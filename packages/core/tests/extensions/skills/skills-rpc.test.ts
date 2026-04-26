@@ -86,7 +86,7 @@ describe("SkillsExtension via RPC", () => {
           expect(Array.isArray(reply)).toBe(true)
           expect(reply).toHaveLength(2)
           expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -113,7 +113,7 @@ describe("SkillsExtension via RPC", () => {
           expect(reply).not.toBeNull()
           expect(reply!.name).toBe("effect-v4")
           expect(reply!.content).toBe("Use Effect.fn for tracing")
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -138,7 +138,7 @@ describe("SkillsExtension via RPC", () => {
           })
 
           expect(reply).toBeNull()
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )

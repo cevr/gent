@@ -113,7 +113,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
             message: CounterProtocol.GetCount.make(),
           })
           expect(r2).toEqual({ count: 1 })
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -148,7 +148,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
             message: CounterProtocol.GetCount.make(),
           })
           expect(r).toEqual({ count: 10 })
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -190,7 +190,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           // Count is at least 1 from the Increment; may be higher if TurnCompleted
           // published before this ask. The assertion proves liveness, not exact timing.
           expect((r as { count: number }).count).toBeGreaterThanOrEqual(1)
-        }),
+        }).pipe(Effect.timeout("13 seconds")),
       ),
     { timeout: 15_000 },
   )

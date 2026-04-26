@@ -289,7 +289,9 @@ describe("Executor actor lifecycle", () => {
         )) as ExecutorUiModel
         expect(model.status).toBe("ready")
         expect(model.baseUrl).toBe("http://127.0.0.1:4788")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -315,7 +317,9 @@ describe("Executor actor lifecycle", () => {
           branchId,
         )) as ExecutorUiModel
         expect(model.status).toBe("idle")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -346,7 +350,9 @@ describe("Executor actor lifecycle", () => {
         )) as ExecutorUiModel
         expect(model.status).toBe("error")
         expect(model.errorMessage).toBeDefined()
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -384,7 +390,9 @@ describe("Executor actor lifecycle", () => {
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -422,7 +430,9 @@ describe("Executor actor lifecycle", () => {
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("idle")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -471,7 +481,9 @@ describe("Executor actor lifecycle", () => {
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )
@@ -508,7 +520,9 @@ describe("Executor actor lifecycle", () => {
         expect(loaded!.version).toBeGreaterThanOrEqual(2)
         const parsed = JSON.parse(loaded!.stateJson) as { _tag: string }
         expect(parsed._tag).toBe("Ready")
-      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension], withStorage: true })))
+      })
+        .pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension], withStorage: true })))
+        .pipe(Effect.timeout("8 seconds"))
     },
     { timeout: 10_000 },
   )

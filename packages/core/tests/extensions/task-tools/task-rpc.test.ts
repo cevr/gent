@@ -111,7 +111,7 @@ describe("TaskExtension via RPC", () => {
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -141,7 +141,7 @@ describe("TaskExtension via RPC", () => {
             .pipe(Effect.flip)
           // ExtensionProtocolError is the transport boundary's tagged error
           expect(result._tag).toBe("ExtensionProtocolError")
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -169,7 +169,7 @@ describe("TaskExtension via RPC", () => {
             })
             .pipe(Effect.flip)
           expect(result._tag).toBe("ExtensionProtocolError")
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )
@@ -198,7 +198,7 @@ describe("TaskExtension via RPC", () => {
             .pipe(Effect.flip)
 
           expect(result._tag).toBe("ExtensionProtocolError")
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )

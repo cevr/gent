@@ -110,7 +110,7 @@ describe("interaction.respondInteraction", () => {
                 ),
             ),
           ).toBe(true)
-        }),
+        }).pipe(Effect.timeout("8 seconds")),
       ),
     { timeout: 10_000 },
   )

@@ -138,7 +138,7 @@ describe("capability permissionRules E2E", () => {
           )
           expect(succeeded.length).toBe(0)
         }).pipe(Effect.provide(e2eLayer))
-      }),
+      }).pipe(Effect.timeout("28 seconds")),
     { timeout: 30_000 },
   )
 
@@ -190,7 +190,7 @@ describe("capability permissionRules E2E", () => {
           )
           expect(failed.length).toBe(0)
         }).pipe(Effect.provide(e2eLayer))
-      }),
+      }).pipe(Effect.timeout("28 seconds")),
     { timeout: 30_000 },
   )
 })

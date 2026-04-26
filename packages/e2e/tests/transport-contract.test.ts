@@ -114,7 +114,7 @@ describe("GentClient transport contract", () => {
 
           expect(queueAfterSend.followUp).toEqual([])
           expect(queueAfterSend.steering).toEqual([])
-        }),
+        }).pipe(Effect.timeout("13 seconds")),
       )
     }, 15_000)
   }
@@ -149,7 +149,7 @@ describe("GentClient transport contract", () => {
           )
 
           expect(messages.some((m) => extractText(m.parts) === "overrides test")).toBe(true)
-        }),
+        }).pipe(Effect.timeout("13 seconds")),
       )
     }, 15_000)
   }
@@ -239,7 +239,7 @@ describe("GentClient transport contract", () => {
               /* */
             }
           }
-        }),
+        }).pipe(Effect.timeout("18 seconds")),
       )
     }, 20_000)
   }
