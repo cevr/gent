@@ -175,54 +175,26 @@ const forgetDeletedSessionRuntimeState = Effect.fn(
 // the typed business errors surfaced from validation paths.
 export type SessionCommandError = StorageError | EventStoreError | NotFoundError | InvalidStateError
 
+// SessionCommands is the RPC-facing surface: dedup-wrapped session creates,
+// branch operations with summarization, and turn-control. Bodies that mutate
+// purely-durable state (rename, child-session create, branch/message delete)
+// live on `SessionMutations` (extension surface) and SessionCommands delegates
+// to it via `mutations.*` so there is exactly one implementation of each
+// mutation. The previous "parallel surface" — duplicated handlers on both
+// services — was deleted in W7-C5; tests calling `commands.renameSession`
+// were migrated to `mutations.renameSession`.
 export interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, AppServiceError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionCommandError>
-  readonly deleteBranch: (input: {
-    readonly sessionId: SessionId
-    readonly currentBranchId: BranchId
-    readonly branchId: BranchId
-  }) => Effect.Effect<void, SessionCommandError>
-  readonly deleteMessages: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly afterMessageId?: MessageId
-  }) => Effect.Effect<void, SessionCommandError>
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
-  readonly renameSession: (input: {
-    readonly sessionId: SessionId
-    readonly name: string
-  }) => Effect.Effect<{ renamed: boolean; name?: string }, SessionCommandError>
-  readonly createSessionBranch: (input: {
-    readonly sessionId: SessionId
-    readonly parentBranchId?: BranchId
-    readonly name?: string
-  }) => Effect.Effect<CreateBranchResult, SessionCommandError>
   readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError>
-  readonly switchActiveBranch: (input: {
-    readonly sessionId: SessionId
-    readonly fromBranchId: BranchId
-    readonly toBranchId: BranchId
-  }) => Effect.Effect<void, SessionCommandError>
   readonly forkBranch: (
     input: ForkBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
-  readonly forkSessionBranch: (input: {
-    readonly sessionId: SessionId
-    readonly fromBranchId: BranchId
-    readonly atMessageId: MessageId
-    readonly name?: string
-  }) => Effect.Effect<CreateBranchResult, SessionCommandError>
-  readonly createChildSession: (input: {
-    readonly parentSessionId: SessionId
-    readonly parentBranchId: BranchId
-    readonly name?: string
-    readonly cwd?: string
-  }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, SessionCommandError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void, AppServiceError>
   readonly drainQueuedMessages: (input: {
@@ -628,13 +600,17 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionRuntime = yield* SessionRuntime
       const sessionRuntimeTerminator = yield* SessionRuntimeTerminator
       yield* sessionRuntimeTerminator.register(sessionRuntime)
-      const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
-      const extensionStateRuntime = yield* MachineEngine
       const sessionCwdRegistry = yield* SessionCwdRegistry
-      const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-      const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
+      // SessionCommands delegates pure-mutation bodies (branch create, branch
+      // fork, switch active branch, session/branch/message delete) to
+      // SessionMutations so there is exactly one implementation of each. The
+      // dedup wrappers below sit *above* the delegation, so retried RPCs still
+      // collapse onto a single mutation invocation. The createSession
+      // happy-path stays in this module because it co-owns the per-cwd
+      // registry pre-record + dedup-cache lifecycle.
+      const mutations = yield* SessionMutations
 
       // ── requestId dedup ──
       //
@@ -922,100 +898,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return yield* dedupRequest(
           createBranchRequestCache,
           input.requestId,
-          createSessionBranch({
+          mutations.createSessionBranch({
             sessionId: input.sessionId,
-            name: input.name,
-          }),
-        )
-      })
-
-      const renameSession = Effect.fn("SessionCommands.renameSession")(function* (input: {
-        readonly sessionId: SessionId
-        readonly name: string
-      }) {
-        const trimmed = input.name.trim().slice(0, 80)
-        if (trimmed.length === 0) return { renamed: false as const }
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) return { renamed: false as const }
-        if (session.name === trimmed) return { renamed: false as const }
-        yield* transactWithEvent(
-          sessionStorage.updateSession(
-            new Session({
-              ...session,
-              name: trimmed,
-              updatedAt: yield* DateTime.nowAsDate,
-            }),
-          ),
-          SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed }),
-        )
-        return { renamed: true as const, name: trimmed }
-      })
-
-      const createSessionBranch = Effect.fn("SessionCommands.createSessionBranch")(
-        function* (input: {
-          readonly sessionId: SessionId
-          readonly parentBranchId?: BranchId
-          readonly name?: string
-        }) {
-          const branch = new Branch({
-            id: BranchId.make(Bun.randomUUIDv7()),
-            sessionId: input.sessionId,
-            parentBranchId: input.parentBranchId,
-            name: input.name,
-            createdAt: yield* DateTime.nowAsDate,
-          })
-          yield* transactWithEvent(
-            branchStorage.createBranch(branch),
-            BranchCreated.make({
-              sessionId: branch.sessionId,
-              branchId: branch.id,
-              ...(branch.parentBranchId !== undefined
-                ? { parentBranchId: branch.parentBranchId }
-                : {}),
-            }),
-          )
-          return { branchId: branch.id }
-        },
-      )
-
-      const switchActiveBranch = Effect.fn("SessionCommands.switchActiveBranch")(function* (input: {
-        readonly sessionId: SessionId
-        readonly fromBranchId: BranchId
-        readonly toBranchId: BranchId
-      }) {
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) {
-          return yield* new NotFoundError({
-            message: "Current session not found",
-            entity: "session",
-          })
-        }
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.fromBranchId}" not found in current session`,
-            entity: "branch",
-          })
-        }
-        const toBranch = yield* branchStorage.getBranch(input.toBranchId)
-        if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.toBranchId}" not found in current session`,
-            entity: "branch",
-          })
-        }
-        yield* transactWithEvent(
-          sessionStorage.updateSession(
-            new Session({
-              ...session,
-              activeBranchId: input.toBranchId,
-              updatedAt: yield* DateTime.nowAsDate,
-            }),
-          ),
-          BranchSwitched.make({
-            sessionId: input.sessionId,
-            fromBranchId: input.fromBranchId,
-            toBranchId: input.toBranchId,
+            ...(input.name !== undefined ? { name: input.name } : {}),
           }),
         )
       })
@@ -1028,15 +913,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
         input: SwitchBranchInput,
       ) {
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "From branch not found", entity: "branch" })
-        }
-        const toBranch = yield* branchStorage.getBranch(input.toBranchId)
-        if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "To branch not found", entity: "branch" })
-        }
-
+        // The summarize side-effect lives on SessionCommands because it
+        // depends on `Provider` and is intentionally outside the durable
+        // mutation tx. Once the (best-effort) summary is published, delegate
+        // the actual switch to SessionMutations so there is exactly one
+        // implementation of "validate branches + update activeBranchId".
         if (input.summarize !== false && input.fromBranchId !== input.toBranchId) {
           const summary = yield* summarizeBranch(input.fromBranchId).pipe(
             Effect.catchEager(() => Effect.succeed("")),
@@ -1053,7 +934,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        yield* switchActiveBranch({
+        yield* mutations.switchActiveBranch({
           sessionId: input.sessionId,
           fromBranchId: input.fromBranchId,
           toBranchId: input.toBranchId,
@@ -1071,123 +952,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
         input: ForkBranchInput,
       ) {
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
-        }
-
-        const messages = yield* messageStorage.listMessages(input.fromBranchId)
-        if (!messages.some((message) => message.id === input.atMessageId)) {
-          return yield* new NotFoundError({
-            message: "Message not found in branch",
-            entity: "message",
-          })
-        }
-
-        return yield* forkSessionBranch({
+        return yield* mutations.forkSessionBranch({
           sessionId: input.sessionId,
           fromBranchId: input.fromBranchId,
           atMessageId: input.atMessageId,
-          name: input.name,
+          ...(input.name !== undefined ? { name: input.name } : {}),
         })
-      })
-
-      const forkSessionBranch = Effect.fn("SessionCommands.forkSessionBranch")(function* (input: {
-        readonly sessionId: SessionId
-        readonly fromBranchId: BranchId
-        readonly atMessageId: MessageId
-        readonly name?: string
-      }) {
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
-        }
-
-        const messages = yield* messageStorage.listMessages(input.fromBranchId)
-        const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
-        if (targetIndex === -1) {
-          return yield* new NotFoundError({
-            message: "Message not found in branch",
-            entity: "message",
-          })
-        }
-
-        const branch = new Branch({
-          id: BranchId.make(Bun.randomUUIDv7()),
-          sessionId: input.sessionId,
-          parentBranchId: input.fromBranchId,
-          parentMessageId: input.atMessageId,
-          name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
-        })
-        yield* transactWithEvent(
-          Effect.gen(function* () {
-            yield* branchStorage.createBranch(branch)
-
-            for (const message of messages.slice(0, targetIndex + 1)) {
-              yield* messageStorage.createMessage(
-                copyMessageToBranch(message, {
-                  id: MessageId.make(Bun.randomUUIDv7()),
-                  branchId: branch.id,
-                }),
-              )
-            }
-          }),
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            ...(branch.parentBranchId !== undefined
-              ? { parentBranchId: branch.parentBranchId }
-              : {}),
-            ...(branch.parentMessageId !== undefined
-              ? { parentMessageId: branch.parentMessageId }
-              : {}),
-          }),
-        )
-        return { branchId: branch.id }
-      })
-
-      const createChildSession = Effect.fn("SessionCommands.createChildSession")(function* (input: {
-        readonly parentSessionId: SessionId
-        readonly parentBranchId: BranchId
-        readonly name?: string
-        readonly cwd?: string
-      }) {
-        const sessionId = SessionId.make(Bun.randomUUIDv7())
-        const branchId = BranchId.make(Bun.randomUUIDv7())
-        const now = yield* DateTime.nowAsDate
-        const session = new Session({
-          id: sessionId,
-          name: input.name ?? "child session",
-          cwd: input.cwd,
-          parentSessionId: input.parentSessionId,
-          parentBranchId: input.parentBranchId,
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: branchId,
-          sessionId,
-          createdAt: now,
-        })
-        const committed = yield* storage
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sessionStorage.createSession(session)
-              yield* branchStorage.createBranch(branch)
-              if (input.cwd !== undefined) {
-                yield* sessionCwdRegistry.record(sessionId, input.cwd)
-              }
-              const envelope = yield* eventPublisher.append(
-                SessionStarted.make({ sessionId, branchId }),
-              )
-              return { envelope }
-            }),
-          )
-          .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
-        yield* eventPublisher.deliver(committed.envelope)
-        return { sessionId, branchId }
       })
 
       const updateReasoningLevel = Effect.fn("SessionCommands.updateReasoningLevel")(function* (
@@ -1240,197 +1010,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         )
       })
 
-      const collectSessionTreeIds = Effect.fn("SessionCommands.collectSessionTreeIds")(function* (
-        rootSessionId: SessionId,
-      ) {
-        const sessionIds: SessionId[] = []
-        const queue: SessionId[] = [rootSessionId]
-        const seen = new Set<SessionId>()
-        let index = 0
-
-        while (index < queue.length) {
-          const sessionId = queue[index]
-          index += 1
-          if (sessionId === undefined || seen.has(sessionId)) continue
-          seen.add(sessionId)
-          sessionIds.push(sessionId)
-          const children = yield* storage.getChildSessions(sessionId)
-          for (const child of children) {
-            queue.push(child.id)
-          }
-        }
-
-        return sessionIds
-      })
-
-      const cleanupSessionRuntimeStateForCommand = Effect.fn(
-        "SessionCommands.cleanupSessionRuntimeState",
-      )(function* (sessionId: SessionId) {
-        yield* cleanupSessionRuntimeState({
-          sessionId,
-          sessionStorage,
-          ambientRuntime: extensionStateRuntime,
-          ...(profileCache !== undefined ? { profileCache } : {}),
-          sessionRuntimeTerminator,
-          eventPublisher,
-          eventStore,
-          sessionCwdRegistry,
-        })
-      })
-
-      const restoreSessionRuntimeStateForCommand = Effect.fn(
-        "SessionCommands.restoreSessionRuntimeState",
-      )(function* (sessionId: SessionId) {
-        yield* restoreSessionRuntimeState({ sessionId, sessionRuntimeTerminator })
-      })
-
-      const forgetDeletedSessionRuntimeStateForCommand = Effect.fn(
-        "SessionCommands.forgetDeletedSessionRuntimeState",
-      )(function* (sessionId: SessionId) {
-        yield* forgetDeletedSessionRuntimeState({
-          sessionId,
-          eventPublisher,
-          eventStore,
-          sessionCwdRegistry,
-        })
-      })
-
-      const deleteSessionCascade = Effect.fn("SessionCommands.deleteSessionCascade")(function* (
-        sessionId: SessionId,
-      ) {
-        // See the mirror comment in `makeSessionMutations.deleteSessionCascade`:
-        // pre-collect tombstones the best-effort set before the durable tx,
-        // then the tx returns the authoritative cascade set (including any
-        // descendant created between pre-collect and the durable delete),
-        // and we clean runtime state for exactly what the DB removed.
-        const preTombstoned = yield* collectSessionTreeIds(sessionId)
-        yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForCommand, {
-          discard: true,
-        })
-        const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
-          // On failure we only restore `preTombstoned`: descendants created after pre-collect
-          // were never tombstoned here, so there's no runtime state for them to "restore" to.
-          Effect.onError(() =>
-            Effect.forEach(preTombstoned, restoreSessionRuntimeStateForCommand, {
-              discard: true,
-            }),
-          ),
-        )
-        const preSet = new Set(preTombstoned)
-        const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
-        yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForCommand, {
-          discard: true,
-        })
-        yield* Effect.forEach(cascadedIds, forgetDeletedSessionRuntimeStateForCommand, {
-          discard: true,
-        })
-        yield* Effect.forEach(
-          cascadedIds,
-          (deletedSessionId) =>
-            Effect.logInfo("session.deleted").pipe(
-              Effect.annotateLogs({ sessionId: deletedSessionId }),
-            ),
-          { discard: true },
-        )
-      })
-
-      const deleteSessionOwned = Effect.fn("SessionCommands.deleteSession")(function* (
-        sessionId: SessionId,
-      ) {
-        yield* deleteSessionCascade(sessionId)
-      })
-
-      const deleteBranch = Effect.fn("SessionCommands.deleteBranch")(function* (input: {
-        readonly sessionId: SessionId
-        readonly currentBranchId: BranchId
-        readonly branchId: BranchId
-      }) {
-        if (input.branchId === input.currentBranchId) {
-          return yield* new InvalidStateError({
-            message: "Cannot delete the current branch",
-            operation: "deleteBranch",
-          })
-        }
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) {
-          return yield* new NotFoundError({
-            message: "Current session not found",
-            entity: "session",
-          })
-        }
-        if (session.activeBranchId === input.branchId) {
-          return yield* new InvalidStateError({
-            message: "Cannot delete the active branch",
-            operation: "deleteBranch",
-          })
-        }
-        const branch = yield* branchStorage.getBranch(input.branchId)
-        if (branch === undefined || branch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.branchId}" not found in current session`,
-            entity: "branch",
-          })
-        }
-        const branches = yield* branchStorage.listBranches(input.sessionId)
-        if (branches.some((candidate) => candidate.parentBranchId === input.branchId)) {
-          return yield* new InvalidStateError({
-            message: `Cannot delete branch "${input.branchId}" with child branches`,
-            operation: "deleteBranch",
-          })
-        }
-        const childSessions = yield* storage.getChildSessions(input.sessionId)
-        if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
-          return yield* new InvalidStateError({
-            message: `Cannot delete branch "${input.branchId}" with child sessions`,
-            operation: "deleteBranch",
-          })
-        }
-        yield* branchStorage.deleteBranch(input.branchId)
-      })
-
-      const deleteMessages = Effect.fn("SessionCommands.deleteMessages")(function* (input: {
-        readonly sessionId: SessionId
-        readonly branchId: BranchId
-        readonly afterMessageId?: MessageId
-      }) {
-        const branch = yield* branchStorage.getBranch(input.branchId)
-        if (branch === undefined || branch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.branchId}" not found in current session`,
-            entity: "branch",
-          })
-        }
-        if (input.afterMessageId !== undefined) {
-          const cursor = yield* messageStorage.getMessage(input.afterMessageId)
-          if (
-            cursor === undefined ||
-            cursor.sessionId !== input.sessionId ||
-            cursor.branchId !== input.branchId
-          ) {
-            return yield* new NotFoundError({
-              message: `Message "${input.afterMessageId}" not found in current branch`,
-              entity: "message",
-            })
-          }
-        }
-        yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
-      })
-
       return {
         createSession,
         // SessionEnded is not emitted on delete — FK cascade would immediately
-        // remove the persisted event. Delete is destructive and rare.
-        deleteSession: deleteSessionOwned,
-        deleteBranch,
-        deleteMessages,
+        // remove the persisted event. Delete is destructive and rare. The
+        // cascade + runtime-state cleanup live on SessionMutations; this is a
+        // thin delegation.
+        deleteSession: (sessionId) => mutations.deleteSession(sessionId),
         createBranch,
-        renameSession,
-        createSessionBranch,
         switchBranch,
-        switchActiveBranch,
         forkBranch,
-        forkSessionBranch,
-        createChildSession,
         sendMessage,
         steer: (command) => sessionRuntime.dispatch(applySteerCommand(command)),
         drainQueuedMessages: ({ sessionId, branchId }) =>

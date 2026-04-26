@@ -75,7 +75,10 @@ const failingSessionCommandsLayer = () => {
     MachineEngine.Test(),
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const postCommitFailingSessionCommandsLayer = () => {
@@ -109,7 +112,10 @@ const postCommitFailingSessionCommandsLayer = () => {
     MachineEngine.Test(),
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(function* (input: {
@@ -164,7 +170,10 @@ const sendFailingSessionCommandsLayer = () => {
     MachineEngine.Test(),
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const sessionCommandsLayer = () => {
@@ -180,7 +189,10 @@ const sessionCommandsLayer = () => {
     MachineEngine.Test(),
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array<SessionId>) =>
@@ -238,7 +250,10 @@ const sessionCommandsLayerWithMachineProbe = (
     machineProbeLayer,
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const sessionMutationsLayerWithMachineProbe = (
@@ -315,7 +330,10 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     machineProbeLayer,
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const makeMachineProbe = (terminated: Array<SessionId>): MachineEngineService => ({
@@ -393,7 +411,10 @@ const sessionCommandsLayerWithProfileMachineProbes = (params: {
     profileCacheLayer,
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 /**
@@ -482,7 +503,10 @@ const racySessionCommandsLayerWithProfileCache = (params: {
     profileCacheLayer,
     cwdRegistryLayer,
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 /**
@@ -557,7 +581,10 @@ const racySessionCommandsLayer = (params: {
     machineProbeLayer,
     SessionCwdRegistry.Test(),
   )
-  return Layer.provideMerge(SessionCommands.Live, deps)
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
 }
 
 const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
@@ -679,7 +706,7 @@ describe("session command persistence", () => {
 
   it.live("rolls back session rename when event publication fails", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-rename-rollback")
@@ -695,7 +722,7 @@ describe("session command persistence", () => {
         name: "before",
       })
 
-      const exit = yield* Effect.exit(commands.renameSession({ sessionId, name: "after" }))
+      const exit = yield* Effect.exit(mutations.renameSession({ sessionId, name: "after" }))
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
@@ -738,7 +765,7 @@ describe("session command persistence", () => {
 
   it.live("rejects active branch switch to a branch outside the session", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-switch-owner")
@@ -765,7 +792,7 @@ describe("session command persistence", () => {
       })
 
       const exit = yield* Effect.exit(
-        commands.switchActiveBranch({
+        mutations.switchActiveBranch({
           sessionId,
           fromBranchId,
           toBranchId,
@@ -823,7 +850,7 @@ describe("session command persistence", () => {
 
   it.live("deletes only non-active branches owned by the session", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-delete-branch")
@@ -841,7 +868,7 @@ describe("session command persistence", () => {
       })
       yield* branches.createBranch(new Branch({ id: deletedBranchId, sessionId, createdAt: now }))
 
-      yield* commands.deleteBranch({
+      yield* mutations.deleteBranch({
         sessionId,
         currentBranchId: activeBranchId,
         branchId: deletedBranchId,
@@ -870,7 +897,7 @@ describe("session command persistence", () => {
 
   it.live("rejects deleting a branch with child branches", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-delete-parent-branch")
@@ -898,7 +925,7 @@ describe("session command persistence", () => {
       )
 
       const exit = yield* Effect.exit(
-        commands.deleteBranch({
+        mutations.deleteBranch({
           sessionId,
           currentBranchId: activeBranchId,
           branchId: parentBranchId,
@@ -918,7 +945,7 @@ describe("session command persistence", () => {
 
   it.live("rejects deleting a branch with child sessions", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-delete-child-session-parent")
@@ -935,14 +962,14 @@ describe("session command persistence", () => {
         name: "delete child session parent",
       })
       yield* branches.createBranch(new Branch({ id: parentBranchId, sessionId, createdAt: now }))
-      const child = yield* commands.createChildSession({
+      const child = yield* mutations.createChildSession({
         parentSessionId: sessionId,
         parentBranchId,
         name: "child",
       })
 
       const exit = yield* Effect.exit(
-        commands.deleteBranch({
+        mutations.deleteBranch({
           sessionId,
           currentBranchId: activeBranchId,
           branchId: parentBranchId,
@@ -962,7 +989,7 @@ describe("session command persistence", () => {
 
   it.live("rejects deleting the active branch even when it is not the caller branch", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-delete-active")
@@ -981,7 +1008,7 @@ describe("session command persistence", () => {
       yield* branches.createBranch(new Branch({ id: currentBranchId, sessionId, createdAt: now }))
 
       const exit = yield* Effect.exit(
-        commands.deleteBranch({
+        mutations.deleteBranch({
           sessionId,
           currentBranchId,
           branchId: activeBranchId,
@@ -1000,7 +1027,7 @@ describe("session command persistence", () => {
 
   it.live("rejects destructive branch mutation across sessions", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const ownerSessionId = SessionId.make("session-delete-owner")
@@ -1027,7 +1054,7 @@ describe("session command persistence", () => {
       })
 
       const exit = yield* Effect.exit(
-        commands.deleteBranch({
+        mutations.deleteBranch({
           sessionId: ownerSessionId,
           currentBranchId,
           branchId: otherBranchId,
@@ -1046,7 +1073,7 @@ describe("session command persistence", () => {
 
   it.live("deleteMessages only mutates branches owned by the session", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const messages = yield* MessageStorage
@@ -1085,7 +1112,7 @@ describe("session command persistence", () => {
         }),
       )
 
-      yield* commands.deleteMessages({ sessionId, branchId, afterMessageId: firstMessageId })
+      yield* mutations.deleteMessages({ sessionId, branchId, afterMessageId: firstMessageId })
 
       const remaining = yield* messages.listMessages(branchId)
       expect(remaining.map((message) => message.id)).toEqual([firstMessageId])
@@ -1094,7 +1121,7 @@ describe("session command persistence", () => {
 
   it.live("deleteMessages rejects a cursor from another session", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const messages = yield* MessageStorage
@@ -1144,7 +1171,7 @@ describe("session command persistence", () => {
       )
 
       const exit = yield* Effect.exit(
-        commands.deleteMessages({ sessionId, branchId, afterMessageId: foreignMessageId }),
+        mutations.deleteMessages({ sessionId, branchId, afterMessageId: foreignMessageId }),
       )
 
       expect(exit._tag).toBe("Failure")
@@ -1272,16 +1299,17 @@ describe("session.delete", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
         const cwdRegistry = yield* SessionCwdRegistry
 
         const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
-        const child = yield* commands.createChildSession({
+        const child = yield* mutations.createChildSession({
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
           cwd: "/tmp/delete-child",
         })
-        const grandchild = yield* commands.createChildSession({
+        const grandchild = yield* mutations.createChildSession({
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
           cwd: "/tmp/delete-grandchild",
@@ -1480,15 +1508,16 @@ describe("session.delete", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const cwdRegistry = yield* SessionCwdRegistry
 
         const parent = yield* commands.createSession({ cwd: "/tmp/delete-profile-parent" })
-        const child = yield* commands.createChildSession({
+        const child = yield* mutations.createChildSession({
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
           cwd: "/tmp/delete-profile-child",
         })
-        const grandchild = yield* commands.createChildSession({
+        const grandchild = yield* mutations.createChildSession({
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
           cwd: "/tmp/delete-profile-grandchild",
@@ -1882,7 +1911,10 @@ describe("requestId idempotency", () => {
         MachineEngine.Test(),
         SessionCwdRegistry.Test(),
       )
-      const layer = Layer.provideMerge(SessionCommands.Live, deps)
+      const layer = Layer.provideMerge(
+        SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+        deps,
+      )
 
       const probe = Effect.gen(function* () {
         const commands = yield* SessionCommands
@@ -1947,7 +1979,10 @@ describe("requestId idempotency", () => {
         MachineEngine.Test(),
         SessionCwdRegistry.Test(),
       )
-      const layer = Layer.provideMerge(SessionCommands.Live, deps)
+      const layer = Layer.provideMerge(
+        SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+        deps,
+      )
 
       yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
