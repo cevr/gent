@@ -17,7 +17,7 @@ import {
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
-import { AuthGuard } from "../domain/auth-guard.js"
+import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
@@ -206,7 +206,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         externalDrivers: resolved.externalDrivers,
       })
       const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
-      const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+      const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),

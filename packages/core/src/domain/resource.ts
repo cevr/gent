@@ -49,7 +49,7 @@ import type {
 } from "./extension-protocol.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
-import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
+import type { CwdScope, EphemeralScope, ServerScope } from "./scope-brand.js"
 
 // ── Bus envelope (shared with subscription handlers) ──
 

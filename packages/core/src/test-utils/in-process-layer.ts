@@ -8,11 +8,11 @@
 import { Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
-import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
+import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -48,7 +48,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
   ])
 
   const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+  const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
   return { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive }

@@ -1,12 +1,12 @@
 import { Effect, Layer, Context } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
-import { AuthGuard } from "../domain/auth-guard.js"
+import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
+import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -150,7 +150,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
   )
   const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+  const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
@@ -224,7 +224,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   const promptPresenterLive = Layer.provide(
-    PromptPresenter.Live,
+    PromptPresenterLive,
     Layer.merge(approvalServiceLive, baseServicesLive),
   )
   const toolRunnerLive = Layer.provide(

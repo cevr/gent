@@ -26,25 +26,9 @@
 
 import { Context, Layer } from "effect"
 import { resolveExtensions, type ResolvedExtensions } from "./extensions/registry.js"
+import type { CwdScope, EphemeralScope, ServerScope } from "../domain/scope-brand.js"
 
-declare const ServerBrand: unique symbol
-declare const CwdBrand: unique symbol
-declare const EphemeralBrand: unique symbol
-
-/**
- * Marker type stamping a profile as "owned by the server composition root."
- *
- * The brand is purely type-level — it carries no runtime payload. The live
- * `Scope.Scope` instance lives separately inside the Effect runtime; the
- * brand only exists so cross-scope composition fails to type-check.
- */
-export type ServerScope = { readonly [ServerBrand]: true }
-
-/** Marker type stamping a profile as "owned by the per-cwd profile cache." */
-export type CwdScope = { readonly [CwdBrand]: true }
-
-/** Marker type stamping a profile as "ephemeral child-run." */
-export type EphemeralScope = { readonly [EphemeralBrand]: true }
+export type { CwdScope, EphemeralScope, ServerScope } from "../domain/scope-brand.js"
 
 /**
  * A profile resolved against a `cwd`, parameterised by the scope-brand it owns.

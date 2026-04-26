@@ -5,6 +5,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { AuthGuard, ListAuthProvidersPayload } from "@gent/core/domain/auth-guard"
+import { AuthGuardLive } from "@gent/core/runtime/auth-guard-live"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -79,7 +80,7 @@ const helperAgentRegistryLayer = Layer.merge(
 
 describe("AuthGuard", () => {
   it.live("requiredProviders include cowork + deepwork providers", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
       Layer.provide(testRegistryLayer),
@@ -93,7 +94,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("missingRequiredProviders returns missing when no keys", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
       Layer.provide(testRegistryLayer),
@@ -107,7 +108,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("missingRequiredProviders clears when keys are present", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" })),
       Layer.provide(testRegistryLayer),
@@ -120,7 +121,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("listProviders uses get even when listInfo fails", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(
         Layer.succeed(AuthStore, {
           get: (provider: string) =>
@@ -149,7 +150,7 @@ describe("AuthGuard", () => {
   it.live(
     "helper-only modeled agents do not widen required providers beyond the runtime pair",
     () => {
-      const layer = AuthGuard.Live.pipe(
+      const layer = AuthGuardLive.pipe(
         Layer.provide(AuthStore.Live),
         Layer.provide(AuthStorage.Test()),
         Layer.provide(helperAgentRegistryLayer),
@@ -165,7 +166,7 @@ describe("AuthGuard", () => {
   )
 
   it.live("selected agent widens required providers to match the actual runtime agent", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
       Layer.provide(helperAgentRegistryLayer),
@@ -180,7 +181,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("agent routed externally via driverOverrides skips model auth requirements", () => {
-    const layer = AuthGuard.Live.pipe(
+    const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
       Layer.provide(testRegistryLayer),

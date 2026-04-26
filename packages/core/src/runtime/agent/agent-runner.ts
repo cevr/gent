@@ -55,7 +55,7 @@ import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
 import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
-import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { ResourceManagerLive } from "../resource-manager.js"
@@ -511,7 +511,7 @@ const buildEphemeralLayer = (params: {
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
   const promptPresenterLayer = Layer.provide(
-    PromptPresenter.Live,
+    PromptPresenterLive,
     Layer.mergeAll(
       approvalLayer,
       parentRuntimePlatformLayer,
