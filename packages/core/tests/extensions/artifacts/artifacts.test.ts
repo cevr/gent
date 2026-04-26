@@ -27,7 +27,7 @@ const withRuntime = (
       yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* fn(runtime)
     }).pipe(Effect.provide(e2eLayer))
-  })
+  }).pipe(Effect.timeout("4 seconds"))
 
 describe("Artifacts extension", () => {
   it.live("Save creates an artifact and returns it", () =>

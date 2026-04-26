@@ -93,7 +93,7 @@ describe("extension concurrency", () => {
         // publish() now returns the IDs of extensions whose machines transitioned.
         // At least one of the concurrent publishes should have caused a transition.
         expect(r1.length + r2.length).toBeGreaterThan(0)
-      }).pipe(Effect.provide(layer))
+      }).pipe(Effect.provide(layer), Effect.timeout("4 seconds"))
     })
   })
 
@@ -174,7 +174,7 @@ describe("extension concurrency", () => {
             },
           ])
         }).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
   })
 
@@ -199,7 +199,7 @@ describe("extension concurrency", () => {
           )
 
           yield* Deferred.await(delivered).pipe(Effect.timeout("1 second"))
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
 
@@ -276,7 +276,7 @@ describe("extension concurrency", () => {
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("nested publish preserves outer event ordering across actors", () =>
@@ -383,7 +383,7 @@ describe("extension concurrency", () => {
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
           expect(observerEvents).toEqual(["SessionStarted", "TurnCompleted"])
         }).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("nested publish outruns already-queued same-session work", () =>
@@ -519,7 +519,7 @@ describe("extension concurrency", () => {
             expect(observed).toEqual(["SessionStarted", "TurnCompleted", "StreamStarted"])
           }).pipe(Effect.provide(layer)),
         )
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("nested send from a subscription handler is delivered without deadlocking", () =>
@@ -612,7 +612,7 @@ describe("extension concurrency", () => {
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(received).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("nested execute from a subscription handler is delivered without deadlocking", () =>
@@ -713,7 +713,7 @@ describe("extension concurrency", () => {
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("concurrent same-session execute calls do not overlap actor critical sections", () =>
@@ -805,7 +805,7 @@ describe("extension concurrency", () => {
             expect(overlapped).toBe(false)
           }),
         ).pipe(Effect.provide(layer))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("terminateAll runs before already-queued same-session work", () =>
@@ -910,7 +910,7 @@ describe("extension concurrency", () => {
             expect(yield* runtime.getActorStatuses(sessionId)).toEqual([])
           }).pipe(Effect.provide(layer)),
         )
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
 
     it.live("terminateAll does not resurrect actors after in-flight spawn completes", () =>
@@ -984,7 +984,7 @@ describe("extension concurrency", () => {
             expect(yield* runtime.getActorStatuses(sessionId)).toEqual([])
           }).pipe(Effect.provide(layer)),
         )
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     )
   })
 
@@ -1055,7 +1055,7 @@ describe("extension concurrency", () => {
         const statuses = yield* runtime.getActorStatuses(sessionId)
         expect(statuses).toHaveLength(1)
         expect(statuses[0]?.extensionId).toBe("scope-override")
-      }).pipe(Effect.provide(layer))
+      }).pipe(Effect.provide(layer), Effect.timeout("4 seconds"))
     })
   })
 })

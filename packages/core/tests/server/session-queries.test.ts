@@ -96,7 +96,7 @@ describe("session queries", () => {
                 message.parts.some((part) => part.type === "text" && part.text === assistantText),
             ),
           ).toBe(true)
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
   )
 
@@ -128,7 +128,7 @@ describe("session queries", () => {
 
         expect(children).toHaveLength(2)
         expect(children.every((child) => child.parentSessionId === root.sessionId)).toBe(true)
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -156,7 +156,7 @@ describe("session queries", () => {
         expect(tree.children).toHaveLength(1)
         expect(tree.children[0]?.id).toBe(child.sessionId)
         expect(tree.children[0]?.children).toHaveLength(1)
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -173,7 +173,7 @@ describe("session queries", () => {
         )
 
         expect(result._tag).toBe("Failure")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -190,7 +190,7 @@ describe("session queries", () => {
         )
 
         expect(result._tag).toBe("Failure")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })

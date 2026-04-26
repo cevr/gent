@@ -107,7 +107,7 @@ describe("auth.listProviders", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -177,7 +177,7 @@ describe("auth.listProviders", () => {
             rmSync(sessionCwd, { recursive: true, force: true })
             rmSync(home, { recursive: true, force: true })
           }
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
   )
 
@@ -200,7 +200,7 @@ describe("auth.listProviders", () => {
           // ref that `get(undefined)` also reads.
           const list = yield* client.auth.listProviders({ agentName: "cowork" })
           expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
   )
 
@@ -221,7 +221,7 @@ describe("auth.listProviders", () => {
         )
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("Session not found")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })
@@ -242,7 +242,7 @@ describe("auth persistence RPC failures", () => {
         const exit = yield* Effect.exit(client.auth.listProviders({}))
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("read failed")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -261,7 +261,7 @@ describe("auth persistence RPC failures", () => {
         const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("Failed to set auth")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -280,7 +280,7 @@ describe("auth persistence RPC failures", () => {
         const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("Failed to delete auth")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -306,7 +306,7 @@ describe("auth persistence RPC failures", () => {
         )
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("Failed to persist auth")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -341,7 +341,7 @@ describe("auth persistence RPC failures", () => {
         )
         expect(exit._tag).toBe("Failure")
         expect(exit.cause.toString()).toContain("Failed to persist auth")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })

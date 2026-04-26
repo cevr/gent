@@ -226,7 +226,7 @@ describe("extension command RPCs", () => {
             input: "rpc-world",
             branchId,
           })
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
 
@@ -264,7 +264,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(invoked).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -298,7 +298,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(invoked).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -328,7 +328,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(boundaryReceived).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -360,7 +360,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(boundaryReceived).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -390,7 +390,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(boundaryReceived).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -422,7 +422,7 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(boundaryReceived).toEqual([])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -488,7 +488,7 @@ describe("extension command RPCs", () => {
           })
 
           expect(result).toBe("profile-token")
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -556,7 +556,7 @@ describe("extension command RPCs", () => {
             })
 
             expect(result).toBe(`live:${profileCwd}`)
-          }),
+          }).pipe(Effect.timeout("4 seconds")),
         ),
       )
     } finally {
@@ -629,7 +629,7 @@ describe("extension command RPCs", () => {
             5_000,
             "boundary to receive send",
           )
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
 
@@ -675,7 +675,7 @@ describe("extension command RPCs", () => {
               error: "setup boom",
             },
           ])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -742,7 +742,7 @@ describe("extension command RPCs", () => {
 
           expect(typeof createdBranchId).toBe("string")
           expect(createdBranchId).not.toBe(branchId)
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -786,7 +786,7 @@ describe("extension command RPCs", () => {
           const commands = yield* client.extension.listCommands({ sessionId })
 
           expect(commands.map((command) => command.name)).toEqual(["visible"])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })
@@ -829,7 +829,7 @@ describe("extension command RPCs", () => {
 
           expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])
           expect(betaCommands.map((command) => command.name)).toEqual(["beta"])
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
     )
   })

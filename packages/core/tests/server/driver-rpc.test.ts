@@ -30,7 +30,7 @@ describe("DriverRpcs", () => {
         // overrides are set.
         expect(before.drivers.length).toBeGreaterThan(0)
         expect(before.overrides).toEqual({})
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -48,7 +48,7 @@ describe("DriverRpcs", () => {
         })
         const after = yield* client.driver.list()
         expect(after.overrides["cowork"]?._tag).toBe("model")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -64,7 +64,7 @@ describe("DriverRpcs", () => {
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -83,7 +83,7 @@ describe("DriverRpcs", () => {
         yield* client.driver.clear({ agentName: "cowork" })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -95,7 +95,7 @@ describe("DriverRpcs", () => {
         yield* client.driver.clear({ agentName: "does-not-exist" })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })

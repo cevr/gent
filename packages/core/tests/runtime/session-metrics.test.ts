@@ -93,7 +93,7 @@ describe("SessionRuntime metrics", () => {
 
         const metrics = yield* runtime.getMetrics({ sessionId, branchId })
         return { streamEndeds, metrics }
-      }).pipe(Effect.provide(makeLayer(providerLayer))),
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
     )
 
     expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
@@ -126,7 +126,7 @@ describe("SessionRuntime metrics", () => {
         const first = yield* runtime.getMetrics({ sessionId, branchId })
         const second = yield* runtime.getMetrics({ sessionId, branchId })
         return { first, second }
-      }).pipe(Effect.provide(makeLayer(providerLayer))),
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
     )
 
     // Two reads over the same event log must return the same cost. The cost
@@ -161,7 +161,7 @@ describe("SessionRuntime metrics", () => {
           .filter((e): e is Extract<typeof e, { _tag: "StreamEnded" }> => e._tag === "StreamEnded")
         const metrics = yield* runtime.getMetrics({ sessionId, branchId })
         return { streamEndeds, metrics }
-      }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced]))),
+      }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds")),
     )
 
     for (const ev of result.streamEndeds) {

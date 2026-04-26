@@ -526,7 +526,7 @@ describe("session command persistence", () => {
         }
       }
       expect(logMessages).not.toContain("session.messageSent")
-    }).pipe(Effect.provide(sendFailingSessionCommandsLayer())),
+    }).pipe(Effect.provide(sendFailingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back session and branch creation when event publication fails", () =>
@@ -540,7 +540,7 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* sessions.listSessions()).toHaveLength(0)
       expect(yield* branches.listBranches(SessionId.make("missing"))).toHaveLength(0)
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back forked branch and copied messages when event publication fails", () =>
@@ -585,7 +585,7 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.listBranches(sessionId)).toHaveLength(1)
       expect(yield* messages.listMessages(branchId)).toHaveLength(1)
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back session rename when event publication fails", () =>
@@ -610,7 +610,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back active branch switch when event publication fails", () =>
@@ -644,7 +644,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects active branch switch to a branch outside the session", () =>
@@ -685,7 +685,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back reasoning setting when event publication fails", () =>
@@ -712,7 +712,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
-    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("does not roll back committed rows when post-commit delivery fails", () =>
@@ -724,7 +724,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect(yield* sessions.listSessions()).toHaveLength(1)
-    }).pipe(Effect.provide(postCommitFailingSessionCommandsLayer())),
+    }).pipe(Effect.provide(postCommitFailingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("deletes only non-active branches owned by the session", () =>
@@ -755,7 +755,7 @@ describe("session command persistence", () => {
 
       expect(yield* branches.getBranch(deletedBranchId)).toBeUndefined()
       expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects session creation with parent branch but no parent session", () =>
@@ -771,7 +771,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect(yield* sessions.listSessions()).toHaveLength(0)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting a branch with child branches", () =>
@@ -814,7 +814,7 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* branches.getBranch(childBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting a branch with child sessions", () =>
@@ -853,7 +853,7 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* sessions.getSession(child.sessionId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting the active branch even when it is not the caller branch", () =>
@@ -886,7 +886,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects destructive branch mutation across sessions", () =>
@@ -927,7 +927,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.getBranch(otherBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("deleteMessages only mutates branches owned by the session", () =>
@@ -975,7 +975,7 @@ describe("session command persistence", () => {
 
       const remaining = yield* messages.listMessages(branchId)
       expect(remaining.map((message) => message.id)).toEqual([firstMessageId])
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("deleteMessages rejects a cursor from another session", () =>
@@ -1037,7 +1037,7 @@ describe("session command persistence", () => {
       expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
         ownerMessageId,
       ])
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 })
 
@@ -1061,7 +1061,7 @@ describe("session.delete", () => {
 
         expect(deleted).toBeNull()
         expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1100,7 +1100,7 @@ describe("session.delete", () => {
         expect(yield* client.session.get({ sessionId: parent.sessionId })).toBeNull()
         expect(yield* client.session.get({ sessionId: child.sessionId })).toBeNull()
         expect(yield* client.session.get({ sessionId: grandchild.sessionId })).toBeNull()
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1128,7 +1128,7 @@ describe("session.delete", () => {
         yield* Deferred.await(runtimeClosed).pipe(Effect.timeout("5 seconds"))
 
         expect(yield* client.session.get({ sessionId: created.sessionId })).toBeNull()
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1143,7 +1143,7 @@ describe("session.delete", () => {
         const deleted = yield* client.session.get({ sessionId: created.sessionId })
 
         expect(deleted).toBeNull()
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1198,7 +1198,10 @@ describe("session.delete", () => {
         expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
         expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
-      }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated))),
+      }).pipe(
+        Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated)),
+        Effect.timeout("4 seconds"),
+      ),
     )
   })
 
@@ -1231,6 +1234,7 @@ describe("session.delete", () => {
             },
           }),
         ),
+        Effect.timeout("4 seconds"),
       ),
     )
   })
@@ -1260,7 +1264,10 @@ describe("session.delete", () => {
 
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
         expect(terminated).toEqual([parent.sessionId, child.sessionId])
-      }).pipe(Effect.provide(sessionMutationsLayerWithMachineProbe(terminated, runtimeTerminated))),
+      }).pipe(
+        Effect.provide(sessionMutationsLayerWithMachineProbe(terminated, runtimeTerminated)),
+        Effect.timeout("4 seconds"),
+      ),
     )
   })
 
@@ -1299,6 +1306,7 @@ describe("session.delete", () => {
             runtimeRestored,
           ),
         ),
+        Effect.timeout("4 seconds"),
       ),
     )
   })
@@ -1346,6 +1354,7 @@ describe("session.delete", () => {
             profileTerminated,
           }),
         ),
+        Effect.timeout("4 seconds"),
       ),
     )
   })
@@ -1410,7 +1419,7 @@ describe("session.delete", () => {
             }),
           )
           expectSessionNotFound(queueExit)
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
   )
 
@@ -1431,7 +1440,7 @@ describe("session.delete", () => {
 
         yield* client.session.delete({ sessionId: created.sessionId })
         yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })
@@ -1482,7 +1491,7 @@ describe("message.send", () => {
                 message.parts.some((part) => part.type === "text" && part.text === assistantText),
             ),
           ).toBe(true)
-        }),
+        }).pipe(Effect.timeout("4 seconds")),
       ),
   )
 
@@ -1539,7 +1548,7 @@ describe("message.send", () => {
           ),
         ).toBe(true)
         yield* controls.assertDone()
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1591,7 +1600,7 @@ describe("message.send", () => {
         )
 
         yield* controls.assertDone()
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
@@ -1616,7 +1625,7 @@ describe("message.send", () => {
 
         expect(exit._tag).toBe("Failure")
         expect(yield* controls.callCount).toBe(0)
-      }),
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 })
@@ -1643,7 +1652,7 @@ describe("requestId idempotency", () => {
       expect(third.sessionId).toBe(first.sessionId)
       const all = yield* sessions.listSessions()
       expect(all).toHaveLength(1)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("distinct createSession requestIds create distinct sessions", () =>
@@ -1654,7 +1663,7 @@ describe("requestId idempotency", () => {
       const b = yield* commands.createSession({ cwd: "/tmp/b", requestId: "req-b" })
       expect(a.sessionId).not.toBe(b.sessionId)
       expect((yield* sessions.listSessions()).length).toBe(2)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createSession requestIds converge on one session", () =>
@@ -1676,7 +1685,7 @@ describe("requestId idempotency", () => {
       expect(results[0].sessionId).toBe(results[1].sessionId)
       expect(results[0].sessionId).toBe(results[2].sessionId)
       expect((yield* sessions.listSessions()).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate sendMessage requestId dispatches the runtime only once", () =>
@@ -1741,7 +1750,7 @@ describe("requestId idempotency", () => {
 
       yield* probe
       expect(dispatchCount).toBe(2)
-    }),
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate sendMessage requestIds dispatch only once", () =>
@@ -1810,7 +1819,7 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       expect(dispatchCount).toBe(1)
-    }),
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate createBranch requestId converges on a single branch id", () =>
@@ -1842,7 +1851,7 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // 1 from fixture + 1 from the deduped create
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createBranch requestIds converge on one branch", () =>
@@ -1871,7 +1880,7 @@ describe("requestId idempotency", () => {
       expect(results[0].branchId).toBe(results[1].branchId)
       expect(results[0].branchId).toBe(results[2].branchId)
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate switchBranch requestId activates the target only once", () =>
@@ -1908,7 +1917,7 @@ describe("requestId idempotency", () => {
       })
 
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(toBranchId)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate forkBranch requestId converges on a single new branch", () =>
@@ -1957,6 +1966,6 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 })
