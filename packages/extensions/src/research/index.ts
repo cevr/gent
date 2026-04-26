@@ -1,4 +1,4 @@
-import { defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
+import { AgentName, defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
 const ARCHITECT_PROMPT = `
@@ -14,7 +14,7 @@ Architect agent. Design implementation approach.
 `.trim()
 
 export const architect = defineAgent({
-  name: "architect",
+  name: AgentName.make("architect"),
   description: "Designs implementation approaches",
   model: ModelId.make("anthropic/claude-opus-4-6"),
   allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],

@@ -1,4 +1,4 @@
-import { type AgentName, type ResourceSchedule } from "@gent/core/extensions/api"
+import { AgentName, type ResourceSchedule } from "@gent/core/extensions/api"
 
 /**
  * Durable host-owned jobs for memory consolidation.
@@ -8,8 +8,8 @@ import { type AgentName, type ResourceSchedule } from "@gent/core/extensions/api
  * or workflow startup.
  */
 
-const MEMORY_REFLECT_AGENT = "memory:reflect" as AgentName
-const MEMORY_MEDITATE_AGENT = "memory:meditate" as AgentName
+const MEMORY_REFLECT_AGENT = AgentName.make("memory:reflect")
+const MEMORY_MEDITATE_AGENT = AgentName.make("memory:meditate")
 
 export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
   {

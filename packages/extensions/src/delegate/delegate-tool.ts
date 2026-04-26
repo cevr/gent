@@ -60,7 +60,7 @@ export const DelegateTool = tool({
     }
 
     const resolveAgent = (agentName: string) =>
-      ctx.agent.get(agentName).pipe(
+      ctx.agent.get(AgentName.make(agentName)).pipe(
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
@@ -88,7 +88,7 @@ export const DelegateTool = tool({
         Effect.catchEager(() => Effect.succeed(false)),
       )
 
-    const spawnBackgroundTask = (task: Task, agent: { name: string }) =>
+    const spawnBackgroundTask = (task: Task, agent: { name: AgentName }) =>
       Effect.gen(function* () {
         // Set task to in_progress
         yield* ctx.extension

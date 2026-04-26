@@ -41,6 +41,7 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
   resolveRunPersistence,
+  type AgentName,
   type AgentRunResult,
   type AgentRunToolCall,
   type AgentPersistence,
@@ -159,7 +160,7 @@ const latestAssistantContent = (messages: ReadonlyArray<Message>) => {
 const buildAgentRunSuccess = (params: {
   text: string
   sessionId: SessionId
-  agentName: string
+  agentName: AgentName
   meta: ChildMetadata
   persistence: AgentPersistence
 }) => ({
@@ -174,7 +175,7 @@ const buildAgentRunSuccess = (params: {
 
 const withAgentRunFailureHandling = <E, R>(
   effect: Effect.Effect<
-    AgentRunResult | { _tag: "error"; error: string; sessionId: SessionId; agentName: string },
+    AgentRunResult | { _tag: "error"; error: string; sessionId: SessionId; agentName: AgentName },
     E,
     R
   >,
@@ -183,7 +184,7 @@ const withAgentRunFailureHandling = <E, R>(
     parentBranchId: BranchId
     toolCallId?: ToolCallId
     sessionId: SessionId
-    agentName: string
+    agentName: AgentName
     persistence: AgentPersistence
     spanName: string
   },
@@ -192,7 +193,7 @@ const withAgentRunFailureHandling = <E, R>(
     parentBranchId: BranchId
     toolCallId?: ToolCallId
     sessionId: SessionId
-    agentName: string
+    agentName: AgentName
   }) => Effect.Effect<void, never>,
 ) =>
   effect.pipe(
@@ -271,7 +272,7 @@ const loadAgentRunSuccessData = (params: {
   storage: StorageService
   branchId: BranchId
   sessionId: SessionId
-  agentName: string
+  agentName: AgentName
   persistence: AgentPersistence
 }) =>
   Effect.gen(function* () {
@@ -293,7 +294,7 @@ const loadAgentRunSuccessData = (params: {
 const saveAgentRunOutput = (result: {
   text: string
   reasoning: string
-  agentName: string
+  agentName: AgentName
   sessionId: SessionId
 }) =>
   Effect.gen(function* () {
@@ -340,7 +341,7 @@ const makeSharedRunnerHelpers = (
   eventPublisher: EventPublisherService,
 ) => {
   const createDurableAgentRunSession = (params: {
-    agent: { name: string }
+    agent: { name: AgentName }
     prompt: string
     parentSessionId: SessionId
     parentBranchId: BranchId
@@ -405,7 +406,7 @@ const makeSharedRunnerHelpers = (
     toolCallId?: ToolCallId
     sessionId: SessionId
     childBranchId: BranchId
-    agentName: string
+    agentName: AgentName
     prompt: string
   }) =>
     eventPublisher.publish(
@@ -425,7 +426,7 @@ const makeSharedRunnerHelpers = (
     parentBranchId: BranchId
     toolCallId?: ToolCallId
     sessionId: SessionId
-    agentName: string
+    agentName: AgentName
     usage?: { input: number; output: number; cost?: number }
     preview?: string
     savedPath?: string
@@ -448,7 +449,7 @@ const makeSharedRunnerHelpers = (
     parentBranchId: BranchId
     toolCallId?: ToolCallId
     sessionId: SessionId
-    agentName: string
+    agentName: AgentName
   }) =>
     eventPublisher
       .publish(
@@ -655,7 +656,7 @@ const runEphemeralAgent = (params: {
   parentBranchId: BranchId
   toolCallId?: ToolCallId
   cwd: string
-  agentName: string
+  agentName: AgentName
   prompt: string
   runSpec?: RunSpec
   persistence: AgentPersistence
@@ -906,7 +907,7 @@ export const InProcessRunner = (
       const publishAgentSwitch = (params: {
         sessionId: SessionId
         branchId: BranchId
-        agentName: string
+        agentName: AgentName
       }) =>
         eventPublisher.publish(
           AgentSwitched.make({

@@ -19,6 +19,7 @@
  */
 import { Effect, Layer } from "effect"
 import {
+  AgentName,
   defineAgent,
   defineExtension,
   defineResource,
@@ -57,14 +58,14 @@ const getClaudeCodeManager = () => {
 }
 
 const claudeCodeAgent = defineAgent({
-  name: CLAUDE_CODE_AGENT_NAME,
+  name: AgentName.make(CLAUDE_CODE_AGENT_NAME),
   description: "Claude Code via Claude Agent SDK",
   driver: ExternalDriverRef.make({ id: `acp-${CLAUDE_CODE_AGENT_NAME}` }),
 })
 
 const protocolAgents = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) =>
   defineAgent({
-    name,
+    name: AgentName.make(name),
     description: `${config.command} via ACP`,
     driver: ExternalDriverRef.make({ id: `acp-${name}` }),
   }),

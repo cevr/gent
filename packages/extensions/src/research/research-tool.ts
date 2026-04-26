@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, makeRunSpec, tool, type ToolContext } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineAgent,
+  makeRunSpec,
+  tool,
+  type ToolContext,
+} from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
 
@@ -15,7 +21,7 @@ When comparing implementations, note patterns, tradeoffs, and design decisions.
 `.trim()
 
 const researchAgent = defineAgent({
-  name: "research-worker",
+  name: AgentName.make("research-worker"),
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: RESEARCHER_PROMPT,
 })

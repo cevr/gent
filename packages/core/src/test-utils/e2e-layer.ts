@@ -11,10 +11,10 @@
 import { Effect, Layer, Ref } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
-  DEFAULT_MODEL_ID,
+  AgentName,
   AgentRunnerService,
+  DEFAULT_MODEL_ID,
   type AgentDefinition,
-  type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
@@ -189,7 +189,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             _tag: "success" as const,
             text: "",
             sessionId: SessionId.make("test-subagent-session"),
-            agentName: "cowork" as AgentName,
+            agentName: AgentName.make("cowork"),
           }),
       }
       const subagentRunnerLayer = Layer.succeed(

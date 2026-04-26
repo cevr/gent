@@ -8,8 +8,8 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import {
   AgentDefinition,
+  AgentName,
   AgentRunnerService,
-  type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
 import {
@@ -226,7 +226,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         _tag: "success" as const,
         text: "",
         sessionId: SessionId.make("test-subagent-session"),
-        agentName: "cowork" as AgentName,
+        agentName: AgentName.make("cowork"),
       }),
   }
   const subagentRunnerLayer = Layer.succeed(

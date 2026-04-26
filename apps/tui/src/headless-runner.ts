@@ -1,5 +1,5 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
-import type { RunSpec } from "@gent/core/domain/agent.js"
+import type { AgentName, RunSpec } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
 
@@ -13,7 +13,7 @@ export const runHeadless = (
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
-  agentOverride?: string,
+  agentOverride?: AgentName,
   runSpec?: RunSpec,
 ) =>
   Effect.scoped(

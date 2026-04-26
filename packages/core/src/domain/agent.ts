@@ -1,13 +1,13 @@
 import { Context, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
-import { ToolCallId } from "./ids.js"
-import type { BranchId, SessionId } from "./ids.js"
+import { branded, SessionId, ToolCallId } from "./ids.js"
+import type { BranchId } from "./ids.js"
 import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Agent definitions
 
-export const AgentName = Schema.String
+export const AgentName = Schema.String.pipe(branded("AgentName"))
 export type AgentName = typeof AgentName.Type
 
 export const ReasoningEffort = Schema.Literals([
@@ -51,7 +51,7 @@ export const ExternalDriverRef = DriverRef.External
 export type ExternalDriverRef = typeof DriverRef.External.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
-export const DEFAULT_AGENT_NAME = "cowork" as AgentName
+export const DEFAULT_AGENT_NAME = AgentName.make("cowork")
 
 /**
  * AgentSpec — agent identity + defaults.
@@ -202,30 +202,37 @@ export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
 // Agent runner types
 
-export interface AgentRunToolCall {
-  toolName: string
-  args: Record<string, unknown>
-  isError: boolean
-}
+export const AgentRunToolCallSchema = Schema.Struct({
+  toolName: Schema.String,
+  args: Schema.Record(Schema.String, Schema.Unknown),
+  isError: Schema.Boolean,
+})
+export type AgentRunToolCall = Schema.Schema.Type<typeof AgentRunToolCallSchema>
 
-export type AgentRunResult =
-  | {
-      _tag: "success"
-      text: string
-      sessionId: SessionId
-      agentName: AgentName
-      persistence?: AgentPersistence
-      usage?: { input: number; output: number; cost?: number }
-      toolCalls?: ReadonlyArray<AgentRunToolCall>
-      savedPath?: string
-    }
-  | {
-      _tag: "error"
-      error: string
-      sessionId?: SessionId
-      agentName?: AgentName
-      persistence?: AgentPersistence
-    }
+const AgentRunUsageSchema = Schema.Struct({
+  input: Schema.Number,
+  output: Schema.Number,
+  cost: Schema.optional(Schema.Number),
+})
+
+export const AgentRunResult = TaggedEnumClass("AgentRunResult", {
+  Success: TaggedEnumClass.variant("success", {
+    text: Schema.String,
+    sessionId: SessionId,
+    agentName: AgentName,
+    persistence: Schema.optional(AgentPersistence),
+    usage: Schema.optional(AgentRunUsageSchema),
+    toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
+    savedPath: Schema.optional(Schema.String),
+  }),
+  Failure: TaggedEnumClass.variant("error", {
+    error: Schema.String,
+    sessionId: Schema.optional(SessionId),
+    agentName: Schema.optional(AgentName),
+    persistence: Schema.optional(AgentPersistence),
+  }),
+})
+export type AgentRunResult = Schema.Schema.Type<typeof AgentRunResult>
 
 export const getDurableAgentRunSessionId = (result: AgentRunResult): SessionId | undefined =>
   result.sessionId !== undefined && (result.persistence ?? "durable") === "durable"

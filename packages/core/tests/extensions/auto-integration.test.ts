@@ -14,7 +14,7 @@ import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
-import type { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AutoProtocol } from "@gent/extensions/auto-protocol"
 
@@ -42,7 +42,7 @@ const reviewCompatibleRunner = {
           ])
         : "No issues found.",
       sessionId: SessionId.make("test-subagent-session"),
-      agentName: "cowork" as AgentName,
+      agentName: AgentName.make("cowork"),
     }),
 }
 

@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentName,
   DEFAULT_AGENT_NAME,
   defineAgent,
   getDurableAgentRunSessionId,
@@ -84,7 +85,7 @@ Only output the JSON array, no other text.
 `.trim()
 
 const reviewAgent = defineAgent({
-  name: "review-worker",
+  name: AgentName.make("review-worker"),
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: REVIEW_AGENT_PROMPT,
 })

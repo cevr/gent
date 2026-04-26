@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import type { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
@@ -20,7 +20,7 @@ describe("resolveStartupAuthState", () => {
             reasoningLevel: undefined,
             runtime: {
               _tag: "Idle" as const,
-              agent: "deepwork" as AgentName,
+              agent: AgentName.make("deepwork"),
               queue: emptyQueueSnapshot(),
             },
             metrics: {
@@ -91,7 +91,7 @@ describe("resolveStartupAuthState", () => {
             reasoningLevel: undefined,
             runtime: {
               _tag: "Idle" as const,
-              agent: "cowork" as AgentName,
+              agent: AgentName.make("cowork"),
               queue: emptyQueueSnapshot(),
             },
             metrics: {

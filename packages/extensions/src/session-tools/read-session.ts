@@ -1,12 +1,13 @@
 import { Effect, Schema } from "effect"
 import {
-  tool,
+  AgentName,
   headTailChars,
   makeRunSpec,
   SessionId,
+  tool,
+  type Branch,
   type Message,
   type MessagePart,
-  type Branch,
 } from "@gent/core/extensions/api"
 
 // Read Session Error
@@ -137,7 +138,7 @@ export const ReadSessionTool = tool({
     // If goal provided, use AI extraction
     if (params.goal !== undefined) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
-      const summarizer = yield* ctx.agent.require("summarizer")
+      const summarizer = yield* ctx.agent.require(AgentName.make("summarizer"))
       const result = yield* ctx.agent.run({
         agent: summarizer,
         prompt,

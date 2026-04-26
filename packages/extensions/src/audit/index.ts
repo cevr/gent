@@ -1,4 +1,4 @@
-import { defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
+import { AgentName, defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
 import { AuditTool } from "./audit-tool.js"
 
 const AUDITOR_PROMPT = `
@@ -10,7 +10,7 @@ Use the principles tool for architectural concerns.
 `.trim()
 
 export const auditor = defineAgent({
-  name: "auditor",
+  name: AgentName.make("auditor"),
   description: "Audits code for a specific concern category",
   model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "bash"],

@@ -5,7 +5,7 @@
  * (`gent -H -a memory:reflect "..."`).
  */
 
-import { defineAgent, ModelId, type AgentName } from "@gent/core/extensions/api"
+import { AgentName, defineAgent, ModelId } from "@gent/core/extensions/api"
 
 // ── Reflect Agent ──
 
@@ -44,7 +44,7 @@ After processing, summarize what you extracted and stored.
 `.trim()
 
 export const MemoryReflectAgent = defineAgent({
-  name: "memory:reflect" as AgentName,
+  name: AgentName.make("memory:reflect"),
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Review recent sessions and extract project-level memories",
   systemPromptAddendum: REFLECT_PROMPT,
@@ -80,7 +80,7 @@ Summarize: how many entries reviewed, merged, promoted, pruned.
 `.trim()
 
 export const MemoryMeditateAgent = defineAgent({
-  name: "memory:meditate" as AgentName,
+  name: AgentName.make("memory:meditate"),
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Consolidate project memories, prune duplicates, promote to global principles",
   systemPromptAddendum: MEDITATE_PROMPT,

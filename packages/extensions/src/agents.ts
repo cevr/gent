@@ -1,4 +1,4 @@
-import { defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
+import { AgentName, defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
 
 const COWORK_PROMPT = `
 Cowork agent. Fast, practical, execute changes.
@@ -35,14 +35,14 @@ Summarizer agent. Summarize prior context. Focus decisions, open questions, curr
 `.trim()
 
 const cowork = defineAgent({
-  name: "cowork",
+  name: AgentName.make("cowork"),
   description: "General purpose - full tool access, can execute code changes",
   model: ModelId.make("anthropic/claude-opus-4-6"),
   systemPromptAddendum: COWORK_PROMPT,
 })
 
 const deepwork = defineAgent({
-  name: "deepwork",
+  name: AgentName.make("deepwork"),
   description: "Deep analysis with thorough reasoning — alternative model perspective",
   model: ModelId.make("openai/gpt-5.4"),
   systemPromptAddendum: DEEPWORK_PROMPT,
@@ -50,7 +50,7 @@ const deepwork = defineAgent({
 })
 
 const explore = defineAgent({
-  name: "explore",
+  name: AgentName.make("explore"),
   description: "Fast codebase exploration - finds files, searches patterns",
   model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
@@ -58,14 +58,14 @@ const explore = defineAgent({
 })
 
 const summarizer = defineAgent({
-  name: "summarizer",
+  name: AgentName.make("summarizer"),
   model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: [],
   systemPromptAddendum: SUMMARIZER_PROMPT,
 })
 
 const title = defineAgent({
-  name: "title",
+  name: AgentName.make("title"),
   model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: [],
   temperature: 0.5,

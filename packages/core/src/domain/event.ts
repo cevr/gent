@@ -2,7 +2,7 @@ import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effe
 
 import { Message } from "./message"
 import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
-import { ReasoningEffort } from "./agent"
+import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
@@ -216,13 +216,13 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   AgentSwitched: {
     sessionId: SessionId,
     branchId: BranchId,
-    fromAgent: Schema.String,
-    toAgent: Schema.String,
+    fromAgent: AgentName,
+    toAgent: AgentName,
   },
   AgentRunSpawned: {
     parentSessionId: SessionId,
     childSessionId: SessionId,
-    agentName: Schema.String,
+    agentName: AgentName,
     prompt: Schema.String,
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
@@ -231,7 +231,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   AgentRunSucceeded: {
     parentSessionId: SessionId,
     childSessionId: SessionId,
-    agentName: Schema.String,
+    agentName: AgentName,
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
     usage: Schema.optional(
@@ -247,7 +247,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   AgentRunFailed: {
     parentSessionId: SessionId,
     childSessionId: SessionId,
-    agentName: Schema.String,
+    agentName: AgentName,
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
   },
@@ -442,17 +442,120 @@ export interface EventStoreService {
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
-  if (event._tag === "MessageReceived") return event.message.sessionId
-  if ("sessionId" in event) return SessionId.make(event.sessionId)
-  if ("parentSessionId" in event) return SessionId.make(event.parentSessionId)
+/**
+ * Defensive structural fallback for events that bypass schema validation —
+ * synthetic test fixtures or future tags this build doesn't yet know about.
+ * The exhaustive `match` paths above stay authoritative for valid events.
+ */
+const readStringField = (event: Record<string, unknown>, key: string): string | undefined => {
+  const value = event[key]
+  return typeof value === "string" ? value : undefined
+}
+
+const fallbackSessionId = (event: Record<string, unknown>): SessionId | undefined => {
+  const direct = readStringField(event, "sessionId")
+  if (direct !== undefined) return SessionId.make(direct)
+  const parent = readStringField(event, "parentSessionId")
+  if (parent !== undefined) return SessionId.make(parent)
   return undefined
 }
 
+const fallbackBranchId = (event: Record<string, unknown>): BranchId | undefined => {
+  const value = readStringField(event, "branchId")
+  return value !== undefined ? BranchId.make(value) : undefined
+}
+
+const matchEventSessionId = AgentEvent.match({
+  SessionStarted: (e) => e.sessionId,
+  MessageReceived: (e) => e.message.sessionId,
+  StreamStarted: (e) => e.sessionId,
+  StreamChunk: (e) => e.sessionId,
+  StreamEnded: (e) => e.sessionId,
+  TurnCompleted: (e) => e.sessionId,
+  TurnRecoveryApplied: (e) => e.sessionId,
+  ToolCallStarted: (e) => e.sessionId,
+  ToolCallSucceeded: (e) => e.sessionId,
+  ToolCallFailed: (e) => e.sessionId,
+  InteractionPresented: (e) => e.sessionId,
+  InteractionResolved: (e) => e.sessionId,
+  ErrorOccurred: (e) => e.sessionId,
+  ProviderRetrying: (e) => e.sessionId,
+  MachineInspected: (e) => e.sessionId,
+  MachineTaskSucceeded: (e) => e.sessionId,
+  MachineTaskFailed: (e) => e.sessionId,
+  SessionNameUpdated: (e) => e.sessionId,
+  SessionSettingsUpdated: (e) => e.sessionId,
+  BranchCreated: (e) => e.sessionId,
+  BranchSwitched: (e) => e.sessionId,
+  BranchSummarized: (e) => e.sessionId,
+  AgentSwitched: (e) => e.sessionId,
+  AgentRunSpawned: (e) => e.parentSessionId,
+  AgentRunSucceeded: (e) => e.parentSessionId,
+  AgentRunFailed: (e) => e.parentSessionId,
+  TaskCreated: (e) => e.sessionId,
+  TaskUpdated: (e) => e.sessionId,
+  TaskCompleted: (e) => e.sessionId,
+  TaskFailed: (e) => e.sessionId,
+  TaskStopped: (e) => e.sessionId,
+  TaskDeleted: (e) => e.sessionId,
+  AgentRestarted: (e) => e.sessionId,
+  ExtensionStateChanged: (e) => e.sessionId,
+})
+
+export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
+  try {
+    return matchEventSessionId(event)
+  } catch {
+    return fallbackSessionId(event)
+  }
+}
+
+const matchEventBranchId = AgentEvent.match({
+  SessionStarted: (e) => e.branchId,
+  MessageReceived: (e) => e.message.branchId,
+  StreamStarted: (e) => e.branchId,
+  StreamChunk: (e) => e.branchId,
+  StreamEnded: (e) => e.branchId,
+  TurnCompleted: (e) => e.branchId,
+  TurnRecoveryApplied: (e) => e.branchId,
+  ToolCallStarted: (e) => e.branchId,
+  ToolCallSucceeded: (e) => e.branchId,
+  ToolCallFailed: (e) => e.branchId,
+  InteractionPresented: (e) => e.branchId,
+  InteractionResolved: (e) => e.branchId,
+  ErrorOccurred: (e) => e.branchId,
+  ProviderRetrying: (e) => e.branchId,
+  MachineInspected: (e) => e.branchId,
+  MachineTaskSucceeded: (e) => e.branchId,
+  MachineTaskFailed: (e) => e.branchId,
+  SessionNameUpdated: () => undefined,
+  SessionSettingsUpdated: () => undefined,
+  BranchCreated: (e) => e.branchId,
+  // BranchSwitched has no `branchId` field — `from`/`to` are both per-branch.
+  // Returning `undefined` lets branch-scoped subscribers see the switch on
+  // either side, matching the prior structural-narrowing behavior.
+  BranchSwitched: () => undefined,
+  BranchSummarized: (e) => e.branchId,
+  AgentSwitched: (e) => e.branchId,
+  AgentRunSpawned: (e) => e.branchId,
+  AgentRunSucceeded: (e) => e.branchId,
+  AgentRunFailed: (e) => e.branchId,
+  TaskCreated: (e) => e.branchId,
+  TaskUpdated: (e) => e.branchId,
+  TaskCompleted: (e) => e.branchId,
+  TaskFailed: (e) => e.branchId,
+  TaskStopped: (e) => e.branchId,
+  TaskDeleted: (e) => e.branchId,
+  AgentRestarted: (e) => e.branchId,
+  ExtensionStateChanged: (e) => e.branchId,
+})
+
 export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
-  if (event._tag === "MessageReceived") return event.message.branchId
-  if ("branchId" in event) return event.branchId as BranchId | undefined
-  return undefined
+  try {
+    return matchEventBranchId(event)
+  } catch {
+    return fallbackBranchId(event)
+  }
 }
 
 export const matchesEventFilter = (

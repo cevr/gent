@@ -9,14 +9,15 @@
 
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import {
+  AgentName,
+  ReadOnlyBrand,
+  SessionId,
   Task,
   TaskStatus,
-  SessionId,
-  type BranchId,
-  type TaskId,
-  type ReadOnly,
-  ReadOnlyBrand,
   withReadOnly,
+  type BranchId,
+  type ReadOnly,
+  type TaskId,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 
@@ -77,7 +78,7 @@ const taskFromRow = (row: TaskRow) =>
     description: row.description ?? undefined,
     status: isTaskStatus(row.status) ? row.status : "pending",
     owner: row.owner !== null ? SessionId.make(row.owner) : undefined,
-    agentType: row.agent_type ?? undefined,
+    agentType: row.agent_type !== null ? AgentName.make(row.agent_type) : undefined,
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,
     metadata: decodeTaskMetadata(row.metadata),

@@ -22,16 +22,18 @@ import { BranchId, SessionId } from "./ids"
 // ============================================================================
 
 /** Request params for ctx.interaction.approve() */
-export interface ApprovalRequest {
-  readonly text: string
-  readonly metadata?: unknown
-}
+export const ApprovalRequestSchema = Schema.Struct({
+  text: Schema.String,
+  metadata: Schema.optional(Schema.Unknown),
+})
+export type ApprovalRequest = Schema.Schema.Type<typeof ApprovalRequestSchema>
 
 /** Decision returned from ctx.interaction.approve() */
-export interface ApprovalDecision {
-  readonly approved: boolean
-  readonly notes?: string
-}
+export const ApprovalDecisionSchema = Schema.Struct({
+  approved: Schema.Boolean,
+  notes: Schema.optional(Schema.String),
+})
+export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 
 // ============================================================================
 // Interaction pending signal
@@ -64,13 +66,7 @@ export interface InteractionRequestRecord {
 /** All interaction records use this type — the old per-handler types are gone */
 export const INTERACTION_TYPE = "approval" as const
 
-const ApprovalRequestSchema = Schema.Struct({
-  text: Schema.String,
-  metadata: Schema.optional(Schema.Unknown),
-})
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema as unknown as Schema.Any)
+const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 
 export const encodeInteractionParams = (
   params: ApprovalRequest,

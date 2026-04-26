@@ -6,7 +6,7 @@ import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import { Auth } from "../src/routes/auth"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
-import type { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
@@ -60,7 +60,7 @@ describe("Auth route", () => {
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
-      initialAgent: "helper:google" as AgentName,
+      initialAgent: AgentName.make("helper:google"),
     })
 
     expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
@@ -102,13 +102,13 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork" as AgentName,
+        initialAgent: AgentName.make("cowork"),
       },
     )
 
     expect(pending.map((entry) => entry.agentName)).toEqual(["cowork"])
 
-    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
+    ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
     await setup.renderOnce()
 
     expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
@@ -188,7 +188,7 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork" as AgentName,
+        initialAgent: AgentName.make("cowork"),
       },
     )
 
@@ -204,7 +204,7 @@ describe("Auth route", () => {
     setup.mockInput.pressEnter()
     await setup.renderOnce()
 
-    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
+    ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
     const reloaded = await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
     expect(reloaded).toContain("openai")
 
@@ -312,7 +312,7 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork" as AgentName,
+        initialAgent: AgentName.make("cowork"),
       },
     )
 
@@ -323,7 +323,7 @@ describe("Auth route", () => {
     setup.mockInput.pressEnter()
     await setup.renderOnce()
 
-    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
+    ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
     await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
 
     resolveAuthorize?.({
@@ -391,7 +391,7 @@ describe("Auth route", () => {
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
-      initialAgent: "cowork" as AgentName,
+      initialAgent: AgentName.make("cowork"),
     })
 
     await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
@@ -483,7 +483,7 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork" as AgentName,
+        initialAgent: AgentName.make("cowork"),
       },
     )
 
@@ -495,7 +495,7 @@ describe("Auth route", () => {
     await setup.renderOnce()
     await waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below"))
 
-    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
+    ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
     await Promise.resolve()
     await setup.renderOnce()
     expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
@@ -558,7 +558,7 @@ describe("Auth route", () => {
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
-      initialAgent: "cowork" as AgentName,
+      initialAgent: AgentName.make("cowork"),
     })
 
     await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))

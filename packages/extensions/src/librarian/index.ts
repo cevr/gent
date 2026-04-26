@@ -1,4 +1,10 @@
-import { defineAgent, defineExtension, defineResource, ModelId } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineAgent,
+  defineExtension,
+  defineResource,
+  ModelId,
+} from "@gent/core/extensions/api"
 import { RepoTool } from "./repo-explorer.js"
 import { GitReader } from "./git-reader.js"
 
@@ -12,7 +18,7 @@ Use read, grep, and glob tools to explore the code. Be precise — cite file pat
 `.trim()
 
 export const librarian = defineAgent({
-  name: "librarian",
+  name: AgentName.make("librarian"),
   description: "Answers questions about external repos using local cached clones",
   model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "repo"],

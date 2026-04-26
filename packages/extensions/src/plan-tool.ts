@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentName,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
   tool,
@@ -189,7 +190,7 @@ export const PlanTool = tool({
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
     const mode = params.mode ?? "plan-only"
 
-    const architect = yield* ctx.agent.require("architect")
+    const architect = yield* ctx.agent.require(AgentName.make("architect"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
     const executor = yield* ctx.agent.require(callerAgentName)
 

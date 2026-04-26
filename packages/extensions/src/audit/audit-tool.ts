@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentName,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
   tool,
@@ -293,8 +294,8 @@ export const AuditTool = tool({
     const maxConcerns = params.maxConcerns ?? 5
     const paths = yield* resolveAuditPaths(params.paths, ctx.cwd)
 
-    const architect = yield* ctx.agent.require("architect")
-    const auditor = yield* ctx.agent.require("auditor")
+    const architect = yield* ctx.agent.require(AgentName.make("architect"))
+    const auditor = yield* ctx.agent.require(AgentName.make("auditor"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
     const executor = yield* ctx.agent.require(callerAgentName)
 

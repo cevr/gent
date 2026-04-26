@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, makeRunSpec, tool, type ToolContext } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineAgent,
+  makeRunSpec,
+  tool,
+  type ToolContext,
+} from "@gent/core/extensions/api"
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,
@@ -15,7 +21,7 @@ If you disagree with the current approach, say so and explain why.
 `.trim()
 
 const counselAgent = defineAgent({
-  name: "counsel-worker",
+  name: AgentName.make("counsel-worker"),
 })
 
 export const CounselParams = Schema.Struct({

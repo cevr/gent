@@ -92,7 +92,7 @@ const resolveParentSpan = () =>
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
-  agent: Option.Option<string>,
+  agent: AgentName | undefined,
   runSpec?: RunSpec,
 ) =>
   Effect.gen(function* () {
@@ -123,7 +123,7 @@ const runHeadlessTurn = (
       state.session.id,
       branchId,
       state.prompt,
-      Option.getOrUndefined(agent),
+      agent,
       runSpec,
     ).pipe(
       Effect.withSpan("Headless.run"),
@@ -284,7 +284,7 @@ const main = Command.make(
             ).pipe(Effect.catchEager((e) => Effect.die(`Invalid --run-spec: ${String(e)}`)))
           : undefined
 
-        yield* runHeadlessTurn(bundle, state, agent, decodedRunSpec)
+        yield* runHeadlessTurn(bundle, state, requestedAgent, decodedRunSpec)
         return
       }
 

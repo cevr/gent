@@ -282,7 +282,7 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  const defaultAgent: AgentName = props.initialAgent ?? "cowork"
+  const defaultAgent: AgentName = props.initialAgent ?? AgentNameSchema.make("cowork")
   const client = props.client
   const runtime = props.runtime
   const log = props.log

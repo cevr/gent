@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
-import { RunSpecSchema, DriverRef, ReasoningEffort } from "../domain/agent.js"
+import { AgentName, DriverRef, ReasoningEffort, RunSpecSchema } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import {
   AuthProviderInfo,
@@ -37,7 +37,7 @@ export const CreateSessionInput = Schema.Struct({
   /** If provided, sends this message immediately after creation */
   initialPrompt: Schema.optional(Schema.String),
   /** Agent override for the initial prompt (turn-scoped, not persistent) */
-  agentOverride: Schema.optional(Schema.String),
+  agentOverride: Schema.optional(AgentName),
   /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
   requestId: Schema.optional(RequestIdSchema),
 })
@@ -203,7 +203,7 @@ export const SendMessageInput = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   /** Per-run agent override — switches agent for this message only. Uses fresh ephemeral sessions to avoid state bleed. */
-  agentOverride: Schema.optional(Schema.String),
+  agentOverride: Schema.optional(AgentName),
   /** Per-run dispatch config — forwarded to the agent loop for this turn only. */
   runSpec: Schema.optional(RunSpecSchema),
   /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
