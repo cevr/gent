@@ -1,9 +1,14 @@
 import { Context, type Effect } from "effect"
 import type { EventStoreError } from "./event.js"
 import type { BranchId, MessageId, SessionId } from "./ids.js"
+import type { InvalidStateError, NotFoundError } from "./business-errors.js"
 import type { StorageError } from "../storage/sqlite-storage.js"
 
-export type SessionMutationError = StorageError | EventStoreError
+export type SessionMutationError =
+  | StorageError
+  | EventStoreError
+  | InvalidStateError
+  | NotFoundError
 
 export interface SessionMutationsService {
   readonly renameSession: (input: {
@@ -37,12 +42,12 @@ export interface SessionMutationsService {
     readonly sessionId: SessionId
     readonly currentBranchId: BranchId
     readonly branchId: BranchId
-  }) => Effect.Effect<void, StorageError>
+  }) => Effect.Effect<void, SessionMutationError>
   readonly deleteMessages: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly afterMessageId?: MessageId
-  }) => Effect.Effect<void, StorageError>
+  }) => Effect.Effect<void, SessionMutationError>
 }
 
 export class SessionMutations extends Context.Service<SessionMutations, SessionMutationsService>()(

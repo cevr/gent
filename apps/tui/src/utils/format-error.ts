@@ -26,6 +26,8 @@ export const formatError = (error: UiError): string => {
       return `Events: ${error.message}`
     case "NotFoundError":
       return `Not found: ${error.message}`
+    case "InvalidStateError":
+      return `Invalid: ${error.message}`
     case "PlatformError":
       return `Platform: ${error.message}`
     case "ProviderAuthError":

@@ -37,7 +37,7 @@ import {
   applySteerCommand,
   sendUserMessageCommand,
 } from "../runtime/session-runtime.js"
-import { NotFoundError, type AppServiceError } from "./errors.js"
+import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
   CreateBranchResult,
@@ -280,11 +280,17 @@ const makeSessionMutationsService: Effect.Effect<
     function* (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) {
       const branches = yield* branchStorage.listBranches(input.sessionId)
       if (branches.some((branch) => branch.parentBranchId === input.branchId)) {
-        return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child branches`)
+        return yield* new InvalidStateError({
+          message: `Cannot delete branch "${input.branchId}" with child branches`,
+          operation: "deleteBranch",
+        })
       }
       const childSessions = yield* storage.getChildSessions(input.sessionId)
       if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
-        return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child sessions`)
+        return yield* new InvalidStateError({
+          message: `Cannot delete branch "${input.branchId}" with child sessions`,
+          operation: "deleteBranch",
+        })
       }
     },
   )
