@@ -423,7 +423,7 @@ describe("SessionRuntime", () => {
             requestId: "req-not-waiting",
           }),
         )
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -458,7 +458,7 @@ describe("SessionRuntime", () => {
         }
 
         expect(eventTags(yield* recorder.getCalls())).toContain("ErrorOccurred")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -530,7 +530,7 @@ describe("SessionRuntime", () => {
         const calls = yield* recorder.getCalls()
         expect(eventTags(calls)).not.toContain("AgentSwitched")
         yield* controls.assertDone()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -569,7 +569,7 @@ describe("SessionRuntime", () => {
         expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
         expect(eventTags(calls)).toContain("ToolCallStarted")
         expect(eventTags(calls)).toContain("ToolCallSucceeded")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -611,7 +611,7 @@ describe("SessionRuntime", () => {
 
         expect(exit._tag).toBe("Failure")
         expect(message).toBeUndefined()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -644,7 +644,7 @@ describe("SessionRuntime", () => {
 
         expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
         expect(toolSucceeded).toHaveLength(1)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -685,7 +685,7 @@ describe("SessionRuntime", () => {
         expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
         expect(toolSucceeded).toHaveLength(1)
         expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -771,7 +771,7 @@ describe("SessionRuntime", () => {
         yield* Fiber.join(secondFiber)
 
         expect(deliveredToolResults).toBe(2)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -848,7 +848,7 @@ describe("SessionRuntime", () => {
           "assistant",
           "tool",
         ])
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -923,7 +923,7 @@ describe("SessionRuntime", () => {
 
         expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
         yield* controls.assertDone()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -977,7 +977,7 @@ describe("SessionRuntime", () => {
         expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -1030,7 +1030,7 @@ describe("SessionRuntime", () => {
         expect(
           (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
         ).toHaveLength(1)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -1078,7 +1078,7 @@ describe("SessionRuntime", () => {
 
         expect(state._tag).toBe("Idle")
         expect(Ref.getUnsafe(callCount)).toBe(2)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
     )
   })
 })
