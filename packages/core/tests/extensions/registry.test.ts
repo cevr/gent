@@ -401,7 +401,7 @@ describe("ExtensionRegistry", () => {
     expect(agents.map((a) => a.name)).toContain("deepwork")
   })
 
-  test("resolveToolPolicy filters by allowedTools", async () => {
+  test("allowedTools narrows the resolved tool set", async () => {
     const readTool = makeTool("read")
     const bashTool = makeTool("bash")
     const agent = AgentDefinition.make({
@@ -418,7 +418,7 @@ describe("ExtensionRegistry", () => {
     expect(tools[0]?.id).toBe("read")
   })
 
-  test("resolveToolPolicy allowedTools restricts to exact set", async () => {
+  test("allowedTools restricts the resolved set to exactly the listed names", async () => {
     const readTool = makeTool("read")
     const bashTool = makeTool("bash")
     const editTool = makeTool("edit")
@@ -438,7 +438,7 @@ describe("ExtensionRegistry", () => {
     expect(names).not.toContain("edit")
   })
 
-  test("resolveToolPolicy applies deniedTools", async () => {
+  test("deniedTools removes matching entries from the resolved set", async () => {
     const readTool = makeTool("read")
     const writeTool = makeTool("write")
     const agent = AgentDefinition.make({

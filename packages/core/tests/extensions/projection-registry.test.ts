@@ -140,7 +140,7 @@ describe("projection registry", () => {
       }),
   )
 
-  it.live("query() returns highest-precedence value and undefined for missing ids", () =>
+  it.live("query yields the highest-precedence value, or undefined for missing ids", () =>
     Effect.gen(function* () {
       const builtin: ProjectionContribution<string> = {
         id: "raw",

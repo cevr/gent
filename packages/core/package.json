@@ -155,7 +155,9 @@
     "./test-utils/in-process-layer": "./src/test-utils/in-process-layer.ts",
     "./test-utils/in-process-layer.js": "./src/test-utils/in-process-layer.ts",
     "./test-utils/reconciled-extensions": "./src/test-utils/reconciled-extensions.ts",
-    "./test-utils/reconciled-extensions.js": "./src/test-utils/reconciled-extensions.ts"
+    "./test-utils/reconciled-extensions.js": "./src/test-utils/reconciled-extensions.ts",
+    "./test-utils/rpc-harness": "./src/test-utils/rpc-harness.ts",
+    "./test-utils/rpc-harness.js": "./src/test-utils/rpc-harness.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",

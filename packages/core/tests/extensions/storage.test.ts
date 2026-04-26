@@ -34,20 +34,20 @@ afterEach(() => {
 })
 
 describe("ExtensionStorage", () => {
-  test("set and get a value", async () => {
+  test("written value reads back unchanged", async () => {
     const storage = makeStorage("test-ext")
     await runWithPlatform(storage.set("key1", { hello: "world" }))
     const value = await runWithPlatform(storage.get("key1"))
     expect(value).toEqual({ hello: "world" })
   })
 
-  test("get returns undefined for missing key", async () => {
+  test("missing key reads back undefined", async () => {
     const storage = makeStorage("test-ext")
     const value = await runWithPlatform(storage.get("missing"))
     expect(value).toBeUndefined()
   })
 
-  test("delete removes a key", async () => {
+  test("deleted key disappears from subsequent reads", async () => {
     const storage = makeStorage("test-ext")
     await runWithPlatform(storage.set("key1", "value"))
     await runWithPlatform(storage.delete("key1"))
@@ -55,13 +55,13 @@ describe("ExtensionStorage", () => {
     expect(value).toBeUndefined()
   })
 
-  test("delete is idempotent for missing key", async () => {
+  test("deleting a missing key is a no-op", async () => {
     const storage = makeStorage("test-ext")
     await runWithPlatform(storage.delete("nonexistent"))
     // Should not throw
   })
 
-  test("list returns all keys", async () => {
+  test("listing yields every set key", async () => {
     const storage = makeStorage("test-ext")
     await runWithPlatform(storage.set("alpha", 1))
     await runWithPlatform(storage.set("beta", 2))
@@ -70,7 +70,7 @@ describe("ExtensionStorage", () => {
     expect(keys.sort()).toEqual(["alpha", "beta", "gamma"])
   })
 
-  test("list returns empty for no keys", async () => {
+  test("empty namespace lists no keys", async () => {
     const storage = makeStorage("test-ext")
     const keys = await runWithPlatform(storage.list())
     expect(keys).toEqual([])

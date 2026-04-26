@@ -15,7 +15,7 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {
-    it.live("get returns initial config when provided", () => {
+    it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({
         permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
       })
@@ -30,7 +30,7 @@ describe("ConfigService", () => {
       )
     })
 
-    it.live("set updates config", () =>
+    it.live("written permission rule is visible on next read", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.set({ permissions: [new PermissionRule({ tool: "Read", action: "allow" })] })
@@ -42,7 +42,7 @@ describe("ConfigService", () => {
   })
 
   describe("Permission rules", () => {
-    it.live("getPermissionRules returns rules from config", () => {
+    it.live("seeded permission rules are exposed verbatim", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", action: "deny" }),
@@ -55,7 +55,7 @@ describe("ConfigService", () => {
       )
     })
 
-    it.live("addPermissionRule adds rule to config", () =>
+    it.live("appended permission rule appears on next read", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
 
@@ -70,7 +70,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("addPermissionRule accumulates rules", () =>
+    it.live("repeated appends accumulate rules in order", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
 
@@ -85,7 +85,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("removePermissionRule removes matching rule", () => {
+    it.live("removing a rule by tool drops the matching entry", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", action: "deny" }),
@@ -104,7 +104,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test(initial)))
     })
 
-    it.live("removePermissionRule matches on pattern", () => {
+    it.live("pattern-scoped removal leaves the unpatterned rule intact", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", pattern: "rm", action: "deny" }),
@@ -123,7 +123,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test(initial)))
     })
 
-    it.live("removePermissionRule is idempotent for missing rule", () =>
+    it.live("removing a missing rule is a no-op", () =>
       ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
         Effect.provide(ConfigService.Test()),
       ),
@@ -131,7 +131,7 @@ describe("ConfigService", () => {
   })
 
   describe("disabledExtensions", () => {
-    it.live("get returns initial disabledExtensions when provided", () => {
+    it.live("seeded disabledExtensions read back unchanged", () => {
       const initial = new UserConfig({
         disabledExtensions: ["@gent/task-tools", "@gent/auto"],
       })
@@ -147,7 +147,7 @@ describe("ConfigService", () => {
       )
     })
 
-    it.live("set updates disabledExtensions", () =>
+    it.live("written disabledExtensions appear on next read", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.set({ disabledExtensions: ["@gent/memory"] })
@@ -157,7 +157,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("set preserves disabledExtensions when updating permissions", () =>
+    it.live("permission updates preserve previously stored disabledExtensions", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.set({ disabledExtensions: ["@gent/task-tools"] })
@@ -173,7 +173,7 @@ describe("ConfigService", () => {
   })
 
   describe("driverOverrides", () => {
-    it.live("setDriverOverride writes a single agent override", () =>
+    it.live("a single agent's driver override is persisted", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const driver = ExternalDriverRef.make({ id: "acp-claude-code" })
@@ -186,7 +186,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("setDriverOverride replaces an existing override for the same agent", () =>
+    it.live("re-setting an agent's driver replaces the prior override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -196,7 +196,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("setDriverOverride preserves other agents' overrides", () =>
+    it.live("setting one agent's driver leaves other agents' overrides intact", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -206,7 +206,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("clearDriverOverride removes one entry without touching others", () =>
+    it.live("clearing one agent's driver removes only that entry", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -218,7 +218,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("clearDriverOverride drops the entire record when last entry is removed", () =>
+    it.live("clearing the last driver override drops the record entirely", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -228,7 +228,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("clearDriverOverride is a no-op for an unknown agent", () =>
+    it.live("clearing an unknown agent's driver is a no-op", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.clearDriverOverride("does-not-exist")
@@ -237,7 +237,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("addPermissionRule preserves driverOverrides", () =>
+    it.live("appending a permission rule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -247,7 +247,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("removePermissionRule preserves driverOverrides", () =>
+    it.live("removing a permission rule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
@@ -259,7 +259,7 @@ describe("ConfigService", () => {
     )
   })
 
-  describe("get(cwd) — per-session project config", () => {
+  describe("per-session project config resolution", () => {
     // Shared scratch dirs: server launch cwd + two distinct project cwds,
     // each with a different `.gent/config.json`. The Live ConfigService
     // is built against the launch cwd, but every `get(otherCwd)` call
@@ -303,7 +303,7 @@ describe("ConfigService", () => {
       expect(override.id).toBe(expectedId)
     }
 
-    it.live("get() returns the launch-cwd project config", () =>
+    it.live("launch-cwd reads the launch-cwd project config", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const result = yield* cfg.get()
@@ -311,7 +311,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(live)),
     )
 
-    it.live("get(projectA) reads projectA's .gent/config.json, not the launch cwd", () =>
+    it.live("a project cwd resolves its own .gent/config.json, not the launch cwd's", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const result = yield* cfg.get(projectA)
@@ -319,7 +319,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(live)),
     )
 
-    it.live("get(projectB) is independent of get(projectA) — no cross-contamination", () =>
+    it.live("two project cwds resolve independently — no cross-contamination", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const a = yield* cfg.get(projectA)
@@ -329,7 +329,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(live)),
     )
 
-    it.live("get(unknownCwd) falls back to user-only config when no project file exists", () =>
+    it.live("an unknown cwd falls back to user-only config", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const empty = mkdtempSync(join(tmpdir(), "gent-config-empty-"))

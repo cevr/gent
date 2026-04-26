@@ -23,8 +23,7 @@ import {
   TaskUpdateRequest,
 } from "@gent/extensions/task-tools/requests"
 import { ref } from "@gent/core/extensions/api"
-import { Gent } from "@gent/sdk"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
 
 const setupTaskExt = Effect.provide(
@@ -36,6 +35,12 @@ const setupTaskExt = Effect.provide(
   BunServices.layer,
 )
 
+// Hoisted refs — every test reuses the same capability tokens.
+const TaskCreateRef = ref(TaskCreateRequest)
+const TaskDeleteRef = ref(TaskDeleteRequest)
+const TaskListRef = ref(TaskListRequest)
+const TaskUpdateRef = ref(TaskUpdateRequest)
+
 describe("TaskExtension via RPC", () => {
   it.live(
     "request(TaskCreate/TaskList/TaskUpdate) round-trip",
@@ -44,18 +49,19 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+          })
 
           // request: create
           const created = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskCreateRequest).extensionId,
-            capabilityId: ref(TaskCreateRequest).capabilityId,
-            intent: ref(TaskCreateRequest).intent,
+            extensionId: TaskCreateRef.extensionId,
+            capabilityId: TaskCreateRef.capabilityId,
+            intent: TaskCreateRef.intent,
             input: { subject: "Inspect repo" },
           })) as { id: string; subject: string; status: string }
           expect(created.id).toBeDefined()
@@ -66,9 +72,9 @@ describe("TaskExtension via RPC", () => {
           const listed = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskListRequest).extensionId,
-            capabilityId: ref(TaskListRequest).capabilityId,
-            intent: ref(TaskListRequest).intent,
+            extensionId: TaskListRef.extensionId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; subject: string; status: string }>
           expect(listed).toHaveLength(1)
@@ -78,18 +84,18 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskUpdateRequest).extensionId,
-            capabilityId: ref(TaskUpdateRequest).capabilityId,
-            intent: ref(TaskUpdateRequest).intent,
+            extensionId: TaskUpdateRef.extensionId,
+            capabilityId: TaskUpdateRef.capabilityId,
+            intent: TaskUpdateRef.intent,
             input: { taskId: created.id, status: "in_progress" },
           })
 
           const afterUpdate = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskListRequest).extensionId,
-            capabilityId: ref(TaskListRequest).capabilityId,
-            intent: ref(TaskListRequest).intent,
+            extensionId: TaskListRef.extensionId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
@@ -98,17 +104,17 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskDeleteRequest).extensionId,
-            capabilityId: ref(TaskDeleteRequest).capabilityId,
-            intent: ref(TaskDeleteRequest).intent,
+            extensionId: TaskDeleteRef.extensionId,
+            capabilityId: TaskDeleteRef.capabilityId,
+            intent: TaskDeleteRef.intent,
             input: { taskId: created.id },
           })
           const afterDelete = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: ref(TaskListRequest).extensionId,
-            capabilityId: ref(TaskListRequest).capabilityId,
-            intent: ref(TaskListRequest).intent,
+            extensionId: TaskListRef.extensionId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
@@ -124,18 +130,19 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+          })
 
           const result = yield* client.extension
             .request({
               sessionId,
               branchId,
-              extensionId: ref(TaskCreateRequest).extensionId,
-              capabilityId: ref(TaskCreateRequest).capabilityId,
-              intent: ref(TaskCreateRequest).intent,
+              extensionId: TaskCreateRef.extensionId,
+              capabilityId: TaskCreateRef.capabilityId,
+              intent: TaskCreateRef.intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
             })
@@ -154,16 +161,17 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+          })
 
           const result = yield* client.extension
             .request({
               sessionId,
               branchId,
-              extensionId: ref(TaskCreateRequest).extensionId,
+              extensionId: TaskCreateRef.extensionId,
               capabilityId: "not-a-real-capability",
               intent: "write",
               input: {},
@@ -182,17 +190,18 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+          })
 
           const result = yield* client.extension
             .request({
               sessionId,
               branchId,
-              extensionId: ref(TaskCreateRequest).extensionId,
-              capabilityId: ref(TaskCreateRequest).capabilityId,
+              extensionId: TaskCreateRef.extensionId,
+              capabilityId: TaskCreateRef.capabilityId,
               intent: "read",
               input: { subject: "Inspect repo" },
             })

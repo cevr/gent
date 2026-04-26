@@ -16,7 +16,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
 
   const stubRunner = (result: KeychainRunResult) => () => Promise.resolve(result)
 
-  test("get returns undefined on exit 44 (item not found)", async () => {
+  test("missing keychain item reads back undefined (exit 44)", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* AuthStorage
@@ -36,7 +36,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
     expect(result).toBeUndefined()
   })
 
-  test("get raises AuthStorageError on locked keychain (exit 36), not undefined", async () => {
+  test("locked keychain (exit 36) surfaces as AuthStorageError, not silent undefined", async () => {
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const storage = yield* AuthStorage
@@ -61,7 +61,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
     }
   })
 
-  test("delete raises AuthStorageError on missing item (exit 44)", async () => {
+  test("deleting a missing keychain item surfaces AuthStorageError (exit 44)", async () => {
     // delete must treat item-not-found as a real error — the caller asked
     // to remove something that doesn't exist, which is an invariant
     // violation worth surfacing, unlike `get` where missing is a valid
