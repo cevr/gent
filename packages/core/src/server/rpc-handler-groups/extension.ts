@@ -19,13 +19,13 @@ import type {
 import type { RpcHandlerDeps } from "./shared.js"
 
 const extensionRequestError = (params: {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly capabilityId: string
   readonly phase?: "command" | "request"
   readonly message: string
 }) =>
   new ExtensionProtocolError({
-    extensionId: ExtensionId.make(params.extensionId),
+    extensionId: params.extensionId,
     tag: params.capabilityId,
     phase: params.phase ?? "request",
     message: params.message,
@@ -34,7 +34,7 @@ const extensionRequestError = (params: {
 const resolveExtensionSession = (
   deps: RpcHandlerDeps,
   params: {
-    readonly extensionId: string
+    readonly extensionId: ExtensionId
     readonly tag: string
     readonly phase: "command" | "request"
     readonly sessionId: string
@@ -113,7 +113,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.send": ({ sessionId, message, branchId }: SendExtensionMessageInput) =>
     Effect.gen(function* () {
       const scope = yield* resolveExtensionSession(deps, {
-        extensionId: message.extensionId,
+        extensionId: ExtensionId.make(message.extensionId),
         tag: message._tag,
         phase: "command",
         sessionId,
@@ -144,7 +144,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.ask": ({ sessionId, message, branchId }: AskExtensionMessageInput) =>
     Effect.gen(function* () {
       const scope = yield* resolveExtensionSession(deps, {
-        extensionId: message.extensionId,
+        extensionId: ExtensionId.make(message.extensionId),
         tag: message._tag,
         phase: "request",
         sessionId,
@@ -179,8 +179,9 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     branchId,
   }: RequestCapabilityInput) =>
     Effect.gen(function* () {
+      const brandedExtensionId = ExtensionId.make(extensionId)
       const scope = yield* resolveExtensionSession(deps, {
-        extensionId,
+        extensionId: brandedExtensionId,
         tag: capabilityId,
         phase: "request",
         sessionId,
@@ -188,14 +189,14 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       })
       if (scope.session.cwd === undefined) {
         return yield* extensionRequestError({
-          extensionId,
+          extensionId: brandedExtensionId,
           capabilityId,
           message: "Session cwd unavailable for extension request",
         })
       }
       if (scope.branchId === undefined) {
         return yield* extensionRequestError({
-          extensionId,
+          extensionId: brandedExtensionId,
           capabilityId,
           message: "Branch unavailable for extension request",
         })
@@ -203,7 +204,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
       if (deps.storage === undefined) {
         return yield* extensionRequestError({
-          extensionId,
+          extensionId: brandedExtensionId,
           capabilityId,
           message: "Storage unavailable for transport-public capability dispatch",
         })
@@ -236,7 +237,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({
-              extensionId,
+              extensionId: brandedExtensionId,
               capabilityId,
               message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
             }),
