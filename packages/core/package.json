@@ -3,6 +3,8 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
+    "./domain/actor": "./src/domain/actor.ts",
+    "./domain/actor.js": "./src/domain/actor.ts",
     "./domain/agent": "./src/domain/agent.ts",
     "./domain/agent.js": "./src/domain/agent.ts",
     "./domain/auth-guard": "./src/domain/auth-guard.ts",
