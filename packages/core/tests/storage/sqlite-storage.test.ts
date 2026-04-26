@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { test } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Exit, Layer, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -472,12 +472,16 @@ describe("Storage", () => {
     //   3. no row in `sessions` has `parent_session_id = parent`;
     //   4. every id in `cascadedIds` is actually absent from `sessions` —
     //      callers use this set to clean runtime state (loops, streams,
-    //      cwd-registry) and a divergence would leak ghost entries.
+    //      cwd-registry) and a divergence would leak ghost entries;
+    //   5. every child create that *succeeded* is either in `cascadedIds`
+    //      or still present in the DB — a partial-cascade bug that
+    //      silently drops a child from the returned set without leaving
+    //      it in the DB would fail this invariant.
     // The bun:sqlite driver serializes SQL calls, so this test cannot
     // independently prove the `withTransaction` boundary is load-bearing
     // (FK enforcement does most of the heavy lifting). It pins the public
-    // contract: a regression that returned a stale or empty cascade set
-    // while still completing the delete would fail invariants 2 or 4.
+    // contract: a regression that returned a stale or partial cascade set
+    // while still completing the delete would fail invariants 2, 4, or 5.
     it.live("deleteSession racing with concurrent child createSession leaves no orphan rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -489,6 +493,25 @@ describe("Storage", () => {
         yield* storage.createBranch(
           new Branch({ id: parentBranchId, sessionId: parentId, createdAt: now }),
         )
+
+        // Pre-create K children before the race so the cascade has a
+        // non-vacuous set to return. These MUST appear in cascadedIds
+        // (they exist when the delete tx's SELECT runs).
+        const K = 8
+        const preChildIds = Array.from({ length: K }, (_, i) =>
+          SessionId.make(`race-pre-child-${i}`),
+        )
+        for (const id of preChildIds) {
+          yield* storage.createSession(
+            new Session({
+              id,
+              parentSessionId: parentId,
+              parentBranchId,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          )
+        }
 
         const N = 24
         const childIds = Array.from({ length: N }, (_, i) => SessionId.make(`race-child-${i}`))
@@ -514,7 +537,7 @@ describe("Storage", () => {
             ),
           )
 
-        const [cascadedIds] = yield* Effect.all(
+        const [cascadedIds, childExits] = yield* Effect.all(
           [
             storage.deleteSession(parentId),
             Effect.forEach(childIds, createChild, { concurrency: "unbounded" }),
@@ -522,14 +545,24 @@ describe("Storage", () => {
           { concurrency: "unbounded" },
         )
 
-        // Invariant: parent is gone, and parent is in the returned set.
+        // Invariant 1+2: parent is gone, and parent is in the returned set.
         const parentRows = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${parentId}`
         expect(parentRows[0]?.count).toBe(0)
         expect(cascadedIds).toContain(parentId)
 
-        // Invariant: no child row points at the removed parent. Children
+        // Invariant 2b: every pre-existing child must be in cascadedIds.
+        // These rows existed when the delete tx began, so the recursive
+        // descendant SELECT must have seen them. A partial-cascade bug
+        // that returned only `[parentId]` while still cascading children
+        // via FK would fail this — callers would never know to clean
+        // those children's runtime state.
+        for (const id of preChildIds) {
+          expect(cascadedIds).toContain(id)
+        }
+
+        // Invariant 3: no child row points at the removed parent. Children
         // that landed before the delete were cascaded; children that tried
         // to land after were rejected by the FK or cascaded together.
         const orphanRows = yield* sql<{
@@ -537,7 +570,7 @@ describe("Storage", () => {
         }>`SELECT COUNT(*) as count FROM sessions WHERE parent_session_id = ${parentId}`
         expect(orphanRows[0]?.count).toBe(0)
 
-        // Invariant: every id the storage layer reports as cascaded is
+        // Invariant 4: every id the storage layer reports as cascaded is
         // gone from the DB. The caller uses this set to clean runtime
         // state (loops, streams, cwd-registry) — a divergence here would
         // leak ghost entries pointing at deleted sessions.
@@ -546,6 +579,26 @@ describe("Storage", () => {
             count: number
           }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${id}`
           expect(rows[0]?.count).toBe(0)
+        }
+
+        // Invariant 5: every child create that *succeeded* is either in
+        // `cascadedIds` (the storage layer reported it as cascaded) or
+        // still present in the DB. A partial-cascade bug that silently
+        // dropped a successfully-created child from the returned set
+        // without leaving the row in the DB would fail this check —
+        // callers would never know to clean its runtime state.
+        const cascadedSet = new Set<SessionId>(cascadedIds)
+        for (let i = 0; i < childIds.length; i++) {
+          const childId = childIds[i]!
+          const exit = childExits[i]!
+          if (Exit.isSuccess(exit)) {
+            const inCascade = cascadedSet.has(childId)
+            const dbRows = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${childId}`
+            const inDb = (dbRows[0]?.count ?? 0) > 0
+            expect(inCascade || inDb).toBe(true)
+          }
         }
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
     )
