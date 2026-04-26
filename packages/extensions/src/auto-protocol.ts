@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "@gent/core/extensions/api"
+import { ExtensionId, ExtensionMessage } from "@gent/core/extensions/api"
 
-export const AUTO_EXTENSION_ID = "@gent/auto"
+export const AUTO_EXTENSION_ID = ExtensionId.make("@gent/auto")
 
 const AutoSnapshotLearning = Schema.Struct({
   iteration: Schema.Number,

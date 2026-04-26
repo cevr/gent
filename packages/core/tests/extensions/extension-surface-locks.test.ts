@@ -17,6 +17,7 @@ import {
   action,
   defineExtension,
   defineResource,
+  ExtensionId,
   type ProjectionContribution,
   ProjectionError,
   type ReadOnly,
@@ -100,7 +101,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({ intent: 'read' }) — happy path compiles with ReadOnly Tag", () => {
     const ok = request({
       id: "ok-read",
-      extensionId: "test-ext",
+      extensionId: ExtensionId.make("test-ext"),
       intent: "read",
       input: NoInput,
       output: StringOutput,
@@ -118,7 +119,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({ intent: 'read' }) rejects write-capable Tag in R", () => {
     const badInput = {
       id: "bad-read",
-      extensionId: "test-ext",
+      extensionId: ExtensionId.make("test-ext"),
       intent: "read" as const,
       input: NoInput,
       output: StringOutput,
@@ -138,7 +139,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({ intent: 'write' }) — write-capable Tag in R is allowed", () => {
     const ok = request({
       id: "ok-write",
-      extensionId: "test-ext",
+      extensionId: ExtensionId.make("test-ext"),
       intent: "write",
       input: NoInput,
       output: StringOutput,
@@ -157,7 +158,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) rejects `params` field (tool-only)", () => {
     const badInput = {
       id: "bad-request",
-      extensionId: "test-ext",
+      extensionId: ExtensionId.make("test-ext"),
       intent: "write" as const,
       // @ts-expect-error — `params` belongs to tool(), not request()
       params: NoInput,

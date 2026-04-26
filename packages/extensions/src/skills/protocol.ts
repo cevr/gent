@@ -1,8 +1,8 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "@gent/core/extensions/api"
+import { ExtensionId, ExtensionMessage } from "@gent/core/extensions/api"
 import { SkillLevel } from "./skills.js"
 
-export const SKILLS_EXTENSION_ID = "@gent/skills"
+export const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
 
 export const SkillEntry = Schema.Struct({
   name: Schema.String,

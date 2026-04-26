@@ -6,6 +6,7 @@
  */
 
 import { Schema } from "effect"
+import { ExtensionId } from "@gent/core/extensions/api"
 
 // ── Settings ──
 
@@ -150,7 +151,7 @@ export type ResumeAction = typeof ResumeAction.Type
 
 // ── Constants ──
 
-export const EXECUTOR_EXTENSION_ID = "@gent/executor"
+export const EXECUTOR_EXTENSION_ID = ExtensionId.make("@gent/executor")
 
 export const DEFAULT_PORT_SEED = 4788
 export const PORT_SCAN_LIMIT = 32

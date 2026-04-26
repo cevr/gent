@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import { ExtensionMessage, ArtifactId, BranchId } from "@gent/core/extensions/api"
+import { ExtensionMessage, ExtensionId, ArtifactId, BranchId } from "@gent/core/extensions/api"
 
-export const ARTIFACTS_EXTENSION_ID = "@gent/artifacts"
+export const ARTIFACTS_EXTENSION_ID = ExtensionId.make("@gent/artifacts")
 
 // ── Artifact schema ──
 

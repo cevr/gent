@@ -19,6 +19,7 @@
  */
 
 import { type Effect, type Schema } from "effect"
+import type { ExtensionId } from "../ids.js"
 import {
   CAPABILITY_REF,
   type AnyCapabilityContribution,
@@ -36,7 +37,7 @@ interface RequestInputBase<Input, Output> {
   readonly id: string
   /** Owning extension id. Embedded into the typed `CapabilityRef` attached
    *  to the returned token so callers do not re-state it. */
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Schema<Input>
   /** Schema for validating `output` at the boundary. */
@@ -97,7 +98,7 @@ export function request<Input, Output, R = never>(
 ): CapabilityToken<Input, Output>
 export function request(input: {
   readonly id: string
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly intent: "read" | "write"
   readonly input: Schema.Schema<unknown>
   readonly output: Schema.Schema<unknown>

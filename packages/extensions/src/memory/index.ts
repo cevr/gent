@@ -22,6 +22,7 @@ import {
   AgentEvent,
   defineExtension,
   defineResource,
+  ExtensionId,
   type ReduceResult,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
@@ -41,7 +42,7 @@ import { MemoryAgents } from "./agents.js"
 import { Live as MemoryVaultLive } from "./vault.js"
 import { MemoryDreamJobs } from "./dreaming.js"
 
-export const MEMORY_EXTENSION_ID = "@gent/memory"
+export const MEMORY_EXTENSION_ID = ExtensionId.make("@gent/memory")
 
 // ── Receive ──
 

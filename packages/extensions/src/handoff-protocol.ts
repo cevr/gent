@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "@gent/core/extensions/api"
+import { ExtensionId, ExtensionMessage } from "@gent/core/extensions/api"
 
-export const HANDOFF_EXTENSION_ID = "@gent/handoff"
+export const HANDOFF_EXTENSION_ID = ExtensionId.make("@gent/handoff")
 
 export const HandoffProtocol = {
   Suppress: ExtensionMessage.command(HANDOFF_EXTENSION_ID, "Suppress", {
