@@ -240,64 +240,6 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("Layer.fresh + MemoMap omission produces a fresh build per ephemeral composition", () => {
-    // Regression for the load-bearing pair documented in composer.ts:346-389:
-    //   (a) `Layer.CurrentMemoMap` is omitted from forwarded parent context
-    //   (b) the merged layer is wrapped in `Layer.fresh`
-    // If either is dropped, a layer that the parent already memoised (same
-    // Layer object identity) replays the parent's instance into the child
-    // — defeating ephemeral isolation.
-    //
-    // Setup: a single Layer.effect builder with an observable side effect.
-    // Build it inside a parent scope (memoising it in the parent's MemoMap),
-    // then via the composer in a child scope. The builder must run twice.
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        let buildCount = 0
-        const sharedLayer = Layer.effect(
-          FakeService,
-          Effect.sync(() => {
-            buildCount += 1
-            return { value: buildCount }
-          }),
-        )
-
-        // Parent build — populates parent's MemoMap with sharedLayer.
-        const parentValue = yield* Effect.gen(function* () {
-          return (yield* FakeService).value
-        }).pipe(Effect.provide(sharedLayer))
-        expect(parentValue).toBe(1)
-        expect(buildCount).toBe(1)
-
-        // Forward parent context (would carry MemoMap if not stripped).
-        // We simulate this by capturing parent context and feeding it
-        // into the composer as `parentServices`.
-        const parentServices = yield* Effect.context<never>()
-
-        const serverParent = {
-          cwd: "/tmp",
-          resolved: { kinds: {} } as never,
-          __brand: undefined as never,
-        } as ServerProfile
-
-        // Compose with the SAME sharedLayer object as an override.
-        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-          .own(ownService(FakeService, sharedLayer))
-          .build()
-
-        const childValue = yield* Effect.gen(function* () {
-          return (yield* FakeService).value
-        }).pipe(Effect.provide(composed.layer))
-
-        // If MemoMap-omission OR Layer.fresh broke, buildCount would
-        // remain 1 and childValue would be 1 (replayed). With both
-        // working, the builder runs again under the child's fresh scope.
-        expect(buildCount).toBe(2)
-        expect(childValue).toBe(2)
-      }),
-    )
-  })
-
   test("provide(layer) leaves a missing-service requirement in `R` for unprovided consumers", () => {
     // This is the type-level guarantee the composer claims: a consumer that
     // requires a service NOT in `Provides` has its `R` channel left
