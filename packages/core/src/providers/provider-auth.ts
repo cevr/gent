@@ -3,6 +3,7 @@ import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
 import { AuthAuthorization } from "../domain/auth-method.js"
 import type { AuthMethod } from "../domain/auth-method.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
+import type { SessionId } from "../domain/ids.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
@@ -13,12 +14,12 @@ export { ProviderAuthError } from "../domain/driver.js"
 export interface ProviderAuthService {
   readonly listMethods: () => Effect.Effect<Record<string, ReadonlyArray<typeof AuthMethod.Type>>>
   readonly authorize: (
-    sessionId: string,
+    sessionId: SessionId,
     provider: string,
     method: number,
   ) => Effect.Effect<typeof AuthAuthorization.Type | undefined, ProviderAuthError>
   readonly callback: (
-    sessionId: string,
+    sessionId: SessionId,
     provider: string,
     method: number,
     authorizationId: string,
@@ -93,7 +94,7 @@ const makeProviderAuth = (
     })
 
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
-      sessionId: string,
+      sessionId: SessionId,
       provider: string,
       method: number,
     ) {
@@ -131,7 +132,7 @@ const makeProviderAuth = (
     })
 
     const callback = Effect.fn("ProviderAuth.callback")(function* (
-      sessionId: string,
+      sessionId: SessionId,
       provider: string,
       method: number,
       authorizationId: string,

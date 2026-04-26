@@ -132,7 +132,7 @@ export interface ResolvedAgentDriver {
  */
 export const resolveAgentDriver = (
   agent: AgentDefinition,
-  overrides?: Readonly<Record<string, DriverRef>>,
+  overrides?: Readonly<Record<AgentName, DriverRef>>,
 ): ResolvedAgentDriver => {
   if (agent.driver !== undefined) {
     return { driver: agent.driver, source: "agent" }

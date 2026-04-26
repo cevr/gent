@@ -1,0 +1,103 @@
+/**
+ * Branded id locks — guarantees the W7-C1 brand pass survives.
+ *
+ * Tests cover:
+ * - `Schema.decodeUnknownSync` roundtrip for each branded id
+ * - cross-brand assignability is a compile-time error (recorded via @ts-expect-error)
+ * - `TurnEvent.Tool*` decode produces `ToolCallId`-branded `toolCallId`
+ *
+ * @module
+ */
+import { describe, test, expect } from "bun:test"
+import { Schema } from "effect"
+import { TurnEvent } from "@gent/core/domain/driver"
+import {
+  ActorCommandId,
+  ArtifactId,
+  BranchId,
+  MessageId,
+  SessionId,
+  TaskId,
+  ToolCallId,
+} from "@gent/core/domain/ids"
+
+describe("branded ids — roundtrip", () => {
+  test("SessionId decodes from a plain string and brand survives", () => {
+    const id = Schema.decodeUnknownSync(SessionId)("sess-abc")
+    expect(id).toBe("sess-abc")
+  })
+
+  test("ToolCallId decodes from a plain string and brand survives", () => {
+    const id = Schema.decodeUnknownSync(ToolCallId)("tc-1")
+    expect(id).toBe("tc-1")
+  })
+
+  test("BranchId, MessageId, TaskId, ActorCommandId, ArtifactId all roundtrip", () => {
+    expect(Schema.decodeUnknownSync(BranchId)("b-1")).toBe("b-1")
+    expect(Schema.decodeUnknownSync(MessageId)("m-1")).toBe("m-1")
+    expect(Schema.decodeUnknownSync(TaskId)("t-1")).toBe("t-1")
+    expect(Schema.decodeUnknownSync(ActorCommandId)("a-1")).toBe("a-1")
+    expect(Schema.decodeUnknownSync(ArtifactId)("art-1")).toBe("art-1")
+  })
+})
+
+describe("branded ids — cross-brand assignability is a type error", () => {
+  test("SessionId is not assignable to ToolCallId", () => {
+    const session = Schema.decodeUnknownSync(SessionId)("sess-abc")
+    // @ts-expect-error — branded ids should not be cross-assignable
+    const tool: ToolCallId = session
+    expect(tool).toBe("sess-abc")
+  })
+
+  test("ToolCallId is not assignable to SessionId", () => {
+    const tool = Schema.decodeUnknownSync(ToolCallId)("tc-1")
+    // @ts-expect-error — branded ids should not be cross-assignable
+    const session: SessionId = tool
+    expect(session).toBe("tc-1")
+  })
+})
+
+describe("TurnEvent — toolCallId is branded ToolCallId", () => {
+  test("ToolCall variant decodes toolCallId as ToolCallId", () => {
+    const decoded = Schema.decodeUnknownSync(TurnEvent)({
+      _tag: "tool-call",
+      toolCallId: "tc-7",
+      toolName: "echo",
+      input: { text: "hi" },
+    })
+    expect(decoded._tag).toBe("tool-call")
+    if (decoded._tag !== "tool-call") throw new Error("unreachable")
+    // Compile-time: assigning to ToolCallId should typecheck.
+    const id: ToolCallId = decoded.toolCallId
+    expect(id).toBe("tc-7")
+  })
+
+  test("ToolStarted, ToolCompleted, ToolFailed all carry branded toolCallId", () => {
+    const started = Schema.decodeUnknownSync(TurnEvent)({
+      _tag: "tool-started",
+      toolCallId: "tc-1",
+      toolName: "echo",
+    })
+    const completed = Schema.decodeUnknownSync(TurnEvent)({
+      _tag: "tool-completed",
+      toolCallId: "tc-2",
+    })
+    const failed = Schema.decodeUnknownSync(TurnEvent)({
+      _tag: "tool-failed",
+      toolCallId: "tc-3",
+      error: "boom",
+    })
+    if (started._tag === "tool-started") {
+      const id: ToolCallId = started.toolCallId
+      expect(id).toBe("tc-1")
+    }
+    if (completed._tag === "tool-completed") {
+      const id: ToolCallId = completed.toolCallId
+      expect(id).toBe("tc-2")
+    }
+    if (failed._tag === "tool-failed") {
+      const id: ToolCallId = failed.toolCallId
+      expect(id).toBe("tc-3")
+    }
+  })
+})

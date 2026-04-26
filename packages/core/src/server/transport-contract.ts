@@ -327,7 +327,7 @@ export type ListAuthProvidersInput = typeof ListAuthProvidersInput.Type
 export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthInput = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
   provider: Schema.String,
   method: Schema.Number,
 })
@@ -336,7 +336,7 @@ export type AuthorizeAuthInput = typeof AuthorizeAuthInput.Type
 export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
 
 export const CallbackAuthInput = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
   provider: Schema.String,
   method: Schema.Number,
   authorizationId: Schema.String,

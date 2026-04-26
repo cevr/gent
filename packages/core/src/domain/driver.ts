@@ -34,7 +34,7 @@ import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
 import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import type { BranchId, SessionId } from "./ids.js"
+import { ToolCallId, type BranchId, type SessionId } from "./ids.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
 import type { ProviderError } from "../providers/provider.js"
@@ -128,7 +128,7 @@ export type PersistAuth = (
 ) => Effect.Effect<void, ProviderAuthError>
 
 export interface ProviderAuthorizeContext {
-  readonly sessionId: string
+  readonly sessionId: SessionId
   readonly methodIndex: number
   readonly authorizationId: string
   readonly persist: PersistAuth
@@ -211,21 +211,21 @@ export const TurnEvent = TaggedEnumClass("TurnEvent", {
     text: Schema.String,
   }),
   ToolCall: TaggedEnumClass.variant("tool-call", {
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     toolName: Schema.String,
     input: Schema.Unknown,
   }),
   ToolStarted: TaggedEnumClass.variant("tool-started", {
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     toolName: Schema.String,
     input: Schema.optional(Schema.Unknown),
   }),
   ToolCompleted: TaggedEnumClass.variant("tool-completed", {
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     output: Schema.optional(Schema.Unknown),
   }),
   ToolFailed: TaggedEnumClass.variant("tool-failed", {
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     error: Schema.String,
   }),
   Finished: TaggedEnumClass.variant("finished", {
