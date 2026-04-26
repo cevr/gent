@@ -3,11 +3,11 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionRuntime, respondInteractionCommand } from "../runtime/session-runtime.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
 import type { AppServiceError } from "./errors.js"
 
 export interface RespondInteractionInput {
-  readonly requestId: string
+  readonly requestId: InteractionRequestId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly approved: boolean

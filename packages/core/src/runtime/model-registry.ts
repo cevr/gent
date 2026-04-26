@@ -3,7 +3,7 @@ import { HttpClient, type HttpClient as HttpClientService } from "effect/unstabl
 import { AuthStore } from "../domain/auth-store.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
-import { Model, ModelId } from "../domain/model.js"
+import { Model, ModelId, ProviderId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
@@ -66,7 +66,7 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
         Model.make({
           id,
           name,
-          provider: providerId,
+          provider: ProviderId.make(providerId),
           ...(contextLength !== undefined ? { contextLength } : {}),
           ...(pricing !== undefined ? { pricing } : {}),
         }),

@@ -10,7 +10,7 @@ import {
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
@@ -282,7 +282,7 @@ export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
 
 /** Generic interaction response — replaces RespondPromptInput/RespondHandoffInput/RespondQuestionsInput */
 export const RespondInteractionInput = Schema.Struct({
-  requestId: Schema.String,
+  requestId: InteractionRequestId,
   sessionId: SessionId,
   branchId: BranchId,
   approved: Schema.Boolean,

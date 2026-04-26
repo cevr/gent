@@ -42,6 +42,7 @@
  * @module
  */
 import { Effect } from "effect"
+import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
 import type {
@@ -465,7 +466,7 @@ export const validatePackageShape = (
  * ```
  */
 export const defineExtension = (params: DefineExtensionInput): GentExtension => {
-  const manifest: ExtensionManifest = { id: params.id }
+  const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,
     setup: (ctx) =>

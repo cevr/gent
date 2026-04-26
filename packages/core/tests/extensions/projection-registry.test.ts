@@ -13,6 +13,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Ref } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
+import { ExtensionId } from "@gent/core/domain/ids"
 import {
   type AnyProjectionContribution,
   type ProjectionContribution,
@@ -27,7 +28,7 @@ const ext = (
   scope: "builtin" | "user" | "project",
   projections: ReadonlyArray<AnyProjectionContribution>,
 ): LoadedExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   scope,
   sourcePath: `/test/${id}`,
   contributions: { projections },

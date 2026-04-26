@@ -24,7 +24,7 @@ import { AuthStore } from "../domain/auth-store.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
-import { SessionId } from "../domain/ids.js"
+import { ExtensionId, SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
@@ -111,7 +111,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const loadedExtensions: ReadonlyArray<LoadedExtension> = config.extensions
         ? [
             {
-              manifest: { id: "test-agents" },
+              manifest: { id: ExtensionId.make("test-agents") },
               scope: "builtin" as const,
               sourcePath: "test",
               contributions: builtinContributions,

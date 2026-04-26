@@ -184,7 +184,7 @@ describe("resolveRuntimeProfile", () => {
         })
         // Projection contributes through the projection registry, not
         // compileBaseSections; assert the extension was wired in.
-        expect(profile.resolved.extensions.map((e) => e.manifest.id)).toContain(
+        expect(profile.resolved.extensions.map((e) => e.manifest.id as string)).toContain(
           "@gent/test-runtime-profile-dynamic",
         )
       }),

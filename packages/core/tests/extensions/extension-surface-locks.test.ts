@@ -448,7 +448,7 @@ describe("Effect-purity locks (compile-time)", () => {
       ],
     })
 
-    expect(ext.manifest.id).toBe("purity-positive")
+    expect(ext.manifest.id as string).toBe("purity-positive")
   })
 })
 

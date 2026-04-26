@@ -26,3 +26,12 @@ export type ActorCommandId = typeof ActorCommandId.Type
 
 export const ArtifactId = Schema.String.pipe(branded("ArtifactId"))
 export type ArtifactId = typeof ArtifactId.Type
+
+export const ActorId = Schema.String.pipe(branded("ActorId"))
+export type ActorId = typeof ActorId.Type
+
+export const InteractionRequestId = Schema.String.pipe(branded("InteractionRequestId"))
+export type InteractionRequestId = typeof InteractionRequestId.Type
+
+export const ExtensionId = Schema.String.pipe(branded("ExtensionId"))
+export type ExtensionId = typeof ExtensionId.Type

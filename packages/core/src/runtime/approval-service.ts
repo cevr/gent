@@ -12,7 +12,7 @@ import { Context, Effect, Layer } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { InteractionPresented, type EventStoreError } from "../domain/event.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
 import {
   makeInteractionService,
   type ApprovalDecision,
@@ -29,12 +29,12 @@ export interface ApprovalServiceShape {
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
   /** Store a resolution for cold-mode resumption */
-  readonly storeResolution: (requestId: string, decision: ApprovalDecision) => void
+  readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
   /** Mark a request as resolved in storage */
-  readonly respond: (requestId: string) => Effect.Effect<void, EventStoreError>
+  readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Re-publish event for a persisted pending request (recovery after restart) */
   readonly rehydrate: (
-    requestId: string,
+    requestId: InteractionRequestId,
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<void, EventStoreError>

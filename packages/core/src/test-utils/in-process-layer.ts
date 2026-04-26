@@ -8,6 +8,7 @@
 import { Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
+import { ExtensionId } from "../domain/ids.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
@@ -40,7 +41,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
   const extensionRegistryLive = testExtensionRegistryLayer([
     {
-      manifest: { id: "test-agents" },
+      manifest: { id: ExtensionId.make("test-agents") },
       scope: "builtin",
       sourcePath: "test",
       contributions: { agents },

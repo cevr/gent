@@ -15,7 +15,7 @@
 
 import { Clock, Effect, Schema } from "effect"
 import { EventStoreError } from "./event"
-import { BranchId, SessionId } from "./ids"
+import { BranchId, InteractionRequestId, SessionId } from "./ids"
 
 // ============================================================================
 // Approval schemas
@@ -42,7 +42,7 @@ export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 export class InteractionPendingError extends Schema.TaggedErrorClass<InteractionPendingError>(
   "@gent/core/domain/interaction-request/InteractionPendingError",
 )("InteractionPendingError", {
-  requestId: Schema.String,
+  requestId: InteractionRequestId,
   sessionId: SessionId,
   branchId: BranchId,
 }) {}
@@ -54,7 +54,7 @@ export class InteractionPendingError extends Schema.TaggedErrorClass<Interaction
 export type InteractionRequestStatus = "pending" | "resolved"
 
 export interface InteractionRequestRecord {
-  readonly requestId: string
+  readonly requestId: InteractionRequestId
   readonly type: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -103,12 +103,12 @@ export interface InteractionService {
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
-  readonly respond: (requestId: string) => Effect.Effect<void, EventStoreError>
+  readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Store a resolution for cold-mode resumption (keyed by requestId) */
-  readonly storeResolution: (requestId: string, decision: ApprovalDecision) => void
+  readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
   /** Re-publish event for a persisted pending request (recovery after restart) */
   readonly rehydrate: (
-    requestId: string,
+    requestId: InteractionRequestId,
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<void, EventStoreError>
@@ -120,17 +120,17 @@ export interface InteractionService {
  */
 export interface InteractionStorageConfig {
   readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, never>
-  readonly resolve: (requestId: string) => Effect.Effect<void, never>
+  readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
 }
 
 export interface InteractionServiceConfig {
   readonly onPresent: (
-    requestId: string,
+    requestId: InteractionRequestId,
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<void, EventStoreError>
   readonly onRespond?: (
-    requestId: string,
+    requestId: InteractionRequestId,
     decision: ApprovalDecision,
   ) => Effect.Effect<void, EventStoreError>
   readonly autoResolve?: (params: ApprovalRequest) => ApprovalDecision | undefined
@@ -140,9 +140,9 @@ export interface InteractionServiceConfig {
 
 export const makeInteractionService = (config: InteractionServiceConfig): InteractionService => {
   /** Stored resolutions keyed by requestId */
-  const storedResolutions = new Map<string, ApprovalDecision>()
+  const storedResolutions = new Map<InteractionRequestId, ApprovalDecision>()
   /** Reverse lookup: sessionId:branchId → requestId (at most one pending per session+branch) */
-  const pendingByContext = new Map<string, string>()
+  const pendingByContext = new Map<string, InteractionRequestId>()
   const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
 
   return {
@@ -175,7 +175,7 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
         }
       }
 
-      const requestId = Bun.randomUUIDv7()
+      const requestId = InteractionRequestId.make(Bun.randomUUIDv7())
       pendingByContext.set(ctxKey, requestId)
 
       // Persist to storage before publishing event (crash-safe)
@@ -202,7 +202,7 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
       })
     }),
 
-    respond: Effect.fn("InteractionService.respond")(function* (requestId: string) {
+    respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
       if (config.storage !== undefined) {
         yield* config.storage.resolve(requestId)
       }
@@ -211,7 +211,7 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
     }),
 
     rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
-      requestId: string,
+      requestId: InteractionRequestId,
       params: ApprovalRequest,
       ctx: { sessionId: SessionId; branchId: BranchId },
     ) {

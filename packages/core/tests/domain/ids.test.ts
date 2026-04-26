@@ -13,8 +13,11 @@ import { Schema } from "effect"
 import { TurnEvent } from "@gent/core/domain/driver"
 import {
   ActorCommandId,
+  ActorId,
   ArtifactId,
   BranchId,
+  ExtensionId,
+  InteractionRequestId,
   MessageId,
   SessionId,
   TaskId,
@@ -39,6 +42,12 @@ describe("branded ids — roundtrip", () => {
     expect(Schema.decodeUnknownSync(ActorCommandId)("a-1")).toBe("a-1")
     expect(Schema.decodeUnknownSync(ArtifactId)("art-1")).toBe("art-1")
   })
+
+  test("ActorId, InteractionRequestId, ExtensionId all roundtrip", () => {
+    expect(Schema.decodeUnknownSync(ActorId)("actor-1")).toBe("actor-1")
+    expect(Schema.decodeUnknownSync(InteractionRequestId)("int-1")).toBe("int-1")
+    expect(Schema.decodeUnknownSync(ExtensionId)("@gent/x")).toBe("@gent/x")
+  })
 })
 
 describe("branded ids — cross-brand assignability is a type error", () => {
@@ -54,6 +63,19 @@ describe("branded ids — cross-brand assignability is a type error", () => {
     // @ts-expect-error — branded ids should not be cross-assignable
     const session: SessionId = tool
     expect(session).toBe("tc-1")
+  })
+
+  test("ExtensionId, ActorId, InteractionRequestId are mutually non-assignable", () => {
+    const ext = Schema.decodeUnknownSync(ExtensionId)("@gent/x")
+    const actor = Schema.decodeUnknownSync(ActorId)("a-1")
+    const interaction = Schema.decodeUnknownSync(InteractionRequestId)("int-1")
+    // @ts-expect-error
+    const a: ActorId = ext
+    // @ts-expect-error
+    const b: InteractionRequestId = actor
+    // @ts-expect-error
+    const c: ExtensionId = interaction
+    expect([a, b, c]).toEqual(["@gent/x", "a-1", "int-1"])
   })
 })
 

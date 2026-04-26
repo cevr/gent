@@ -3,6 +3,7 @@ import { Effect, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
+import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
 import { validatePackageShape } from "../../extensions/api.js"
@@ -83,7 +84,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
       try: () => import(filePath),
       catch: (err) =>
         new ExtensionLoadError({
-          extensionId: "unknown",
+          extensionId: ExtensionId.make("unknown"),
           message: `Failed to import ${filePath}: ${String(err)}`,
           cause: err,
         }),
@@ -111,14 +112,14 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
 
     if (candidates.length === 0) {
       return yield* new ExtensionLoadError({
-        extensionId: "unknown",
+        extensionId: ExtensionId.make("unknown"),
         message: `No GentExtension found in ${filePath}. Export a defineExtension() result as default or named export.`,
       })
     }
 
     if (candidates.length > 1) {
       return yield* new ExtensionLoadError({
-        extensionId: "unknown",
+        extensionId: ExtensionId.make("unknown"),
         message: `Multiple GentExtension exports found in ${filePath}. Export exactly one.`,
       })
     }
@@ -127,7 +128,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     const result = candidates[0]
     if (result === undefined) {
       return yield* new ExtensionLoadError({
-        extensionId: "unknown",
+        extensionId: ExtensionId.make("unknown"),
         message: `No extension in ${filePath}`,
       })
     }

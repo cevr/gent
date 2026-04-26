@@ -24,7 +24,7 @@ export type ModelPricing = typeof ModelPricing.Type
 export class Model extends Schema.Class<Model>("Model")({
   id: ModelId,
   name: Schema.String,
-  provider: Schema.String,
+  provider: ProviderId,
   contextLength: Schema.optional(Schema.Number),
   pricing: Schema.optional(ModelPricing),
 }) {}

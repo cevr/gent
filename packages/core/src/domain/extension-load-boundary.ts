@@ -1,8 +1,9 @@
 import { Effect, Schema } from "effect"
+import type { ExtensionId } from "./ids.js"
 import { ExtensionLoadError } from "./extension.js"
 
 const toExtensionLoadError = (opts: {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly message: string
   readonly cause: unknown
 }): ExtensionLoadError =>
@@ -15,7 +16,7 @@ const toExtensionLoadError = (opts: {
       })
 
 export const sealRuntimeLoadedEffect = <A>(opts: {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly effect: () => Effect.Effect<A, unknown, unknown>
   readonly failureMessage: (cause: unknown) => string
   readonly defectMessage: (cause: unknown) => string

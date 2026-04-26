@@ -5,7 +5,7 @@ import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { AnyCapabilityContribution } from "./capability"
 import type { AgentEvent } from "./event"
-import { BranchId, SessionId, type ToolCallId } from "./ids"
+import { BranchId, ExtensionId, SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
@@ -21,7 +21,7 @@ import type {
 // Extension Manifest — authored by extension author
 
 export interface ExtensionManifest {
-  readonly id: string
+  readonly id: ExtensionId
   readonly version?: string
 }
 
@@ -78,7 +78,7 @@ export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
 export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
 
 const ExtensionActorStatusFields = {
-  extensionId: Schema.String,
+  extensionId: ExtensionId,
   sessionId: SessionId,
   branchId: Schema.optional(BranchId),
 }
@@ -109,7 +109,7 @@ export type ExtensionScope = "builtin" | "user" | "project"
 export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadError>(
   "@gent/core/domain/extension/ExtensionLoadError",
 )("ExtensionLoadError", {
-  extensionId: Schema.String,
+  extensionId: ExtensionId,
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}

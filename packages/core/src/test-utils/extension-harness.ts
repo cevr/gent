@@ -31,7 +31,7 @@ import type {
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
-import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
+import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { ToolContext } from "../domain/tool.js"
@@ -248,7 +248,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
       const allExtensions: LoadedExtension[] = [
         {
-          manifest: { id: "test-agents" },
+          manifest: { id: ExtensionId.make("test-agents") },
           scope: "builtin" as const,
           sourcePath: "test",
           contributions: builtinContributions,

@@ -1,7 +1,17 @@
 import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 import { Message } from "./message"
-import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
+import {
+  ActorId,
+  branded,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  TaskId,
+  ToolCallId,
+} from "./ids"
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
@@ -134,7 +144,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   InteractionPresented: {
     sessionId: SessionId,
     branchId: BranchId,
-    requestId: Schema.String,
+    requestId: InteractionRequestId,
     text: Schema.String,
     metadata: Schema.optional(Schema.Unknown),
   },
@@ -142,7 +152,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   InteractionResolved: {
     sessionId: SessionId,
     branchId: BranchId,
-    requestId: Schema.String,
+    requestId: InteractionRequestId,
     approved: Schema.Boolean,
     notes: Schema.optional(Schema.String),
   },
@@ -172,20 +182,20 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   MachineInspected: {
     sessionId: SessionId,
     branchId: BranchId,
-    actorId: Schema.String,
+    actorId: ActorId,
     inspectionType: MachineInspectionType,
     payload: Schema.Unknown,
   },
   MachineTaskSucceeded: {
     sessionId: SessionId,
     branchId: BranchId,
-    actorId: Schema.String,
+    actorId: ActorId,
     stateTag: Schema.String,
   },
   MachineTaskFailed: {
     sessionId: SessionId,
     branchId: BranchId,
-    actorId: Schema.String,
+    actorId: ActorId,
     stateTag: Schema.String,
     error: Schema.String,
   },
@@ -311,7 +321,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   ExtensionStateChanged: {
     sessionId: SessionId,
     branchId: BranchId,
-    extensionId: Schema.String,
+    extensionId: ExtensionId,
   },
 })
 export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>

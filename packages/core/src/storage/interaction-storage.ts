@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type { InteractionRequestRecord } from "../domain/interaction-request.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import { InteractionRequestId, type SessionId, type BranchId } from "../domain/ids.js"
 import { StorageError } from "./sqlite-storage.js"
 
 interface InteractionRequestRow {
@@ -18,7 +18,7 @@ const isStatus = (s: string): s is InteractionRequestRecord["status"] =>
   s === "pending" || s === "resolved"
 
 const fromRow = (row: InteractionRequestRow): InteractionRequestRecord => ({
-  requestId: row.request_id,
+  requestId: InteractionRequestId.make(row.request_id),
   type: row.type,
   sessionId: row.session_id,
   branchId: row.branch_id,
@@ -33,7 +33,7 @@ export interface InteractionStorageService {
   readonly persist: (
     record: InteractionRequestRecord,
   ) => Effect.Effect<InteractionRequestRecord, StorageError>
-  readonly resolve: (requestId: string) => Effect.Effect<void, StorageError>
+  readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
   /** List pending interactions. Pass `scope` to narrow to a specific session+branch
    *  (used by the projection for per-session UI). Omit `scope` for a global scan
    *  (used by server startup for rehydration). */
