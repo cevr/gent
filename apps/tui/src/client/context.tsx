@@ -783,7 +783,11 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (s === null) return Effect.succeed(BranchId.make(""))
       return client.branch
-        .create({ sessionId: s.sessionId, ...(name !== undefined ? { name } : {}) })
+        .create({
+          sessionId: s.sessionId,
+          requestId: crypto.randomUUID(),
+          ...(name !== undefined ? { name } : {}),
+        })
         .pipe(Effect.map((result) => result.branchId))
     },
 
@@ -803,6 +807,7 @@ export function ClientProvider(props: ClientProviderProps) {
           sessionId: s.sessionId,
           fromBranchId: s.branchId,
           atMessageId: messageId,
+          requestId: crypto.randomUUID(),
           ...(name !== undefined ? { name } : {}),
         })
         .pipe(Effect.map((result) => BranchId.make(result.branchId)))
@@ -834,6 +839,7 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId: s.sessionId,
             fromBranchId: s.branchId,
             toBranchId: branchId,
+            requestId: crypto.randomUUID(),
             ...(summarize !== undefined ? { summarize } : {}),
           })
           .pipe(

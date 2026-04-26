@@ -610,6 +610,55 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sendRequestCache = yield* Ref.make(
         new Map<string, Deferred.Deferred<void, AppServiceError>>(),
       )
+      const createBranchRequestCache = yield* Ref.make(
+        new Map<string, Deferred.Deferred<CreateBranchResult, AppServiceError>>(),
+      )
+      const forkBranchRequestCache = yield* Ref.make(
+        new Map<string, Deferred.Deferred<CreateBranchResult, AppServiceError>>(),
+      )
+      const switchBranchRequestCache = yield* Ref.make(
+        new Map<string, Deferred.Deferred<void, AppServiceError>>(),
+      )
+
+      /**
+       * Atomic-claim dedup helper. Concurrent callers with the same
+       * `requestId` collapse onto the first caller's outcome. On failure,
+       * the entry is evicted so retries can re-attempt under the same id.
+       *
+       * The cache is in-memory and unbounded for the lifetime of the
+       * server process (W6-29 in the audit batch is a separate fix —
+       * this helper does not change the eviction story).
+       */
+      const dedupRequest = <A, E>(
+        cache: Ref.Ref<Map<string, Deferred.Deferred<A, E>>>,
+        requestId: string | undefined,
+        body: Effect.Effect<A, E>,
+      ): Effect.Effect<A, E> =>
+        Effect.gen(function* () {
+          if (requestId === undefined) return yield* body
+          const fresh = yield* Deferred.make<A, E>()
+          const claimed = yield* Ref.modify(cache, (m) => {
+            const existing = m.get(requestId)
+            if (existing !== undefined) return [existing, m] as const
+            const next = new Map(m)
+            next.set(requestId, fresh)
+            return [fresh, next] as const
+          })
+          if (claimed !== fresh) return yield* Deferred.await(claimed)
+          return yield* body.pipe(
+            Effect.tap((result) => Deferred.succeed(fresh, result)),
+            Effect.tapCause((cause) =>
+              Effect.gen(function* () {
+                yield* Ref.update(cache, (m) => {
+                  const next = new Map(m)
+                  next.delete(requestId)
+                  return next
+                })
+                yield* Deferred.failCause(fresh, cause)
+              }),
+            ),
+          )
+        })
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -685,41 +734,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
         "SessionCommands.createSession",
       )(function* (input: CreateSessionInput) {
-        // Atomic claim: first concurrent caller with this requestId installs
-        // a fresh Deferred and does the work; subsequent callers see the
-        // existing Deferred and await its outcome.
-        if (input.requestId !== undefined) {
-          const rid = input.requestId
-          const fresh = yield* Deferred.make<CreateSessionResult, AppServiceError>()
-          const claimed = yield* Ref.modify(createRequestCache, (m) => {
-            const existing = m.get(rid)
-            if (existing !== undefined) return [existing, m] as const
-            const next = new Map(m)
-            next.set(rid, fresh)
-            return [fresh, next] as const
-          })
-          if (claimed !== fresh) {
-            return yield* Deferred.await(claimed)
-          }
-          // Run the body; publish outcome to the Deferred so concurrent
-          // awaiters resume. On failure, evict the entry so retries can
-          // retry (we don't want to cache a permanent failure under the
-          // same requestId).
-          return yield* doCreateSession(input).pipe(
-            Effect.tap((result) => Deferred.succeed(fresh, result)),
-            Effect.tapCause((cause) =>
-              Effect.gen(function* () {
-                yield* Ref.update(createRequestCache, (m) => {
-                  const next = new Map(m)
-                  next.delete(rid)
-                  return next
-                })
-                yield* Deferred.failCause(fresh, cause)
-              }),
-            ),
-          )
-        }
-        return yield* doCreateSession(input)
+        return yield* dedupRequest(createRequestCache, input.requestId, doCreateSession(input))
       })
 
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
@@ -820,10 +835,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
         input: CreateBranchInput,
       ) {
-        return yield* createSessionBranch({
-          sessionId: input.sessionId,
-          name: input.name,
-        })
+        return yield* dedupRequest(
+          createBranchRequestCache,
+          input.requestId,
+          createSessionBranch({
+            sessionId: input.sessionId,
+            name: input.name,
+          }),
+        )
       })
 
       const renameSession = Effect.fn("SessionCommands.renameSession")(function* (input: {
@@ -906,7 +925,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         )
       })
 
-      const switchBranch = Effect.fn("SessionCommands.switchBranch")(function* (
+      const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
+        Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
+          yield* dedupRequest(switchBranchRequestCache, input.requestId, doSwitchBranch(input))
+        })
+
+      const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
         input: SwitchBranchInput,
       ) {
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
@@ -941,7 +965,15 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
-      const forkBranch = Effect.fn("SessionCommands.forkBranch")(function* (
+      const forkBranch: (
+        input: ForkBranchInput,
+      ) => Effect.Effect<CreateBranchResult, AppServiceError> = Effect.fn(
+        "SessionCommands.forkBranch",
+      )(function* (input: ForkBranchInput) {
+        return yield* dedupRequest(forkBranchRequestCache, input.requestId, doForkBranch(input))
+      })
+
+      const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
         input: ForkBranchInput,
       ) {
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
@@ -1085,34 +1117,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
-          if (input.requestId !== undefined) {
-            const rid = input.requestId
-            const fresh = yield* Deferred.make<void, AppServiceError>()
-            const claimed = yield* Ref.modify(sendRequestCache, (m) => {
-              const existing = m.get(rid)
-              if (existing !== undefined) return [existing, m] as const
-              const next = new Map(m)
-              next.set(rid, fresh)
-              return [fresh, next] as const
-            })
-            if (claimed !== fresh) {
-              return yield* Deferred.await(claimed)
-            }
-            return yield* doSendMessage(input).pipe(
-              Effect.tap(() => Deferred.succeed(fresh, undefined)),
-              Effect.tapCause((cause) =>
-                Effect.gen(function* () {
-                  yield* Ref.update(sendRequestCache, (m) => {
-                    const next = new Map(m)
-                    next.delete(rid)
-                    return next
-                  })
-                  yield* Deferred.failCause(fresh, cause)
-                }),
-              ),
-            )
-          }
-          yield* doSendMessage(input)
+          yield* dedupRequest(sendRequestCache, input.requestId, doSendMessage(input))
         })
 
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (

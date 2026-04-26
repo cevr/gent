@@ -66,11 +66,13 @@ export const runHeadless = (
         Effect.forkScoped,
       )
 
+      const sendRequestId = crypto.randomUUID()
       yield* Effect.suspend(() =>
         client.message.send({
           sessionId,
           branchId,
           content: promptText,
+          requestId: sendRequestId,
           ...(agentOverride !== undefined ? { agentOverride } : {}),
           ...(runSpec !== undefined ? { runSpec } : {}),
         }),

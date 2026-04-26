@@ -1812,4 +1812,151 @@ describe("requestId idempotency", () => {
       expect(dispatchCount).toBe(1)
     }),
   )
+
+  it.live("duplicate createBranch requestId converges on a single branch id", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const branches = yield* BranchStorage
+      const sessions = yield* SessionStorage
+      const sessionId = SessionId.make("session-branch-dedup")
+      const branchId = BranchId.make("branch-branch-dedup")
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now: new Date(),
+      })
+
+      const first = yield* commands.createBranch({
+        sessionId,
+        name: "feat",
+        requestId: "req-branch-1",
+      })
+      const second = yield* commands.createBranch({
+        sessionId,
+        name: "feat",
+        requestId: "req-branch-1",
+      })
+
+      expect(second.branchId).toBe(first.branchId)
+      // 1 from fixture + 1 from the deduped create
+      expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("concurrent duplicate createBranch requestIds converge on one branch", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const branches = yield* BranchStorage
+      const sessions = yield* SessionStorage
+      const sessionId = SessionId.make("session-branch-conc")
+      const branchId = BranchId.make("branch-branch-conc")
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now: new Date(),
+      })
+
+      const results = yield* Effect.all(
+        [
+          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results[0].branchId).toBe(results[1].branchId)
+      expect(results[0].branchId).toBe(results[2].branchId)
+      expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("duplicate switchBranch requestId activates the target only once", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-switch-dedup")
+      const fromBranchId = BranchId.make("branch-switch-dedup-from")
+      const toBranchId = BranchId.make("branch-switch-dedup-to")
+      const now = new Date()
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: fromBranchId,
+        now,
+      })
+      yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
+
+      yield* commands.switchBranch({
+        sessionId,
+        fromBranchId,
+        toBranchId,
+        summarize: false,
+        requestId: "req-switch-1",
+      })
+      yield* commands.switchBranch({
+        sessionId,
+        fromBranchId,
+        toBranchId,
+        summarize: false,
+        requestId: "req-switch-1",
+      })
+
+      expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(toBranchId)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("duplicate forkBranch requestId converges on a single new branch", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const sessionId = SessionId.make("session-fork-dedup")
+      const branchId = BranchId.make("branch-fork-dedup")
+      const messageId = MessageId.make("message-fork-dedup")
+      const now = new Date()
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+      })
+      yield* messages.createMessage(
+        Message.Regular.make({
+          id: messageId,
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "seed" })],
+          createdAt: now,
+        }),
+      )
+
+      const first = yield* commands.forkBranch({
+        sessionId,
+        fromBranchId: branchId,
+        atMessageId: messageId,
+        name: "fork",
+        requestId: "req-fork-1",
+      })
+      const second = yield* commands.forkBranch({
+        sessionId,
+        fromBranchId: branchId,
+        atMessageId: messageId,
+        name: "fork",
+        requestId: "req-fork-1",
+      })
+
+      expect(second.branchId).toBe(first.branchId)
+      // origin + 1 forked branch
+      expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
 })

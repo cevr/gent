@@ -220,7 +220,7 @@ export const resolveInitialState = (input: {
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
 
-      const result = yield* client.session.create({ cwd })
+      const result = yield* client.session.create({ cwd, requestId: crypto.randomUUID() })
       return { _tag: "headless" as const, session: toSessionInfo(result, cwd), prompt: promptText }
     }
 
@@ -271,6 +271,6 @@ export const resolveInitialState = (input: {
     }
 
     const promptText = Option.getOrUndefined(prompt)
-    const result = yield* client.session.create({ cwd })
+    const result = yield* client.session.create({ cwd, requestId: crypto.randomUUID() })
     return { _tag: "session" as const, session: toSessionInfo(result, cwd), prompt: promptText }
   })

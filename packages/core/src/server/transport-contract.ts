@@ -127,6 +127,8 @@ export type ListBranchesInput = typeof ListBranchesInput.Type
 export const CreateBranchInput = Schema.Struct({
   sessionId: SessionId,
   name: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type CreateBranchInput = typeof CreateBranchInput.Type
 
@@ -176,6 +178,8 @@ export const SwitchBranchInput = Schema.Struct({
   fromBranchId: BranchId,
   toBranchId: BranchId,
   summarize: Schema.optional(Schema.Boolean),
+  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type SwitchBranchInput = typeof SwitchBranchInput.Type
 
@@ -184,6 +188,8 @@ export const ForkBranchInput = Schema.Struct({
   fromBranchId: BranchId,
   atMessageId: MessageId,
   name: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type ForkBranchInput = typeof ForkBranchInput.Type
 
