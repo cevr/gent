@@ -54,7 +54,7 @@ import {
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
 export interface E2ELayerConfig {
-  /** Provider layer — typically from createSequenceProvider */
+  /** Provider layer — typically from `Provider.Sequence` */
   readonly providerLayer: Layer.Layer<Provider>
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>

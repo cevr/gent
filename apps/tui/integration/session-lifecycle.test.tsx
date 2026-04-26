@@ -162,7 +162,7 @@ describe("session lifecycle", () => {
             content: "hello world",
           })
 
-          // DebugProvider responds with a message containing the user's text
+          // `Provider.Debug` responds with a message containing the user's text
           // Wait for the response to appear in the rendered frame
           const frame = yield* waitForFrame(
             setup,

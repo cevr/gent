@@ -50,8 +50,8 @@ bun run --cwd apps/tui dev sessions
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
-- **Signal provider for lifecycle assertions** - Use `createSignalProvider(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
-- **DebugProvider({ delayMs })** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
+- **Signal provider for lifecycle assertions** - Use `Provider.Signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
+- **`Provider.Debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer through `RuntimeComposer.ephemeral({ parent: ServerProfile, parentServices }).withOverrides({ storage, eventStore, ... }).merge(extensionLayers).build()`. The `.withOverrides(...)` method maps each named field (e.g. `storage`, `eventStore`) to ALL Tags that should be omitted from parent context — including sub-Tags (e.g. `storage` omits `Storage`, `SessionStorage`, `BranchStorage`, etc. via `OVERRIDE_TAG_SETS`). To prevent the parent's already-built layer instances from being replayed, the composer (a) omits `Layer.CurrentMemoMap` from the forwarded parent context, and (b) wraps the final merged layer in `Layer.fresh`. Both are load-bearing — do not delete one without the other. The `parent: ServerProfile` brand makes cross-scope misuse a type error.
 
 ## Architecture
@@ -86,7 +86,7 @@ packages/core/src/       # Everything non-UI
   tools/                 # Tool implementations
   server/                # transport contract, commands, queries, handlers, startup wiring
   test-utils/            # Mock layers, sequence recording, in-process layer
-  debug/                 # Debug providers (DebugProvider, DebugFailingProvider, createSignalProvider)
+  debug/                 # Sequence step builders (textStep, toolCallStep, multiToolCallStep)
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
 apps/server/             # BunHttpServer
@@ -153,7 +153,7 @@ assertSequence(calls, [
 ## Key Files
 
 | File                                               | Purpose                                             |
-| -------------------------------------------------- | --------------------------------------------------- |
+| -------------------------------------------------- | --------------------------------------------------- | ------ | ----- | -------------------------------------- |
 | `packages/core/src/storage/sqlite-storage.ts`      | `decodeMessageParts` for JSON→Schema roundtrip      |
 | `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
 | `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
@@ -161,7 +161,8 @@ assertSequence(calls, [
 | `packages/core/src/runtime/agent/agent-loop.ts`    | flat loop machine assembly                          |
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
 | `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/debug/provider.ts`              | debug providers + `createSignalProvider`            |
+| `packages/core/src/debug/provider.ts`              | step builders for `Provider.Sequence`               |
+| `packages/core/src/providers/provider.ts`          | `Provider.Live` + `Provider.Sequence                | Signal | Debug | Failing` statics + stream-part helpers |
 | `packages/extensions/src/auto.ts`                  | auto loop modality extension (fromMachine)          |
 | `packages/extensions/src/auto-checkpoint.ts`       | signal tool for auto loop iteration                 |
 | `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |

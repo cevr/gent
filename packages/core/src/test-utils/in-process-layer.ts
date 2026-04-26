@@ -140,7 +140,7 @@ export const baseLocalLayer = (
     config,
   )
 
-/** Build a complete in-process test layer with a custom provider layer (e.g. createSignalProvider). */
+/** Build a complete in-process test layer with a custom provider layer (e.g. `Provider.Signal`). */
 export const baseLocalLayerWithProvider = (
   providerLayer: Layer.Layer<Provider>,
   config: InProcessLayerConfig,
