@@ -1,5 +1,11 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
-import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
+import {
+  AgentRunError,
+  DEFAULT_AGENT_NAME,
+  RunSpecSchema,
+  type RunSpec,
+  AgentName,
+} from "../domain/agent.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
 import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
@@ -601,7 +607,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       getState: () =>
         Effect.succeed(
           SessionRuntimeStateSchema.Idle.make({
-            agent: "cowork" as const,
+            agent: DEFAULT_AGENT_NAME,
             queue: emptyQueueSnapshot(),
           }),
         ),
