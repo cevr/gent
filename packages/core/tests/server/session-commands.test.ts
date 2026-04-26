@@ -2191,6 +2191,28 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 
+  // Companion to the TTL eviction test: prove the bound is the bound.
+  // Within the 60s window, a retry MUST collapse onto the cached outcome
+  // — otherwise "evict past TTL" would be vacuous.
+  it.effect("dedup cache retains success entry within TTL — retried requestId collapses", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const first = yield* commands.createSession({
+        cwd: "/tmp/ttl-mid",
+        requestId: "req-ttl-mid",
+      })
+      // Advance well inside the 60s window — should still hit the cache.
+      yield* TestClock.adjust("30 seconds")
+      const second = yield* commands.createSession({
+        cwd: "/tmp/ttl-mid",
+        requestId: "req-ttl-mid",
+      })
+      expect(second.sessionId).toBe(first.sessionId)
+      expect((yield* sessions.listSessions()).length).toBe(1)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
   // W7-C8.5a: dedup-cache hard-cap eviction. The cache caps at 1024
   // entries; on overflow the oldest insertion-ordered entry is evicted
   // before insert. After overflow, the original `requestId` is no
