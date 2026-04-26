@@ -52,9 +52,7 @@ export interface RpcHandlerDeps {
 }
 
 export const isPublicTransportEvent = (envelope: EventEnvelope) =>
-  envelope.event._tag !== "MachineInspected" &&
-  envelope.event._tag !== "MachineTaskSucceeded" &&
-  envelope.event._tag !== "MachineTaskFailed"
+  envelope.event._tag !== "MachineTaskSucceeded" && envelope.event._tag !== "MachineTaskFailed"
 
 export const invalidateExternalDriversFor = (
   registry: DriverRegistryService,

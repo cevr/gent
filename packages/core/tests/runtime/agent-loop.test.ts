@@ -1782,16 +1782,8 @@ describe("turn stream parity", () => {
       )
 
       expect(modelDraft).toEqual(externalDraft)
-      expect(
-        (yield* Ref.get(modelEventsRef))
-          .map((event) => event._tag)
-          .filter((tag) => tag !== "MachineInspected"),
-      ).toEqual(expectedTags)
-      expect(
-        (yield* Ref.get(externalEventsRef))
-          .map((event) => event._tag)
-          .filter((tag) => tag !== "MachineInspected"),
-      ).toEqual(expectedTags)
+      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag)).toEqual(expectedTags)
+      expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag)).toEqual(expectedTags)
     }).pipe(Effect.runPromise))
 })
 

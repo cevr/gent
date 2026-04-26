@@ -36,17 +36,6 @@ export const RecoveryAction = Schema.Literals([
 ])
 export type RecoveryAction = typeof RecoveryAction.Type
 
-export const MachineInspectionType = Schema.Literals([
-  "@machine.spawn",
-  "@machine.event",
-  "@machine.transition",
-  "@machine.effect",
-  "@machine.task",
-  "@machine.error",
-  "@machine.stop",
-])
-export type MachineInspectionType = typeof MachineInspectionType.Type
-
 export const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
   description: Schema.optional(Schema.String),
@@ -168,23 +157,6 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     maxAttempts: Schema.Int,
     delayMs: Schema.Int,
     error: Schema.String,
-  },
-  /**
-   * Machine inspection events are published to the EventStore on purpose.
-   *
-   * Why:
-   * - They let the TUI/debug surfaces observe real actor transitions without bespoke debug channels.
-   * - They give us post-hoc receipts for queue/turn/task bugs that normal message history loses.
-   * - They bridge machine internals into the same session-scoped event stream the rest of Gent already uses.
-   *
-   * They are observability events, not business events. Consumers should treat them as optional diagnostics.
-   */
-  MachineInspected: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    actorId: ActorId,
-    inspectionType: MachineInspectionType,
-    payload: Schema.Unknown,
   },
   MachineTaskSucceeded: {
     sessionId: SessionId,
@@ -363,8 +335,6 @@ export const ErrorOccurred = AgentEvent.ErrorOccurred
 export type ErrorOccurred = typeof AgentEvent.ErrorOccurred.Type
 export const ProviderRetrying = AgentEvent.ProviderRetrying
 export type ProviderRetrying = typeof AgentEvent.ProviderRetrying.Type
-export const MachineInspected = AgentEvent.MachineInspected
-export type MachineInspected = typeof AgentEvent.MachineInspected.Type
 export const MachineTaskSucceeded = AgentEvent.MachineTaskSucceeded
 export type MachineTaskSucceeded = typeof AgentEvent.MachineTaskSucceeded.Type
 export const MachineTaskFailed = AgentEvent.MachineTaskFailed
@@ -467,7 +437,6 @@ const matchEventSessionId = AgentEvent.match({
   InteractionResolved: (e) => e.sessionId,
   ErrorOccurred: (e) => e.sessionId,
   ProviderRetrying: (e) => e.sessionId,
-  MachineInspected: (e) => e.sessionId,
   MachineTaskSucceeded: (e) => e.sessionId,
   MachineTaskFailed: (e) => e.sessionId,
   SessionNameUpdated: (e) => e.sessionId,
@@ -507,7 +476,6 @@ const matchEventBranchId = AgentEvent.match({
   InteractionResolved: (e) => e.branchId,
   ErrorOccurred: (e) => e.branchId,
   ProviderRetrying: (e) => e.branchId,
-  MachineInspected: (e) => e.branchId,
   MachineTaskSucceeded: (e) => e.branchId,
   MachineTaskFailed: (e) => e.branchId,
   SessionNameUpdated: () => undefined,
