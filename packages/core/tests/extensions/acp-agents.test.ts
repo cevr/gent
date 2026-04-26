@@ -130,6 +130,31 @@ describe("mapAcpUpdateToTurnEvent", () => {
     })
   })
 
+  test("normalizes mixed text and non-text blocks into a structured array", () => {
+    const event = mapAcpUpdateToTurnEvent(
+      makeNotification({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tc-out-mixed",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "text", text: "see image:" } },
+          {
+            type: "content",
+            content: { type: "image", data: "base64...", mimeType: "image/png" },
+          },
+        ],
+      }),
+    )
+    expect(event).toEqual({
+      _tag: "tool-completed",
+      toolCallId: "tc-out-mixed",
+      output: [
+        { type: "text", text: "see image:" },
+        { type: "image", data: "base64...", mimeType: "image/png" },
+      ],
+    })
+  })
+
   test("emits tool-completed with no output when content array is absent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
