@@ -282,9 +282,36 @@ touch `Resource.machine`.
 
 - **W10-1a**: design-tier migrates `handoff` (simplest, single-state
   store) — establishes the recipe for state-holders.
-- **W10-1b**: design-tier migrates `auto` (genuine multi-state
-  workflow with `effect-machine` inside `Behavior`) —
-  establishes the recipe for genuine machines.
+- **W10-1b**: design-tier migrates `auto`. Splits into two
+  sub-commits because W10-1a sidestepped a routing concern auto
+  cannot:
+  - **W10-1b.0**: build the actor-backed `ExtensionRef` path so
+    `ctx.extension.send/ask(AutoProtocol.X)` continues to reach
+    the right state-holder when the FSM is gone. New builder
+    `spawnActorBackedExtensionRef` (routes ExtensionMessages
+    through `Receptionist.find` + `ActorEngine.tell`/`ask`) +
+    `ExtensionContributions.protocols` field (sources protocols
+    for actor-only extensions, since `actor.protocols` no longer
+    exists on the FSM-less path) + loader branch (pick the
+    actor-backed builder when an extension has `actors:` and no
+    `actor:`). Touches `spawn-machine-ref.ts` siblings,
+    `contribution.ts`, `machine-protocol.ts`,
+    `machine-lifecycle.ts`. Tests: a unit test that drives
+    `ExtensionRef.send/execute` for an actor-only extension and
+    asserts the message lands at the actor (regression: flip the
+    routing to no-op, prove the test fails, restore).
+  - **W10-1b.1**: design-tier migrates `auto`'s FSM into a
+    `Behavior<AutoMsg, AutoState, never>` (hand-rolled
+    switch-on-`(state._tag, msg._tag)`; `Machine.spawn`-nesting
+    and `executeTransition`-reaching-into-internals were both
+    rejected — see `plans/W10-1b-auto-recipe.md`). The Resource
+    shell stays for layer + slots until W10-5; its `actor:`
+    field goes away. Establishes the recipe for genuine
+    machines. afterTransition QueueFollowUp lifts onto the slot
+    handler that owns `ExtensionHostContext`; replay seeding
+    moves to a slot-handler-driven `tell` sequence. Empirical
+    regression: flip the `AutoSignal(continue)` arm to skip the
+    review gate, prove the new direct-actor test fails, restore.
 - **W10-1c**: design-tier migrates `executor/actor` (the second
   genuine machine, peer-discovery via Receptionist) — exercises
   cross-extension `find` + `ask`.
