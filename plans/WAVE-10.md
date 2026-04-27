@@ -205,11 +205,72 @@ practice; it is what authors do in their own code already.
 
 ## Implementation Batches
 
-Order: migrate every consumer of every doomed surface, then delete
-in one revertible sweep, then stabilize. Per
+Order: harden the actor primitive's storage path first (W9
+inheritance), then migrate every consumer of every doomed surface,
+then delete in one revertible sweep, then stabilize. Per
 `migrate-callers-then-delete-legacy-apis`. Sub-commits where blast
 radius > 20 files. Apply-tier delegation per CLAUDE.md for the
 recipe-execution tail.
+
+### Commit 0: `feat(runtime): profile-scoped actor persistence + engine hardening (W9 inheritance)`
+
+**Why W10-0 first**: W9 shipped the actor primitive but its
+persistence contract is engine-boundary only — `engine.snapshot()`
+returns an `ActorSnapshot` and `restoredState` seeds a spawn, but
+no production caller writes the snapshot to durable storage. W10-1
+through W10-4 migrate state-holders that need durable state across
+process restarts; the storage surface must exist first or the
+migration ships broken.
+
+**Why profile-scoped, not session-scoped**: `ActorEngine.Live`
+lives in the per-cwd `RuntimeProfile`. Folding actor state into
+`AgentLoopCheckpointState` (per-session/per-branch) forces wrong
+shapes — duplication-per-session or concurrent multi-session writes
+to the same row. Actors live longer than sessions; the storage
+surface must reflect that.
+
+**Sub-commits**:
+
+- **W10-0a**: persistence-key claim leak window — engine spawn
+  after a successful `Ref.modify` claim but before fork can leak
+  the key on allocation/interrupt. Wrap the claim + fork in
+  `Effect.acquireRelease` so the release frees the claim if spawn
+  aborts before the cleanup-bearing fiber runs. (W9 ultraverify A1.)
+- **W10-0b**: Receptionist death-observability test — actor crashes
+  via defect → `Receptionist.find(key)` returns `[]`. The cleanup
+  path already does the unregister; this locks it. (W9 ultraverify A8.)
+- **W10-0c**: extension-id-namespaced persistence keys —
+  `${extensionId}/${behaviorKey}` written/read at the storage
+  boundary; behaviors continue to declare flat `key: string`. The
+  namespace prevents accidental cross-extension collisions when
+  W10-1 migrates the 7+ state-holders. (W9 ultraverify W10
+  inheritance #3.)
+- **W10-0d**: profile-scoped persistence surface. New table /
+  storage interface keyed by `(profileId, namespacedKey)`. Wires
+  `engine.snapshot()` into a periodic + on-mailbox-quiescence write
+  path; seeds `restoredState` at spawn-time from the surface.
+  Snapshot quiescence contract enforced via a per-actor semaphore
+  around `receive` + `snapshot()`. (W9 ultraverify A9 + W9-4
+  storage integration deferred from W9.)
+
+**Files**: `packages/core/src/runtime/extensions/actor-engine.ts`
+(claim acquireRelease + snapshot semaphore),
+`packages/core/src/runtime/extensions/actor-host.ts` (extension-id
+namespacing at the spawn-time boundary),
+new `packages/core/src/runtime/extensions/actor-storage.ts` (the
+profile-scoped surface), schema for the persistence table,
+`packages/core/src/runtime/profile.ts` (compose ActorStorage into
+the profile layer alongside ActorEngine + ActorHost), tests:
+new `packages/core/tests/runtime/actor-storage.test.ts`,
+extend `actor-host.test.ts` (death observability + namespacing),
+extend `actor-engine.test.ts` (claim leak regression — disable
+the acquireRelease, prove the test fails, restore).
+
+**Verification**: `bun run gate` + each regression test
+empirically validated (disable protection → fail; restore → pass).
+
+**Cites**: `derive-dont-sync`,
+`make-impossible-states-unrepresentable`, `prove-it-works`.
 
 ### Commit 1: `refactor(extensions): migrate all Resource.machine sites + executor/actor to actors`
 
