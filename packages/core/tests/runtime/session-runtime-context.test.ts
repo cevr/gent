@@ -9,6 +9,8 @@ import { defineResource } from "@gent/core/domain/resource"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
 import type { CapabilityRef } from "@gent/core/domain/capability"
+import { request } from "@gent/core/extensions/api"
+import type { ExtensionId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -157,19 +159,19 @@ describe("resolveSessionEnvironment", () => {
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        capabilities: [
-          {
+        rpc: [
+          request({
             id: "echo-cwd",
-            audiences: ["agent-protocol"],
+            extensionId: "@test/session-request-context" as ExtensionId,
             intent: "read",
             input: Schema.String,
             output: Schema.String,
-            effect: (_input, ctx) =>
+            execute: (_input, ctx) =>
               Effect.sync(() => {
                 seenCwd.push(ctx.cwd)
                 return ctx.cwd
               }),
-          },
+          }),
         ],
       },
     }
@@ -266,19 +268,19 @@ describe("resolveSessionEnvironment", () => {
             }),
           }),
         ],
-        capabilities: [
-          {
+        rpc: [
+          request({
             id: "read-profile-token",
-            audiences: ["agent-protocol"],
+            extensionId: "@test/profile-resource-context" as ExtensionId,
             intent: "read",
             input: Schema.String,
             output: Schema.String,
-            effect: () =>
+            execute: () =>
               Effect.gen(function* () {
                 const token = yield* ProfileToken
                 return yield* token.read()
               }),
-          },
+          }),
         ],
       },
     }
