@@ -197,6 +197,7 @@ export {
   // in is the discrimination (no `_kind` field).
   defineResource,
   resource,
+  behavior,
 } from "../domain/contribution.js"
 
 // B11.5 typed capability factories — `audiences[] + intent` flag matrix

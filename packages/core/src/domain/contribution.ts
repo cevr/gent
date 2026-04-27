@@ -34,20 +34,20 @@ import type { AnyResourceContribution, ResourceContribution, ResourceScope } fro
  * existentially quantified across the message and state type
  * parameters so a bucket can hold heterogeneously-typed behaviors.
  *
- * `M` and `S` use `any` (not `unknown`) because `Behavior.receive` is
- * contravariant in `M` (and `S`) — a `Behavior<unknown, unknown>`
- * is NOT a supertype of `Behavior<MyMsg, MyState>`, since assigning
- * the latter would let a caller invoke `receive(unknownValue)` when
- * the implementation expects `MyMsg`. `any` opts out of variance
- * checking so authors can drop a `Behavior<MyMsg, MyState>` directly
- * into the bucket without an identity widener.
+ * `M` and `S` use `any` (not `unknown`) because `Behavior` is invariant
+ * in both: `receive: (msg: M, state: S) => Effect<S>` puts `M` in
+ * contravariant position and `S` in both positions. A widener
+ * (`unknown`) would force every caller through an identity cast;
+ * `any` opts out of variance checking so authors can route behaviors
+ * through the typed `behavior()` smart constructor below — which
+ * performs the cast in exactly one place.
  *
  * The requirements parameter is fixed to `never` at the bucket
  * boundary — the host has no extra services to provide, so
  * behaviors that need additional dependencies must close them at the
  * declaration site (e.g. `pipe(Effect.provide(Layer))`).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: contravariant Behavior position requires `any` to avoid forcing every author through an identity widener
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: invariant Behavior position; `behavior()` smart constructor below is the named cast site
 export type AnyBehavior = Behavior<any, any, never>
 
 // ── Typed buckets ──
@@ -116,3 +116,15 @@ export const resource = <A, S extends ResourceScope, R, E>(
 ): AnyResourceContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   r as unknown as AnyResourceContribution
+
+/**
+ * Identity smart constructor for the Behavior primitive. Generic over
+ * `<M, S>` so authors keep their typed Behavior shape; the leaf is
+ * widened to `AnyBehavior` at the bucket boundary. The requirements
+ * channel is closed to `never` at the boundary — behaviors that need
+ * extra services must close them at the declaration site via
+ * `Effect.provide`.
+ */
+export const behavior = <M, S>(b: Behavior<M, S, never>): AnyBehavior =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- bucket boundary: invariant Behavior<M,S> existentially quantified to AnyBehavior
+  b as unknown as AnyBehavior

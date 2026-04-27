@@ -26,6 +26,7 @@ import {
   defineExtension,
   defineResource,
   tool,
+  behavior,
   ProjectionError,
   type ProjectionContribution,
   type ReadOnly,
@@ -118,7 +119,7 @@ const actorBehavior: Behavior<RpMsg, { hits: number }, never> = {
 
 const actorExtension = defineExtension({
   id: "@gent/test-runtime-profile-actors",
-  actors: [actorBehavior],
+  actors: [behavior(actorBehavior)],
 })
 
 const PersistedState = S.Struct({ hits: S.Number })
@@ -131,12 +132,12 @@ const collidingBehavior: Behavior<RpMsg, { hits: number }, never> = {
 
 const collidingExtensionA = defineExtension({
   id: "@gent/test-runtime-profile-collision-a",
-  actors: [collidingBehavior],
+  actors: [behavior(collidingBehavior)],
 })
 
 const collidingExtensionB = defineExtension({
   id: "@gent/test-runtime-profile-collision-b",
-  actors: [collidingBehavior],
+  actors: [behavior(collidingBehavior)],
 })
 
 describe("resolveRuntimeProfile", () => {
