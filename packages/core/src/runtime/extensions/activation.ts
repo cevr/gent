@@ -7,14 +7,14 @@ import type {
   GentExtension,
   LoadedExtension,
 } from "../../domain/extension.js"
-import type { ExtensionContributions } from "../../domain/contribution.js"
+import { type ExtensionContributions, modelCapabilities } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const hasMachine = (contribs: ExtensionContributions): boolean =>
   (contribs.resources ?? []).some((r) => r.machine !== undefined)
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
-  (contribs.capabilities ?? []).filter((c) => c.audiences.includes("model")).length
+  modelCapabilities(contribs).length
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
@@ -253,9 +253,12 @@ export const collectValidationFailures = (
     }
   }
 
-  // Tool collisions: same-scope same-id model-audience capabilities.
+  // Tool collisions: same-scope same-id model-audience capabilities. Reads
+  // from both `tools:` and `capabilities:` (audiences:["model"]) — the
+  // bucket-discriminated path and the legacy unified bucket — so a same-id
+  // collision across buckets is still caught.
   collectScopedCollisions(
-    (cs) => (cs.capabilities ?? []).filter((cap) => cap.audiences.includes("model")),
+    (cs) => modelCapabilities(cs),
     (cap) => cap.id,
     "tool",
   )
@@ -278,7 +281,7 @@ export const collectValidationFailures = (
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
-      (cs.capabilities ?? [])
+      [...(cs.tools ?? []), ...(cs.capabilities ?? [])]
         .map((c) => c.prompt)
         .filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,
@@ -289,8 +292,7 @@ export const collectValidationFailures = (
   // string is sent to the LLM as part of the tool schema, so empty/missing
   // becomes "why is the model dumb?" rot later. Codex ADVISORY on C4.4a.
   for (const ext of extensions) {
-    for (const cap of ext.contributions.capabilities ?? []) {
-      if (!cap.audiences.includes("model")) continue
+    for (const cap of modelCapabilities(ext.contributions)) {
       const trimmed = (cap.description ?? "").trim()
       if (trimmed.length === 0) {
         addFailure(

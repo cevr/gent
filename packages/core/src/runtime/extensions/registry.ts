@@ -80,6 +80,12 @@ const compileCapabilityWinners = (
 ): ReadonlyMap<string, AnyCapabilityContribution> => {
   const winners = new Map<string, AnyCapabilityContribution>()
   for (const ext of sorted) {
+    // Sorted scope-ascending; later writes win. Iterate `tools:` and
+    // `capabilities:` for each extension so a later-scope contribution from
+    // either bucket shadows an earlier registration with the same id.
+    for (const cap of ext.contributions.tools ?? []) {
+      winners.set(cap.id, cap)
+    }
     for (const cap of ext.contributions.capabilities ?? []) {
       winners.set(cap.id, cap)
     }

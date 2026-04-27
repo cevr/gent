@@ -12,9 +12,13 @@ import type { PromptSection } from "../../domain/prompt.js"
 /** Static prompt sections live on `Capability.prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
  *  scope collision detection — same shape, same precedence rules as the
- *  legacy promptSection contribution. */
+ *  legacy promptSection contribution. Reads from both the `tools:` and
+ *  `capabilities:` buckets so prompts attached to typed-bucket tools still
+ *  collide-check against legacy ones during W10-3 migration. */
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
-  (cs.capabilities ?? []).map((c) => c.prompt).filter((p): p is PromptSection => p !== undefined)
+  [...(cs.tools ?? []), ...(cs.capabilities ?? [])]
+    .map((c) => c.prompt)
+    .filter((p): p is PromptSection => p !== undefined)
 
 // Discovery — scan directories for extension files
 

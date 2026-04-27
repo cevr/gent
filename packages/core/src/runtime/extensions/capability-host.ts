@@ -139,6 +139,13 @@ export const compileCapabilities = (
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredCapability[] = []
   for (const ext of sorted) {
+    // Read from both buckets — `tools:` (typed bucket per W10-3) and
+    // `capabilities:` (legacy heterogeneous bucket, deleted in W10-5). Each
+    // entry already carries its own `audiences` so the dispatcher path stays
+    // identical regardless of source bucket.
+    for (const capability of ext.contributions.tools ?? []) {
+      entries.push({ extensionId: ext.manifest.id, capability })
+    }
     for (const capability of ext.contributions.capabilities ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }

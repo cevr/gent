@@ -24,6 +24,7 @@
 import type { Behavior, ServiceKey } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
+import type { ToolToken } from "./capability/tool.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ExtensionProtocol } from "./extension-protocol.js"
@@ -66,6 +67,15 @@ export type AnyBehavior = Behavior<any, any, never>
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
+  /**
+   * LLM-callable tools authored via `tool({...})`. Bucket name IS the
+   * audience: every entry is a `ToolToken` with `audiences: ["model"]`
+   * — no runtime tag check needed downstream.
+   *
+   * Until W10-5, `capabilities:` is also scanned for `audiences:["model"]`
+   * entries so as-yet-unmigrated `tool({...})` call sites keep working.
+   */
+  readonly tools?: ReadonlyArray<ToolToken>
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
@@ -111,6 +121,29 @@ export interface ExtensionContributions {
    * extension's snapshot."
    */
   readonly pulseTags?: ReadonlyArray<AgentEventTag>
+}
+
+// ── Bucket readers ──
+
+/**
+ * Read all model-audience capabilities from a contributions bag — the union of
+ * the typed `tools:` bucket and any `capabilities:` entries with
+ * `audiences: ["model"]`. Used by every consumer that previously filtered
+ * `capabilities[]` by audience: tool runner, activation collision detection,
+ * tool-list assembly, prompt-section indexing.
+ *
+ * The shim exists during W10-3a/b — `tools:` migration is incremental and
+ * unmigrated `tool({...})` call sites still slot into `capabilities:`. After
+ * W10-5, `capabilities:` is gone and this helper just returns `tools ?? []`.
+ */
+export const modelCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<CapabilityToken> => {
+  const fromTools = contribs.tools ?? []
+  const fromCapabilities = (contribs.capabilities ?? []).filter((c) =>
+    c.audiences.includes("model"),
+  )
+  return [...fromTools, ...fromCapabilities]
 }
 
 // ── Smart constructors ──

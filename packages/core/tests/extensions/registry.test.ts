@@ -96,6 +96,30 @@ describe("resolveExtensions", () => {
     expect(resolved.modelCapabilities.has("bash")).toBe(true)
   })
 
+  // W10-3a regression: the typed `tools:` bucket is a separate field on
+  // `ExtensionContributions`. Resolved capability winners must include
+  // entries from BOTH `tools:` (new path) and `capabilities:` (legacy
+  // shim path until W10-5). Bypass `makeExt` to write straight into the
+  // contributions bag — the helper currently routes everything through
+  // `capabilities:`.
+  test("resolves model capabilities from both `tools:` and `capabilities:` buckets", () => {
+    const fromToolsBucket: LoadedExtension = {
+      manifest: { id: "a-tools-bucket" },
+      scope: "builtin",
+      sourcePath: "/test/a-tools-bucket",
+      contributions: { tools: [makeTool("read")] },
+    }
+    const fromCapabilitiesBucket: LoadedExtension = {
+      manifest: { id: "b-capabilities-bucket" },
+      scope: "builtin",
+      sourcePath: "/test/b-capabilities-bucket",
+      contributions: { capabilities: [makeTool("write")] },
+    }
+    const resolved = resolveExtensions([fromToolsBucket, fromCapabilitiesBucket])
+    expect(resolved.modelCapabilities.has("read")).toBe(true)
+    expect(resolved.modelCapabilities.has("write")).toBe(true)
+  })
+
   test("later scope wins for same-name tool", () => {
     const builtinRead = makeTool("read")
     const projectRead = { ...makeTool("read"), description: "project override" }

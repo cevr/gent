@@ -3,5 +3,5 @@ import { PrinciplesTool } from "./principles-tool.js"
 
 export const PrinciplesExtension = defineExtension({
   id: "@gent/principles",
-  capabilities: [PrinciplesTool],
+  tools: [PrinciplesTool],
 })

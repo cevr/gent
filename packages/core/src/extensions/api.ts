@@ -54,6 +54,7 @@ import type { AnyBehavior, ExtensionContributions } from "../domain/contribution
 import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
+import type { ToolToken } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { ExtensionProtocol } from "../domain/extension-protocol.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
@@ -220,7 +221,12 @@ export { Receptionist } from "../runtime/extensions/receptionist.js"
 // and the dual-shape `tool()` overload were deleted there.
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
-export { tool, type ToolCapabilityContext, type ToolInput } from "../domain/capability/tool.js"
+export {
+  tool,
+  type ToolCapabilityContext,
+  type ToolInput,
+  type ToolToken,
+} from "../domain/capability/tool.js"
 export {
   request,
   type ReadRequestInput,
@@ -303,6 +309,16 @@ export type FieldSpec<A> =
 export interface DefineExtensionInput {
   readonly id: string
   readonly resources?: FieldSpec<AnyResourceContribution>
+  /**
+   * LLM-callable tools authored via `tool({...})`. The bucket name is the
+   * audience: every entry must be a `ToolToken` (i.e. `audiences: ["model"]`)
+   * — `request({...})` and `action({...})` outputs cannot be slotted here.
+   *
+   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
+   * for unmigrated `tool({...})` call sites and for `request`/`action` until
+   * their typed buckets land. After W10-5 it is deleted.
+   */
+  readonly tools?: FieldSpec<ToolToken>
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
@@ -426,7 +442,21 @@ const validateResources = (contribs: ExtensionContributions): string | undefined
 }
 
 const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
-  const capIds = new Map<string, number>()
+  const capIds = new Map<string, string>()
+  // Validate `tools:` first so error messages name the correct bucket.
+  // `ToolToken.audiences` is the literal `readonly ["model"]` at the type
+  // level, so the empty-audiences and missing-model-audience branches in the
+  // legacy `capabilities:` validator below are statically unreachable here —
+  // we only check description and id-uniqueness.
+  for (const [i, cap] of (contribs.tools ?? []).entries()) {
+    if (cap.description === undefined || cap.description === "") {
+      return `tools[${i}] (${cap.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
+    }
+    if (capIds.has(cap.id)) {
+      return `tools[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+    }
+    capIds.set(cap.id, `tools[${i}]`)
+  }
   for (const [i, cap] of (contribs.capabilities ?? []).entries()) {
     if (cap.audiences === undefined || cap.audiences.length === 0) {
       return `capabilities[${i}] (${cap.id ?? "<no id>"}): \`audiences\` must be a non-empty array`
@@ -438,9 +468,9 @@ const validateCapabilities = (contribs: ExtensionContributions): string | undefi
       return `capabilities[${i}] (${cap.id}): model-audience capability requires a non-empty \`description\` (the model sees it as the tool description)`
     }
     if (capIds.has(cap.id)) {
-      return `capabilities[${i}] (${cap.id}): duplicate id within extension (also at index ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+      return `capabilities[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
     }
-    capIds.set(cap.id, i)
+    capIds.set(cap.id, `capabilities[${i}]`)
   }
   return undefined
 }
@@ -518,6 +548,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
     setup: (ctx) =>
       Effect.gen(function* () {
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
+        const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
         const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
@@ -531,6 +562,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         )
         const contribs: ExtensionContributions = {
           ...(resources.length > 0 ? { resources } : {}),
+          ...(tools.length > 0 ? { tools } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),

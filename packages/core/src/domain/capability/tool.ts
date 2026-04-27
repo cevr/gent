@@ -30,6 +30,27 @@ import type { ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 
+/**
+ * `ToolToken` — `tool({...})` return type. Narrows `CapabilityToken` so
+ * `audiences` is fixed to `["model"]` at the type level. The `ExtensionContributions.tools`
+ * bucket only accepts this narrowed shape — non-tool capabilities (`request`,
+ * `action`) cannot be slotted into `tools:`, so the bucket name IS the
+ * audience discrimination (consistent with C8: bucket name is the
+ * discrimination, no runtime tag check needed).
+ *
+ * `ToolToken` extends `CapabilityToken`, so authors mid-migration may still
+ * pass a tool token through the legacy `capabilities:` bucket — the latter is
+ * deleted in the W10-5 sweep once every site lives in `tools:`.
+ */
+declare const ToolTokenBrand: unique symbol
+export interface ToolToken<Input = unknown, Output = unknown> extends CapabilityToken<
+  Input,
+  Output
+> {
+  readonly [ToolTokenBrand]: true
+  readonly audiences: readonly ["model"]
+}
+
 /** Context passed to `tool({...}).execute`. Same shape as the wide
  *  `ModelCapabilityContext` but with `toolCallId` narrowed to required.
  *  Tools are always invoked from the agent loop with a real call id;
@@ -115,8 +136,8 @@ export const tool = <
   Deps,
 >(
   input: ToolInput<Params, Result, Error, Deps>,
-): CapabilityToken =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
+): ToolToken<Schema.Schema.Type<Params>, Result> =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken brand applied at factory boundary
   ({
     id: input.id,
     description: input.description,
@@ -139,4 +160,4 @@ export const tool = <
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as AnyCapabilityContribution["effect"],
-  }) as unknown as CapabilityToken
+  }) as unknown as ToolToken<Schema.Schema.Type<Params>, Result>
