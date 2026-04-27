@@ -190,11 +190,12 @@ describe("ActorHost", () => {
     expect(counts).toEqual({ a: 1, b: 1 })
   })
 
-  test("persistence-key collision: failing actor is skipped, sibling actors still spawn", async () => {
+  test("two extensions with the same flat persistence key both spawn (host namespaces by extension id)", async () => {
     const dup = makePingBehavior("shared-key")
-    // Two extensions, each with the same persistence.key. The second
-    // spawn fails ActorPersistenceKeyCollision → ActorHost logs+skips,
-    // the first actor stays alive.
+    // Pre-W10-0c the second spawn would collide on `shared-key`. With
+    // host-level extension-id namespacing the engine sees
+    // `@test/ext-1/shared-key` vs `@test/ext-2/shared-key` — distinct
+    // claims, both actors live.
     const resolved = makeResolved([
       makeLoaded("@test/ext-1", [dup]),
       makeLoaded("@test/ext-2", [dup]),
@@ -210,7 +211,47 @@ describe("ActorHost", () => {
         }).pipe(Effect.provide(layer)),
       ),
     )
+    expect(live).toBe(2)
+  })
+
+  test("same-extension persistence-key collision still fails: second actor is skipped", async () => {
+    const dup = makePingBehavior("shared-key")
+    // Same extension declares two behaviors with the same flat key.
+    // Namespacing folds both to `@test/ext/shared-key`, so the engine's
+    // collision check fires and the second one is skipped.
+    const resolved = makeResolved([makeLoaded("@test/ext", [dup, dup])])
+    const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+
+    const live = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reg = yield* Receptionist
+          const refs = yield* reg.find(PingService)
+          return refs.length
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
     expect(live).toBe(1)
+  })
+
+  test("snapshot keys are extension-id-namespaced (W10-0c regression)", async () => {
+    const counter = makePingBehavior("counter")
+    const resolved = makeResolved([
+      makeLoaded("@test/ext-a", [counter]),
+      makeLoaded("@test/ext-b", [counter]),
+    ])
+    const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+
+    const keys = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const snap = yield* engine.snapshot()
+          return Array.from(snap.keys()).sort()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(keys).toEqual(["@test/ext-a/counter", "@test/ext-b/counter"])
   })
 
   test("extension with empty actors bucket is a no-op", async () => {

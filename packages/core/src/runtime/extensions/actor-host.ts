@@ -17,12 +17,46 @@
  */
 
 import { Cause, Context, Effect, Layer, Ref } from "effect"
+import type { Behavior } from "../../domain/actor.js"
 import { ActorEngine } from "./actor-engine.js"
 import type { ResolvedExtensions } from "./registry.js"
 
 export interface ActorSpawnFailure {
   readonly extensionId: string
   readonly error: string
+}
+
+/**
+ * Namespace separator embedded into engine-level persistence keys so
+ * the storage round-trip can split `${extensionId}/${behaviorKey}`
+ * back into its parts. `/` is not legal in extension ids (manifest id
+ * uses dashed lowercase; behavior keys are author-controlled
+ * identifiers — neither contains a forward slash) so a single split
+ * on the first separator is unambiguous.
+ */
+export const PERSISTENCE_KEY_SEPARATOR = "/"
+
+/**
+ * Build the namespaced persistence key the engine sees. Behaviors
+ * declare flat `persistence.key`; the host overlays the extension id
+ * so two extensions can innocently both name a behavior `counter`
+ * without colliding on snapshot or restore.
+ */
+export const namespacePersistenceKey = (extensionId: string, behaviorKey: string): string =>
+  `${extensionId}${PERSISTENCE_KEY_SEPARATOR}${behaviorKey}`
+
+const withNamespacedPersistenceKey = <M, S>(
+  behavior: Behavior<M, S, never>,
+  extensionId: string,
+): Behavior<M, S, never> => {
+  if (behavior.persistence === undefined) return behavior
+  return {
+    ...behavior,
+    persistence: {
+      ...behavior.persistence,
+      key: namespacePersistenceKey(extensionId, behavior.persistence.key),
+    },
+  }
 }
 
 interface ActorHostFailuresService {
@@ -49,7 +83,8 @@ const spawnContributedActors = (
     for (const ext of resolved.extensions) {
       const behaviors = ext.contributions.actors ?? []
       for (const behavior of behaviors) {
-        yield* engine.spawn(behavior).pipe(
+        const namespaced = withNamespacedPersistenceKey(behavior, ext.manifest.id)
+        yield* engine.spawn(namespaced).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
               const error = String(Cause.squash(cause))

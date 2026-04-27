@@ -130,14 +130,12 @@ const collidingBehavior: Behavior<RpMsg, { hits: number }, never> = {
   receive: (_msg, state) => Effect.succeed({ hits: state.hits + 1 }),
 }
 
-const collidingExtensionA = defineExtension({
-  id: "@gent/test-runtime-profile-collision-a",
-  actors: [behavior(collidingBehavior)],
-})
-
-const collidingExtensionB = defineExtension({
-  id: "@gent/test-runtime-profile-collision-b",
-  actors: [behavior(collidingBehavior)],
+const collidingExtension = defineExtension({
+  id: "@gent/test-runtime-profile-collision",
+  // Two behaviors in the SAME extension declaring the SAME flat
+  // persistence key — collide after namespacing into
+  // `@gent/test-runtime-profile-collision/rp-shared-persistence-key`.
+  actors: [behavior(collidingBehavior), behavior(collidingBehavior)],
 })
 
 describe("resolveRuntimeProfile", () => {
@@ -273,14 +271,13 @@ describe("resolveRuntimeProfile", () => {
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
-          extensions: [collidingExtensionA, collidingExtensionB],
+          extensions: [collidingExtension],
         })
-        // Two extensions share a persistence.key — first wins, second is
-        // captured as a spawn failure rather than disappearing.
+        // One extension declares two behaviors with the same flat
+        // persistence key — they collide after namespacing. First
+        // wins, second is captured as a spawn failure.
         expect(built.actorHostFailures.length).toBe(1)
-        expect(built.actorHostFailures[0]?.extensionId).toBe(
-          "@gent/test-runtime-profile-collision-b",
-        )
+        expect(built.actorHostFailures[0]?.extensionId).toBe("@gent/test-runtime-profile-collision")
         expect(built.actorHostFailures[0]?.error).toContain("ActorPersistenceKeyCollision")
       }),
     ).pipe(Effect.provide(sharedLayer)),
