@@ -521,6 +521,84 @@ describe("ActorEngine — subscribeState", () => {
   })
 })
 
+describe("ActorEngine — peekView", () => {
+  test("samples behavior.view(state) at the post-receive state", async () => {
+    interface ViewState {
+      readonly count: number
+    }
+    const ViewMsg = TaggedEnumClass("ViewMsg", { Inc: {} })
+    type ViewMsg = Schema.Schema.Type<typeof ViewMsg>
+    const viewBehavior: Behavior<ViewMsg, ViewState, never> = {
+      initialState: { count: 0 },
+      receive: (_msg, state) =>
+        Effect.succeed({ count: state.count + 1 }) as Effect.Effect<ViewState, never, never>,
+      view: (state) => ({
+        prompt: [
+          {
+            id: "view-test",
+            content: `count=${state.count}`,
+            priority: 50,
+          },
+        ],
+      }),
+    }
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(viewBehavior)
+
+          const initial = yield* engine.peekView(ref)
+          expect(initial?.prompt?.[0]?.content).toBe("count=0")
+
+          yield* engine.tell(ref, ViewMsg.Inc.make({}))
+          // Permit ordering: peekView shares the per-actor permit with
+          // receive, so the post-Inc state is visible once tell is
+          // observed processed (we wait by polling the view).
+          yield* waitFor(() => true, 1)
+          // Spin until peekView observes the tick — the ask-fence
+          // pattern from subscribeState tests is unavailable because
+          // this behavior has no reply path.
+          let observed = 0
+          for (let i = 0; i < 50; i++) {
+            const v = yield* engine.peekView(ref)
+            observed = Number((v?.prompt?.[0]?.content ?? "count=0").split("=")[1])
+            if (observed >= 1) break
+            yield* Effect.sleep("10 millis")
+          }
+          expect(observed).toBe(1)
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+
+  test("returns undefined when behavior declares no view", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(counterBehavior)
+          const v = yield* engine.peekView(ref)
+          expect(v).toBeUndefined()
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+
+  test("returns undefined for unknown ref (matches tell no-op semantics)", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const phantom = { _tag: "ActorRef", id: "phantom-actor-id" } as never
+          const v = yield* engine.peekView(phantom)
+          expect(v).toBeUndefined()
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+})
+
 /** Tiny polling helper — avoids `Effect.sleep` for state transitions per CLAUDE.md. */
 const waitFor = (predicate: () => boolean, attempts = 50): Effect.Effect<void, never, never> =>
   Effect.gen(function* () {
