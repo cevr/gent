@@ -135,7 +135,10 @@ const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") =
   return "extension.startup.failed"
 }
 
-export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
+export const logRuntimeProfileFailures = (
+  profile: RuntimeProfile,
+  actorSpawnFailures: ReadonlyArray<ActorSpawnFailure> = [],
+) =>
   Effect.gen(function* () {
     for (const failed of profile.resolved.failedExtensions) {
       const message = extensionFailureLogMessage(failed.phase)
@@ -153,6 +156,15 @@ export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
         Effect.annotateLogs({
           extensionId: failure.extensionId,
           jobId: failure.jobId,
+          error: failure.error,
+          cwd: profile.cwd,
+        }),
+      )
+    }
+    for (const failure of actorSpawnFailures) {
+      yield* Effect.logWarning("extension.actor.spawn.failed").pipe(
+        Effect.annotateLogs({
+          extensionId: failure.extensionId,
           error: failure.error,
           cwd: profile.cwd,
         }),
@@ -384,25 +396,11 @@ export const buildProfileRuntime = (params: {
     }
   })
 
-export const logActorHostFailures = (failures: ReadonlyArray<ActorSpawnFailure>, cwd: string) =>
-  Effect.gen(function* () {
-    for (const failure of failures) {
-      yield* Effect.logWarning("extension.actor.spawn.failed").pipe(
-        Effect.annotateLogs({
-          extensionId: failure.extensionId,
-          error: failure.error,
-          cwd,
-        }),
-      )
-    }
-  })
-
 export const resolveProfileRuntime = (inputs: RuntimeProfileInputs) =>
   Effect.gen(function* () {
     const configService = yield* ConfigService
     const profile = yield* resolveRuntimeProfile(inputs)
-    yield* logRuntimeProfileFailures(profile)
     const built = yield* buildProfileRuntime({ profile, configService })
-    yield* logActorHostFailures(built.actorHostFailures, profile.cwd)
+    yield* logRuntimeProfileFailures(profile, built.actorHostFailures)
     return built
   })
