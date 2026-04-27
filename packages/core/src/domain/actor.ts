@@ -19,17 +19,25 @@ import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
  */
 
 /**
- * Reference to a spawned actor. The phantom `M` is used by `tell` /
- * `ask` to enforce message-type compatibility at every call site.
+ * Reference to a spawned actor. The phantom `M` enforces message-type
+ * compatibility on `tell` / `ask`. The phantom `S` (defaulted to
+ * `unknown`) carries the actor's state type so `subscribeState` can
+ * return `Stream<S>` instead of `Stream<unknown>` — callers that own
+ * the spawning Behavior get typed state observation without a cast,
+ * while callers that erase the ref (e.g. discovery via `find` /
+ * `subscribe`, where the registry only knows `M`) keep the
+ * `S = unknown` default and narrow at the consumption seam.
  *
  * Construct via `ActorEngine.spawn`. Never construct one by hand —
  * the runtime requires the id to map to an active mailbox.
  */
-export interface ActorRef<in M> {
+export interface ActorRef<in M, out S = unknown> {
   readonly _tag: "ActorRef"
   readonly id: ActorId
   /** Phantom — never read, never written. Erased at runtime. */
   readonly _phantomMessage?: (msg: M) => void
+  /** Phantom — never read, never written. Erased at runtime. */
+  readonly _phantomState?: () => S
 }
 
 /**
@@ -105,18 +113,17 @@ export interface ActorContext<M> {
    * compared values will fall back to reference equality and emit
    * spuriously on every receive — keep `S` to plain data.
    *
-   * The engine type-erases the value channel: the caller's
-   * `ActorRef<N>` does not carry `S`, so the returned stream is
-   * `Stream<unknown>` at the type level and downstream consumers must
-   * narrow. In practice the only correct caller is one that owns the
-   * Behavior whose state it expects (e.g. an extension's connection
-   * runner observing its own actor) — narrow with a discriminator
-   * (`_tag`) before pattern-matching. (Carrying `S` on `ActorRef<M, S>`
-   * is a follow-up; for now the cast lives at the call site.)
+   * `S` is carried on the ref: a ref returned by `spawn(behavior)` has
+   * `behavior`'s state type pinned to its second phantom slot, so the
+   * returned stream is `Stream<S>` for callers that hold the spawned
+   * ref. Callers that erase the ref (discovery via `find` / `subscribe`,
+   * which only know `M`) get `Stream<unknown>` from the default
+   * `S = unknown` and narrow at the consumption seam — typically by
+   * `_tag` for `TaggedEnumClass` state shapes.
    *
    * Returns `Stream.empty` for unknown refs (mirrors `tell` semantics).
    */
-  readonly subscribeState: <N>(target: ActorRef<N>) => Stream.Stream<unknown>
+  readonly subscribeState: <N, U>(target: ActorRef<N, U>) => Stream.Stream<U>
 }
 
 /**

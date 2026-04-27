@@ -103,4 +103,24 @@ describe("type-level — ActorContext threads M end-to-end", () => {
     void _stub
     expect(true).toBe(true)
   })
+
+  test("ActorRef carries S; subscribeState is Stream<S> for spawn-typed refs", () => {
+    // Compile-time pin: a ref whose phantom S is fixed yields a typed
+    // subscribeState stream — the consumer reads `.count` without a
+    // cast. A ref with the default `S = unknown` (e.g. one returned
+    // by Receptionist discovery) yields `Stream<unknown>` and the
+    // caller narrows at the consumption seam. Body never executes.
+    type State = { readonly count: number }
+    const _typedStub = (ctx: ActorContext<Ping>, typed: ActorRef<Ping, State>) => {
+      const s: Stream.Stream<State> = ctx.subscribeState(typed)
+      return s
+    }
+    const _erasedStub = (ctx: ActorContext<Ping>, erased: ActorRef<Ping>) => {
+      const s: Stream.Stream<unknown> = ctx.subscribeState(erased)
+      return s
+    }
+    void _typedStub
+    void _erasedStub
+    expect(true).toBe(true)
+  })
 })

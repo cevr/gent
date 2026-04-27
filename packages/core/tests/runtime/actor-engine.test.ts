@@ -413,7 +413,7 @@ describe("ActorEngine — subscribeState", () => {
           // observed the expected sequence.
           const fiber = yield* Effect.forkChild(
             Stream.runForEach(engine.subscribeState(ref), (s) =>
-              Effect.sync(() => collected.push((s as CounterState).count)),
+              Effect.sync(() => collected.push(s.count)),
             ),
           )
 
@@ -465,7 +465,7 @@ describe("ActorEngine — subscribeState", () => {
 
           const fiber = yield* Effect.forkChild(
             Stream.runForEach(engine.subscribeState(ref), (s) =>
-              Effect.sync(() => collected.push((s as IdleState).v)),
+              Effect.sync(() => collected.push(s.v)),
             ),
           )
 

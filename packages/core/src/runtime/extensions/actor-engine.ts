@@ -156,7 +156,7 @@ export interface ActorEngineService {
   readonly spawn: <M, S>(
     behavior: Behavior<M, S, never>,
     options?: SpawnOptions,
-  ) => Effect.Effect<ActorRef<M>, ActorRestoreError | ActorPersistenceKeyCollision>
+  ) => Effect.Effect<ActorRef<M, S>, ActorRestoreError | ActorPersistenceKeyCollision>
   readonly tell: <M>(target: ActorRef<M>, msg: M) => Effect.Effect<void>
   /**
    * Ask-correlated send. The reply type is inferred from the message's
@@ -191,12 +191,13 @@ export interface ActorEngineService {
    * duplicates are deduped via `Stream.changes`. Returns
    * `Stream.empty` for unknown refs (mirrors `tell` semantics).
    *
-   * The engine type-erases the value channel — `S` is pinned by the
-   * caller's `Behavior<M, S>` declaration, not by the ref itself.
-   * Same-extension callers (e.g. a connection runner observing its
-   * own actor) narrow with a discriminator before pattern-matching.
+   * `S` is carried on `ActorRef<M, S>` — a ref returned by
+   * `spawn(behavior)` pins the spawn-time state type, so the returned
+   * stream is `Stream<S>`. Discovery surfaces (`find` / `subscribe`)
+   * only know `M`, so refs sourced from them keep `S = unknown` and
+   * the caller narrows at the consumption seam (typically by `_tag`).
    */
-  readonly subscribeState: <M>(target: ActorRef<M>) => Stream.Stream<unknown>
+  readonly subscribeState: <M, S>(target: ActorRef<M, S>) => Stream.Stream<S>
   /**
    * Sample the target actor's `behavior.view(state)` once. Returns
    * `undefined` for unknown refs (mirrors `tell` no-op semantics) or
@@ -297,7 +298,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
         const spawn = <M, S>(
           behavior: Behavior<M, S, never>,
           options?: SpawnOptions,
-        ): Effect.Effect<ActorRef<M>, ActorRestoreError | ActorPersistenceKeyCollision> =>
+        ): Effect.Effect<ActorRef<M, S>, ActorRestoreError | ActorPersistenceKeyCollision> =>
           Effect.gen(function* () {
             const persistence = behavior.persistence
             if (persistence !== undefined) {
@@ -318,7 +319,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             }
 
             const id = Schema.decodeUnknownSync(ActorId)(crypto.randomUUID())
-            const ref: ActorRef<M> = { _tag: "ActorRef", id }
+            const ref: ActorRef<M, S> = { _tag: "ActorRef", id }
             const queue = yield* Queue.unbounded<EnvelopedMessage>()
 
             const initial: S =
@@ -415,7 +416,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                 receptionist.find(key),
               subscribe: <N>(key: ServiceKey<N>): Stream.Stream<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.subscribe(key),
-              subscribeState: <N>(target: ActorRef<N>): Stream.Stream<unknown> =>
+              subscribeState: <N, U>(target: ActorRef<N, U>): Stream.Stream<U> =>
                 subscribeState(target),
             })
 
@@ -517,16 +518,24 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             return out
           })
 
-        const subscribeState = <M>(target: ActorRef<M>): Stream.Stream<unknown> =>
+        const subscribeState = <M, S>(target: ActorRef<M, S>): Stream.Stream<S> =>
           // Resolve the mailbox lazily on subscribe so callers can
           // hand the stream around before the actor is necessarily
           // spawned. Unknown refs degrade to `Stream.empty` (matches
           // `tell` no-op semantics).
+          //
+          // The mailbox's `subscribeState()` is engine-erased to
+          // `Stream<unknown>` because mailboxes are heterogeneous in
+          // `S`. The cast back to `Stream<S>` is safe: `S` is pinned
+          // by the ref's phantom (set at spawn time), the underlying
+          // `SubscriptionRef<S>` stores exactly that `S`, and the
+          // engine never publishes anything else into that channel.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased mailbox channel; S pinned by ActorRef<M, S> phantom set at spawn time
           Stream.unwrap(
             lookup(target.id).pipe(
               Effect.map((entry) => (entry === undefined ? Stream.empty : entry.subscribeState())),
             ),
-          )
+          ) as Stream.Stream<S>
 
         const peekView = <M>(target: ActorRef<M>): Effect.Effect<ActorView | undefined> =>
           lookup(target.id).pipe(
