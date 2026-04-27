@@ -13,7 +13,11 @@
 import { describe, expect, test } from "bun:test"
 import { Context, Deferred, Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
-import { ActorHost } from "@gent/core/runtime/extensions/actor-host"
+import {
+  ActorHost,
+  namespacePersistenceKey,
+  parseNamespacedPersistenceKey,
+} from "@gent/core/runtime/extensions/actor-host"
 import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
 import { ServiceKey, type ActorRef, type Behavior } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
@@ -236,6 +240,11 @@ describe("ActorHost", () => {
 
   test("snapshot keys are extension-id-namespaced (W10-0c regression)", async () => {
     const counter = makePingBehavior("counter")
+    // Using scoped extension ids that contain `/` proves the encoding
+    // is unambiguous — a `/`-based separator would alias these against
+    // any behavior key with a `/` in it. Splitting `@test/ext-a` vs
+    // `@test/ext-a\x1fcounter` on the unit-separator yields exactly
+    // `("@test/ext-a", "counter")`.
     const resolved = makeResolved([
       makeLoaded("@test/ext-a", [counter]),
       makeLoaded("@test/ext-b", [counter]),
@@ -251,7 +260,27 @@ describe("ActorHost", () => {
         }).pipe(Effect.provide(layer)),
       ),
     )
-    expect(keys).toEqual(["@test/ext-a/counter", "@test/ext-b/counter"])
+    expect(keys).toEqual(["@test/ext-a\x1fcounter", "@test/ext-b\x1fcounter"])
+  })
+
+  test("parseNamespacedPersistenceKey round-trips with scoped extension ids", () => {
+    // Scoped ids with `/` were the case a printable separator would
+    // break. Confirm the unit-separator encoding splits exactly once
+    // at the right boundary.
+    const ns = namespacePersistenceKey("@gent/memory", "todos")
+    expect(parseNamespacedPersistenceKey(ns)).toEqual({
+      extensionId: "@gent/memory",
+      behaviorKey: "todos",
+    })
+    // Behavior keys with `/` survive too — the separator is the unit
+    // separator, not `/`.
+    const nested = namespacePersistenceKey("@gent/memory", "todo/lists")
+    expect(parseNamespacedPersistenceKey(nested)).toEqual({
+      extensionId: "@gent/memory",
+      behaviorKey: "todo/lists",
+    })
+    // Malformed input (no separator) returns undefined.
+    expect(parseNamespacedPersistenceKey("flat-key")).toBeUndefined()
   })
 
   test("extension with empty actors bucket is a no-op", async () => {

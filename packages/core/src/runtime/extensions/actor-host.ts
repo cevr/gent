@@ -27,14 +27,17 @@ export interface ActorSpawnFailure {
 }
 
 /**
- * Namespace separator embedded into engine-level persistence keys so
- * the storage round-trip can split `${extensionId}/${behaviorKey}`
- * back into its parts. `/` is not legal in extension ids (manifest id
- * uses dashed lowercase; behavior keys are author-controlled
- * identifiers — neither contains a forward slash) so a single split
- * on the first separator is unambiguous.
+ * Namespace separator embedded into engine-level persistence keys.
+ * ASCII unit separator (U+001F) is illegal in `ExtensionId`
+ * (`/^@?[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/`) and a non-printable
+ * control character no author would put in a behavior key, so the
+ * encoding is unambiguous: split on the first occurrence yields
+ * `(extensionId, behaviorKey)` exactly. A printable separator like
+ * `/` would alias scoped ids such as `@gent/memory` against behavior
+ * keys that themselves contain a slash, breaking the storage
+ * round-trip.
  */
-export const PERSISTENCE_KEY_SEPARATOR = "/"
+export const PERSISTENCE_KEY_SEPARATOR = "\x1f"
 
 /**
  * Build the namespaced persistence key the engine sees. Behaviors
@@ -44,6 +47,24 @@ export const PERSISTENCE_KEY_SEPARATOR = "/"
  */
 export const namespacePersistenceKey = (extensionId: string, behaviorKey: string): string =>
   `${extensionId}${PERSISTENCE_KEY_SEPARATOR}${behaviorKey}`
+
+/**
+ * Inverse of `namespacePersistenceKey`. Splits on the first `\x1f`,
+ * which is unambiguous because the separator is illegal in both
+ * `ExtensionId` and any reasonable author-chosen behavior key.
+ * Returns `undefined` for malformed input so storage callers can
+ * log + skip without an exception.
+ */
+export const parseNamespacedPersistenceKey = (
+  namespaced: string,
+): { readonly extensionId: string; readonly behaviorKey: string } | undefined => {
+  const idx = namespaced.indexOf(PERSISTENCE_KEY_SEPARATOR)
+  if (idx < 0) return undefined
+  return {
+    extensionId: namespaced.slice(0, idx),
+    behaviorKey: namespaced.slice(idx + 1),
+  }
+}
 
 const withNamespacedPersistenceKey = <M, S>(
   behavior: Behavior<M, S, never>,
