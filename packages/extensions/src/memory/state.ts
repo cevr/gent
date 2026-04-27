@@ -1,77 +1,13 @@
 /**
- * Memory extension state — volatile, session-local.
+ * Memory extension helpers — slug + path + frontmatter constructors.
  *
- * Session memories are ephemeral (lost on restart). The vault index and
- * project key are NOT stored here — they are derived from `MemoryVault`
- * on demand by `MemoryVaultProjection`. This is the
- * `derive-do-not-create-states` principle: disk is the source of truth;
- * there is no actor mirror to keep in sync.
- *
- * No stateSchema on actor definition — session memories don't survive a
- * process restart by design (use scope="project"/"global" tools to persist).
+ * The session-memory state-holder (W10-1d) was deleted along with the
+ * legacy `Resource.machine` plumbing. The vault is the durable store and
+ * `MemoryVaultProjection` derives the prompt surface; tools use the
+ * helpers below to compute on-disk paths and write frontmatter.
  */
 
-import { Schema } from "effect"
-import {
-  type AgentEvent,
-  type ExtensionReduceContext,
-  type ReduceResult,
-} from "@gent/core/extensions/api"
 import { type MemoryScope, type MemorySource } from "./vault.js"
-
-// ── Session memory (volatile) ──
-
-export const SessionMemory = Schema.Struct({
-  title: Schema.String,
-  content: Schema.String,
-  tags: Schema.Array(Schema.String),
-  created: Schema.String,
-})
-export type SessionMemory = typeof SessionMemory.Type
-
-// ── Extension state ──
-
-export interface MemoryState {
-  /** Session-local memories — volatile, not persisted to disk */
-  readonly sessionMemories: ReadonlyArray<SessionMemory>
-}
-
-export const MemoryStateSchema = Schema.Struct({
-  sessionMemories: Schema.Array(SessionMemory),
-})
-
-export const initialMemoryState: MemoryState = {
-  sessionMemories: [],
-}
-
-// ── Reduce ──
-
-/**
- * Reduce is minimal — most state changes happen through tool execution
- * and intent handling, which directly mutate via the vault service.
- * The reduce function only handles event-driven state updates.
- */
-export const reduce = (
-  state: MemoryState,
-  _event: AgentEvent,
-  _ctx: ExtensionReduceContext,
-): ReduceResult<MemoryState> => {
-  // SessionStarted: vault index reload happens in init, not reduce.
-  // Future: could react to TurnCompleted for auto-extraction.
-  return { state }
-}
-
-// ── Session memory helpers ──
-
-export const addSessionMemory = (state: MemoryState, memory: SessionMemory): MemoryState => ({
-  ...state,
-  sessionMemories: [...state.sessionMemories, memory],
-})
-
-export const removeSessionMemory = (state: MemoryState, title: string): MemoryState => ({
-  ...state,
-  sessionMemories: state.sessionMemories.filter((m) => m.title !== title),
-})
 
 // ── Slug generation ──
 

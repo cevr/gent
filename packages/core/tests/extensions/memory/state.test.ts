@@ -1,44 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import {
-  initialMemoryState,
-  addSessionMemory,
-  removeSessionMemory,
-  toSlug,
-  memoryPath,
-  newFrontmatter,
-  type SessionMemory,
-} from "@gent/extensions/memory/state"
-
-const makeSessionMemory = (title: string): SessionMemory => ({
-  title,
-  content: `Content for ${title}`,
-  tags: ["test"],
-  created: "2026-01-01T00:00:00Z",
-})
-
-describe("MemoryState", () => {
-  test("initial state is empty", () => {
-    expect(initialMemoryState.sessionMemories).toEqual([])
-  })
-
-  test("addSessionMemory appends", () => {
-    const m = makeSessionMemory("first")
-    const s1 = addSessionMemory(initialMemoryState, m)
-    expect(s1.sessionMemories.length).toBe(1)
-    expect(s1.sessionMemories[0]!.title).toBe("first")
-
-    const s2 = addSessionMemory(s1, makeSessionMemory("second"))
-    expect(s2.sessionMemories.length).toBe(2)
-  })
-
-  test("removeSessionMemory filters by title", () => {
-    let state = addSessionMemory(initialMemoryState, makeSessionMemory("keep"))
-    state = addSessionMemory(state, makeSessionMemory("remove"))
-    state = removeSessionMemory(state, "remove")
-    expect(state.sessionMemories.length).toBe(1)
-    expect(state.sessionMemories[0]!.title).toBe("keep")
-  })
-})
+import { toSlug, memoryPath, newFrontmatter } from "@gent/extensions/memory/state"
 
 describe("toSlug", () => {
   test("lowercases and hyphenates", () => {
