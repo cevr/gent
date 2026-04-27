@@ -449,14 +449,26 @@ describe("ActorEngine — subscribeState", () => {
   })
 
   test("dedupes consecutive equal states (filter-changed semantics)", async () => {
-    // Behavior whose receive returns the SAME state structure on
-    // every Touch — set into the channel happens unconditionally,
-    // but `Stream.changes` collapses duplicates downstream.
-    const Touch = TaggedEnumClass("Touch", { Touch: {} })
-    type Touch = Schema.Schema.Type<typeof Touch>
-    const idle: Behavior<Touch, { readonly v: number }, never> = {
-      initialState: { v: 0 },
-      receive: (_, state) => Effect.succeed(state),
+    // Behavior whose receive returns a structurally-equal state on
+    // every Touch — `SubscriptionRef.set` fires unconditionally, but
+    // `Stream.changes` collapses duplicates downstream. `Probe`
+    // serves as a fence: receive replies, so awaiting `engine.ask`
+    // proves all prior Touch messages have been processed.
+    const TouchMsg = TaggedEnumClass("TouchMsg", { Touch: {}, Probe: {} })
+    type TouchMsg = Schema.Schema.Type<typeof TouchMsg>
+    interface IdleState {
+      readonly _tag: "Idle"
+      readonly v: number
+    }
+    const idle: Behavior<TouchMsg, IdleState, never> = {
+      initialState: { _tag: "Idle", v: 0 },
+      receive: (msg, state, ctx) =>
+        Effect.gen(function* () {
+          if (msg._tag === "Probe") yield* ctx.reply(state.v)
+          // Return a fresh object on every receive so reference
+          // equality fails — only structural equality can dedupe.
+          return { _tag: "Idle", v: state.v } as const
+        }) as Effect.Effect<IdleState, never, never>,
     }
     const collected: number[] = []
     await Effect.runPromise(
@@ -467,23 +479,33 @@ describe("ActorEngine — subscribeState", () => {
 
           const fiber = yield* Effect.forkChild(
             Stream.runForEach(engine.subscribeState(ref), (s) =>
-              Effect.sync(() => collected.push((s as { readonly v: number }).v)),
+              Effect.sync(() => collected.push((s as IdleState).v)),
             ),
           )
 
           yield* waitFor(() => collected.length >= 1)
-          yield* engine.tell(ref, Touch.Touch.make({}))
-          yield* engine.tell(ref, Touch.Touch.make({}))
-          yield* engine.tell(ref, Touch.Touch.make({}))
-          // Give the loop time to drain — but Stream.changes should
-          // suppress every set since v stays at 0.
-          yield* Effect.sleep("50 millis")
+          yield* engine.tell(ref, TouchMsg.Touch.make({}))
+          yield* engine.tell(ref, TouchMsg.Touch.make({}))
+          yield* engine.tell(ref, TouchMsg.Touch.make({}))
+          // Fence: ask drains the mailbox up through this point. By
+          // the time the reply lands, every Touch has been processed
+          // and any non-deduped publishes would have been observed.
+          const v = yield* engine.ask<TouchMsg, number>(ref, TouchMsg.Probe.make({}), () =>
+            TouchMsg.Probe.make({}),
+          )
+          expect(v).toBe(0)
           yield* Fiber.interrupt(fiber)
           expect(collected).toEqual([0])
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
   })
+
+  // Subscribers are routine `Stream.fromPubSub` consumers — when the
+  // PubSub's owning scope closes, the take-loop is interrupted by the
+  // ambient scope. Asserting that boundary here would require driving
+  // a sub-scope and Effect/PubSub guarantees, neither of which this
+  // engine seam owns. (Recipe Q3 advisory.)
 
   test("subscribeState on unknown ref is empty (no hang, no fail)", async () => {
     await Effect.runPromise(

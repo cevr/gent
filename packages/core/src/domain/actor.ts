@@ -87,8 +87,16 @@ export interface ActorContext<M> {
   readonly subscribe: <N>(key: ServiceKey<N>) => Stream.Stream<ReadonlyArray<ActorRef<N>>>
   /**
    * Live stream of an actor's `S` state. Emits the current state on
-   * subscribe, then on every change. Consecutive duplicates are
-   * deduped — subscribers only observe genuine transitions.
+   * subscribe (via the underlying `replay: 1` PubSub), then on every
+   * change. Consecutive duplicates are deduped via `Equal.equals`,
+   * so subscribers only observe genuine transitions.
+   *
+   * Equality contract: `Stream.changes` uses structural equality.
+   * `TaggedEnumClass`/`Schema.TaggedStruct`/`Data.Class` instances
+   * dedupe correctly (their fields are compared structurally). State
+   * shapes that include closures, `Map`, `Set`, or other reference-
+   * compared values will fall back to reference equality and emit
+   * spuriously on every receive — keep `S` to plain data.
    *
    * The engine type-erases the value channel: the caller's
    * `ActorRef<N>` does not carry `S`, so the returned stream is
@@ -96,7 +104,8 @@ export interface ActorContext<M> {
    * narrow. In practice the only correct caller is one that owns the
    * Behavior whose state it expects (e.g. an extension's connection
    * runner observing its own actor) — narrow with a discriminator
-   * (`_tag`) before pattern-matching.
+   * (`_tag`) before pattern-matching. (Carrying `S` on `ActorRef<M, S>`
+   * is a follow-up; for now the cast lives at the call site.)
    *
    * Returns `Stream.empty` for unknown refs (mirrors `tell` semantics).
    */

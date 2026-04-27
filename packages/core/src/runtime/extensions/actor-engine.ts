@@ -10,7 +10,7 @@
  * Supervision policy in the receive loop:
  *   - interrupts propagate (scope close is tearing the actor down).
  *   - typed failures: log + continue, state survives the transient
- *     crash because the loop re-reads `Ref<S>` on the next iteration.
+ *     crash because the loop re-reads `SubscriptionRef<S>` on the next iteration.
  *   - defects (`Effect.die`): log + escalate, killing the fiber so the
  *     absence is observable to ask callers.
  *
@@ -294,7 +294,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                     ),
                   )
                 : behavior.initialState
-            const stateRef = yield* Ref.make<S>(initial)
             // Per-actor permit. `receive` and `snapshot` both acquire
             // it, so a snapshot read sees the post-state of whatever
             // message most recently completed — never an in-flight
@@ -302,20 +301,24 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // still the caller's contract; this guards each actor in
             // isolation.
             const stateSemaphore = yield* Semaphore.make(1)
-            // Live changes-channel for `subscribeState`. Updated in
-            // lockstep with `stateRef` under the same permit so
-            // subscribers can never observe a value out of order
-            // relative to a `snapshot()` row. `SubscriptionRef.changes`
-            // emits the current value on subscribe + every set; the
-            // public stream is wrapped in `Stream.changes` to dedupe
-            // consecutive equals (filter-changed semantics).
+            // Sole storage of `S`. `SubscriptionRef` provides both the
+            // current-value reads `snapshot()` needs and the changes-
+            // channel `subscribeState` exposes — keeping a separate
+            // `Ref<S>` would be a `derive-dont-sync` violation (two
+            // sources of truth, one write per receive split across
+            // both, drift on next edit). The wrapping PubSub uses
+            // `replay: 1`, so a late subscriber observes the latest
+            // published value; the public stream is wrapped in
+            // `Stream.changes` to dedupe consecutive equals via
+            // `Equal.equals` (filter-changed semantics; structural
+            // equality on `TaggedEnumClass`/`Data.Class` instances).
             const stateChannel = yield* SubscriptionRef.make<S>(initial)
 
             const snapshotForActor: MailboxEntry["snapshot"] = () =>
               stateSemaphore.withPermits(1)(
                 Effect.gen(function* () {
                   if (persistence === undefined) return undefined
-                  const current = yield* Ref.get(stateRef)
+                  const current = yield* SubscriptionRef.get(stateChannel)
                   const encoded = yield* Schema.encodeUnknownEffect(persistence.state)(
                     current,
                   ).pipe(
@@ -383,17 +386,14 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               const env = yield* Queue.take(queue)
               yield* stateSemaphore.withPermits(1)(
                 Effect.gen(function* () {
-                  const state = yield* Ref.get(stateRef)
+                  const state = yield* SubscriptionRef.get(stateChannel)
                   const next = yield* behavior.receive(
                     receiveMsg(env.msg),
                     state,
                     ctxFor(env.askId),
                   )
-                  yield* Ref.set(stateRef, next)
-                  // Mirror into the changes-channel under the same
-                  // permit so subscribers and `snapshot()` callers
-                  // both observe the same totally-ordered sequence
-                  // of post-receive states.
+                  // Single write — `SubscriptionRef.set` updates the
+                  // current value AND notifies subscribers atomically.
                   yield* SubscriptionRef.set(stateChannel, next)
                 }),
               )
