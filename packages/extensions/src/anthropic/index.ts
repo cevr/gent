@@ -1,3 +1,4 @@
+import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Redacted, Ref } from "effect"
 import {
   defineExtension,
@@ -124,6 +125,7 @@ const makeOauthAnthropicLayer = (
   const wrappedClient = keychainClient.pipe(Layer.provide(clientLayer))
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
     Layer.provide(wrappedClient),
+    Layer.provide(BunServices.layer),
   )
 }
 
@@ -218,6 +220,7 @@ export const buildAnthropicModelDriver = (
             }),
           ),
         ),
+        Effect.provide(BunServices.layer),
       ),
   },
 })

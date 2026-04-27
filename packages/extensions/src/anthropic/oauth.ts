@@ -1,8 +1,9 @@
-import { Effect, Option, Schema } from "effect"
+import { Duration, Effect, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import * as os from "node:os"
 import * as fsPromises from "node:fs/promises"
-import { ProviderAuthError } from "@gent/core/extensions/api"
+import { ProviderAuthError, runProcess } from "@gent/core/extensions/api"
 
 // ── Claude Code Keychain Reader ──
 
@@ -88,54 +89,60 @@ class ClaudeKeychainNotFoundError extends Schema.TaggedErrorClass<ClaudeKeychain
 
 const spawnSecurity = (
   args: readonly string[],
-): Effect.Effect<string, ProviderAuthError | ClaudeKeychainNotFoundError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(["security", ...args], {
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 5000,
-      })
-      const raw = await new Response(proc.stdout).text()
-      const code = await proc.exited
-      if (code !== 0) {
-        const err = await new Response(proc.stderr).text()
-        throw Object.assign(new Error(err || `Exit code ${code}`), { exitCode: code })
-      }
-      return raw.trim()
-    },
-    catch: (e) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      const error = e as { exitCode?: number; killed?: boolean; code?: string }
-      if (error.killed || error.code === "ETIMEDOUT") {
-        return new ProviderAuthError({
-          message: "Keychain read timed out. Try restarting Keychain Access.",
-        })
-      }
-      if (error.exitCode === 44) {
-        return new ClaudeKeychainNotFoundError()
-      }
-      if (error.exitCode === 36) {
-        return new ProviderAuthError({
+): Effect.Effect<
+  string,
+  ProviderAuthError | ClaudeKeychainNotFoundError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const result = yield* runProcess("security", args, { timeout: Duration.millis(5000) }).pipe(
+      Effect.catchTag("ProcessError", (e) => {
+        if (e.timedOut === true) {
+          return Effect.fail(
+            new ProviderAuthError({
+              message: "Keychain read timed out. Try restarting Keychain Access.",
+            }),
+          )
+        }
+        return Effect.fail(
+          new ProviderAuthError({
+            message: `Failed to read Claude Code credentials from Keychain: ${e.message}`,
+            cause: e,
+          }),
+        )
+      }),
+    )
+    if (result.exitCode === 0) return result.stdout.trim()
+    if (result.exitCode === 44) return yield* Effect.fail(new ClaudeKeychainNotFoundError())
+    if (result.exitCode === 36) {
+      return yield* Effect.fail(
+        new ProviderAuthError({
           message:
             "macOS Keychain is locked. Unlock it or run: security unlock-keychain ~/Library/Keychains/login.keychain-db",
-        })
-      }
-      if (error.exitCode === 128) {
-        return new ProviderAuthError({
+        }),
+      )
+    }
+    if (result.exitCode === 128) {
+      return yield* Effect.fail(
+        new ProviderAuthError({
           message: "Keychain access was denied. Grant access when prompted by macOS.",
-        })
-      }
-      return new ProviderAuthError({
-        message: `Failed to read Claude Code credentials from Keychain: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
-      })
-    },
+        }),
+      )
+    }
+    return yield* Effect.fail(
+      new ProviderAuthError({
+        message: `Failed to read Claude Code credentials from Keychain: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
+      }),
+    )
   })
 
 const readFromKeychain = (
   source: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError | ClaudeKeychainNotFoundError> =>
+): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError | ClaudeKeychainNotFoundError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
   spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
     Effect.flatMap(decodeCredentials),
   )
@@ -181,7 +188,7 @@ export const shouldFallBackToCli = (source: string): boolean => source === PRIMA
  */
 export const readClaudeCodeCredentials = (
   source: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError> => {
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> => {
   if (process.platform !== "darwin") {
     return readCredentialsFile()
   }
@@ -212,43 +219,34 @@ export const readClaudeCodeCredentials = (
  */
 export const listClaudeCodeKeychainServices = (): Effect.Effect<
   ReadonlyArray<string>,
-  ProviderAuthError
+  ProviderAuthError,
+  ChildProcessSpawner.ChildProcessSpawner
 > =>
-  Effect.tryPromise({
-    try: async () => {
-      if (process.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE]
-      const proc = Bun.spawn(["security", "dump-keychain"], {
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 5000,
-      })
-      const raw = await new Response(proc.stdout).text()
-      const code = await proc.exited
-      if (code !== 0) return [PRIMARY_CLAUDE_SERVICE]
-      const services: string[] = []
-      const seen = new Set<string>()
-      const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
-      let m = re.exec(raw)
-      while (m !== null) {
-        const svc = m[0].slice(1, -1)
-        if (!seen.has(svc)) {
-          seen.add(svc)
-          services.push(svc)
-        }
-        m = re.exec(raw)
+  Effect.gen(function* () {
+    if (process.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
+    const result = yield* runProcess("security", ["dump-keychain"], {
+      timeout: Duration.millis(5000),
+    }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+    if (result === undefined || result.exitCode !== 0)
+      return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
+    const services: string[] = []
+    const seen = new Set<string>()
+    const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
+    let m = re.exec(result.stdout)
+    while (m !== null) {
+      const svc = m[0].slice(1, -1)
+      if (!seen.has(svc)) {
+        seen.add(svc)
+        services.push(svc)
       }
-      const ordered: string[] = []
-      if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
-      for (const svc of services) {
-        if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
-      }
-      return ordered.length > 0 ? ordered : [PRIMARY_CLAUDE_SERVICE]
-    },
-    catch: (e) =>
-      new ProviderAuthError({
-        message: `Failed to enumerate Claude keychain services: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
-      }),
+      m = re.exec(result.stdout)
+    }
+    const ordered: string[] = []
+    if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
+    for (const svc of services) {
+      if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
+    }
+    return (ordered.length > 0 ? ordered : [PRIMARY_CLAUDE_SERVICE]) as ReadonlyArray<string>
   })
 
 /**
@@ -273,7 +271,11 @@ export interface ClaudeAccount {
  *
  * Foundation for the multi-account auth UI.
  */
-export const listClaudeAccounts = (): Effect.Effect<ReadonlyArray<ClaudeAccount>> =>
+export const listClaudeAccounts = (): Effect.Effect<
+  ReadonlyArray<ClaudeAccount>,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const sources = yield* listClaudeCodeKeychainServices().pipe(
       Effect.catchEager(() => Effect.succeed([PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>)),
@@ -299,52 +301,46 @@ export const listClaudeAccounts = (): Effect.Effect<ReadonlyArray<ClaudeAccount>
  * creates a duplicate entry instead of updating the existing one —
  * exactly the bug `griffinmartin/opencode-claude-auth` ran into.
  */
-const getKeychainAccountName = (serviceName: string): Effect.Effect<string | undefined> =>
-  Effect.tryPromise(async () => {
-    const proc = Bun.spawn(["security", "find-generic-password", "-s", serviceName], {
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 2000,
-    })
-    const raw = await new Response(proc.stdout).text()
-    await proc.exited
-    const match = /"acct"<blob>="([^"]*)"/.exec(raw)
-    return match?.[1]
-  }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+const getKeychainAccountName = (
+  serviceName: string,
+): Effect.Effect<string | undefined, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess("security", ["find-generic-password", "-s", serviceName], {
+    timeout: Duration.millis(2000),
+  }).pipe(
+    Effect.map((result) => {
+      const match = /"acct"<blob>="([^"]*)"/.exec(result.stdout)
+      return match?.[1]
+    }),
+    Effect.catchEager(() => Effect.succeed(undefined)),
+  )
 
 const writeKeychainEntry = (
   serviceName: string,
   accountName: string,
   payload: string,
-): Effect.Effect<void, ProviderAuthError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(
-        [
-          "security",
-          "add-generic-password",
-          "-s",
-          serviceName,
-          "-a",
-          accountName,
-          "-w",
-          payload,
-          "-U",
-        ],
-        { stdout: "ignore", stderr: "pipe", timeout: 2000 },
+): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess(
+    "security",
+    ["add-generic-password", "-s", serviceName, "-a", accountName, "-w", payload, "-U"],
+    { timeout: Duration.millis(2000), stdout: "ignore" },
+  ).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.void
+      return Effect.fail(
+        new ProviderAuthError({
+          message: `Failed to write Claude credentials to Keychain: ${result.stderr.trim() || `security add-generic-password exit ${result.exitCode}`}`,
+        }),
       )
-      const code = await proc.exited
-      if (code !== 0) {
-        const err = await new Response(proc.stderr).text()
-        throw new Error(err || `security add-generic-password exit ${code}`)
-      }
-    },
-    catch: (e) =>
-      new ProviderAuthError({
-        message: `Failed to write Claude credentials to Keychain: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
-      }),
-  })
+    }),
+    Effect.catchTag("ProcessError", (e) =>
+      Effect.fail(
+        new ProviderAuthError({
+          message: `Failed to write Claude credentials to Keychain: ${e.message}`,
+          cause: e,
+        }),
+      ),
+    ),
+  )
 
 /**
  * Splice fresh credentials into an existing keychain blob, preserving
@@ -387,7 +383,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const writeBackCredentials = (
   creds: ClaudeCredentials,
   source: string,
-): Effect.Effect<void, ProviderAuthError> =>
+): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     if (process.platform !== "darwin") {
       yield* Effect.tryPromise({
@@ -530,28 +526,37 @@ const refreshViaOAuth = (
     Effect.provide(FetchHttpClient.layer),
   )
 
-const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
-  Effect.tryPromise({
-    try: async () => {
-      // eslint-disable-next-line no-process-env -- auth probe inherits local CLI credentials from the shell
-      const env = { ...process.env, TERM: "dumb" }
-      const proc = Bun.spawn(["claude", "-p", ".", "--model", "haiku"], {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-        stdout: "ignore" as unknown as "pipe",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-        stderr: "ignore" as unknown as "pipe",
-        env,
-        timeout: 60_000,
-      })
-      const code = await proc.exited
-      if (code !== 0) throw new Error(`claude CLI exited with code ${code}`)
-    },
-    catch: (e) =>
-      new ProviderAuthError({
-        message: `Failed to refresh Claude Code credentials via CLI: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
-      }),
-  })
+const spawnClaudeCli = (): Effect.Effect<
+  void,
+  ProviderAuthError,
+  ChildProcessSpawner.ChildProcessSpawner
+> => {
+  // eslint-disable-next-line no-process-env -- auth probe inherits local CLI credentials from the shell
+  const env = { ...process.env, TERM: "dumb" }
+  return runProcess("claude", ["-p", ".", "--model", "haiku"], {
+    env,
+    timeout: Duration.millis(60_000),
+    stdout: "ignore",
+    stderr: "ignore",
+  }).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.void
+      return Effect.fail(
+        new ProviderAuthError({
+          message: `Failed to refresh Claude Code credentials via CLI: claude CLI exited with code ${result.exitCode}`,
+        }),
+      )
+    }),
+    Effect.catchTag("ProcessError", (e) =>
+      Effect.fail(
+        new ProviderAuthError({
+          message: `Failed to refresh Claude Code credentials via CLI: ${e.message}`,
+          cause: e,
+        }),
+      ),
+    ),
+  )
+}
 
 /**
  * Refresh the cached Claude Code credentials and return the fresh ones
@@ -569,7 +574,7 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
  */
 export const refreshClaudeCodeCredentials = (
   source: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const current = yield* readClaudeCodeCredentials(source).pipe(
       Effect.catchEager(() => Effect.succeed(undefined)),

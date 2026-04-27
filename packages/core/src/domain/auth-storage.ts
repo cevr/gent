@@ -1,7 +1,9 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
+import { runProcess } from "../utils/run-process.js"
 
 // Auth Storage Error
 
@@ -44,12 +46,16 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
       filePath?: string
       keyPath?: string
     } = {},
-  ): Layer.Layer<AuthStorage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+  ): Layer.Layer<
+    AuthStorage,
+    PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  > =>
     process.platform === "darwin" && options.filePath === undefined && options.keyPath === undefined
       ? (AuthStorage.LiveKeychain(options.serviceName ?? "gent") as Layer.Layer<
           AuthStorage,
           PlatformError.PlatformError,
-          FileSystem.FileSystem | Path.Path
+          FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
         >)
       : Layer.unwrap(
           Effect.sync(() => {
@@ -73,12 +79,15 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
   static LiveKeychain = (
     serviceName: string = "gent",
     options: {
-      readonly runSecurity?: (args: ReadonlyArray<string>) => Promise<KeychainRunResult>
+      readonly runSecurity?: (
+        args: ReadonlyArray<string>,
+      ) => Effect.Effect<KeychainRunResult, AuthStorageError>
     } = {},
-  ): Layer.Layer<AuthStorage> =>
+  ): Layer.Layer<AuthStorage, never, ChildProcessSpawner.ChildProcessSpawner> =>
     Layer.effect(
       AuthStorage,
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
         // `security` exits 44 (errSecItemNotFound) when the keychain item
         // doesn't exist. Every other non-zero exit — 36 (locked keychain),
         // 51 (denied access), 25308 (interaction not allowed), 127 (command
@@ -92,23 +101,33 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
           | { readonly _tag: "item-not-found" }
           | { readonly _tag: "failure"; readonly exitCode: number; readonly stderr: string }
 
-        const defaultRunSecurity = async (args: ReadonlyArray<string>) => {
-          const proc = Bun.spawn(["security", ...args], {
-            stdout: "pipe",
-            stderr: "pipe",
-          })
-          const stdout = await new Response(proc.stdout).text()
-          const exitCode = await proc.exited
-          const stderr = exitCode === 0 ? "" : await new Response(proc.stderr).text()
-          return { exitCode, stdout, stderr } satisfies KeychainRunResult
-        }
+        const defaultRunSecurity = (
+          args: ReadonlyArray<string>,
+        ): Effect.Effect<KeychainRunResult, AuthStorageError> =>
+          runProcess("security", args).pipe(
+            Effect.map(
+              (result) =>
+                ({
+                  exitCode: result.exitCode,
+                  stdout: result.stdout,
+                  stderr: result.stderr,
+                }) satisfies KeychainRunResult,
+            ),
+            Effect.mapError(
+              (e) =>
+                new AuthStorageError({
+                  message: e.message,
+                  cause: e,
+                }),
+            ),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          )
 
         const runSecurityRaw = options.runSecurity ?? defaultRunSecurity
 
         const runSecurity = (args: ReadonlyArray<string>): Effect.Effect<KeychainExit> =>
-          Effect.tryPromise({
-            try: async () => {
-              const result = await runSecurityRaw(args)
+          runSecurityRaw(args).pipe(
+            Effect.map((result) => {
               if (result.exitCode === 0)
                 return { _tag: "ok", stdout: result.stdout.trim() } as KeychainExit
               if (result.exitCode === ITEM_NOT_FOUND_EXIT)
@@ -118,13 +137,7 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
                 exitCode: result.exitCode,
                 stderr: result.stderr.trim(),
               } as KeychainExit
-            },
-            catch: (e) =>
-              new AuthStorageError({
-                message: `Keychain command spawn failed: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-          }).pipe(
+            }),
             // Spawn-level failures are rare (binary missing) — surface them
             // as a generic shell-boundary failure so callers can classify
             // uniformly instead of distinguishing spawn vs exit codes.
@@ -155,27 +168,28 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
             }),
           )
 
-        const execShell = (cmd: string) =>
-          Effect.tryPromise({
-            try: async () => {
-              const proc = Bun.spawn(["sh", "-c", cmd], {
-                stdout: "pipe",
-                stderr: "pipe",
-              })
-              const text = await new Response(proc.stdout).text()
-              const code = await proc.exited
-              if (code !== 0) {
-                const err = await new Response(proc.stderr).text()
-                throw new Error(err || `Exit code ${code}`)
+        const execShell = (cmd: string): Effect.Effect<string, AuthStorageError> =>
+          runProcess("sh", ["-c", cmd]).pipe(
+            Effect.flatMap((result) => {
+              if (result.exitCode !== 0) {
+                return Effect.fail(
+                  new AuthStorageError({
+                    message: `Keychain command failed: ${result.stderr.trim() || `Exit code ${result.exitCode}`}`,
+                  }),
+                )
               }
-              return text.trim()
-            },
-            catch: (e) =>
-              new AuthStorageError({
-                message: `Keychain command failed: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-          })
+              return Effect.succeed(result.stdout.trim())
+            }),
+            Effect.catchTag("ProcessError", (e) =>
+              Effect.fail(
+                new AuthStorageError({
+                  message: `Keychain command failed: ${e.message}`,
+                  cause: e,
+                }),
+              ),
+            ),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          )
 
         return {
           get: (provider) =>

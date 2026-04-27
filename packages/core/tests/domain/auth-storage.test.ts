@@ -9,12 +9,17 @@ import { AuthStorage, type KeychainRunResult } from "@gent/core/domain/auth-stor
 const encryptedFileLayer = (authPath: string, keyPath: string) =>
   AuthStorage.LiveEncryptedFile(authPath, keyPath).pipe(Layer.provide(BunServices.layer))
 
+const keychainLayer = (
+  serviceName: string,
+  options: Parameters<typeof AuthStorage.LiveKeychain>[1],
+) => AuthStorage.LiveKeychain(serviceName, options).pipe(Layer.provide(BunServices.layer))
+
 describe("AuthStorage.LiveKeychain classification", () => {
   // `LiveKeychain` accepts an injected `runSecurity` runner. The tests
   // here stub it to drive classification behavior without touching the
   // real macOS `security` binary.
 
-  const stubRunner = (result: KeychainRunResult) => () => Promise.resolve(result)
+  const stubRunner = (result: KeychainRunResult) => () => Effect.succeed(result)
 
   test("missing keychain item reads back undefined (exit 44)", async () => {
     const result = await Effect.runPromise(
@@ -23,7 +28,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
         return yield* storage.get("openai")
       }).pipe(
         Effect.provide(
-          AuthStorage.LiveKeychain("gent-test", {
+          keychainLayer("gent-test", {
             runSecurity: stubRunner({
               exitCode: 44,
               stdout: "",
@@ -43,7 +48,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
         return yield* storage.get("openai")
       }).pipe(
         Effect.provide(
-          AuthStorage.LiveKeychain("gent-test", {
+          keychainLayer("gent-test", {
             runSecurity: stubRunner({
               exitCode: 36,
               stdout: "",
@@ -72,7 +77,7 @@ describe("AuthStorage.LiveKeychain classification", () => {
         return yield* storage.delete("openai")
       }).pipe(
         Effect.provide(
-          AuthStorage.LiveKeychain("gent-test", {
+          keychainLayer("gent-test", {
             runSecurity: stubRunner({
               exitCode: 44,
               stdout: "",

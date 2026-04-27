@@ -7,6 +7,7 @@
  *
  * @module
  */
+import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import {
@@ -47,4 +48,4 @@ export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthEr
       }
     }
     return creds.accessToken
-  })
+  }).pipe(Effect.provide(BunServices.layer))

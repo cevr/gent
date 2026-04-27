@@ -10,6 +10,7 @@
  * memoization concerns. The fake is a real `HttpClient.HttpClient`
  * passed via Layer — the same composition production uses.
  */
+import { BunServices } from "@effect/platform-bun"
 import { describe, test, expect } from "bun:test"
 import { Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
@@ -103,7 +104,7 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
 const buildCreds = async (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
-  const layer = AnthropicCredentialService.layerFromIO(io)
+  const layer = AnthropicCredentialService.layerFromIO(io).pipe(Layer.provide(BunServices.layer))
   return await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

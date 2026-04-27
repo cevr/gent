@@ -7,6 +7,7 @@
  * via `TestClock` so we can assert cache semantics without spawning
  * `security` or hitting the keychain.
  */
+import { BunServices } from "@effect/platform-bun"
 import { describe, test, expect } from "bun:test"
 import { Cause, Effect, Layer, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
@@ -16,6 +17,11 @@ import {
 } from "@gent/extensions/anthropic/credential-service"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
+
+const credLayer = (
+  ...args: Parameters<typeof AnthropicCredentialService.layerFromIO>
+): Layer.Layer<AnthropicCredentialService> =>
+  AnthropicCredentialService.layerFromIO(...args).pipe(Layer.provide(BunServices.layer))
 
 // ── Helpers ──
 
@@ -79,7 +85,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
       readResult: () => Effect.succeed(callsRef.current),
       refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+    const layer = credLayer(makeIO(state))
 
     await runWithTestClock(
       Effect.gen(function* () {
@@ -101,7 +107,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
       readResult: () => Effect.succeed(callsRef.current),
       refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+    const layer = credLayer(makeIO(state))
 
     await runWithTestClock(
       Effect.gen(function* () {
@@ -130,7 +136,7 @@ describe("AnthropicCredentialService — refresh on stale", () => {
       refreshResult: () => Effect.succeed(fresh),
     }
     const persistState: PersistState = { lastWritten: undefined, failNext: false }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state), makeAuthInfo(persistState))
+    const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
 
     await runWithTestClock(
       Effect.gen(function* () {
@@ -149,7 +155,7 @@ describe("AnthropicCredentialService — refresh on stale", () => {
       refreshResult: () =>
         Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
     }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+    const layer = credLayer(makeIO(state))
 
     const result = await runWithTestClock(
       Effect.gen(function* () {
@@ -178,7 +184,7 @@ describe("AnthropicCredentialService — invalidate", () => {
       readResult: () => Effect.succeed(callsRef.current),
       refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+    const layer = credLayer(makeIO(state))
 
     await runWithTestClock(
       Effect.gen(function* () {
@@ -203,7 +209,7 @@ describe("AnthropicCredentialService — durable persist failure", () => {
       refreshResult: () => Effect.succeed(fresh),
     }
     const persistState: PersistState = { lastWritten: undefined, failNext: true }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state), makeAuthInfo(persistState))
+    const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
 
     const result = await runWithTestClock(
       Effect.gen(function* () {
@@ -231,7 +237,7 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
       readResult: () => Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
       refreshResult: () => Effect.succeed(fresh),
     }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+    const layer = credLayer(makeIO(state))
 
     await runWithTestClock(
       Effect.gen(function* () {
