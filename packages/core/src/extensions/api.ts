@@ -271,9 +271,6 @@ export type {
   ResourceBusEnvelope,
   ResourceSubscription,
   ResourceSchedule,
-  ResourceMachine,
-  AnyResourceMachine,
-  ResourceMachineInitContext,
 } from "../domain/resource.js"
 export type {
   ProjectionContribution,
@@ -445,27 +442,12 @@ const resolveField = <A>(
  * messages is `Extension "@x" <field>[<i>] invalid: <reason>`.
  *
  * Invariants enforced here:
- *   - At most one Resource declares `machine` per extension. Without this,
- *     the runtime silently picks by array order and drops the rest.
- *   - Resource.machine must be process-scope until ephemeral composers wire
- *     Resource layers (codex BLOCK 3 on C3.5a).
  *   - Capability `audiences` must be non-empty.
  *   - `audiences:["model"]` capabilities must have a non-empty description
  *     (model-audience disclosure requirement; was activation.ts:282 check).
  *   - Intra-extension capability/agent/driver id/name collisions are
  *     surfaced (cross-extension collisions are scope-precedence's concern).
  */
-const validateResources = (contribs: ExtensionContributions): string | undefined => {
-  const machineResources = (contribs.resources ?? []).filter((r) => r.machine !== undefined)
-  if (machineResources.length > 1) {
-    return `resources: at most one Resource may declare \`machine\` (found ${machineResources.length}); the runtime would silently pick the first by array order and drop the rest`
-  }
-  const sessionScopedMachine = machineResources.find((r) => r.scope !== "process")
-  if (sessionScopedMachine !== undefined) {
-    return `resources: Resource.machine on scope "${sessionScopedMachine.scope}" is not yet supported (only "process" until per-cwd / ephemeral composers wire Resource layers). Move the machine to a process-scope Resource.`
-  }
-  return undefined
-}
 
 /**
  * Per-bucket id-uniqueness check. Mutates `capIds` to record locations and
@@ -555,7 +537,7 @@ export const validatePackageShape = (
   contribs: ExtensionContributions,
 ): Effect.Effect<void, ExtensionLoadError> =>
   Effect.gen(function* () {
-    const checks = [validateResources, validateCapabilities, validateAgents, validateDriverIds]
+    const checks = [validateCapabilities, validateAgents, validateDriverIds]
     for (const check of checks) {
       const message = check(contribs)
       if (message !== undefined) {

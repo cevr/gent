@@ -5,17 +5,6 @@
  * which are intentionally excluded from the public authoring API.
  */
 
-import { Schema } from "effect"
-import type { SlotsDef } from "effect-machine"
-import {
-  ExtensionEffectSchema,
-  MessageMetadata,
-  type ResourceContribution,
-  type ResourceMachine,
-  type ResourceScope,
-  type ResourceSpec,
-} from "./api.js"
-
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 export { BuiltinEventSink, type BuiltinEventSinkService } from "../domain/event-publisher.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
@@ -26,47 +15,3 @@ export {
   type InteractionPendingReaderService,
   type PendingInteraction,
 } from "../storage/interaction-pending-reader.js"
-
-export const BuiltinQueueFollowUpEffect = Schema.TaggedStruct("QueueFollowUp", {
-  content: Schema.String,
-  metadata: Schema.optional(MessageMetadata),
-})
-
-export const BuiltinInterjectEffect = Schema.TaggedStruct("Interject", {
-  content: Schema.String,
-})
-
-export const BuiltinRuntimeEffectSchema = Schema.Union([
-  BuiltinQueueFollowUpEffect,
-  BuiltinInterjectEffect,
-  ExtensionEffectSchema,
-])
-
-export type BuiltinRuntimeEffect = typeof BuiltinRuntimeEffectSchema.Type
-
-export interface BuiltinResourceMachine<
-  State extends { readonly _tag: string } = { readonly _tag: string },
-  Event extends { readonly _tag: string } = { readonly _tag: string },
-  SlotsR = never,
-  SD extends SlotsDef = Record<string, never>,
-> extends Omit<ResourceMachine<State, Event, SlotsR, SD>, "afterTransition"> {
-  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<BuiltinRuntimeEffect>
-}
-
-export const defineBuiltinResource = <
-  A,
-  S extends ResourceScope,
-  R = never,
-  E = never,
-  State extends { readonly _tag: string } = { readonly _tag: string },
-  Event extends { readonly _tag: string } = { readonly _tag: string },
-  SlotsR = never,
-  SD extends SlotsDef = Record<string, never>,
->(
-  spec: Omit<ResourceSpec<A, S, R, E>, "machine"> & {
-    readonly machine?: BuiltinResourceMachine<State, Event, SlotsR, SD>
-  },
-): ResourceContribution<A, S, R, E> =>
-  // Builtins may emit runtime turn-control effects; public extension machines cannot.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- builtin-only membrane widens runtime effects before the shared Resource host consumes them.
-  spec as ResourceContribution<A, S, R, E>

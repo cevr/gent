@@ -15,9 +15,6 @@ import {
 } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
-const hasMachine = (contribs: ExtensionContributions): boolean =>
-  (contribs.resources ?? []).some((r) => r.machine !== undefined)
-
 const modelToolCount = (contribs: ExtensionContributions): number =>
   modelCapabilities(contribs).length
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
@@ -96,7 +93,6 @@ export const setupBuiltinExtensions = (params: {
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
             scope: "builtin",
-            hasMachine: hasMachine(exit.value.contributions),
             tools: modelToolCount(exit.value.contributions),
           }),
         )
@@ -154,7 +150,6 @@ export const setupDiscoveredExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             scope: discovered.scope,
-            hasMachine: hasMachine(exit.value.contributions),
             tools: modelToolCount(exit.value.contributions),
           }),
         )
@@ -383,17 +378,11 @@ export const reconcileLoadedExtensions = (params: {
       groupScheduledJobFailures(scheduledJobFailures),
     )
 
-    const machineCount = activated.active.filter((ext) => hasMachine(ext.contributions)).length
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
       Effect.annotateLogs({
         active: activated.active.length,
         failed: allFailed.length,
-        withMachines: machineCount,
         activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
-        machineIds: activated.active
-          .filter((ext) => hasMachine(ext.contributions))
-          .map((ext) => ext.manifest.id)
-          .join(", "),
         ...(allFailed.length > 0
           ? {
               failedDetails: allFailed

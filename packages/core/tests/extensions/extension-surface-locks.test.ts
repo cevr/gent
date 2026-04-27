@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
-import * as PublicExtensionApi from "@gent/core/extensions/api"
+import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
   action,
   defineExtension,
@@ -37,7 +37,6 @@ import {
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
-import type { BuiltinResourceMachine } from "../../src/extensions/internal"
 import type { SearchResult as StorageSearchResult } from "../../src/storage/search-storage"
 import { StorageError } from "../../src/storage/sqlite-storage"
 
@@ -287,51 +286,6 @@ describe("Effect-purity locks (compile-time)", () => {
     void result
     void badSessionError
     void badSearchResult
-    expect(true).toBe(true)
-  })
-
-  test("public extension api rejects runtime-only resource machine effects", () => {
-    // @ts-expect-error — resource-machine runtime effects are likewise internal-only
-    type _BadResource = PublicExtensionApi.ResourceMachineEffect
-    // @ts-expect-error — builtin machine effects are not part of the public author API
-    type _BadBuiltinRuntimeEffect = PublicExtensionApi.BuiltinRuntimeEffect
-    // @ts-expect-error — builtin machine shape is not part of the public author API
-    type _BadBuiltinResourceMachine = PublicExtensionApi.BuiltinResourceMachine
-
-    type PublicMachine = PublicExtensionApi.ResourceMachine<
-      { readonly _tag: "Idle" },
-      { readonly _tag: "Ping" }
-    >
-    type PublicAfterTransition = NonNullable<PublicMachine["afterTransition"]>
-    type PublicAfterTransitionEffect = ReturnType<PublicAfterTransition>[number]
-    // @ts-expect-error — QueueFollowUp is runtime-only and must not type-check for public machines
-    const badEffect: PublicAfterTransitionEffect = { _tag: "QueueFollowUp", content: "x" }
-
-    void badEffect
-    expect(true).toBe(true)
-  })
-
-  test("public extension api does not expose builtin runtime constructors as values", () => {
-    // @ts-expect-error — builtin resource constructor is not part of the public author API
-    const badDefineBuiltinResource = PublicExtensionApi.defineBuiltinResource
-
-    void badDefineBuiltinResource
-    expect(true).toBe(true)
-  })
-
-  test("builtin-only resource machines may emit runtime turn-control effects", () => {
-    type BuiltinMachine = BuiltinResourceMachine<
-      { readonly _tag: "Idle" },
-      { readonly _tag: "Ping" }
-    >
-    type BuiltinAfterTransition = NonNullable<BuiltinMachine["afterTransition"]>
-    type BuiltinEffect = ReturnType<BuiltinAfterTransition>[number]
-
-    const followUp: BuiltinEffect = { _tag: "QueueFollowUp", content: "next" }
-    const interject: BuiltinEffect = { _tag: "Interject", content: "now" }
-
-    void followUp
-    void interject
     expect(true).toBe(true)
   })
 

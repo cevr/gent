@@ -1,13 +1,56 @@
-import { Effect, Exit, Option, Ref, Schema, Scope } from "effect"
-import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
-import type { ExtensionRef } from "../../domain/extension.js"
+import { Effect, Exit, Option, Ref, Schema, Scope, type Schema as S } from "effect"
+import {
+  ActorScope,
+  Machine,
+  Slot,
+  type Lifecycle,
+  type ProvideSlots,
+  type SlotCalls,
+  type SlotsDef,
+} from "effect-machine"
+import type { ExtensionRef, ExtensionEffect } from "../../domain/extension.js"
 import { ExtensionId, type BranchId, type SessionId } from "../../domain/ids.js"
-import type { ResourceMachine } from "../../domain/resource.js"
+import type { AgentEvent } from "../../domain/event.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
   ExtensionProtocolError,
 } from "../../domain/extension-protocol.js"
+
+/** Local FSM-machine type — kept until B4 deletes MachineEngine + the FSM
+ *  spawn path. Public `Resource.machine` type was removed in W10-PhaseB/B3
+ *  but `spawnMachineExtensionRef` still typechecks against the same shape
+ *  so the unreachable FSM dispatch path doesn't lose its type guarantees
+ *  before deletion. */
+interface ResourceMachineInitContext<State, Event, SD extends SlotsDef> {
+  readonly sessionId: SessionId
+  readonly snapshot: Effect.Effect<State>
+  readonly send: (event: Event) => Effect.Effect<boolean>
+  readonly sessionCwd?: string
+  readonly parentSessionId?: SessionId
+  readonly getSessionAncestors: () => Effect.Effect<ReadonlyArray<{ readonly id: string }>>
+  readonly slots?: SlotCalls<SD>
+}
+interface ResourceMachine<
+  State extends { readonly _tag: string },
+  Event extends { readonly _tag: string },
+  SlotsR,
+  SD extends SlotsDef,
+> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural compat with deleted public type
+  readonly machine: Machine.Machine<State, Event, never, any, any, SD>
+  readonly slots?: (ctx: {
+    readonly sessionId: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<ProvideSlots<SD>, never, SlotsR>
+  readonly mapEvent?: (event: AgentEvent) => Event | undefined
+  readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
+  readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
+  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
+  readonly stateSchema?: S.Schema<State>
+  readonly protocols?: Readonly<Record<string, unknown>>
+  readonly onInit?: (ctx: ResourceMachineInitContext<State, Event, SD>) => Effect.Effect<void>
+}
 import { ExtensionProtocolError as ExtensionProtocolTaggedError } from "../../domain/extension-protocol.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import {

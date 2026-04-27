@@ -1,7 +1,10 @@
 import { Cause, Effect, Schema } from "effect"
 import type { ExtensionScope, LoadedExtension, ExtensionRef } from "../../../domain/extension.js"
 import { ExtensionId } from "../../../domain/ids.js"
-import type { AnyResourceMachine } from "../../../domain/resource.js"
+/** Local FSM-machine alias — kept until B4 deletes MachineEngine + the FSM
+ *  spawn path. Public `Resource.machine` type was removed in W10-PhaseB/B3. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- transitional alias for unreachable FSM spawn map
+export type AnyResourceMachine = any
 import type { ServiceKey } from "../../../domain/actor.js"
 import { SCOPE_PRECEDENCE } from "../disabled.js"
 import type {
@@ -66,13 +69,11 @@ export interface CollectedMachineProtocol {
   readonly protocols: MachineProtocol
 }
 
-/** Extract the (at most one) `Resource.machine` declared by an extension. */
-export const extractMachine = (ext: LoadedExtension): AnyResourceMachine | undefined => {
-  for (const r of ext.contributions.resources ?? []) {
-    if (r.machine !== undefined) return r.machine
-  }
-  return undefined
-}
+/** `Resource.machine` was deleted in W10-PhaseB/B3 — every extension is
+ *  actor-only now. The FSM-supervised path in MachineEngine becomes
+ *  unreachable; this helper exists only until B4 deletes MachineEngine
+ *  entirely. */
+export const extractMachine = (_ext: LoadedExtension): AnyResourceMachine | undefined => undefined
 
 export const protocolError = (
   extensionId: string,

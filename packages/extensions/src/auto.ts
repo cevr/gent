@@ -23,6 +23,7 @@ import { Effect, Schema } from "effect"
 import {
   behavior,
   defineExtension,
+  defineResource,
   isRecord,
   ServiceKey,
   TaggedEnumClass,
@@ -31,7 +32,6 @@ import {
   type TurnAfterInput,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { defineBuiltinResource } from "../internal/builtin.js"
 import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
@@ -730,10 +730,8 @@ export const AutoExtension = defineExtension({
       handler: autoHandoffImpl,
     },
   },
-  // Resource still owns the AutoJournal service layer until W10-5/C-4
-  // promotes layer ownership off Resource (deletion sweep).
   resources: ({ ctx }) => [
-    defineBuiltinResource({
+    defineResource({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
