@@ -221,6 +221,13 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             )
           })
 
+        const releaseClaim = (key: string): Effect.Effect<void> =>
+          Ref.update(claimedPersistenceKeys, (s) => {
+            const next = new Set(s)
+            next.delete(key)
+            return next
+          })
+
         const spawn = <M, S>(
           behavior: Behavior<M, S, never>,
           options?: SpawnOptions,
@@ -348,11 +355,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                 return next
               })
               if (persistence !== undefined) {
-                yield* Ref.update(claimedPersistenceKeys, (s) => {
-                  const next = new Set(s)
-                  next.delete(persistence.key)
-                  return next
-                })
+                yield* releaseClaim(persistence.key)
               }
               if (behavior.serviceKey !== undefined) {
                 yield* receptionist.unregister(behavior.serviceKey, ref)
@@ -361,6 +364,22 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
 
             yield* Effect.forkIn(loop.pipe(Effect.ensuring(cleanup)), runtimeScope)
             return ref
+          }).pipe((eff) => {
+            // Backstop for the leak window between the persistence-key
+            // claim above and the successful `Effect.forkIn` below it.
+            // If anything in that window fails or interrupts (decode
+            // error, queue/Ref allocation interrupt, receptionist
+            // register failure), free the claim so a retry isn't
+            // locked out by an orphan key. `onError` only fires on the
+            // failure path, so when `forkIn` succeeds the spawned
+            // fiber's `cleanup` owns the release and there is no
+            // double-free. The collision-return path also flows
+            // through here as a typed failure, but it never reached
+            // the claim-write branch — `releaseClaim` on a key not in
+            // the set is a no-op delete.
+            const key = behavior.persistence?.key
+            if (key === undefined) return eff
+            return eff.pipe(Effect.onError(() => releaseClaim(key)))
           })
 
         const snapshot = (): Effect.Effect<ActorSnapshot, ActorSnapshotError> =>

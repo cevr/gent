@@ -256,4 +256,35 @@ describe("ActorEngine — persistence", () => {
       ),
     )
   })
+
+  test("failed spawn after claim releases the persistence-key claim (W10-0a regression)", async () => {
+    // A spawn that fails AFTER the claim (here: malformed restoredState
+    // → ActorRestoreError) must not leak the persistence-key claim. A
+    // subsequent spawn for the same key in the same engine must
+    // succeed. Without the post-claim onError release, the claim stays
+    // in `claimedPersistenceKeys` forever and the second spawn fails
+    // with ActorPersistenceKeyCollision.
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const failed = yield* Effect.exit(
+            engine.spawn(durableCounter, {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- intentional malformed encoded value
+              restoredState: { count: "not-a-number" } as never,
+            }),
+          )
+          expect(failed._tag).toBe("Failure")
+          // Same key, valid restore — must succeed because the prior
+          // claim was released on failure.
+          const ref = yield* engine.spawn(durableCounter)
+          yield* engine.tell(ref, CounterMsg.Inc.make({}))
+          const count = yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
+            CounterMsg.Get.make({}),
+          )
+          expect(count).toBe(1)
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
 })
