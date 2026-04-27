@@ -195,7 +195,18 @@ export const ExecutorConnectionRunnerLayer = (
         const ref = yield* awaitExecutorRef
         yield* supervise(ref).pipe(Effect.forkIn(layerScope))
         yield* autoStartIfNeeded(ref, cwd)
-      }).pipe(Effect.catchDefect(() => Effect.void))
+      }).pipe(
+        // Log defects so a layer-composer regression (e.g. an
+        // `ActorEngine` / `Receptionist` not in scope) is observable
+        // instead of silently disabling the runner. A swallow is
+        // exactly what hid B1 (`Layer.mergeAll` not cross-wiring R)
+        // until an integration test caught it.
+        Effect.catchDefect((cause) =>
+          Effect.logError("executor.connection-runner.bootstrap.defect").pipe(
+            Effect.annotateLogs({ defect: String(cause) }),
+          ),
+        ),
+      )
       yield* bootstrap.pipe(Effect.forkIn(layerScope))
       return ExecutorConnectionRunner.of({})
     }),
