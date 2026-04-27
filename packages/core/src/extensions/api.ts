@@ -201,6 +201,7 @@ export {
 } from "../domain/contribution.js"
 export {
   ServiceKey,
+  ActorAskTimeout,
   type ActorContext,
   type ActorRef,
   type ActorView,
