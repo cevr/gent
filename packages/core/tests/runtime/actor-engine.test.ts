@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Cause, Context, Deferred, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
 import { ActorAskTimeout, ServiceKey, type Behavior } from "@gent/core/domain/actor"
@@ -352,6 +352,65 @@ describe("ActorEngine — runtime", () => {
           yield* engine.tell(ref, OrderMsg.Done.make({ latch }))
           const received = yield* Deferred.await(latch)
           expect(received).toEqual([1, 2, 3, 4, 5])
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+
+  test("snapshot blocks until in-flight receive completes (W10-0d.2 regression)", async () => {
+    // A receive that holds open until we explicitly release it must
+    // make `snapshot()` wait. Without the per-actor permit, snapshot
+    // would race: it would either see the pre-receive state (if the
+    // actor hadn't taken the message yet) or the partially-mutated
+    // state if `receive` were to perform multiple `Ref.set`s. The
+    // assertion is structural — `snapshot()` must not resolve until we
+    // release the gate.
+    const Slow = TaggedEnumClass("Slow", { Hold: { latch: Schema.Any }, Tick: {} })
+    type Slow = Schema.Schema.Type<typeof Slow>
+    const SlowState = Schema.Struct({ done: Schema.Boolean })
+    type SlowState = typeof SlowState.Type
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const release = yield* Deferred.make<void>()
+          const reachedReceive = yield* Deferred.make<void>()
+          const slow: Behavior<Slow, SlowState, never> = {
+            initialState: { done: false },
+            persistence: { key: "slow", state: SlowState },
+            receive: (msg) =>
+              Effect.gen(function* () {
+                if (msg._tag === "Hold") {
+                  yield* Deferred.succeed(reachedReceive, undefined)
+                  yield* Deferred.await(msg.latch as Deferred.Deferred<void>)
+                  return { done: true }
+                }
+                return { done: true }
+              }) as Effect.Effect<SlowState, never, never>,
+          }
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(slow)
+          yield* engine.tell(ref, Slow.Hold.make({ latch: release }))
+          yield* Deferred.await(reachedReceive)
+
+          // Race snapshot against a guard that resolves only after we
+          // release the receive. If the permit isn't honored, snapshot
+          // wins (returns pre-state {done:false}) before the release
+          // ever fires.
+          const snapFiber = yield* Effect.forkChild(engine.snapshot())
+          // Brief observation window: snapshot must NOT have resolved.
+          yield* Effect.sleep("50 millis")
+          const earlyExit = snapFiber.pollUnsafe()
+          expect(earlyExit).toBeUndefined()
+
+          yield* Deferred.succeed(release, undefined)
+          const snap = yield* Fiber.await(snapFiber)
+          expect(Exit.isSuccess(snap)).toBe(true)
+          if (Exit.isSuccess(snap)) {
+            const map = snap.value
+            // Encoded post-state — `done: true` proves snapshot waited
+            // for the in-flight receive to commit before reading.
+            expect(map.get("slow")).toEqual({ done: true })
+          }
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )

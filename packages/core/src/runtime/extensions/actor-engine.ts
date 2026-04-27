@@ -46,6 +46,7 @@ import {
   Ref,
   Schema,
   Scope,
+  Semaphore,
   type Stream,
 } from "effect"
 import {
@@ -76,6 +77,11 @@ interface MailboxEntry {
    * Returns `undefined` for ephemeral actors (no `persistence`).
    * Encode failures surface as `ActorSnapshotError` so the checkpoint
    * caller decides skip-vs-abort.
+   *
+   * Quiescence: implementations of durable actors run inside the
+   * actor's per-instance semaphore, so a snapshot cannot interleave
+   * with an in-flight `receive`. The encoded value is therefore the
+   * post-state of whatever message most recently completed.
    */
   readonly snapshot: () => Effect.Effect<
     { readonly persistenceKey: string; readonly state: JsonValueT } | undefined,
@@ -264,18 +270,29 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                   )
                 : behavior.initialState
             const stateRef = yield* Ref.make<S>(initial)
+            // Per-actor permit. `receive` and `snapshot` both acquire
+            // it, so a snapshot read sees the post-state of whatever
+            // message most recently completed — never an in-flight
+            // `receive` mid-step. Cross-actor snapshot atomicity is
+            // still the caller's contract; this guards each actor in
+            // isolation.
+            const stateSemaphore = yield* Semaphore.make(1)
 
             const snapshotForActor: MailboxEntry["snapshot"] = () =>
-              Effect.gen(function* () {
-                if (persistence === undefined) return undefined
-                const current = yield* Ref.get(stateRef)
-                const encoded = yield* Schema.encodeUnknownEffect(persistence.state)(current).pipe(
-                  Effect.mapError(
-                    (cause) => new ActorSnapshotError({ persistenceKey: persistence.key, cause }),
-                  ),
-                )
-                return { persistenceKey: persistence.key, state: encoded }
-              })
+              stateSemaphore.withPermits(1)(
+                Effect.gen(function* () {
+                  if (persistence === undefined) return undefined
+                  const current = yield* Ref.get(stateRef)
+                  const encoded = yield* Schema.encodeUnknownEffect(persistence.state)(
+                    current,
+                  ).pipe(
+                    Effect.mapError(
+                      (cause) => new ActorSnapshotError({ persistenceKey: persistence.key, cause }),
+                    ),
+                  )
+                  return { persistenceKey: persistence.key, state: encoded }
+                }),
+              )
 
             const entry: MailboxEntry = {
               id,
@@ -318,11 +335,29 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased mailbox storage; M pinned at spawn time
             const receiveMsg = (msg: unknown): M => msg as M
 
+            // Take outside the permit so the next message's blocking
+            // dequeue does not hold the snapshot lock. Receive + state
+            // write run under the permit, so a concurrent `snapshot()`
+            // observes the post-state of whatever message most recently
+            // completed — never a torn read mid-receive.
+            // Take outside the permit so the next message's blocking
+            // dequeue does not hold the snapshot lock. Receive + state
+            // write run under the permit, so a concurrent `snapshot()`
+            // observes the post-state of whatever message most recently
+            // completed — never a torn read mid-receive.
             const step = Effect.gen(function* () {
               const env = yield* Queue.take(queue)
-              const state = yield* Ref.get(stateRef)
-              const next = yield* behavior.receive(receiveMsg(env.msg), state, ctxFor(env.askId))
-              yield* Ref.set(stateRef, next)
+              yield* stateSemaphore.withPermits(1)(
+                Effect.gen(function* () {
+                  const state = yield* Ref.get(stateRef)
+                  const next = yield* behavior.receive(
+                    receiveMsg(env.msg),
+                    state,
+                    ctxFor(env.askId),
+                  )
+                  yield* Ref.set(stateRef, next)
+                }),
+              )
             })
 
             // Interrupts propagate so scope close ends the loop. Typed

@@ -8,8 +8,9 @@
  * multi-session writes to the same row). Actors live across sessions;
  * the storage surface must reflect that.
  *
- * Keys are the engine-level `${extensionId}/${behaviorKey}` form
- * (see `actor-host.PERSISTENCE_KEY_SEPARATOR`). The `profileId` slot
+ * Keys are the engine-level `${extensionId}\x1f${behaviorKey}` form
+ * (see `actor-host.PERSISTENCE_KEY_SEPARATOR` — the unit separator is
+ * unambiguous against `/`-bearing scoped extension ids). The `profileId` slot
  * scopes the row to a single `RuntimeProfile` so multiple cwds on the
  * same DB do not collide.
  */

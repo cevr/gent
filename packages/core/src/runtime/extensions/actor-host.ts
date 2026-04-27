@@ -28,14 +28,15 @@ export interface ActorSpawnFailure {
 
 /**
  * Namespace separator embedded into engine-level persistence keys.
- * ASCII unit separator (U+001F) is illegal in `ExtensionId`
- * (`/^@?[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/`) and a non-printable
- * control character no author would put in a behavior key, so the
- * encoding is unambiguous: split on the first occurrence yields
- * `(extensionId, behaviorKey)` exactly. A printable separator like
- * `/` would alias scoped ids such as `@gent/memory` against behavior
- * keys that themselves contain a slash, breaking the storage
- * round-trip.
+ * ASCII unit separator (U+001F) is a non-printable control character
+ * that no real `ExtensionId` ever contains (the storage layer enforces
+ * `/^@?[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/` via
+ * `extension-storage.validateExtensionId`) and that no behavior author
+ * would put in a key, so the encoding is unambiguous: split on the
+ * first occurrence yields `(extensionId, behaviorKey)` exactly. A
+ * printable separator like `/` would alias scoped ids such as
+ * `@gent/memory` against behavior keys that themselves contain a
+ * slash, breaking the storage round-trip.
  */
 export const PERSISTENCE_KEY_SEPARATOR = "\x1f"
 
