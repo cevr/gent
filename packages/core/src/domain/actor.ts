@@ -99,12 +99,30 @@ export interface ActorView {
  * `M` is the message type, `S` the actor's local state, `R` the
  * Effect requirements available to `receive` (services from the
  * extension's layer).
+ *
+ * Persistence is opt-in. A behavior is durable iff both
+ * `persistenceKey` and `state` are set: the engine snapshots the live
+ * `S` through `state` at checkpoint time, and rehydrates it back into
+ * `initialState` at restore time. Behaviors without both are
+ * ephemeral — they restart from `initialState` after a crash and
+ * peers re-tell them on resume.
  */
 export interface Behavior<M, S, R = never> {
   readonly initialState: S
   readonly receive: (msg: M, state: S, ctx: ActorContext<M>) => Effect.Effect<S, never, R>
   readonly view?: (state: S) => ActorView
   readonly serviceKey?: ServiceKey<M>
+  /**
+   * Stable identifier under which this actor's state is checkpointed.
+   * Required for durability; must be unique within the host extension.
+   */
+  readonly persistenceKey?: string
+  /**
+   * Schema for serializing the actor's local state. Required for
+   * durability; the engine encodes via this schema at snapshot time
+   * and decodes via this schema at restore time.
+   */
+  readonly state?: Schema.Codec<S, unknown>
 }
 
 /**
