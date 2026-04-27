@@ -15,7 +15,6 @@ import {
 } from "../domain/event.js"
 import type { MachineEngineService } from "../runtime/extensions/resource-host/machine-engine.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
-import { CurrentMachinePublishListener } from "../runtime/extensions/resource-host/machine-publish-listener.js"
 import {
   SubscriptionEngine,
   type SubscriptionEngineService,
@@ -56,15 +55,19 @@ const deliverInner = (
 
     const branchId = getEventBranchId(event)
     const extensionSession = { sessionId }
-    const publishPulses = (transitioned: ReadonlyArray<string>) =>
-      Effect.gen(function* () {
-        if (branchId === undefined || event._tag === "ExtensionStateChanged") return
-        const subscribers = pulseByTag.get(event._tag)
-        const pulseTargets = new Set<string>(transitioned)
-        if (subscribers !== undefined) {
-          for (const id of subscribers) pulseTargets.add(id)
-        }
-        for (const extensionId of pulseTargets) {
+
+    yield* deps.stateRuntime.publish(event, { sessionId, branchId })
+
+    // Pulse-on-event: extensions that declared `pulseTags` for this
+    // event tag receive an `ExtensionStateChanged` envelope so their UI
+    // surfaces refresh. After W10-PhaseB collapsed Resource.machine into
+    // Behaviors, the FSM-transition signal is gone — declared `pulseTags`
+    // is the only pulse path. Extensions that need pulse-on-state-change
+    // must declare the relevant agent event tags.
+    if (branchId !== undefined && event._tag !== "ExtensionStateChanged") {
+      const subscribers = pulseByTag.get(event._tag)
+      if (subscribers !== undefined) {
+        for (const extensionId of subscribers) {
           const pulse = ExtensionStateChanged.make({
             sessionId,
             branchId,
@@ -81,11 +84,8 @@ const deliverInner = (
             ),
           )
         }
-      })
-
-    yield* deps.stateRuntime
-      .publish(event, { sessionId, branchId })
-      .pipe(Effect.provideService(CurrentMachinePublishListener, publishPulses))
+      }
+    }
 
     if (deps.bus !== undefined) {
       yield* deps.bus

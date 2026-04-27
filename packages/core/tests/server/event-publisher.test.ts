@@ -11,7 +11,6 @@ import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/e
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { CurrentMachinePublishListener } from "../../src/runtime/extensions/resource-host/machine-publish-listener"
 
 const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" })
@@ -259,10 +258,13 @@ describe("EventPublisher", () => {
     expect(delivered).toEqual([TAG.OuterEvent, TAG.BusNestedEvent])
   })
 
-  test("nested publish still emits ExtensionStateChanged pulses when transitions are async", async () => {
+  test("declared pulseTags trigger ExtensionStateChanged for each matching event", async () => {
+    // After W10-PhaseB, FSM transitions are gone — the only pulse path is
+    // `pulseTags` declared at extension-load time. `event-publisher.ts`
+    // looks up subscribers for each event's tag and emits one
+    // `ExtensionStateChanged` per declared subscriber, regardless of what
+    // the MachineEngine returns.
     const persisted: string[] = []
-    const nestedPulse = Effect.runSync(Deferred.make<void>())
-    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
     const pulseTagsRegistryLayer = ExtensionRegistry.fromResolved(
       resolveExtensions([
         {
@@ -276,32 +278,10 @@ describe("EventPublisher", () => {
 
     const baseLayer = makeEventStoreLayer((event) => {
       persisted.push(event._tag)
-      if (event._tag === "ExtensionStateChanged" && persisted.includes(TAG.NestedEvent)) {
-        Effect.runSync(Deferred.succeed(nestedPulse, void 0).pipe(Effect.ignore))
-      }
     })
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
-        Effect.gen(function* () {
-          const listener = yield* CurrentMachinePublishListener
-          if (event._tag === TAG.OuterEvent) {
-            yield* listener?.([]) ?? Effect.void
-            if (publishFn !== undefined) {
-              yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
-                Effect.provideService(CurrentExtensionSession, {
-                  sessionId: SessionId.make("session-1"),
-                }),
-              )
-            }
-            return [] as ReadonlyArray<string>
-          }
-          if (event._tag === TAG.NestedEvent) {
-            yield* listener?.([]) ?? Effect.void
-            return [] as ReadonlyArray<string>
-          }
-          return [] as ReadonlyArray<string>
-        }),
+      publish: () => Effect.succeed([] as ReadonlyArray<string>),
       send: () => Effect.void,
       execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
@@ -315,9 +295,8 @@ describe("EventPublisher", () => {
 
     await Effect.gen(function* () {
       const publisher = yield* EventPublisher
-      publishFn = publisher.publish
       yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-      yield* Deferred.await(nestedPulse)
+      yield* publisher.publish(makeEvent("NestedEvent", "session-1", "branch-1"))
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(persisted).toEqual([
