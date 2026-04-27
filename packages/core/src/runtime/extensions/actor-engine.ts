@@ -147,12 +147,13 @@ export interface ActorEngineService {
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
   "@gent/core/src/runtime/extensions/actor-engine/ActorEngine",
 ) {
-  // Self-contained: composes `Receptionist.Live` and re-exposes it so
-  // downstream layers (e.g. `ActorHost`) and external callers share
-  // the same registry instance the engine writes into. If a runtime
-  // needs to share a single Receptionist across engines, build the
-  // engine layer manually with `Layer.effect(ActorEngine, …)` and
-  // provide an external Receptionist instance.
+  // Composes `Receptionist.Live` and re-exposes it via provideMerge so
+  // downstream layers (`ActorHost`) and external callers share the
+  // same registry instance the engine writes into. Scope-close order
+  // is load-bearing: the engine's `acquireRelease` finalizer runs
+  // before Receptionist's scope close, so per-actor cleanup fibers
+  // can still call `receptionist.unregister` while the registry is
+  // alive.
   static Live: Layer.Layer<ActorEngine | Receptionist> = Layer.effect(
     ActorEngine,
     Effect.acquireRelease(

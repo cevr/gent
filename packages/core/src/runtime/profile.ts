@@ -44,7 +44,7 @@ import {
   SubscriptionEngine,
 } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
-import { ActorHost } from "./extensions/actor-host.js"
+import { ActorHost, ActorHostFailures, type ActorSpawnFailure } from "./extensions/actor-host.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -360,6 +360,7 @@ export const buildProfileRuntime = (params: {
     const subscriptionEngineOpt = Context.getOption(layerContext, SubscriptionEngine)
     const subscriptionEngine =
       subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
+    const actorHostFailures = yield* Context.get(layerContext, ActorHostFailures).snapshot
     const permissionService = makeProfilePermissionService({
       cwd: params.profile.cwd,
       configService: params.configService,
@@ -378,7 +379,21 @@ export const buildProfileRuntime = (params: {
       driverRegistryService,
       extensionStateRuntime,
       subscriptionEngine,
+      actorHostFailures,
       baseSections,
+    }
+  })
+
+export const logActorHostFailures = (failures: ReadonlyArray<ActorSpawnFailure>, cwd: string) =>
+  Effect.gen(function* () {
+    for (const failure of failures) {
+      yield* Effect.logWarning("extension.actor.spawn.failed").pipe(
+        Effect.annotateLogs({
+          extensionId: failure.extensionId,
+          error: failure.error,
+          cwd,
+        }),
+      )
     }
   })
 
@@ -387,5 +402,7 @@ export const resolveProfileRuntime = (inputs: RuntimeProfileInputs) =>
     const configService = yield* ConfigService
     const profile = yield* resolveRuntimeProfile(inputs)
     yield* logRuntimeProfileFailures(profile)
-    return yield* buildProfileRuntime({ profile, configService })
+    const built = yield* buildProfileRuntime({ profile, configService })
+    yield* logActorHostFailures(built.actorHostFailures, profile.cwd)
+    return built
   })

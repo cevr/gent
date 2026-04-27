@@ -8,23 +8,41 @@
  * to the host layer's scope: when the runtime tears down, the engine's
  * scope-close interrupts every spawned actor fiber.
  *
- * Spawn failures are logged and skipped (rather than failing the
- * whole layer). A failing actor is in the same category as a failing
- * extension contribution — the runtime should keep running with the
- * actors that did spawn cleanly. Persistence-key collisions and
- * decode errors land here as warnings annotated with the extension id.
+ * Failure surfacing: a failing spawn does not collapse the layer — the
+ * runtime should keep running with the actors that did spawn cleanly.
+ * Failures are recorded into an `ActorHostFailures` snapshot so the
+ * profile composer can route them into `RuntimeProfile.failed` and
+ * make them visible to status / health surfaces. Pure log-and-skip
+ * would leave the failure invisible to the rest of the system.
  */
 
-import { Cause, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer, Ref } from "effect"
 import { ActorEngine } from "./actor-engine.js"
 import type { ResolvedExtensions } from "./registry.js"
 
+export interface ActorSpawnFailure {
+  readonly extensionId: string
+  readonly error: string
+}
+
+interface ActorHostFailuresService {
+  readonly snapshot: Effect.Effect<ReadonlyArray<ActorSpawnFailure>>
+}
+
 /**
- * Spawn every contributed `Behavior` into the engine. Internal — used
- * only by `ActorHost.fromResolved`.
+ * Snapshot of every spawn failure observed at host startup. Read once
+ * by the profile composer after the runtime layer is built. A failing
+ * spawn is recorded here AND logged; the recording is the
+ * programmatic signal the rest of the system observes.
  */
+export class ActorHostFailures extends Context.Service<
+  ActorHostFailures,
+  ActorHostFailuresService
+>()("@gent/core/src/runtime/extensions/actor-host/ActorHostFailures") {}
+
 const spawnContributedActors = (
   resolved: ResolvedExtensions,
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
 ): Effect.Effect<void, never, ActorEngine> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
@@ -33,12 +51,16 @@ const spawnContributedActors = (
       for (const behavior of behaviors) {
         yield* engine.spawn(behavior).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("actor-host.spawn.failed").pipe(
-              Effect.annotateLogs({
-                extensionId: ext.manifest.id,
-                error: String(Cause.squash(cause)),
-              }),
-            ),
+            Effect.gen(function* () {
+              const error = String(Cause.squash(cause))
+              yield* Ref.update(failuresRef, (xs) => [
+                ...xs,
+                { extensionId: ext.manifest.id, error },
+              ])
+              yield* Effect.logWarning("actor-host.spawn.failed").pipe(
+                Effect.annotateLogs({ extensionId: ext.manifest.id, error }),
+              )
+            }),
           ),
         )
       }
@@ -47,10 +69,20 @@ const spawnContributedActors = (
 
 /**
  * Layer that spawns every extension's `actors` into the running
- * `ActorEngine`. Composed into the runtime layer alongside
+ * `ActorEngine` and exposes the resulting failure list as
+ * `ActorHostFailures`. Composed into the runtime layer alongside
  * `ActorEngine.Live`.
  */
 export const ActorHost = {
-  fromResolved: (resolved: ResolvedExtensions): Layer.Layer<never, never, ActorEngine> =>
-    Layer.effectDiscard(spawnContributedActors(resolved)),
+  fromResolved: (
+    resolved: ResolvedExtensions,
+  ): Layer.Layer<ActorHostFailures, never, ActorEngine> =>
+    Layer.effect(
+      ActorHostFailures,
+      Effect.gen(function* () {
+        const failuresRef = yield* Ref.make<ReadonlyArray<ActorSpawnFailure>>([])
+        yield* spawnContributedActors(resolved, failuresRef)
+        return { snapshot: Ref.get(failuresRef) }
+      }),
+    ),
 }

@@ -32,6 +32,8 @@ import {
   ReadOnlyBrand,
   withReadOnly,
 } from "@gent/core/extensions/api"
+import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { ConfigService } from "../../src/runtime/config-service"
 import {
   buildExtensionLayers,
@@ -41,6 +43,7 @@ import {
 } from "../../src/runtime/profile"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { Receptionist } from "../../src/runtime/extensions/receptionist"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -101,6 +104,21 @@ const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
   resources: [defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive })],
   projections: [dynamicProjection],
+})
+
+const RpMsg = TaggedEnumClass("RpMsg", { Ping: {} })
+type RpMsg = S.Schema.Type<typeof RpMsg>
+const RpService = ServiceKey<RpMsg>("rp-actor-service")
+
+const actorBehavior: Behavior<RpMsg, { hits: number }, never> = {
+  initialState: { hits: 0 },
+  serviceKey: RpService,
+  receive: (_msg, state) => Effect.succeed({ hits: state.hits + 1 }),
+}
+
+const actorExtension = defineExtension({
+  id: "@gent/test-runtime-profile-actors",
+  actors: [actorBehavior],
 })
 
 describe("resolveRuntimeProfile", () => {
@@ -187,6 +205,44 @@ describe("resolveRuntimeProfile", () => {
         expect(profile.resolved.extensions.map((e) => e.manifest.id as string)).toContain(
           "@gent/test-runtime-profile-dynamic",
         )
+      }),
+    ).pipe(Effect.provide(sharedLayer)),
+  )
+
+  it.live("defineExtension({ actors }) wires Behaviors through to the Receptionist", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const profile = yield* resolveRuntimeProfile({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [actorExtension],
+        })
+
+        const layer = buildExtensionLayers(profile.resolved).pipe(
+          Layer.provide(ExtensionTurnControl.Live),
+        )
+
+        const refs = yield* Effect.gen(function* () {
+          const reg = yield* Receptionist
+          return yield* reg.find(RpService)
+        }).pipe(Effect.provide(layer))
+
+        expect(refs.length).toBe(1)
+      }),
+    ).pipe(Effect.provide(sharedLayer)),
+  )
+
+  it.live("resolveProfileRuntime exposes actorHostFailures (empty on clean spawn)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const built = yield* resolveProfileRuntime({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [actorExtension],
+        })
+        expect(built.actorHostFailures).toEqual([])
       }),
     ).pipe(Effect.provide(sharedLayer)),
   )
