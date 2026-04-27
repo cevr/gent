@@ -497,7 +497,13 @@ const tellAutoFromTool = (input: ToolResultInput, ctx: ExtensionHostContext) =>
         | undefined
       try {
         parsed = parseCheckpointResult(input.result)
-      } catch {
+      } catch (decodeError) {
+        yield* Effect.logWarning("auto.checkpoint.decode-failed").pipe(
+          Effect.annotateLogs({
+            error: String(decodeError),
+            resultType: typeof input.result,
+          }),
+        )
         parsed = undefined
       }
       const msg = AutoMsg.AutoSignal.make({
@@ -631,29 +637,10 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     yield* drainAndQueueFollowUp(ctx).pipe(Effect.catchEager(() => Effect.void))
   }).pipe(Effect.catchEager(() => Effect.void))
 
-// ── Replay (formerly `onInit` on the workflow) ──
-
-const ReplayCheckpoint = Schema.Struct({
-  type: Schema.Literal("checkpoint"),
-  iteration: Schema.Number,
-  status: Schema.Literals(["continue", "complete", "abandon"]),
-  summary: Schema.String,
-  learnings: Schema.optional(Schema.String),
-  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
-  nextIdea: Schema.optional(Schema.String),
-})
-
-const ReplayReview = Schema.Struct({
-  type: Schema.Literal("review"),
-  iteration: Schema.Number,
-})
-
-// Replay is staged for W10-1c+: needs cross-extension Receptionist
-// discovery (find AutoService from a non-host slot) plus session-ancestry
-// guard. Tracked in #102 follow-up. The journal interceptor still appends
-// rows; replay just doesn't seed the actor on a fresh child session.
-void ReplayCheckpoint
-void ReplayReview
+// Replay (cold-start hydration from journal) is staged for W10-1c.
+// Needs cross-extension Receptionist discovery from a non-host slot
+// plus a session-ancestry guard. The journal interceptor still appends
+// rows during the live loop — only the on-spawn replay path is gone.
 
 // ── Extension ──
 

@@ -6,9 +6,7 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
 import { AutoProjection } from "@gent/extensions/auto-projection"
-import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
-import { Session } from "@gent/core/domain/message"
 import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
@@ -362,6 +360,32 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
+  it.live("complete checkpoint while AwaitingReview is ignored (review gate)", () =>
+    Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
+
+      // First checkpoint moves to AwaitingReview
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "first" }))
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+
+      // A `complete` AutoSignal arriving while AwaitingReview must NOT
+      // bypass the review gate and short-circuit to Inactive. The contract
+      // is: AwaitingReview accepts ReviewSignal only — every other status
+      // (continue/complete/abandon) is dropped until review acknowledges.
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "complete", summary: "skip review" }))
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as AutoSnapshotReply
+      expect(ui.phase).toBe("awaiting-review")
+      expect(ui.active).toBe(true)
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
@@ -425,143 +449,10 @@ describe("Auto runtime integration", () => {
   )
 })
 
-// ── JSONL replay tests ──
-
-describe("Auto JSONL replay via onInit", () => {
-  const parentId = SessionId.make("parent-session")
-  const childId = SessionId.make("child-session")
-  const childBranchId = BranchId.make("child-branch")
-
-  /** Build a mock AutoJournal that returns pre-built rows */
-  const mockJournal = (rows: JournalRow[], originSessionId?: string) =>
-    Layer.succeed(AutoJournal, {
-      start: () => Effect.succeed("/tmp/test.jsonl"),
-      appendCheckpoint: () => Effect.void,
-      appendReview: () => Effect.void,
-      finish: () => Effect.void,
-      readActive: () =>
-        Effect.succeed({
-          rows,
-          path: "/tmp/test.jsonl",
-          sessionId: originSessionId,
-        }),
-      getActivePath: () => Effect.succeed("/tmp/test.jsonl" as string | undefined),
-    })
-
-  const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
-    seededMachineLayer([mockJournal(rows, originSessionId)])
-
-  const getAutoSnapshot = (runtime: MachineEngine) =>
-    Effect.gen(function* () {
-      const model = (yield* runtime.execute(
-        childId,
-        AutoProtocol.GetSnapshot.make(),
-        childBranchId,
-      )) as AutoSnapshotReply
-      return { model } as { readonly model: AutoSnapshotReply }
-    })
-
-  // The "replays config + checkpoint + review → correct iteration" case
-  // is staged for W10-1c. Replay-on-spawn needs cross-extension
-  // Receptionist discovery from a non-host slot + the session-ancestry
-  // guard re-implemented as actor on-spawn logic. Until then, the
-  // journal interceptor still appends rows during the live loop — what's
-  // missing is the cold-start hydration. The skip cases below
-  // (`root session`, `unrelated child`, `legacy pointer`) still pass
-  // because no replay = `active === false` is the spawn default.
-
-  it.live("root session never replays journal", () =>
-    Effect.gen(function* () {
-      const storage = yield* Storage
-      const now = new Date()
-      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
-
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId: parentId, branchId }), {
-        sessionId: parentId,
-        branchId,
-      })
-
-      const ui = (yield* runtime.execute(
-        parentId,
-        AutoProtocol.GetSnapshot.make(),
-        branchId,
-      )) as AutoSnapshotReply
-      expect(ui.active).toBe(false) // Not replayed — root session
-    }).pipe(
-      Effect.provide(
-        makeReplayLayer(
-          [{ type: "config", goal: "should not replay", maxIterations: 3, startedAt: Date.now() }],
-          parentId,
-        ),
-      ),
-    ),
-  )
-
-  it.live("unrelated child session does not replay", () =>
-    Effect.gen(function* () {
-      const storage = yield* Storage
-      const now = new Date()
-      // Create two separate lineages
-      const otherParentId = SessionId.make("other-parent")
-      yield* storage.createSession(
-        new Session({ id: otherParentId, createdAt: now, updatedAt: now }),
-      )
-      yield* storage.createSession(
-        new Session({
-          id: childId,
-          parentSessionId: otherParentId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
-        sessionId: childId,
-        branchId: childBranchId,
-      })
-
-      const snap = yield* getAutoSnapshot(runtime)
-      expect(snap).toBeDefined()
-      const ui = snap!.model as AutoSnapshotReply
-      expect(ui.active).toBe(false) // Not replayed — ancestry doesn't match
-    }).pipe(
-      Effect.provide(
-        makeReplayLayer(
-          [{ type: "config", goal: "scoped to parentId", maxIterations: 3, startedAt: Date.now() }],
-          parentId, // Journal scoped to parentId, but child is under otherParent
-        ),
-      ),
-    ),
-  )
-
-  it.live("legacy pointer without sessionId fails closed — no replay", () =>
-    Effect.gen(function* () {
-      const storage = yield* Storage
-      const now = new Date()
-      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
-      yield* storage.createSession(
-        new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
-      )
-
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
-        sessionId: childId,
-        branchId: childBranchId,
-      })
-
-      const snap = yield* getAutoSnapshot(runtime)
-      expect(snap).toBeDefined()
-      const ui = snap!.model as AutoSnapshotReply
-      expect(ui.active).toBe(false) // Not replayed — no sessionId in pointer = fail closed
-    }).pipe(
-      Effect.provide(
-        makeReplayLayer(
-          [{ type: "config", goal: "legacy pointer", maxIterations: 3, startedAt: Date.now() }],
-          undefined, // No sessionId — simulates legacy active.json without scoping
-        ),
-      ),
-    ),
-  )
-})
+// JSONL replay tests deleted with W10-1b.1.b: the replay-on-spawn path
+// (formerly `onInit` on the workflow) was removed because the new actor
+// primitive doesn't yet support cross-extension Receptionist discovery
+// from a non-host slot + the session-ancestry guard. Reintroduce in
+// W10-1c with a *positive* test that verifies state is hydrated from
+// the journal — the old "active === false" assertions trivially held
+// because replay was dead code, so they were false reassurance.
