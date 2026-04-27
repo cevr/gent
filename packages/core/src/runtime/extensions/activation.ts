@@ -11,6 +11,7 @@ import {
   type ExtensionContributions,
   humanCapabilities,
   modelCapabilities,
+  rpcCapabilities,
 } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
@@ -272,6 +273,11 @@ export const collectValidationFailures = (
     "command",
   )
   collectScopedCollisions(
+    (cs) => rpcCapabilities(cs),
+    (cap) => cap.id,
+    "rpc",
+  )
+  collectScopedCollisions(
     (cs) => cs.agents ?? [],
     (agent) => agent.name,
     "agent",
@@ -290,7 +296,7 @@ export const collectValidationFailures = (
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
-      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.capabilities ?? [])]
+      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? []), ...(cs.capabilities ?? [])]
         .map((c) => c.prompt)
         .filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,

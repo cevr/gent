@@ -89,6 +89,9 @@ const compileCapabilityWinners = (
     for (const cap of ext.contributions.commands ?? []) {
       winners.set(cap.id, cap)
     }
+    for (const cap of ext.contributions.rpc ?? []) {
+      winners.set(cap.id, cap)
+    }
     for (const cap of ext.contributions.capabilities ?? []) {
       winners.set(cap.id, cap)
     }

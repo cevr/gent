@@ -25,6 +25,7 @@ import type { Behavior, ServiceKey } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
 import type { ActionToken } from "./capability/action.js"
+import type { RequestToken } from "./capability/request.js"
 import type { ToolToken } from "./capability/tool.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
@@ -88,6 +89,16 @@ export interface ExtensionContributions {
    * keep working.
    */
   readonly commands?: ReadonlyArray<ActionToken>
+  /**
+   * Extension-to-extension RPC capabilities authored via `request({...})`.
+   * Bucket name IS the audience cluster: every entry is a `RequestToken` with
+   * `audiences: ["agent-protocol", "transport-public"]` — no runtime tag
+   * check needed downstream.
+   *
+   * Until W10-5, `capabilities:` is also scanned for `agent-protocol` entries
+   * so as-yet-unmigrated `request({...})` call sites keep working.
+   */
+  readonly rpc?: ReadonlyArray<RequestToken>
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
@@ -177,6 +188,27 @@ export const humanCapabilities = (
     (c) => c.audiences.includes("human-slash") || c.audiences.includes("human-palette"),
   )
   return [...fromCommands, ...fromCapabilities]
+}
+
+/**
+ * Read all extension-to-extension RPC capabilities (`agent-protocol` audience)
+ * from a contributions bag — the union of the typed `rpc:` bucket and any
+ * `capabilities:` entries with the `agent-protocol` audience. Used by RPC
+ * dispatch wiring on the server side.
+ *
+ * Like {@link modelCapabilities} and {@link humanCapabilities}, the shim
+ * exists during W10-3d — `rpc:` migration is incremental and unmigrated
+ * `request({...})` call sites still slot into `capabilities:`. After W10-5,
+ * `capabilities:` is gone and this helper just returns `rpc ?? []`.
+ */
+export const rpcCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<CapabilityToken> => {
+  const fromRpc = contribs.rpc ?? []
+  const fromCapabilities = (contribs.capabilities ?? []).filter((c) =>
+    c.audiences.includes("agent-protocol"),
+  )
+  return [...fromRpc, ...fromCapabilities]
 }
 
 // ── Smart constructors ──

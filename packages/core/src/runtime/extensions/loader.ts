@@ -17,7 +17,7 @@ import type { PromptSection } from "../../domain/prompt.js"
  *  contributions still collide-check against legacy ones during W10-3
  *  migration. */
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
-  [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.capabilities ?? [])]
+  [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? []), ...(cs.capabilities ?? [])]
     .map((c) => c.prompt)
     .filter((p): p is PromptSection => p !== undefined)
 

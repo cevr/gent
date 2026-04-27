@@ -31,6 +31,28 @@ import {
 import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
 
+/**
+ * `RequestToken` — `request({...})` return type. Narrows `CapabilityToken` so
+ * `audiences` is fixed to `["agent-protocol", "transport-public"]` at the
+ * type level. The `ExtensionContributions.rpc` bucket only accepts this
+ * narrowed shape — non-request capabilities (`tool`, `action`) cannot be
+ * slotted into `rpc:`, so the bucket name IS the audience discrimination
+ * (consistent with W10-3a's `tools:` and W10-3c's `commands:` buckets).
+ *
+ * `RequestToken` extends `CapabilityToken`, so authors mid-migration may
+ * still pass a request token through the legacy `capabilities:` bucket — the
+ * latter is deleted in the W10-5 sweep once every site lives in its typed
+ * bucket.
+ */
+declare const RequestTokenBrand: unique symbol
+export interface RequestToken<Input = unknown, Output = unknown> extends CapabilityToken<
+  Input,
+  Output
+> {
+  readonly [RequestTokenBrand]: true
+  readonly audiences: readonly ["agent-protocol", "transport-public"]
+}
+
 /** Fields shared by both read- and write-intent request inputs. */
 interface RequestInputBase<Input, Output> {
   /** Stable id (capability-local). Used for routing. */
@@ -92,10 +114,10 @@ export interface WriteRequestInput<
  */
 export function request<Input, Output, R extends ReadOnlyTag = never>(
   input: ReadRequestInput<Input, Output, R>,
-): CapabilityToken<Input, Output>
+): RequestToken<Input, Output>
 export function request<Input, Output, R = never>(
   input: WriteRequestInput<Input, Output, R>,
-): CapabilityToken<Input, Output>
+): RequestToken<Input, Output>
 export function request(input: {
   readonly id: string
   readonly extensionId: ExtensionId
@@ -104,7 +126,7 @@ export function request(input: {
   readonly output: Schema.Schema<unknown>
   readonly prompt?: PromptSection
   readonly execute: AnyCapabilityContribution["effect"]
-}): CapabilityToken {
+}): RequestToken {
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
   // dispatcher boundary. Author-supplied schemas always satisfy this — the
   // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
@@ -118,7 +140,7 @@ export function request(input: {
     input: input.input,
     output: input.output,
   } as unknown as CapabilityRef
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
   return {
     id: input.id,
     audiences: ["agent-protocol", "transport-public"],
@@ -128,5 +150,5 @@ export function request(input: {
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: input.execute,
     [CAPABILITY_REF]: refValue,
-  } as unknown as CapabilityToken
+  } as unknown as RequestToken
 }

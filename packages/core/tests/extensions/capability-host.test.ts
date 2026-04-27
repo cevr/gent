@@ -157,6 +157,60 @@ describe("capability-host", () => {
       }),
   )
 
+  // W10-3d regression: the typed `rpc:` bucket is a separate field on
+  // `ExtensionContributions`. `compileCapabilities` must include entries from
+  // BOTH `rpc:` (new path) and `capabilities:` (legacy shim path until W10-5).
+  // Bypass `extWith` to write straight into the contributions bag — the helper
+  // currently routes everything through `capabilities:`.
+  it.live(
+    "listForAudience reads `agent-protocol` entries from both `rpc:` and `capabilities:`",
+    () =>
+      Effect.sync(() => {
+        const fromRpcBucket: CapabilityContribution<{ value: string }, { value: string }, never> = {
+          id: "rpc-from-rpc-bucket",
+          audiences: ["agent-protocol", "transport-public"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: (input) => Effect.succeed({ value: input.value }),
+        }
+        const fromLegacyBucket: CapabilityContribution<
+          { value: string },
+          { value: string },
+          never
+        > = {
+          id: "rpc-from-legacy-bucket",
+          audiences: ["agent-protocol", "transport-public"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: (input) => Effect.succeed({ value: input.value }),
+        }
+        const fromRpc: LoadedExtension = {
+          manifest: { id: "@test/rpc-bucket" },
+          scope: "builtin",
+          sourcePath: "/test/rpc-bucket",
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the RequestToken brand
+          contributions: { rpc: [fromRpcBucket as never] },
+        }
+        const fromLegacy: LoadedExtension = {
+          manifest: { id: "@test/legacy-bucket" },
+          scope: "builtin",
+          sourcePath: "/test/legacy-bucket",
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+          contributions: {
+            capabilities: [fromLegacyBucket] as ReadonlyArray<
+              CapabilityContribution<never, never, never>
+            >,
+          },
+        }
+        const compiled = compileCapabilities([fromRpc, fromLegacy])
+        const ids = compiled.listForAudience("agent-protocol").map((e) => e.capability.id)
+        expect(ids).toContain("rpc-from-rpc-bucket")
+        expect(ids).toContain("rpc-from-legacy-bucket")
+      }),
+  )
+
   it.live("input decode failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const compiled = compileCapabilities([

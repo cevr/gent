@@ -55,6 +55,7 @@ import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ActionToken } from "../domain/capability/action.js"
+import type { RequestToken } from "../domain/capability/request.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { ExtensionProtocol } from "../domain/extension-protocol.js"
@@ -231,6 +232,7 @@ export {
 export {
   request,
   type ReadRequestInput,
+  type RequestToken,
   type WriteRequestInput,
 } from "../domain/capability/request.js"
 export {
@@ -336,6 +338,16 @@ export interface DefineExtensionInput {
    * typed bucket lands. After W10-5 it is deleted.
    */
   readonly commands?: FieldSpec<ActionToken>
+  /**
+   * Extension-to-extension RPC capabilities authored via `request({...})`.
+   * The bucket name is the audience cluster: every entry must be a
+   * `RequestToken` (i.e. `audiences: ["agent-protocol", "transport-public"]`)
+   * — `tool({...})` and `action({...})` outputs cannot be slotted here.
+   *
+   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
+   * for unmigrated `request({...})` call sites. After W10-5 it is deleted.
+   */
+  readonly rpc?: FieldSpec<RequestToken>
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
@@ -458,34 +470,49 @@ const validateResources = (contribs: ExtensionContributions): string | undefined
   return undefined
 }
 
-const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
-  const capIds = new Map<string, string>()
-  // Validate `tools:` first so error messages name the correct bucket.
-  // `ToolToken.audiences` is the literal `readonly ["model"]` at the type
-  // level, so the empty-audiences and missing-model-audience branches in the
-  // legacy `capabilities:` validator below are statically unreachable here —
-  // we only check description and id-uniqueness.
-  for (const [i, cap] of (contribs.tools ?? []).entries()) {
+/**
+ * Per-bucket id-uniqueness check. Mutates `capIds` to record locations and
+ * returns an error message if a duplicate is found within the bucket or
+ * across previously-checked buckets.
+ */
+const checkBucketIds = (
+  bucket: string,
+  entries: ReadonlyArray<{ readonly id: string }>,
+  capIds: Map<string, string>,
+): string | undefined => {
+  for (const [i, cap] of entries.entries()) {
+    if (capIds.has(cap.id)) {
+      return `${bucket}[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+    }
+    capIds.set(cap.id, `${bucket}[${i}]`)
+  }
+  return undefined
+}
+
+/**
+ * Tools require a non-empty description (the model sees it as the tool
+ * description). `ToolToken.audiences` is the literal `readonly ["model"]` at
+ * the type level, so empty-audiences / missing-model-audience branches are
+ * statically unreachable here.
+ */
+const checkToolDescriptions = (
+  tools: ReadonlyArray<{ readonly id: string; readonly description?: string }>,
+): string | undefined => {
+  for (const [i, cap] of tools.entries()) {
     if (cap.description === undefined || cap.description === "") {
       return `tools[${i}] (${cap.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
     }
-    if (capIds.has(cap.id)) {
-      return `tools[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
-    }
-    capIds.set(cap.id, `tools[${i}]`)
   }
-  // `ActionToken.audiences` is the literal `ReadonlyArray<"human-slash" |
-  // "human-palette" | "transport-public">` at the type level — empty audiences
-  // cannot be constructed through `action({...})`, so we only check
-  // id-uniqueness here. Description is informational for human surfaces, not
-  // wire-protocol — keep the check lenient.
-  for (const [i, cap] of (contribs.commands ?? []).entries()) {
-    if (capIds.has(cap.id)) {
-      return `commands[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
-    }
-    capIds.set(cap.id, `commands[${i}]`)
-  }
-  for (const [i, cap] of (contribs.capabilities ?? []).entries()) {
+  return undefined
+}
+
+/**
+ * Legacy `capabilities:` bucket carries runtime audience metadata, so audiences
+ * and the model-audience description rule are checked here (unlike the typed
+ * buckets above where the brand statically guarantees the audience shape).
+ */
+const checkLegacyCapabilities = (caps: ReadonlyArray<CapabilityToken>): string | undefined => {
+  for (const [i, cap] of caps.entries()) {
     if (cap.audiences === undefined || cap.audiences.length === 0) {
       return `capabilities[${i}] (${cap.id ?? "<no id>"}): \`audiences\` must be a non-empty array`
     }
@@ -495,12 +522,28 @@ const validateCapabilities = (contribs: ExtensionContributions): string | undefi
     ) {
       return `capabilities[${i}] (${cap.id}): model-audience capability requires a non-empty \`description\` (the model sees it as the tool description)`
     }
-    if (capIds.has(cap.id)) {
-      return `capabilities[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
-    }
-    capIds.set(cap.id, `capabilities[${i}]`)
   }
   return undefined
+}
+
+const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
+  const tools = contribs.tools ?? []
+  const commands = contribs.commands ?? []
+  const rpc = contribs.rpc ?? []
+  const capabilities = contribs.capabilities ?? []
+  const toolErr = checkToolDescriptions(tools)
+  if (toolErr !== undefined) return toolErr
+  const legacyErr = checkLegacyCapabilities(capabilities)
+  if (legacyErr !== undefined) return legacyErr
+  // Validate id-uniqueness across all buckets in declaration order so error
+  // messages name the correct bucket.
+  const capIds = new Map<string, string>()
+  return (
+    checkBucketIds("tools", tools, capIds) ??
+    checkBucketIds("commands", commands, capIds) ??
+    checkBucketIds("rpc", rpc, capIds) ??
+    checkBucketIds("capabilities", capabilities, capIds)
+  )
 }
 
 const validateAgents = (contribs: ExtensionContributions): string | undefined => {
@@ -578,6 +621,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
         const commands = yield* resolveField(manifest, "commands", params.commands, ctx)
+        const rpc = yield* resolveField(manifest, "rpc", params.rpc, ctx)
         const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
@@ -593,6 +637,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(resources.length > 0 ? { resources } : {}),
           ...(tools.length > 0 ? { tools } : {}),
           ...(commands.length > 0 ? { commands } : {}),
+          ...(rpc.length > 0 ? { rpc } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),
