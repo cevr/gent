@@ -258,10 +258,7 @@ export const collectValidationFailures = (
     }
   }
 
-  // Tool collisions: same-scope same-id model-audience capabilities. Reads
-  // from both `tools:` and `capabilities:` (audiences:["model"]) — the
-  // bucket-discriminated path and the legacy unified bucket — so a same-id
-  // collision across buckets is still caught.
+  // Tool collisions: same-scope same-id model-audience capabilities.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
     (cap) => cap.id,
@@ -296,7 +293,7 @@ export const collectValidationFailures = (
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
-      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? []), ...(cs.capabilities ?? [])]
+      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? [])]
         .map((c) => c.prompt)
         .filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,

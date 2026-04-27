@@ -48,6 +48,31 @@ const promptSectionAsToolContribution = (section: PromptSection): AnyCapabilityC
   effect: () => Effect.void,
 })
 
+// Routes raw capability shapes into the typed bucket that matches their
+// audiences. Bucket name IS the audience discrimination — tests that need
+// resolveExtensions/listSlashCommands behavior author leaves directly without
+// going through `tool()/action()/request()` factories (token brand bypassed
+// via `as ReadonlyArray<never>` at the bucket boundary).
+const routeByAudience = (
+  caps: ReadonlyArray<AnyCapabilityContribution>,
+): {
+  tools: ReadonlyArray<AnyCapabilityContribution>
+  commands: ReadonlyArray<AnyCapabilityContribution>
+  rpc: ReadonlyArray<AnyCapabilityContribution>
+} => {
+  const tools: Array<AnyCapabilityContribution> = []
+  const commands: Array<AnyCapabilityContribution> = []
+  const rpc: Array<AnyCapabilityContribution> = []
+  for (const cap of caps) {
+    const audiences = cap.audiences ?? []
+    if (audiences.includes("model")) tools.push(cap)
+    else if (audiences.includes("human-slash") || audiences.includes("human-palette"))
+      commands.push(cap)
+    else rpc.push(cap)
+  }
+  return { tools, commands, rpc }
+}
+
 const makeExt = (
   id: string,
   scope: "builtin" | "user" | "project",
@@ -58,20 +83,29 @@ const makeExt = (
     promptSections?: PromptSection[]
     capabilities?: AnyCapabilityContribution[]
   },
-): LoadedExtension => ({
-  manifest: { id },
-  scope,
-  sourcePath: `/test/${id}`,
-  contributions: {
-    capabilities: [
-      ...(opts?.tools ?? []),
-      ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
-      ...(opts?.capabilities ?? []),
-    ],
-    agents: opts?.agents,
-    modelDrivers: opts?.modelDrivers,
-  },
-})
+): LoadedExtension => {
+  const all = [
+    ...(opts?.tools ?? []),
+    ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
+    ...(opts?.capabilities ?? []),
+  ]
+  const { tools, commands, rpc } = routeByAudience(all)
+  return {
+    manifest: { id },
+    scope,
+    sourcePath: `/test/${id}`,
+    contributions: {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(tools.length > 0 ? { tools: tools as ReadonlyArray<never> } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(commands.length > 0 ? { commands: commands as ReadonlyArray<never> } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(rpc.length > 0 ? { rpc: rpc as ReadonlyArray<never> } : {}),
+      agents: opts?.agents,
+      modelDrivers: opts?.modelDrivers,
+    },
+  }
+}
 
 const runCtx: RunContext = {
   sessionId: SessionId.make("test-session"),
@@ -94,31 +128,6 @@ describe("resolveExtensions", () => {
     expect(resolved.modelCapabilities.has("read")).toBe(true)
     expect(resolved.modelCapabilities.has("write")).toBe(true)
     expect(resolved.modelCapabilities.has("bash")).toBe(true)
-  })
-
-  // W10-3a regression: the typed `tools:` bucket is a separate field on
-  // `ExtensionContributions`. Resolved capability winners must include
-  // entries from BOTH `tools:` (new path) and `capabilities:` (legacy
-  // shim path until W10-5). Bypass `makeExt` to write straight into the
-  // contributions bag — the helper currently routes everything through
-  // `capabilities:`.
-  test("resolves model capabilities from both `tools:` and `capabilities:` buckets", () => {
-    const fromToolsBucket: LoadedExtension = {
-      manifest: { id: "a-tools-bucket" },
-      scope: "builtin",
-      sourcePath: "/test/a-tools-bucket",
-      contributions: { tools: [makeTool("read")] },
-    }
-    const fromCapabilitiesBucket: LoadedExtension = {
-      manifest: { id: "b-capabilities-bucket" },
-      scope: "builtin",
-      sourcePath: "/test/b-capabilities-bucket",
-      // LEGACY-SHIM-TEST
-      contributions: { capabilities: [makeTool("write")] },
-    }
-    const resolved = resolveExtensions([fromToolsBucket, fromCapabilitiesBucket])
-    expect(resolved.modelCapabilities.has("read")).toBe(true)
-    expect(resolved.modelCapabilities.has("write")).toBe(true)
   })
 
   test("later scope wins for same-name tool", () => {
@@ -586,48 +595,6 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
 
-  // W10-3c regression: the typed `commands:` bucket is a separate field on
-  // `ExtensionContributions`. `listSlashCommands` must include entries from
-  // BOTH `commands:` (new path) and `capabilities:` (legacy shim path until
-  // W10-5). Bypass `makeExt` to write straight into the contributions bag —
-  // the helper currently routes everything through `capabilities:`.
-  test("listSlashCommands reads from both `commands:` and `capabilities:` buckets", () => {
-    const fromCommandsBucket: AnyCapabilityContribution = {
-      id: "from-commands",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const fromLegacyBucket: AnyCapabilityContribution = {
-      id: "from-legacy",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const a: LoadedExtension = {
-      manifest: { id: "@test/cmd-bucket" },
-      scope: "builtin",
-      sourcePath: "/test/cmd-bucket",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the ActionToken brand
-      contributions: { commands: [fromCommandsBucket as never] },
-    }
-    const b: LoadedExtension = {
-      manifest: { id: "@test/legacy-bucket" },
-      scope: "builtin",
-      sourcePath: "/test/legacy-bucket",
-      // LEGACY-SHIM-TEST
-      contributions: { capabilities: [fromLegacyBucket] },
-    }
-    const resolved = resolveExtensions([a, b])
-    const commands = listSlashCommands(resolved.extensions)
-    expect(commands.map((c) => c.name)).toContain("from-commands")
-    expect(commands.map((c) => c.name)).toContain("from-legacy")
-  })
-
   test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
     // Builtin exposes a slash command via human-slash capability.
     const builtinCap: AnyCapabilityContribution = {
@@ -673,31 +640,6 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
     expect(commands.map((c) => c.name)).not.toContain("palette-only")
   })
 
-  test('project capability with audiences:["transport-public"] SHADOWS builtin slash command', () => {
-    const builtinCap: AnyCapabilityContribution = {
-      id: "act",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
-    const projectCap: AnyCapabilityContribution = {
-      id: "act",
-      audiences: ["transport-public"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
-
-    const resolved = resolveExtensions([builtin, project])
-    const commands = listSlashCommands(resolved.extensions)
-    expect(commands.map((c) => c.name)).not.toContain("act")
-  })
-
   test('project capability with intent:"read" SHADOWS builtin slash command', () => {
     const builtinCap: AnyCapabilityContribution = {
       id: "look",
@@ -723,31 +665,6 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
     // (the filter is audiences:["human-slash"], not intent:"write")
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).toContain("look")
-  })
-
-  test("model-only capability SHADOWS builtin slash command", () => {
-    const builtinCap: AnyCapabilityContribution = {
-      id: "run",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
-    const projectCap: AnyCapabilityContribution = {
-      id: "run",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
-
-    const resolved = resolveExtensions([builtin, project])
-    const commands = listSlashCommands(resolved.extensions)
-    expect(commands.map((c) => c.name)).not.toContain("run")
   })
 
   // ── Model capability surface ────────────────────────────────────────

@@ -165,35 +165,39 @@ describe("extension activation isolation", () => {
   // capability with `audiences:["model"]` becomes a tool by `cap.id` — the
   // resolver overwrites silently in last-write-wins order without this check.
 
-  it.live("validation catches same-scope capability/capability tool-name collision", () =>
+  // Raw token-shaped leaves bypass the `tool()/action()/request()` factories
+  // (whose runtime guards would catch malformed inputs at construction). The
+  // validation pass exists to catch leaves authored through the runtime-load
+  // path or that bypass typed authoring — these tests assert validation works
+  // on the typed-bucket leaf shape.
+  const rawToolLeaf = (id: string, description: string | undefined): never =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the ToolToken brand
+    ({
+      id,
+      ...(description !== undefined ? { description } : {}),
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }) as never
+
+  const rawRpcLeaf = (id: string): never =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the RequestToken brand
+    ({
+      id,
+      audiences: ["agent-protocol", "transport-public"],
+      intent: "read",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }) as never
+
+  it.live("validation catches same-scope tool/tool name collision", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("collider-a", {
-          capabilities: [
-            {
-              id: "shared_cap",
-              description: "a",
-              audiences: ["model"],
-              intent: "write",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
-        makeLoaded("collider-b", {
-          capabilities: [
-            {
-              id: "shared_cap",
-              description: "b",
-              audiences: ["model"],
-              intent: "write",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
+        makeLoaded("collider-a", { tools: [rawToolLeaf("shared_cap", "a")] }),
+        makeLoaded("collider-b", { tools: [rawToolLeaf("shared_cap", "b")] }),
       ])
 
       expect(result.active).toEqual([])
@@ -205,46 +209,10 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("validation catches same-scope tool/capability tool-name collision", () =>
-    Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("legacy-tool", {
-          tools: [
-            tool({
-              id: "shared_name",
-              description: "legacy",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-          ],
-        }),
-        makeLoaded("capability-tool", {
-          capabilities: [
-            {
-              id: "shared_name",
-              description: "capability",
-              audiences: ["model"],
-              intent: "write",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
-      ])
-
-      expect(result.active).toEqual([])
-      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
-        "capability-tool",
-        "legacy-tool",
-      ])
-    }),
-  )
-
-  it.live("validation does NOT collide capability(non-model) with same-name tool", () =>
+  it.live("validation does NOT collide rpc(non-model) with same-name tool", () =>
     Effect.gen(function* () {
       // A capability that doesn't surface as a tool (no `model` audience)
-      // must NOT trigger a "tool" collision against a same-name legacy tool.
+      // must NOT trigger a "tool" collision against a same-name tool.
       // The tool list is "things audience-authorized as model"; cross-audience
       // sharing of an id is fine.
       const result = yield* validateLoadedExtensions([
@@ -258,18 +226,7 @@ describe("extension activation isolation", () => {
             }),
           ],
         }),
-        makeLoaded("rpc-only", {
-          capabilities: [
-            {
-              id: "shared_name",
-              audiences: ["agent-protocol"],
-              intent: "read",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
+        makeLoaded("rpc-only", { rpc: [rawRpcLeaf("shared_name")] }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
@@ -283,18 +240,7 @@ describe("extension activation isolation", () => {
   it.live("validation rejects model-audience capability with empty description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("missing-desc", {
-          capabilities: [
-            {
-              id: "describeless",
-              audiences: ["model"],
-              intent: "write",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
+        makeLoaded("missing-desc", { tools: [rawToolLeaf("describeless", undefined)] }),
       ])
 
       expect(result.active).toEqual([])
@@ -308,19 +254,7 @@ describe("extension activation isolation", () => {
   it.live("validation rejects model-audience capability with whitespace-only description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("blank-desc", {
-          capabilities: [
-            {
-              id: "blanky",
-              description: "   \t\n",
-              audiences: ["model"],
-              intent: "write",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
+        makeLoaded("blank-desc", { tools: [rawToolLeaf("blanky", "   \t\n")] }),
       ])
 
       expect(result.active).toEqual([])
@@ -334,18 +268,7 @@ describe("extension activation isolation", () => {
       // Non-model capabilities don't ship to the LLM, so empty description
       // is fine (the field is optional). Only `audiences:["model"]` requires.
       const result = yield* validateLoadedExtensions([
-        makeLoaded("rpc-no-desc", {
-          capabilities: [
-            {
-              id: "internal",
-              audiences: ["agent-protocol"],
-              intent: "read",
-              input: Schema.Unknown,
-              output: Schema.Unknown,
-              effect: () => Effect.succeed(undefined),
-            },
-          ],
-        }),
+        makeLoaded("rpc-no-desc", { rpc: [rawRpcLeaf("internal")] }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual(["rpc-no-desc"])

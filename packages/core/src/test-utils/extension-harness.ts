@@ -30,7 +30,8 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
+import type { AnyCapabilityContribution } from "../domain/capability.js"
+import type { ToolToken } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -202,8 +203,8 @@ export interface ToolTestLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
   readonly extensions?: ReadonlyArray<GentExtension>
-  /** Extra capabilities to register (authored via `tool({...})` / `request({...})` / `action({...})`) */
-  readonly tools?: ReadonlyArray<CapabilityToken>
+  /** Extra tools to register (authored via `tool({...})`). */
+  readonly tools?: ReadonlyArray<ToolToken>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., GitReader.Test) */
@@ -219,7 +220,7 @@ export interface ToolTestLayerConfig {
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
   const builtinContributions: ExtensionContributions = {
     agents: config.agents,
-    ...((config.tools ?? []).length > 0 ? { capabilities: config.tools } : {}),
+    ...((config.tools ?? []).length > 0 ? { tools: config.tools } : {}),
   }
 
   const defaultRunner: AgentRunner = {

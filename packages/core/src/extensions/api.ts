@@ -1,16 +1,14 @@
 /**
  * Extension authoring API.
  *
- * Single entry point: `defineExtension({ id, resources?, capabilities?, ... })`.
+ * Single entry point: `defineExtension({ id, resources?, tools?, commands?, rpc?, ... })`.
  * The factory accepts typed sub-arrays (literal arrays OR `(ctx) => array` OR
  * `(ctx) => Effect<array>` per bucket), validates them, and produces a
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
  *
- * After C8 there is no flat `Contribution[]`, no `_kind` discriminator, no
- * `filterByKind`. The bucket name IS the discrimination — TypeScript catches
- * a Projection placed in `capabilities` at the call site; runtime
- * `validatePackageShape` adds field-local error messages for runtime-loaded
- * (JS) extensions.
+ * The bucket name IS the discrimination — TypeScript catches a Projection
+ * placed in `tools` at the call site; runtime `validatePackageShape` adds
+ * field-local error messages for runtime-loaded (JS) extensions.
  *
  * Effect-native end-to-end: every contribution returns Effect. There are no
  * Promise edges in the contribution surface — gent is a library used inside
@@ -23,7 +21,7 @@
  * export default defineExtension({
  *   id: "my-ext",
  *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
- *   capabilities: [tool(MyTool)],
+ *   tools: [tool(MyTool)],
  * })
  * ```
  *
@@ -31,7 +29,7 @@
  * ```ts
  * export default defineExtension({
  *   id: "my-ext",
- *   capabilities: ({ ctx }) =>
+ *   tools: ({ ctx }) =>
  *     Effect.gen(function* () {
  *       const skills = yield* loadSkills(ctx.cwd)
  *       return [tool(SearchSkillsTool(skills))]
@@ -326,10 +324,6 @@ export interface DefineExtensionInput {
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
    * audience: every entry must be a `ToolToken` (i.e. `audiences: ["model"]`)
    * — `request({...})` and `action({...})` outputs cannot be slotted here.
-   *
-   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
-   * for unmigrated `tool({...})` call sites and for `request`/`action` until
-   * their typed buckets land. After W10-5 it is deleted.
    */
   readonly tools?: FieldSpec<ToolToken>
   /**
@@ -337,10 +331,6 @@ export interface DefineExtensionInput {
    * the audience cluster: every entry must be an `ActionToken` (i.e.
    * `audiences ⊆ {"human-slash", "human-palette", "transport-public"}`) —
    * `tool({...})` and `request({...})` outputs cannot be slotted here.
-   *
-   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
-   * for unmigrated `action({...})` call sites and for `request` until its
-   * typed bucket lands. After W10-5 it is deleted.
    */
   readonly commands?: FieldSpec<ActionToken>
   /**
@@ -348,12 +338,8 @@ export interface DefineExtensionInput {
    * The bucket name is the audience cluster: every entry must be a
    * `RequestToken` (i.e. `audiences: ["agent-protocol", "transport-public"]`)
    * — `tool({...})` and `action({...})` outputs cannot be slotted here.
-   *
-   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
-   * for unmigrated `request({...})` call sites. After W10-5 it is deleted.
    */
   readonly rpc?: FieldSpec<RequestToken>
-  readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
   /**
@@ -441,7 +427,7 @@ const resolveField = <A>(
       return value as ReadonlyArray<A>
     }
     // Sync factory: validate shape — a JS extension returning a single item
-    // (`capabilities: () => myCap`) would otherwise silently become "no items"
+    // (`tools: () => myCap`) would otherwise silently become "no items"
     // because `undefined > 0` is false in the bucket-include check.
     if (!Array.isArray(result)) {
       return yield* new ExtensionLoadError({
@@ -517,43 +503,19 @@ const checkToolDescriptions = (
   return undefined
 }
 
-/**
- * Legacy `capabilities:` bucket carries runtime audience metadata, so audiences
- * and the model-audience description rule are checked here (unlike the typed
- * buckets above where the brand statically guarantees the audience shape).
- */
-const checkLegacyCapabilities = (caps: ReadonlyArray<CapabilityToken>): string | undefined => {
-  for (const [i, cap] of caps.entries()) {
-    if (cap.audiences === undefined || cap.audiences.length === 0) {
-      return `capabilities[${i}] (${cap.id ?? "<no id>"}): \`audiences\` must be a non-empty array`
-    }
-    if (
-      cap.audiences.includes("model") &&
-      (cap.description === undefined || cap.description === "")
-    ) {
-      return `capabilities[${i}] (${cap.id}): model-audience capability requires a non-empty \`description\` (the model sees it as the tool description)`
-    }
-  }
-  return undefined
-}
-
 const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
   const tools = contribs.tools ?? []
   const commands = contribs.commands ?? []
   const rpc = contribs.rpc ?? []
-  const capabilities = contribs.capabilities ?? []
   const toolErr = checkToolDescriptions(tools)
   if (toolErr !== undefined) return toolErr
-  const legacyErr = checkLegacyCapabilities(capabilities)
-  if (legacyErr !== undefined) return legacyErr
   // Validate id-uniqueness across all buckets in declaration order so error
   // messages name the correct bucket.
   const capIds = new Map<string, string>()
   return (
     checkBucketIds("tools", tools, capIds) ??
     checkBucketIds("commands", commands, capIds) ??
-    checkBucketIds("rpc", rpc, capIds) ??
-    checkBucketIds("capabilities", capabilities, capIds)
+    checkBucketIds("rpc", rpc, capIds)
   )
 }
 
@@ -619,7 +581,7 @@ export const validatePackageShape = (
  * export const MyExt = defineExtension({
  *   id: "my-ext",
  *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
- *   capabilities: [tool(MyTool)],
+ *   tools: [tool(MyTool)],
  * })
  * ```
  */
@@ -633,7 +595,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
         const commands = yield* resolveField(manifest, "commands", params.commands, ctx)
         const rpc = yield* resolveField(manifest, "rpc", params.rpc, ctx)
-        const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
         const projections = yield* resolveField(manifest, "projections", params.projections, ctx)
@@ -649,7 +610,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(tools.length > 0 ? { tools } : {}),
           ...(commands.length > 0 ? { commands } : {}),
           ...(rpc.length > 0 ? { rpc } : {}),
-          ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),
           ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),

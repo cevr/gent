@@ -39,10 +39,9 @@ import type { ReadOnlyTag } from "../read-only.js"
  * slotted into `rpc:`, so the bucket name IS the audience discrimination
  * (consistent with W10-3a's `tools:` and W10-3c's `commands:` buckets).
  *
- * `RequestToken` extends `CapabilityToken`, so authors mid-migration may
- * still pass a request token through the legacy `capabilities:` bucket — the
- * latter is deleted in the W10-5 sweep once every site lives in its typed
- * bucket.
+ * `RequestToken` extends `CapabilityToken`; runtime-loaded extensions can
+ * also author capabilities directly without going through `request()`, but
+ * the `rpc:` bucket only accepts the branded shape.
  */
 declare const RequestTokenBrand: unique symbol
 export interface RequestToken<Input = unknown, Output = unknown> extends CapabilityToken<

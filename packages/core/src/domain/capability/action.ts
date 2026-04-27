@@ -41,9 +41,9 @@ export type ActionSurface = "slash" | "palette" | "both"
  * `commands:`, so the bucket name IS the audience discrimination (consistent
  * with W10-3a's `tools:` bucket).
  *
- * `ActionToken` extends `CapabilityToken`, so authors mid-migration may still
- * pass an action token through the legacy `capabilities:` bucket — the latter
- * is deleted in the W10-5 sweep once every site lives in its typed bucket.
+ * `ActionToken` extends `CapabilityToken`; runtime-loaded extensions can also
+ * author capabilities directly without going through `action()`, but the
+ * `commands:` bucket only accepts the branded shape.
  */
 declare const ActionTokenBrand: unique symbol
 export interface ActionToken<Input = unknown, Output = unknown> extends CapabilityToken<

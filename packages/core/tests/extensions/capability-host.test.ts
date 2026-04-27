@@ -40,19 +40,40 @@ const ctx = {
   home: "/tmp",
 } as unknown as CapabilityContext
 
+// Routes raw capability shapes into the typed bucket that matches their
+// audiences. Bucket name IS the audience discrimination; tests that need
+// CapabilityHost dispatch behavior author leaves directly without going
+// through `tool()/action()/request()` factories (token brand bypassed via
+// `as never` at the bucket boundary).
 const extWith = (
   id: string,
   scope: "builtin" | "user" | "project",
   caps: ReadonlyArray<CapabilityContribution<unknown, unknown, never>>,
-): LoadedExtension => ({
-  manifest: { id },
-  scope,
-  sourcePath: `/test/${id}`,
-  contributions: {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-    capabilities: caps as ReadonlyArray<CapabilityContribution<never, never, never>>,
-  },
-})
+): LoadedExtension => {
+  const tools: Array<CapabilityContribution<unknown, unknown, never>> = []
+  const commands: Array<CapabilityContribution<unknown, unknown, never>> = []
+  const rpc: Array<CapabilityContribution<unknown, unknown, never>> = []
+  for (const cap of caps) {
+    const audiences = cap.audiences ?? []
+    if (audiences.includes("model")) tools.push(cap)
+    else if (audiences.includes("human-slash") || audiences.includes("human-palette"))
+      commands.push(cap)
+    else rpc.push(cap)
+  }
+  return {
+    manifest: { id },
+    scope,
+    sourcePath: `/test/${id}`,
+    contributions: {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(tools.length > 0 ? { tools: tools as ReadonlyArray<never> } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(commands.length > 0 ? { commands: commands as ReadonlyArray<never> } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
+      ...(rpc.length > 0 ? { rpc: rpc as ReadonlyArray<never> } : {}),
+    },
+  }
+}
 
 const echoCap = (
   id: string,
@@ -154,60 +175,6 @@ describe("capability-host", () => {
         // The project entry IS visible to its declared audience.
         const slashList = compiled.listForAudience("human-slash").map((e) => e.capability.id)
         expect(slashList).toEqual(["doThing"])
-      }),
-  )
-
-  // W10-3d regression: the typed `rpc:` bucket is a separate field on
-  // `ExtensionContributions`. `compileCapabilities` must include entries from
-  // BOTH `rpc:` (new path) and `capabilities:` (legacy shim path until W10-5).
-  // Bypass `extWith` to write straight into the contributions bag — the helper
-  // currently routes everything through `capabilities:`.
-  it.live(
-    "listForAudience reads `agent-protocol` entries from both `rpc:` and `capabilities:`",
-    () =>
-      Effect.sync(() => {
-        const fromRpcBucket: CapabilityContribution<{ value: string }, { value: string }, never> = {
-          id: "rpc-from-rpc-bucket",
-          audiences: ["agent-protocol", "transport-public"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: (input) => Effect.succeed({ value: input.value }),
-        }
-        const fromLegacyBucket: CapabilityContribution<
-          { value: string },
-          { value: string },
-          never
-        > = {
-          id: "rpc-from-legacy-bucket",
-          audiences: ["agent-protocol", "transport-public"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: (input) => Effect.succeed({ value: input.value }),
-        }
-        const fromRpc: LoadedExtension = {
-          manifest: { id: "@test/rpc-bucket" },
-          scope: "builtin",
-          sourcePath: "/test/rpc-bucket",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the RequestToken brand
-          contributions: { rpc: [fromRpcBucket as never] },
-        }
-        const fromLegacy: LoadedExtension = {
-          manifest: { id: "@test/legacy-bucket" },
-          scope: "builtin",
-          sourcePath: "/test/legacy-bucket",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-          contributions: {
-            capabilities: [fromLegacyBucket] as ReadonlyArray<
-              CapabilityContribution<never, never, never>
-            >,
-          },
-        }
-        const compiled = compileCapabilities([fromRpc, fromLegacy])
-        const ids = compiled.listForAudience("agent-protocol").map((e) => e.capability.id)
-        expect(ids).toContain("rpc-from-rpc-bucket")
-        expect(ids).toContain("rpc-from-legacy-bucket")
       }),
   )
 

@@ -82,9 +82,6 @@ export interface ExtensionContributions {
    * LLM-callable tools authored via `tool({...})`. Bucket name IS the
    * audience: every entry is a `ToolToken` with `audiences: ["model"]`
    * — no runtime tag check needed downstream.
-   *
-   * Until W10-5, `capabilities:` is also scanned for `audiences:["model"]`
-   * entries so as-yet-unmigrated `tool({...})` call sites keep working.
    */
   readonly tools?: ReadonlyArray<ToolToken>
   /**
@@ -92,10 +89,6 @@ export interface ExtensionContributions {
    * audience cluster: every entry is an `ActionToken` whose `audiences` is a
    * subset of `{"human-slash", "human-palette", "transport-public"}` — no
    * runtime tag check needed downstream.
-   *
-   * Until W10-5, `capabilities:` is also scanned for `human-slash` /
-   * `human-palette` entries so as-yet-unmigrated `action({...})` call sites
-   * keep working.
    */
   readonly commands?: ReadonlyArray<ActionToken>
   /**
@@ -103,12 +96,8 @@ export interface ExtensionContributions {
    * Bucket name IS the audience cluster: every entry is a `RequestToken` with
    * `audiences: ["agent-protocol", "transport-public"]` — no runtime tag
    * check needed downstream.
-   *
-   * Until W10-5, `capabilities:` is also scanned for `agent-protocol` entries
-   * so as-yet-unmigrated `request({...})` call sites keep working.
    */
   readonly rpc?: ReadonlyArray<RequestToken>
-  readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
   /**
@@ -164,67 +153,31 @@ export interface ExtensionContributions {
 // ── Bucket readers ──
 
 /**
- * Read all model-audience capabilities from a contributions bag — the union of
- * the typed `tools:` bucket and any `capabilities:` entries with
- * `audiences: ["model"]`. Used by every consumer that previously filtered
- * `capabilities[]` by audience: tool runner, activation collision detection,
- * tool-list assembly, prompt-section indexing.
- *
- * The shim exists during W10-3a/b — `tools:` migration is incremental and
- * unmigrated `tool({...})` call sites still slot into `capabilities:`. After
- * W10-5, `capabilities:` is gone and this helper just returns `tools ?? []`.
+ * Read all model-audience capabilities from a contributions bag. Bucket name
+ * IS the audience discrimination — every entry in `tools:` has
+ * `audiences: ["model"]` by construction.
  */
 export const modelCapabilities = (
   contribs: ExtensionContributions,
-): ReadonlyArray<CapabilityToken> => {
-  const fromTools = contribs.tools ?? []
-  const fromCapabilities = (contribs.capabilities ?? []).filter((c) =>
-    c.audiences.includes("model"),
-  )
-  return [...fromTools, ...fromCapabilities]
-}
+): ReadonlyArray<CapabilityToken> => contribs.tools ?? []
 
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
- * bag — the union of the typed `commands:` bucket and any `capabilities:`
- * entries with a `human-slash` or `human-palette` audience. Used by the
- * slash-command list assembler and any future palette consumer.
- *
- * Like {@link modelCapabilities}, the shim exists during W10-3c — `commands:`
- * migration is incremental and unmigrated `action({...})` call sites still
- * slot into `capabilities:`. After W10-5, `capabilities:` is gone and this
- * helper just returns `commands ?? []`.
+ * bag. Bucket name IS the audience discrimination — every entry in `commands:`
+ * has audiences ⊆ `{"human-slash", "human-palette", "transport-public"}` by
+ * construction.
  */
 export const humanCapabilities = (
   contribs: ExtensionContributions,
-): ReadonlyArray<CapabilityToken> => {
-  const fromCommands = contribs.commands ?? []
-  const fromCapabilities = (contribs.capabilities ?? []).filter(
-    (c) => c.audiences.includes("human-slash") || c.audiences.includes("human-palette"),
-  )
-  return [...fromCommands, ...fromCapabilities]
-}
+): ReadonlyArray<CapabilityToken> => contribs.commands ?? []
 
 /**
- * Read all extension-to-extension RPC capabilities (`agent-protocol` audience)
- * from a contributions bag — the union of the typed `rpc:` bucket and any
- * `capabilities:` entries with the `agent-protocol` audience. Used by RPC
- * dispatch wiring on the server side.
- *
- * Like {@link modelCapabilities} and {@link humanCapabilities}, the shim
- * exists during W10-3d — `rpc:` migration is incremental and unmigrated
- * `request({...})` call sites still slot into `capabilities:`. After W10-5,
- * `capabilities:` is gone and this helper just returns `rpc ?? []`.
+ * Read all extension-to-extension RPC capabilities from a contributions bag.
+ * Bucket name IS the audience discrimination — every entry in `rpc:` has
+ * `audiences: ["agent-protocol", "transport-public"]` by construction.
  */
-export const rpcCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<CapabilityToken> => {
-  const fromRpc = contribs.rpc ?? []
-  const fromCapabilities = (contribs.capabilities ?? []).filter((c) =>
-    c.audiences.includes("agent-protocol"),
-  )
-  return [...fromRpc, ...fromCapabilities]
-}
+export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<CapabilityToken> =>
+  contribs.rpc ?? []
 
 // ── Smart constructors ──
 //

@@ -38,9 +38,9 @@ import type { PromptSection } from "../prompt.js"
  * audience discrimination (consistent with C8: bucket name is the
  * discrimination, no runtime tag check needed).
  *
- * `ToolToken` extends `CapabilityToken`, so authors mid-migration may still
- * pass a tool token through the legacy `capabilities:` bucket — the latter is
- * deleted in the W10-5 sweep once every site lives in `tools:`.
+ * `ToolToken` extends `CapabilityToken`; runtime-loaded extensions can also
+ * author capabilities directly without going through `tool()`, but the
+ * `tools:` bucket only accepts the branded shape.
  */
 declare const ToolTokenBrand: unique symbol
 export interface ToolToken<Input = unknown, Output = unknown> extends CapabilityToken<

@@ -139,10 +139,10 @@ export const compileCapabilities = (
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredCapability[] = []
   for (const ext of sorted) {
-    // Read from both buckets — `tools:` (typed bucket per W10-3) and
-    // `capabilities:` (legacy heterogeneous bucket, deleted in W10-5). Each
-    // entry already carries its own `audiences` so the dispatcher path stays
-    // identical regardless of source bucket.
+    // Read from all three typed buckets — bucket name IS the audience
+    // discrimination (tools→["model"], commands→human-surface, rpc→agent-protocol).
+    // Each entry already carries its own `audiences` so the dispatcher path
+    // stays identical regardless of source bucket.
     for (const capability of ext.contributions.tools ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }
@@ -150,9 +150,6 @@ export const compileCapabilities = (
       entries.push({ extensionId: ext.manifest.id, capability })
     }
     for (const capability of ext.contributions.rpc ?? []) {
-      entries.push({ extensionId: ext.manifest.id, capability })
-    }
-    for (const capability of ext.contributions.capabilities ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }
   }

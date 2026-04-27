@@ -30,7 +30,8 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { action, request, tool } from "@gent/core/extensions/api"
+import { BranchId, type ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { reducerActor } from "../extensions/helpers/reducer-actor"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -43,35 +44,38 @@ class ProfileToken extends Context.Service<
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string; cwd: string }> = []
 
-  // Slash commands are now Capabilities with `audiences:["human-slash"]`.
-  // The command's display description comes from `promptSnippet` (capabilities
-  // expose `promptSnippet` as the slash-command short description; `description`
-  // is reserved for the model-audience tool description).
+  // Slash commands are authored via `action({ surface: "slash" })` (lowers to
+  // `audiences: ["human-slash"]` in the `commands:` bucket). `action()` requires
+  // a `description` which is shown in the slash list; `promptSnippet` is an
+  // optional system-prompt fragment.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: "@test/commands" },
     setup: () =>
       Effect.succeed({
-        capabilities: [
-          {
+        commands: [
+          action({
             id: "greet",
-            audiences: ["human-slash", "transport-public"],
-            intent: "write",
+            name: "greet",
+            description: "Say hello",
+            surface: "slash",
+            public: true,
             promptSnippet: "Say hello",
             input: Schema.String,
             output: Schema.Void,
-            effect: (args: string, ctx) =>
+            execute: (args, ctx) =>
               Effect.sync(() => {
                 invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
               }),
-          },
-          {
+          }),
+          action({
             id: "noop",
-            audiences: ["human-slash"],
-            intent: "write",
+            name: "noop",
+            description: "noop",
+            surface: "slash",
             input: Schema.String,
             output: Schema.Void,
-            effect: () => Effect.void,
-          },
+            execute: () => Effect.void,
+          }),
         ],
       }),
   }
@@ -120,15 +124,17 @@ describe("extension command RPCs", () => {
     scope: "builtin",
     sourcePath: "test",
     contributions: {
-      capabilities: [
-        {
+      commands: [
+        action({
           id: commandId,
-          audiences: ["human-slash", "transport-public"],
-          intent: "write",
+          name: commandId,
+          description: commandId,
+          surface: "slash",
+          public: true,
           input: Schema.String,
           output: Schema.Void,
-          effect: () => Effect.void,
-        },
+          execute: () => Effect.void,
+        }),
       ],
     },
   })
@@ -188,7 +194,7 @@ describe("extension command RPCs", () => {
         const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
-        expect(testCmds.find((c) => c.name === "noop")?.description).toBeUndefined()
+        expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -444,19 +450,19 @@ describe("extension command RPCs", () => {
             }),
           }),
         ],
-        capabilities: [
-          {
+        rpc: [
+          request({
             id: "read-profile-token",
-            audiences: ["transport-public"],
-            intent: "read",
+            extensionId: "@test/profile-service-request" as ExtensionId,
+            intent: "write",
             input: Schema.String,
             output: Schema.String,
-            effect: () =>
+            execute: () =>
               Effect.gen(function* () {
                 const token = yield* ProfileToken
                 return yield* token.read()
               }),
-          },
+          }),
         ],
       },
     }
@@ -483,7 +489,7 @@ describe("extension command RPCs", () => {
             sessionId,
             extensionId: "@test/profile-service-request",
             capabilityId: "read-profile-token",
-            intent: "read",
+            intent: "write",
             input: "token",
             branchId,
           })
@@ -510,19 +516,19 @@ describe("extension command RPCs", () => {
               }),
             }),
           ],
-          capabilities: [
-            {
+          rpc: [
+            request({
               id: "read-live-profile-token",
-              audiences: ["transport-public"],
-              intent: "read",
+              extensionId: "@test/live-profile-service-request" as ExtensionId,
+              intent: "write",
               input: Schema.String,
               output: Schema.String,
-              effect: () =>
+              execute: () =>
                 Effect.gen(function* () {
                   const token = yield* ProfileToken
                   return yield* token.read()
                 }),
-            },
+            }),
           ],
         }),
     }
@@ -555,7 +561,7 @@ describe("extension command RPCs", () => {
               sessionId,
               extensionId: "@test/live-profile-service-request",
               capabilityId: "read-live-profile-token",
-              intent: "read",
+              intent: "write",
               input: "token",
               branchId,
             })
@@ -582,16 +588,18 @@ describe("extension command RPCs", () => {
       manifest: { id: "@test/wide-ctx-action" },
       setup: () =>
         Effect.succeed({
-          capabilities: [
-            {
+          commands: [
+            action({
               id: "touch",
-              audiences: ["transport-public"],
-              intent: "write",
+              name: "touch",
+              description: "Touch the boundary",
+              surface: "slash",
+              public: true,
               input: Schema.String,
               output: Schema.Void,
-              effect: (label: string, ctx) =>
+              execute: (label, ctx) =>
                 ctx.extension.send(BoundaryProtocol.Touch.make({ label })).pipe(Effect.orDie),
-            },
+            }),
           ],
         }),
     }
@@ -691,19 +699,16 @@ describe("extension command RPCs", () => {
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        capabilities: [
-          {
+        tools: [
+          tool({
             id: "create-branch",
             description: "Create a branch through the extension host session API.",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Struct({}),
-            output: Schema.String,
-            effect: (_input, ctx) =>
+            params: Schema.Struct({}),
+            execute: (_input, ctx) =>
               ctx.session
                 .createBranch({ name: "from extension rpc" })
                 .pipe(Effect.map(({ branchId }) => branchId)),
-          },
+          }),
         ],
       },
     }
@@ -758,23 +763,26 @@ describe("extension command RPCs", () => {
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        capabilities: [
-          {
+        commands: [
+          action({
             id: "visible",
-            audiences: ["human-slash", "transport-public"],
-            intent: "write",
+            name: "visible",
+            description: "visible",
+            surface: "slash",
+            public: true,
             input: Schema.String,
             output: Schema.Void,
-            effect: () => Effect.void,
-          },
-          {
+            execute: () => Effect.void,
+          }),
+          action({
             id: "hidden",
-            audiences: ["human-slash"],
-            intent: "write",
+            name: "hidden",
+            description: "hidden",
+            surface: "slash",
             input: Schema.String,
             output: Schema.Void,
-            effect: () => Effect.void,
-          },
+            execute: () => Effect.void,
+          }),
         ],
       },
     }
