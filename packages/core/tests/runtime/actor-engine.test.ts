@@ -11,9 +11,10 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Cause, Context, Deferred, Effect, Exit, Layer, Schema, Scope } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
-import { ActorAskTimeout, type Behavior } from "@gent/core/domain/actor"
+import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
+import { ActorAskTimeout, ServiceKey, type Behavior } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
 const CounterMsg = TaggedEnumClass("CounterMsg", {
@@ -258,6 +259,62 @@ describe("ActorEngine — runtime", () => {
       const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ActorAskTimeout)
       expect(found).toBeDefined()
     }
+  })
+
+  test("receptionist unregisters actor after fiber death (W10-0b regression)", async () => {
+    // Regression for W10-0b: when an actor with a serviceKey dies
+    // (defect or interrupt), its mailbox cleanup must call
+    // receptionist.unregister so dead refs don't leak into discovery
+    // results. Previously verified only by spawn-time wiring; this
+    // test proves the cleanup path observably removes the ref.
+    const PoisonMsg = TaggedEnumClass("PoisonMsg", {
+      Die: {},
+    })
+    type PoisonMsg = Schema.Schema.Type<typeof PoisonMsg>
+    const PoisonKey = ServiceKey<PoisonMsg>("poison-service")
+
+    const poisonBehavior: Behavior<PoisonMsg, null, never> = {
+      initialState: null,
+      serviceKey: PoisonKey,
+      receive: () =>
+        Effect.gen(function* () {
+          return yield* Effect.die("poisoned" as const)
+        }) as Effect.Effect<null, never, never>,
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const receptionist = yield* Receptionist
+          const ref = yield* engine.spawn(poisonBehavior)
+
+          // Sanity: registered at spawn.
+          const beforeDeath = yield* receptionist.find(PoisonKey)
+          expect(beforeDeath).toEqual([ref])
+
+          // Subscribe to the registry so we deterministically wait for
+          // the unregister rather than polling with sleeps.
+          const sawEmpty = yield* Deferred.make<void>()
+          yield* receptionist.subscribe(PoisonKey).pipe(
+            Stream.tap((refs) =>
+              refs.length === 0 ? Deferred.succeed(sawEmpty, undefined) : Effect.void,
+            ),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+
+          yield* engine.tell(ref, PoisonMsg.Die.make({}))
+
+          const observed = yield* Deferred.await(sawEmpty).pipe(Effect.timeoutOption("1 second"))
+          expect(observed._tag).toBe("Some")
+
+          // Final find: dead ref is gone from discovery.
+          const afterDeath = yield* receptionist.find(PoisonKey)
+          expect(afterDeath).toEqual([])
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
   })
 
   test("messages are delivered in submission order to a single actor", async () => {
