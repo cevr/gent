@@ -15,7 +15,7 @@ describe("reconcileTestExtensions", () => {
               scope: "builtin",
               sourcePath: "test-a",
               contributions: {
-                capabilities: [
+                tools: [
                   tool({
                     id: "conflict",
                     description: "tool a",
@@ -30,7 +30,7 @@ describe("reconcileTestExtensions", () => {
               scope: "builtin",
               sourcePath: "test-b",
               contributions: {
-                capabilities: [
+                tools: [
                   tool({
                     id: "conflict",
                     description: "tool b",

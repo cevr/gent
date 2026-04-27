@@ -113,6 +113,7 @@ describe("resolveExtensions", () => {
       manifest: { id: "b-capabilities-bucket" },
       scope: "builtin",
       sourcePath: "/test/b-capabilities-bucket",
+      // LEGACY-SHIM-TEST
       contributions: { capabilities: [makeTool("write")] },
     }
     const resolved = resolveExtensions([fromToolsBucket, fromCapabilitiesBucket])
@@ -618,6 +619,7 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
       manifest: { id: "@test/legacy-bucket" },
       scope: "builtin",
       sourcePath: "/test/legacy-bucket",
+      // LEGACY-SHIM-TEST
       contributions: { capabilities: [fromLegacyBucket] },
     }
     const resolved = resolveExtensions([a, b])

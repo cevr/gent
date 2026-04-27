@@ -63,9 +63,9 @@ describe("scope precedence", () => {
       const projectTool = toolReturning("greet", "from-project")
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [builtinTool] }),
-        ext("b", "user", { capabilities: [userTool] }),
-        ext("c", "project", { capabilities: [projectTool] }),
+        ext("a", "builtin", { tools: [builtinTool] }),
+        ext("b", "user", { tools: [userTool] }),
+        ext("c", "project", { tools: [projectTool] }),
       ])
 
       const resolvedTool = resolved.modelCapabilities.get("greet")!
@@ -102,8 +102,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [builtinTool] }),
-        ext("b", "project", { capabilities: [projectTool] }),
+        ext("a", "builtin", { tools: [builtinTool] }),
+        ext("b", "project", { tools: [projectTool] }),
       ])
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
@@ -130,8 +130,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [builtinTool] }),
-        ext("b", "project", { capabilities: [projectTool] }),
+        ext("a", "builtin", { tools: [builtinTool] }),
+        ext("b", "project", { tools: [projectTool] }),
       ])
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
@@ -156,8 +156,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [builtinTool] }),
-        ext("b", "project", { capabilities: [projectTool] }),
+        ext("a", "builtin", { tools: [builtinTool] }),
+        ext("b", "project", { tools: [projectTool] }),
       ])
       // The deny rule must be gone — project shadowed the builtin entirely.
       return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
@@ -169,8 +169,8 @@ describe("scope precedence", () => {
 
       // Pass in reverse order to prove the registry sorts, not just respects insertion
       const resolved = resolveExtensions([
-        ext("z-ext", "builtin", { capabilities: [toolFromZ] }),
-        ext("a-ext", "builtin", { capabilities: [toolFromA] }),
+        ext("z-ext", "builtin", { tools: [toolFromZ] }),
+        ext("a-ext", "builtin", { tools: [toolFromA] }),
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins

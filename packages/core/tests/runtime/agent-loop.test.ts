@@ -38,11 +38,7 @@ import {
 } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
-import {
-  tool,
-  type AnyCapabilityContribution,
-  type AnyResourceContribution,
-} from "@gent/core/extensions/api"
+import { tool, type AnyResourceContribution, type ToolToken } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
 import {
   EventEnvelope,
@@ -85,7 +81,7 @@ import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 // ============================================================================
 
 const makeExtRegistry = (
-  tools: AnyCapabilityContribution[] = [],
+  tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const resolved = resolveExtensions([
@@ -95,7 +91,7 @@ const makeExtRegistry = (
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
-        capabilities: tools,
+        tools,
         resources,
       },
     },
@@ -139,7 +135,7 @@ const submitAgentLoop = (
 
 const makeLayer = (
   providerLayer: Layer.Layer<Provider>,
-  tools: AnyCapabilityContribution[] = [],
+  tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
@@ -275,7 +271,7 @@ const retryableStreamError = () =>
 
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
-  tools: AnyCapabilityContribution[] = [],
+  tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const turnControlLayer = ExtensionTurnControl.Live
@@ -323,7 +319,7 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
 const makeLayerWithEvents = (
   providerLayer: Layer.Layer<Provider>,
   eventsRef: Ref.Ref<AgentEvent[]>,
-  tools: AnyCapabilityContribution[] = [],
+  tools: ReadonlyArray<ToolToken> = [],
 ) => {
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
@@ -1869,7 +1865,7 @@ describe("interaction", () => {
   }
 
   const makeInteractionRecordingLayer = (
-    tools: AnyCapabilityContribution[],
+    tools: ReadonlyArray<ToolToken>,
     providerLayer?: Layer.Layer<Provider>,
   ) => {
     const recorderLayer = SequenceRecorder.Live
@@ -2472,7 +2468,7 @@ describe("recovery", () => {
         sourcePath: "test",
         contributions: {
           agents: Object.values(Agents),
-          capabilities: [tool(idempotentTestTool)],
+          tools: [tool(idempotentTestTool)],
         },
       },
     ])

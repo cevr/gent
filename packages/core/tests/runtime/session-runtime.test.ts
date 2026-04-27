@@ -7,7 +7,7 @@ import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
 import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
-import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 import {
   Provider,
   finishPart,
@@ -51,7 +51,7 @@ import {
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import type { AgentLoopCheckpointRecord } from "../../src/runtime/agent/agent-loop.checkpoint"
 
-const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
+const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
   const cowork = AgentDefinition.make({
     name: "cowork" as never,
     model: "test/default" as never,
@@ -68,7 +68,7 @@ const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
       sourcePath: "test",
       contributions: {
         agents: [cowork, reflect],
-        ...(tools.length > 0 ? { capabilities: tools } : {}),
+        ...(tools.length > 0 ? { tools } : {}),
       } satisfies ExtensionContributions,
     },
   ])
@@ -76,7 +76,7 @@ const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
 
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
-  tools: AnyCapabilityContribution[] = [],
+  tools: ReadonlyArray<ToolToken> = [],
   profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
@@ -268,7 +268,7 @@ const makePublisherFailingFirstMatchingDelivery = (
 
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
-  tools: AnyCapabilityContribution[],
+  tools: ReadonlyArray<ToolToken>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live

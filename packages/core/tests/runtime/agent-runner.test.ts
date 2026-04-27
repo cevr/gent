@@ -88,7 +88,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
-        capabilities: [bashStubTool],
+        tools: [bashStubTool],
       },
     },
   ]),
@@ -117,7 +117,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
-        capabilities: [bashStubTool, readStubTool],
+        tools: [bashStubTool, readStubTool],
       },
     },
   ])
@@ -1263,7 +1263,7 @@ describe("ephemeral service propagation", () => {
             sourcePath: "test",
             contributions: {
               agents: Object.values(Agents),
-              capabilities: [approveTool],
+              tools: [approveTool],
             },
           },
         ]),

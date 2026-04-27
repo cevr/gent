@@ -405,7 +405,7 @@ describe("Effect-purity locks (compile-time)", () => {
   test("valid Effect-based extension lowering still compiles", () => {
     const ext = defineExtension({
       id: "purity-positive",
-      capabilities: [
+      tools: [
         tool({
           id: "noop",
           description: "noop",

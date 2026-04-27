@@ -67,14 +67,14 @@ const bashExtension: LoadedExtension = {
   manifest: { id: "test-bash-ext" },
   scope: "builtin",
   sourcePath: "test",
-  contributions: { capabilities: [bashTool] },
+  contributions: { tools: [bashTool] },
 }
 
 const permissionRulesExtension: LoadedExtension = {
   manifest: { id: "test-perm-rules-ext" },
   scope: "builtin",
   sourcePath: "test",
-  contributions: { capabilities: [permissionSentinel] },
+  contributions: { tools: [permissionSentinel] },
 }
 
 // ── Test ────────────────────────────────────────────────────────────────────

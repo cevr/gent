@@ -15,7 +15,7 @@ const InteractionProbeExtension: LoadedExtension = {
   scope: "builtin",
   sourcePath: "test",
   contributions: {
-    capabilities: [
+    tools: [
       tool({
         id: "approval_probe",
         description: "Request approval and report the result",

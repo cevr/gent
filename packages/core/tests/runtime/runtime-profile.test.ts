@@ -67,7 +67,7 @@ const sectionTool = tool({
 
 const sectionExtension = defineExtension({
   id: "@gent/test-runtime-profile",
-  capabilities: [sectionTool],
+  tools: [sectionTool],
 })
 
 // Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection

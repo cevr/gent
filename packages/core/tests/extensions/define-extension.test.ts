@@ -73,7 +73,7 @@ describe("defineExtension", () => {
       const myLayer = Layer.empty
       const ext = defineExtension({
         id: "all-kinds",
-        capabilities: [myTool],
+        tools: [myTool],
         agents: [Agents.cowork],
         projections: [
           {
@@ -98,10 +98,7 @@ describe("defineExtension", () => {
         ],
       })
       const contributions = yield* setupOf(ext)
-      // After C4.4, `tool(...)` lowers into a Capability(audiences:["model"]).
-      const modelCaps = (contributions.capabilities ?? []).filter((c) =>
-        c.audiences.includes("model"),
-      )
+      const modelCaps = contributions.tools ?? []
       expect(modelCaps[0]?.id).toBe("echo")
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
@@ -182,7 +179,7 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "effectful",
-        capabilities: () =>
+        tools: () =>
           Effect.gen(function* () {
             yield* Effect.void
             return [
@@ -196,7 +193,7 @@ describe("defineExtension", () => {
           }),
       })
       const contributions = yield* setupOf(ext)
-      expect((contributions.capabilities ?? [])[0]?.id).toBe("from-effect")
+      expect((contributions.tools ?? [])[0]?.id).toBe("from-effect")
     }),
   )
 
@@ -205,7 +202,7 @@ describe("defineExtension", () => {
       let captured: ExtensionSetupContext | undefined
       const ext = defineExtension({
         id: "captures-ctx",
-        capabilities: ({ ctx }) => {
+        tools: ({ ctx }) => {
           captured = ctx
           return []
         },
@@ -227,7 +224,7 @@ describe("defineExtension", () => {
       })
       const ext = defineExtension({
         id: "wired",
-        capabilities: [myTool],
+        tools: [myTool],
         projections: [
           {
             id: "prompt",
@@ -259,14 +256,14 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        capabilities: () => Effect.fail("nope"),
+        tools: () => Effect.fail("nope"),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const rendered = JSON.stringify(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
-        expect(rendered).toContain("capabilities factory failed: nope")
+        expect(rendered).toContain("tools factory failed: nope")
       }
     }),
   )

@@ -45,7 +45,7 @@ describe("extension activation isolation", () => {
     Effect.gen(function* () {
       const good = makeBuiltin("good-ext", () =>
         Effect.succeed({
-          capabilities: [
+          tools: [
             tool({
               id: "good_tool",
               description: "good",
@@ -118,7 +118,7 @@ describe("extension activation isolation", () => {
       Effect.gen(function* () {
         const result = yield* validateLoadedExtensions([
           makeLoaded("healthy-ext", {
-            capabilities: [
+            tools: [
               tool({
                 id: "healthy_tool",
                 description: "healthy",
@@ -128,7 +128,7 @@ describe("extension activation isolation", () => {
             ],
           }),
           makeLoaded("collider-a", {
-            capabilities: [
+            tools: [
               tool({
                 id: "shared_tool",
                 description: "a",
@@ -138,7 +138,7 @@ describe("extension activation isolation", () => {
             ],
           }),
           makeLoaded("collider-b", {
-            capabilities: [
+            tools: [
               tool({
                 id: "shared_tool",
                 description: "b",
@@ -209,7 +209,7 @@ describe("extension activation isolation", () => {
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
         makeLoaded("legacy-tool", {
-          capabilities: [
+          tools: [
             tool({
               id: "shared_name",
               description: "legacy",
@@ -249,7 +249,7 @@ describe("extension activation isolation", () => {
       // sharing of an id is fine.
       const result = yield* validateLoadedExtensions([
         makeLoaded("legacy-tool", {
-          capabilities: [
+          tools: [
             tool({
               id: "shared_name",
               description: "legacy",
@@ -360,7 +360,7 @@ describe("extension activation isolation", () => {
       const result = yield* reconcileLoadedExtensions({
         extensions: [
           makeLoaded("healthy-ext", {
-            capabilities: [
+            tools: [
               tool({
                 id: "healthy_tool",
                 description: "healthy",
