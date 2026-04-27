@@ -529,15 +529,17 @@ const buildEphemeralLayer = (params: {
     baseSections: params.config.baseSections ?? [],
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          eventPublisherLayer,
+          toolRunnerLayer,
+          ResourceManagerLive,
+          extensionLayers,
+          parentProviderLayer,
+          parentConfigLayer,
+          parentModelRegistryLayer,
+        ),
         storageLayer,
-        eventPublisherLayer,
-        toolRunnerLayer,
-        ResourceManagerLive,
-        extensionLayers,
-        parentProviderLayer,
-        parentConfigLayer,
-        parentModelRegistryLayer,
       ),
     ),
   )
