@@ -492,7 +492,11 @@ const resolveTurnContext = (params: {
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
-}): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
+}): Effect.Effect<
+  ResolvedTurnContext | undefined,
+  StorageError,
+  ConfigService | ActorEngine | Receptionist
+> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
     const rawMessages = yield* params.storage
@@ -2582,7 +2586,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   baseSections: turnBaseSections,
                   interactive: state.interactive,
                   hostCtx: turnHostCtx,
-                }).pipe(Effect.provideService(ConfigService, configServiceForRun))
+                }).pipe(
+                  Effect.provideService(ConfigService, configServiceForRun),
+                  Effect.provideService(ActorEngine, actorEngine),
+                  Effect.provideService(Receptionist, receptionist),
+                )
                 if (resolved === undefined) break
 
                 currentTurnAgent = resolved.currentTurnAgent

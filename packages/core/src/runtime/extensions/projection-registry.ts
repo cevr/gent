@@ -19,6 +19,7 @@
  * @module
  */
 import { Effect } from "effect"
+import type { ServiceKey } from "../../domain/actor.js"
 import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
 import type {
@@ -27,12 +28,20 @@ import type {
   ProjectionTurnContext,
 } from "../../domain/projection.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import { ActorEngine } from "./actor-engine.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./effect-membrane.js"
+import { Receptionist } from "./receptionist.js"
 
 interface RegisteredProjection {
   readonly extensionId: ExtensionId
   readonly projection: AnyProjectionContribution
+}
+
+interface RegisteredActorRoute {
+  readonly extensionId: ExtensionId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ServiceKey<M> is contravariant; storage erases M
+  readonly serviceKey: ServiceKey<any>
 }
 
 /** Turn evaluation result — prompt + policy fragments produced for the active turn. */
@@ -44,8 +53,14 @@ export interface ProjectionTurnEvaluation {
 export interface CompiledProjections {
   readonly entries: ReadonlyArray<RegisteredProjection>
   /** Evaluate turn-bearing projections (turn required). Used during prompt assembly
-   *  to derive prompt sections + tool policy fragments. */
-  readonly evaluateTurn: (ctx: ProjectionTurnContext) => Effect.Effect<ProjectionTurnEvaluation>
+   *  to derive prompt sections + tool policy fragments.
+   *
+   *  Also samples each registered actor's `behavior.view(state)` via
+   *  `ActorEngine.peekView` and folds the resulting `prompt` + `toolPolicy`
+   *  into the same aggregate, with the same id-keyed dedup semantics. */
+  readonly evaluateTurn: (
+    ctx: ProjectionTurnContext,
+  ) => Effect.Effect<ProjectionTurnEvaluation, never, ActorEngine | Receptionist>
   /**
    * Run a single projection by `extensionId/projectionId` — returns the raw value.
    * If multiple registrations share the same id (across scopes), the highest-precedence
@@ -81,11 +96,36 @@ const collectProjections = (
   return entries
 }
 
+// Collect actor routes — one per extension that declares either an explicit
+// `actorRoute` or an `actors:` bucket entry whose Behavior carries a
+// `serviceKey`. Scope-sorted so later-scope actors' view contributions
+// override earlier ones with the same prompt-section id (matches projection
+// dedup semantics).
+const collectActorRoutes = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<RegisteredActorRoute> => {
+  const sorted = sortedExtensions(extensions)
+  const routes: RegisteredActorRoute[] = []
+  for (const ext of sorted) {
+    const explicit = ext.contributions.actorRoute
+    if (explicit !== undefined) {
+      routes.push({ extensionId: ext.manifest.id, serviceKey: explicit })
+      continue
+    }
+    for (const behavior of ext.contributions.actors ?? []) {
+      if (behavior.serviceKey === undefined) continue
+      routes.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })
+    }
+  }
+  return routes
+}
+
 /** Compile registered projections into an evaluator. */
 export const compileProjections = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledProjections => {
   const entries = collectProjections(extensions)
+  const actorRoutes = collectActorRoutes(extensions)
 
   const runOne = (
     entry: RegisteredProjection,
@@ -155,6 +195,40 @@ export const compileProjections = (
                 projectionId: entry.projection.id,
               }),
             )
+          }
+        }
+      }
+      // Actor view walk — `Behavior.view(state)` contributes prompt
+      // sections + tool policy fragments alongside `ProjectionContribution`.
+      // Per-actor failures are swallowed (logged) so a single bad view
+      // can't break the turn.
+      if (actorRoutes.length > 0) {
+        const engine = yield* ActorEngine
+        const receptionist = yield* Receptionist
+        for (const route of actorRoutes) {
+          const refsExit = yield* Effect.exit(receptionist.find(route.serviceKey))
+          if (refsExit._tag === "Failure") {
+            yield* Effect.logWarning("extension.actor-view.find.failed").pipe(
+              Effect.annotateLogs({ extensionId: route.extensionId }),
+            )
+            continue
+          }
+          for (const ref of refsExit.value) {
+            const viewExit = yield* Effect.exit(engine.peekView(ref))
+            if (viewExit._tag === "Failure") {
+              yield* Effect.logWarning("extension.actor-view.peek.failed").pipe(
+                Effect.annotateLogs({ extensionId: route.extensionId }),
+              )
+              continue
+            }
+            const view = viewExit.value
+            if (view === undefined) continue
+            if (view.prompt !== undefined) {
+              for (const section of view.prompt) sectionsById.set(section.id, section)
+            }
+            if (view.toolPolicy !== undefined) {
+              policyFragments.push(view.toolPolicy)
+            }
           }
         }
       }
