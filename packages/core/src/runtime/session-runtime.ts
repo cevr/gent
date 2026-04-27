@@ -330,8 +330,6 @@ const makeLiveSessionRuntime: Effect.Effect<
   | MachineEngine
   | ActorEngine
   | Receptionist
-  | Permission
-  | SessionProfileCache
   | ModelRegistry
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop

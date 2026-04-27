@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { SubscriptionEngine } from "../../src/runtime/extensions/resource-host/subscription-engine"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { CurrentExtensionSession } from "../../src/runtime/extensions/extension-actor-shared"
 import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/event-publisher"
@@ -91,28 +90,35 @@ const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
   })
 }
 
+// EventPublisher delivery is now observable through two surfaces only:
+//   • EventStore.append — events become durable
+//   • SubscriptionEngine.emit — extensions react via the `agent:<tag>` bus
+// Tests probe these surfaces; the legacy MachineEngine.publish hook is gone.
+
+const collectingBusLayer = (
+  channels: string[],
+  onChannel?: (envelope: { channel: string; payload: unknown }) => Effect.Effect<void>,
+) =>
+  Layer.succeed(SubscriptionEngine, {
+    emit: (envelope) =>
+      Effect.gen(function* () {
+        channels.push(envelope.channel)
+        if (onChannel !== undefined) yield* onChannel(envelope)
+      }),
+    on: () => Effect.succeed(() => {}),
+  })
+
 describe("EventPublisher", () => {
-  test("normal publish appends and delivers", async () => {
-    const delivered: string[] = []
+  test("normal publish appends and emits to subscription bus", async () => {
     const persisted: string[] = []
+    const channels: string[] = []
 
     const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
-
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
-        Effect.sync(() => {
-          delivered.push(event._tag)
-          return [] as ReadonlyArray<string>
-        }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    })
+    const busLayer = collectingBusLayer(channels)
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, busLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -121,41 +127,38 @@ describe("EventPublisher", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(persisted).toEqual([TAG.OuterEvent])
-    expect(delivered).toEqual([TAG.OuterEvent])
+    expect(channels).toEqual([`agent:${TAG.OuterEvent}`])
   })
 
-  test("nested publish from extension context completes without deadlocking", async () => {
-    const delivered: string[] = []
+  test("nested publish from bus subscriber completes without deadlocking", async () => {
+    const channels: string[] = []
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
-    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
+    let publishFn: typeof EventPublisher.Service.publish | undefined
 
     const baseLayer = makeEventStoreLayer()
 
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
-        Effect.gen(function* () {
-          delivered.push(event._tag)
-          if (event._tag === TAG.OuterEvent && publishFn !== undefined) {
-            yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
-              Effect.provideService(CurrentExtensionSession, {
-                sessionId: SessionId.make("session-1"),
-              }),
-            )
-          }
-          if (event._tag === TAG.NestedEvent) {
-            yield* Deferred.succeed(nestedDelivered, void 0)
-          }
-          return [] as ReadonlyArray<string>
-        }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    })
+    // The bus subscriber re-publishes a nested event when it sees the outer.
+    // This mirrors the historical worry: extension code reacting to one event
+    // by publishing another on the same fiber.
+    const busLayer = collectingBusLayer(channels, (envelope) =>
+      Effect.gen(function* () {
+        if (envelope.channel === `agent:${TAG.OuterEvent}` && publishFn !== undefined) {
+          yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
+            Effect.provideService(CurrentExtensionSession, {
+              sessionId: SessionId.make("session-1"),
+            }),
+            Effect.orDie,
+          )
+        }
+        if (envelope.channel === `agent:${TAG.NestedEvent}`) {
+          yield* Deferred.succeed(nestedDelivered, void 0)
+        }
+      }),
+    )
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, busLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -165,40 +168,37 @@ describe("EventPublisher", () => {
       yield* Deferred.await(nestedDelivered)
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(delivered).toEqual([TAG.OuterEvent, TAG.NestedEvent])
+    expect(channels).toEqual([`agent:${TAG.OuterEvent}`, `agent:${TAG.NestedEvent}`])
   })
 
-  test("nested publish from extension context still appends both events", async () => {
+  test("nested publish from bus subscriber still appends both events", async () => {
     const persisted: string[] = []
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
-    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
+    let publishFn: typeof EventPublisher.Service.publish | undefined
 
     const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
 
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
+    const busLayer = Layer.succeed(SubscriptionEngine, {
+      emit: (envelope) =>
         Effect.gen(function* () {
-          if (event._tag === TAG.OuterEvent && publishFn !== undefined) {
+          if (envelope.channel === `agent:${TAG.OuterEvent}` && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
                 sessionId: SessionId.make("session-1"),
               }),
+              Effect.orDie,
             )
           }
-          if (event._tag === TAG.NestedEvent) {
+          if (envelope.channel === `agent:${TAG.NestedEvent}`) {
             yield* Deferred.succeed(nestedDelivered, void 0)
           }
-          return [] as ReadonlyArray<string>
         }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
+      on: () => Effect.succeed(() => {}),
     })
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, busLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -211,53 +211,6 @@ describe("EventPublisher", () => {
     expect(persisted).toEqual([TAG.OuterEvent, TAG.NestedEvent])
   })
 
-  test("bus-triggered same-session publish completes without deadlocking", async () => {
-    const delivered: string[] = []
-    const busNested = Effect.runSync(Deferred.make<void>())
-    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
-
-    const baseLayer = makeEventStoreLayer()
-
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
-        Effect.gen(function* () {
-          delivered.push(event._tag)
-          if (event._tag === TAG.BusNestedEvent) {
-            yield* Deferred.succeed(busNested, void 0)
-          }
-          return [] as ReadonlyArray<string>
-        }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    })
-
-    const busLayer = Layer.succeed(SubscriptionEngine, {
-      emit: (envelope) =>
-        envelope.payload !== undefined &&
-        envelope.channel === `agent:${TAG.OuterEvent}` &&
-        publishFn !== undefined
-          ? publishFn(makeEvent("BusNestedEvent", "session-1", "branch-1"))
-          : Effect.void,
-      on: () => Effect.succeed(() => {}),
-    })
-
-    const layer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, busLayer, registryLayer, runtimePlatformLayer),
-    )
-
-    await Effect.gen(function* () {
-      const publisher = yield* EventPublisher
-      publishFn = publisher.publish
-      yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-      yield* Deferred.await(busNested)
-    }).pipe(Effect.provide(layer), Effect.runPromise)
-
-    expect(delivered).toEqual([TAG.OuterEvent, TAG.BusNestedEvent])
-  })
-
   test("declared pulseTags trigger ExtensionStateChanged for each matching event", async () => {
     // After W10-PhaseB, FSM transitions are gone — the only pulse path is
     // `pulseTags` declared at extension-load time. `event-publisher.ts`
@@ -268,7 +221,7 @@ describe("EventPublisher", () => {
     const pulseTagsRegistryLayer = ExtensionRegistry.fromResolved(
       resolveExtensions([
         {
-          manifest: { id: "pulse-only-ext" },
+          manifest: { id: ExtensionId.make("pulse-only-ext") },
           scope: "builtin",
           sourcePath: "builtin",
           contributions: { pulseTags: [TAG.OuterEvent, TAG.NestedEvent] },
@@ -280,17 +233,9 @@ describe("EventPublisher", () => {
       persisted.push(event._tag)
     })
 
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: () => Effect.succeed([] as ReadonlyArray<string>),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    })
-
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, pulseTagsRegistryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, pulseTagsRegistryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -306,121 +251,65 @@ describe("EventPublisher", () => {
       "ExtensionStateChanged",
     ])
   })
-})
 
-describe("EventPublisher per-cwd router", () => {
-  test("two cwds firing events dispatch through different MachineEngines", async () => {
-    const primaryDelivered: string[] = []
-    const secondaryDelivered: string[] = []
+  test("publish yields before bus.emit so concurrent fibers see the broadcast", async () => {
+    // Regression: deliverInner has an `Effect.yieldNow` between
+    // baseEventStore.broadcast and bus.emit. The yield lets fibers blocked
+    // on the broadcast (the agent-loop driver subscribed via EventStore)
+    // take a step before extension subscribers see the event. Without it,
+    // sites that publish on the same fiber that drives the loop (e.g.
+    // turn-control commands) skip the Idle → Running edge.
+    //
+    // We model the contract directly: a forked fiber released by the
+    // broadcast hook sets a Ref. The bus.emit subscriber then reads the
+    // Ref. If the yield happens, the Ref is "ran" by the time bus.emit
+    // runs; if removed, bus.emit sees the initial "unset".
+    const broadcastReleased = Effect.runSync(Deferred.make<void>())
+    const observedAtEmit = Effect.runSync(Ref.make<"unset" | "ran">("unset"))
+    const refAtEmit: Array<"unset" | "ran"> = []
 
-    const primaryCwd = "/primary"
-    const secondaryCwd = "/secondary"
-    const sessionA = SessionId.make("session-primary")
-    const sessionB = SessionId.make("session-secondary")
-    const branchA = BranchId.make("branch-primary")
-    const branchB = BranchId.make("branch-secondary")
-
-    const baseLayer = makeEventStoreLayer()
-
-    // Primary MachineEngine tracks events dispatched to it
-    const primaryEngineLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
-        Effect.sync(() => {
-          primaryDelivered.push(event._tag)
-          return [] as ReadonlyArray<string>
+    const customEventStore = Layer.succeed(EventStore, {
+      append: (event) =>
+        Effect.succeed({ id: EventId.make(1), event, createdAt: Date.now() } as EventEnvelope),
+      broadcast: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(broadcastReleased, void 0)
         }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
+      publish: () => Effect.void,
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
     })
 
-    // Secondary MachineEngine tracks events dispatched to it
-    const secondaryEngine = {
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          secondaryDelivered.push(event._tag)
-          return [] as ReadonlyArray<string>
+    const busLayer = Layer.succeed(SubscriptionEngine, {
+      emit: () =>
+        Effect.gen(function* () {
+          const value = yield* Ref.get(observedAtEmit)
+          refAtEmit.push(value)
         }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented") as never,
-      getActorStatuses: () => Effect.succeed([] as ReadonlyArray<never>),
-      terminateAll: () => Effect.void,
-    }
-
-    // Build a SessionProfile for the secondary cwd. Only the fields
-    // used by the router's inner publish path need real values: the
-    // engine, registry's getResolved, and subscriptionEngine.
-    const secondaryResolved = resolveExtensions([])
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-    const secondaryProfile = {
-      cwd: secondaryCwd,
-      extensions: [],
-      resolved: secondaryResolved,
-      permissionService: {
-        check: () => Effect.succeed("allowed" as const),
-        addRule: () => Effect.void,
-        removeRule: () => Effect.void,
-        getRules: () => Effect.succeed([]),
-      },
-      registryService: { getResolved: () => secondaryResolved } as never,
-      driverRegistryService: {} as never,
-      extensionStateRuntime: secondaryEngine,
-      subscriptionEngine: undefined,
-      baseSections: [],
-      instructions: "",
-      pulseByTag: new Map(),
-    } satisfies SessionProfile
-
-    // SessionCwdRegistry knows which session belongs to which cwd
-    const cwdRegistryLayer = SessionCwdRegistry.Test(
-      new Map([
-        [sessionA, primaryCwd],
-        [sessionB, secondaryCwd],
-      ]),
-    )
-
-    const profileCacheLayer = SessionProfileCache.Test(new Map([[secondaryCwd, secondaryProfile]]))
-
-    const runtimePlatformLayer = RuntimePlatform.Test({
-      cwd: primaryCwd,
-      home: "/tmp",
-      platform: "test",
+      on: () => Effect.succeed(() => {}),
     })
-
-    const { handle, layer: routerLayer } = makeEventPublisherRouter()
 
     const layer = Layer.provide(
-      routerLayer,
-      Layer.mergeAll(
-        baseLayer,
-        primaryEngineLayer,
-        registryLayer,
-        cwdRegistryLayer,
-        runtimePlatformLayer,
-      ),
+      EventPublisherLive,
+      Layer.mergeAll(customEventStore, busLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
-      // Set the profile cache handle (simulates what createDependencies does)
-      const profileCache = yield* SessionProfileCache
-      handle.profileCache = profileCache
-
       const publisher = yield* EventPublisher
+      yield* Effect.forkChild(
+        Effect.gen(function* () {
+          yield* Deferred.await(broadcastReleased)
+          yield* Ref.set(observedAtEmit, "ran")
+        }),
+      )
+      yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+    }).pipe(Effect.provide(layer), Effect.runPromise)
 
-      // Publish event for session in primary cwd
-      yield* publisher.publish(makeEvent("PrimaryEvent", sessionA, branchA))
-
-      // Publish event for session in secondary cwd
-      yield* publisher.publish(makeEvent("SecondaryEvent", sessionB, branchB))
-    }).pipe(Effect.provide(Layer.merge(layer, profileCacheLayer)), Effect.runPromise)
-
-    // Primary engine got only the primary event
-    expect(primaryDelivered).toEqual([TAG.PrimaryEvent])
-    // Secondary engine got only the secondary event
-    expect(secondaryDelivered).toEqual([TAG.SecondaryEvent])
+    expect(refAtEmit).toEqual(["ran"])
   })
+})
 
+describe("EventPublisher per-cwd router", () => {
   test("per-cwd SubscriptionEngine receives only its cwd's events", async () => {
     const primaryBusChannels: string[] = []
     const secondaryBusChannels: string[] = []
@@ -432,12 +321,11 @@ describe("EventPublisher per-cwd router", () => {
 
     const baseLayer = makeEventStoreLayer()
 
-    const noopEngine = {
-      publish: () => Effect.succeed([] as ReadonlyArray<string>),
+    // SessionProfile still types `extensionStateRuntime: MachineEngineService`,
+    // but EventPublisher's router no longer reads it. Stub it for shape only.
+    const stubEngine = {
       send: () => Effect.void,
       execute: () => Effect.die("not implemented") as never,
-      getActorStatuses: () => Effect.succeed([] as ReadonlyArray<never>),
-      terminateAll: () => Effect.void,
     }
 
     // Primary bus tracks channels it receives
@@ -472,7 +360,10 @@ describe("EventPublisher per-cwd router", () => {
       },
       registryService: { getResolved: () => secondaryResolved } as never,
       driverRegistryService: {} as never,
-      extensionStateRuntime: noopEngine,
+      extensionStateRuntime: stubEngine,
+      actorEngine: {} as never,
+      receptionist: {} as never,
+      layerContext: Context.empty(),
       subscriptionEngine: secondaryBus,
       baseSections: [],
       instructions: "",
@@ -493,14 +384,12 @@ describe("EventPublisher per-cwd router", () => {
       platform: "test",
     })
 
-    const primaryEngineLayer = Layer.succeed(MachineEngine, noopEngine)
     const { handle, layer: routerLayer } = makeEventPublisherRouter()
 
     const layer = Layer.provide(
       routerLayer,
       Layer.mergeAll(
         baseLayer,
-        primaryEngineLayer,
         primaryBusLayer,
         registryLayer,
         cwdRegistryLayer,
@@ -524,7 +413,7 @@ describe("EventPublisher per-cwd router", () => {
   })
 
   test("unset handle persists event but skips runtime dispatch (fail closed)", async () => {
-    const primaryDelivered: string[] = []
+    const primaryBusChannels: string[] = []
     const persisted: string[] = []
 
     const primaryCwd = "/primary"
@@ -532,16 +421,13 @@ describe("EventPublisher per-cwd router", () => {
 
     const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
 
-    const primaryEngineLayer = Layer.succeed(MachineEngine, {
-      publish: (event) =>
+    // Primary bus probe — would receive events if router fell back to it
+    const primaryBusLayer = Layer.succeed(SubscriptionEngine, {
+      emit: (envelope) =>
         Effect.sync(() => {
-          primaryDelivered.push(event._tag)
-          return [] as ReadonlyArray<string>
+          primaryBusChannels.push(envelope.channel)
         }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
+      on: () => Effect.succeed(() => {}),
     })
 
     // Session maps to a different cwd, but handle is never set
@@ -559,7 +445,7 @@ describe("EventPublisher per-cwd router", () => {
       routerLayer,
       Layer.mergeAll(
         baseLayer,
-        primaryEngineLayer,
+        primaryBusLayer,
         registryLayer,
         cwdRegistryLayer,
         runtimePlatformLayer,
@@ -569,13 +455,13 @@ describe("EventPublisher per-cwd router", () => {
     await Effect.gen(function* () {
       const publisher = yield* EventPublisher
       // handle.profileCache is never set — event should persist but
-      // NOT dispatch through primary engine (fail closed)
+      // NOT fan out through the primary bus (fail closed, not fall-through)
       yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     // Event was persisted to storage
     expect(persisted).toEqual([TAG.FallbackEvent])
-    // Primary engine did NOT receive it (fail closed, not fall-through)
-    expect(primaryDelivered).toEqual([])
+    // Primary bus did NOT receive it (fail closed, not fall-through)
+    expect(primaryBusChannels).toEqual([])
   })
 })

@@ -21,10 +21,11 @@ import {
   resolveAgentModel,
   AgentRunnerService,
   AgentRunError,
+  AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
 } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
-import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
@@ -33,10 +34,7 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../../src/runtime/extensions/resource-host/machine-engine"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -48,6 +46,7 @@ import {
   SessionRuntime,
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
+  type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
@@ -83,7 +82,7 @@ const readStubTool = tool({
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin",
       sourcePath: "test",
       contributions: {
@@ -112,7 +111,7 @@ const withEventPublisher = (
 const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
   const resolved = resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin",
       sourcePath: "test",
       contributions: {
@@ -185,9 +184,9 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
   Layer.effect(
     SessionRuntime,
     Effect.gen(function* () {
-      const runtimeState = yield* SubscriptionRef.make(
+      const runtimeState = yield* SubscriptionRef.make<SessionRuntimeState>(
         SessionRuntimeStateSchema.Idle.make({
-          agent: "cowork" as const,
+          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         }),
       )
@@ -219,7 +218,15 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () => SubscriptionRef.get(runtimeState),
         getMetrics: () =>
-          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+          Effect.succeed({
+            turns: 0,
+            tokens: 0,
+            toolCalls: 0,
+            retries: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          }),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
         terminateSession: () => Effect.void,
         restoreSession: () => Effect.void,
@@ -231,7 +238,7 @@ describe("RunSpec", () => {
   test("dual model pair resolves to cowork and deepwork models", () => {
     const registry = resolveExtensions([
       {
-        manifest: { id: "agents" },
+        manifest: { id: ExtensionId.make("agents") },
         scope: "builtin",
         sourcePath: "test",
         contributions: { agents: Object.values(Agents) },
@@ -241,8 +248,8 @@ describe("RunSpec", () => {
     return Effect.gen(function* () {
       const reg = yield* ExtensionRegistry
       const [a, b] = yield* reg.resolveDualModelPair()
-      expect(a).toBe(resolveAgentModel(Agents.cowork))
-      expect(b).toBe(resolveAgentModel(Agents.deepwork))
+      expect(a).toBe(resolveAgentModel(Agents["cowork"]!))
+      expect(b).toBe(resolveAgentModel(Agents["deepwork"]!))
       expect(a).not.toBe(b)
     }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl), Effect.runPromise)
   })
@@ -269,14 +276,23 @@ describe("RunSpec", () => {
 
         const now = new Date()
         yield* storage.createSession(
-          new Session({ id: "parent-runspec", name: "Parent", createdAt: now, updatedAt: now }),
+          new Session({
+            id: SessionId.make("parent-runspec"),
+            name: "Parent",
+            createdAt: now,
+            updatedAt: now,
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "parent-runspec-branch", sessionId: "parent-runspec", createdAt: now }),
+          new Branch({
+            id: BranchId.make("parent-runspec-branch"),
+            sessionId: SessionId.make("parent-runspec"),
+            createdAt: now,
+          }),
         )
 
         const result = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "check forwarding",
           parentSessionId: SessionId.make("parent-runspec"),
           parentBranchId: BranchId.make("parent-runspec-branch"),
@@ -333,13 +349,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session",
+          id: SessionId.make("parent-session"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch",
+          id: BranchId.make("parent-branch"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -348,7 +364,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -385,16 +401,16 @@ describe("AgentRunner", () => {
           return (
             c.service === "EventStore" &&
             c.method === "append" &&
-            args?._tag === "AgentRunSucceeded"
+            args?.["_tag"] === "AgentRunSucceeded"
           )
         })
         expect(successEvent).toBeDefined()
         const event = successEvent!.args as Record<string, unknown>
-        expect(event.preview).toBeDefined()
-        expect(typeof event.preview).toBe("string")
-        expect(event.savedPath).toBeDefined()
-        expect(typeof event.savedPath).toBe("string")
-        expect(event.savedPath).toContain("/tmp/gent/outputs/")
+        expect(event["preview"]).toBeDefined()
+        expect(typeof event["preview"]).toBe("string")
+        expect(event["savedPath"]).toBeDefined()
+        expect(typeof event["savedPath"]).toBe("string")
+        expect(event["savedPath"]).toContain("/tmp/gent/outputs/")
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
@@ -428,13 +444,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-spawn-rollback",
+          id: SessionId.make("parent-session-spawn-rollback"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-spawn-rollback",
+          id: BranchId.make("parent-branch-spawn-rollback"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -443,7 +459,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         const result = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "spawn rollback",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -484,13 +500,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-noretr",
+          id: SessionId.make("parent-session-noretr"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-noretr",
+          id: BranchId.make("parent-branch-noretr"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -499,7 +515,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         const result = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "fail test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -537,13 +553,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-timeout",
+          id: SessionId.make("parent-session-timeout"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-timeout",
+          id: BranchId.make("parent-branch-timeout"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -552,7 +568,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         return yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "timeout test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -563,7 +579,9 @@ describe("AgentRunner", () => {
     )
 
     expect(result._tag).toBe("error")
-    expect(result.error).toContain("timed out")
+    if (result._tag === "error") {
+      expect(result.error).toContain("timed out")
+    }
   })
 
   test("ephemeral helper runs do not persist child sessions", async () => {
@@ -592,13 +610,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-ephemeral",
+          id: SessionId.make("parent-session-ephemeral"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-ephemeral",
+          id: BranchId.make("parent-branch-ephemeral"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -607,7 +625,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         const runResult = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -625,7 +643,9 @@ describe("AgentRunner", () => {
       expect(result.runResult.persistence).toBe("ephemeral")
       expect(result.runResult.text).toContain("ephemeral response")
     }
-    expect(result.sessions.map((session) => session.id)).toEqual(["parent-session-ephemeral"])
+    expect(result.sessions.map((session) => session.id)).toEqual([
+      SessionId.make("parent-session-ephemeral"),
+    ])
   })
 
   test("ephemeral helper runs mirror child tool events into the parent store", async () => {
@@ -639,7 +659,7 @@ describe("AgentRunner", () => {
       testRegistryLayer,
       scriptedProvider([
         [
-          toolCallPart("bash", { command: "pwd" }, { toolCallId: "tc-ephemeral" }),
+          toolCallPart("bash", { command: "pwd" }, { toolCallId: ToolCallId.make("tc-ephemeral") }),
           finishPart({ finishReason: "tool-calls" }),
         ],
         [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
@@ -659,13 +679,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-mirror",
+          id: SessionId.make("parent-session-mirror"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-mirror",
+          id: BranchId.make("parent-branch-mirror"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -674,7 +694,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         const runResult = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "run helper with one tool",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -697,86 +717,6 @@ describe("AgentRunner", () => {
     expect(result.runResult._tag).toBe("success")
     expect(result.childTags).toContain("ToolCallStarted")
     expect(result.childTags).toContain("ToolCallSucceeded")
-  })
-
-  test("ephemeral mirrored child events bypass extension reduction for synthetic child sessions", async () => {
-    const storageLayer = Storage.TestWithSql()
-    const baseEventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-    const publishedSessionIds: string[] = []
-    const stateRuntime: MachineEngineService = {
-      publish: (_event, ctx) =>
-        Effect.sync(() => {
-          publishedSessionIds.push(ctx.sessionId)
-          return [] as ReadonlyArray<string>
-        }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not used"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    }
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(
-        baseEventStoreLayer,
-        Layer.succeed(MachineEngine, stateRuntime),
-        testRegistryLayer,
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ),
-    )
-    const deps = Layer.mergeAll(
-      storageLayer,
-      baseEventStoreLayer,
-      eventPublisherLayer,
-      testRegistryLayer,
-      scriptedProvider([
-        [
-          toolCallPart("bash", { command: "pwd" }, { toolCallId: "tc-ephemeral-reduce" }),
-          finishPart({ finishReason: "tool-calls" }),
-        ],
-        [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
-      ]),
-      ToolRunner.Test(),
-      sessionRuntimeStub(),
-    )
-    const runnerLayer = InProcessRunner({}).pipe(
-      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
-    )
-    const layer = Layer.mergeAll(deps, runnerLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const runner = yield* AgentRunnerService
-
-        const now = new Date()
-        const session = new Session({
-          id: "parent-session-reduce",
-          name: "Parent",
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: "parent-branch-reduce",
-          sessionId: session.id,
-          createdAt: now,
-        })
-
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
-
-        yield* runner.run({
-          agent: Agents.explore,
-          prompt: "run helper with mirrored child events",
-          parentSessionId: session.id,
-          parentBranchId: branch.id,
-          cwd: process.cwd(),
-          runSpec: { persistence: "ephemeral" },
-        })
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-    )
-
-    expect(publishedSessionIds.length).toBeGreaterThan(0)
-    expect(new Set(publishedSessionIds)).toEqual(new Set(["parent-session-reduce"]))
   })
 
   test("durable override persists child sessions for helper agents", async () => {
@@ -803,13 +743,13 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-durable",
+          id: SessionId.make("parent-session-durable"),
           name: "Parent",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-durable",
+          id: BranchId.make("parent-branch-durable"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -818,7 +758,7 @@ describe("AgentRunner", () => {
         yield* storage.createBranch(branch)
 
         const runResult = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "persist this child",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -842,6 +782,7 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
+    const storageLayer = Storage.Test()
     // Mock agent loop that writes a reasoning-only assistant message
     const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
@@ -857,11 +798,11 @@ describe("AgentRunner", () => {
             createdAt: now,
           }),
         )
-      }),
+      }).pipe(Effect.provide(storageLayer), Effect.orDie),
     )
 
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      storageLayer,
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
@@ -883,23 +824,27 @@ describe("AgentRunner", () => {
         const now = new Date()
         yield* storage.createSession(
           new Session({
-            id: "parent-reasoning",
+            id: SessionId.make("parent-reasoning"),
             name: "P",
             createdAt: now,
             updatedAt: now,
           }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "branch-reasoning", sessionId: "parent-reasoning", createdAt: now }),
+          new Branch({
+            id: BranchId.make("branch-reasoning"),
+            sessionId: SessionId.make("parent-reasoning"),
+            createdAt: now,
+          }),
         )
 
         return yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-reasoning"),
           parentBranchId: BranchId.make("branch-reasoning"),
           cwd: "/tmp",
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
@@ -913,6 +858,7 @@ describe("AgentRunner", () => {
   test("mixed text+reasoning returns text, not reasoning", async () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+    const storageLayer = Storage.Test()
 
     const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
@@ -931,11 +877,11 @@ describe("AgentRunner", () => {
             createdAt: now,
           }),
         )
-      }),
+      }).pipe(Effect.provide(storageLayer), Effect.orDie),
     )
 
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      storageLayer,
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
@@ -956,19 +902,28 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         yield* storage.createSession(
-          new Session({ id: "parent-mixed", name: "P", createdAt: now, updatedAt: now }),
+          new Session({
+            id: SessionId.make("parent-mixed"),
+            name: "P",
+            createdAt: now,
+            updatedAt: now,
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "branch-mixed", sessionId: "parent-mixed", createdAt: now }),
+          new Branch({
+            id: BranchId.make("branch-mixed"),
+            sessionId: SessionId.make("parent-mixed"),
+            createdAt: now,
+          }),
         )
 
         return yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-mixed"),
           parentBranchId: BranchId.make("branch-mixed"),
           cwd: "/tmp",
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
@@ -982,6 +937,7 @@ describe("AgentRunner", () => {
   test("agent run output is saved to /tmp/gent/outputs/", async () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+    const storageLayer = Storage.Test()
 
     const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
@@ -1000,11 +956,11 @@ describe("AgentRunner", () => {
             createdAt: now,
           }),
         )
-      }),
+      }).pipe(Effect.provide(storageLayer), Effect.orDie),
     )
 
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      storageLayer,
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
@@ -1025,19 +981,28 @@ describe("AgentRunner", () => {
 
         const now = new Date()
         yield* storage.createSession(
-          new Session({ id: "parent-save", name: "P", createdAt: now, updatedAt: now }),
+          new Session({
+            id: SessionId.make("parent-save"),
+            name: "P",
+            createdAt: now,
+            updatedAt: now,
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "branch-save", sessionId: "parent-save", createdAt: now }),
+          new Branch({
+            id: BranchId.make("branch-save"),
+            sessionId: SessionId.make("parent-save"),
+            createdAt: now,
+          }),
         )
 
         return yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "save test",
           parentSessionId: SessionId.make("parent-save"),
           parentBranchId: BranchId.make("branch-save"),
           cwd: "/tmp",
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
@@ -1200,13 +1165,15 @@ describe("ephemeral service propagation", () => {
     return Layer.mergeAll(deps, runnerLayer)
   }
 
-  const setupParentSession = (storage: StorageService, id: string) =>
+  const setupParentSession = (storage: StorageService, id: SessionId) =>
     Effect.gen(function* () {
       const now = new Date()
       yield* storage.createSession(
         new Session({ id, name: "Parent", createdAt: now, updatedAt: now }),
       )
-      yield* storage.createBranch(new Branch({ id: `${id}-branch`, sessionId: id, createdAt: now }))
+      yield* storage.createBranch(
+        new Branch({ id: BranchId.make(`${id}-branch`), sessionId: id, createdAt: now }),
+      )
     })
 
   test("ephemeral agent writes to ephemeral storage, not parent", () =>
@@ -1218,10 +1185,10 @@ describe("ephemeral service propagation", () => {
         const storage = yield* Storage
         const runner = yield* AgentRunnerService
 
-        yield* setupParentSession(storage, "parent-svc-prop")
+        yield* setupParentSession(storage, SessionId.make("parent-svc-prop"))
 
         const result = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "test service propagation",
           parentSessionId: SessionId.make("parent-svc-prop"),
           parentBranchId: BranchId.make("parent-svc-prop-branch"),
@@ -1236,7 +1203,7 @@ describe("ephemeral service propagation", () => {
 
         // Parent storage should only have the parent session
         const sessions = yield* storage.listSessions()
-        expect(sessions.map((s) => s.id)).toEqual(["parent-svc-prop"])
+        expect(sessions.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
 
@@ -1258,7 +1225,7 @@ describe("ephemeral service propagation", () => {
       const toolRegistry = ExtensionRegistry.fromResolved(
         resolveExtensions([
           {
-            manifest: { id: "agents" },
+            manifest: { id: ExtensionId.make("agents") },
             scope: "builtin" as const,
             sourcePath: "test",
             contributions: {
@@ -1293,10 +1260,10 @@ describe("ephemeral service propagation", () => {
         const storage = yield* Storage
         const runner = yield* AgentRunnerService
 
-        yield* setupParentSession(storage, "parent-approve")
+        yield* setupParentSession(storage, SessionId.make("parent-approve"))
 
         const result = yield* runner.run({
-          agent: Agents.explore,
+          agent: Agents["explore"]!,
           prompt: "test auto-approve",
           parentSessionId: SessionId.make("parent-approve"),
           parentBranchId: BranchId.make("parent-approve-branch"),

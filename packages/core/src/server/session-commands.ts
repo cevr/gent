@@ -21,16 +21,11 @@ import {
   type EventStoreError,
   type EventStoreService,
 } from "../domain/event.js"
-import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 import { Provider, providerRequestFromMessages } from "../providers/provider.js"
-import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../runtime/extensions/resource-host/machine-engine.js"
-import { SessionProfileCache, type SessionProfileCacheService } from "../runtime/session-profile.js"
 import {
   SessionRuntime,
   type SessionRuntimeService,
@@ -89,63 +84,12 @@ class SessionRuntimeTerminator extends Context.Service<
   )
 }
 
-const terminateSessionMachineRuntime = Effect.fn("SessionCommands.terminateSessionMachineRuntime")(
-  function* (input: {
-    readonly sessionId: SessionId
-    readonly sessionStorage: SessionStorageService
-    readonly sessionCwdRegistry: SessionCwdRegistryService
-    readonly ambientRuntime: MachineEngineService
-    readonly profileCache?: SessionProfileCacheService
-  }) {
-    // Prefer the in-memory cwd registry: descendants caught by the post-delete
-    // cleanup have no durable row to read from, but the registry still holds
-    // their cwd until forgetDeletedSessionRuntimeState runs. Per the registry's
-    // own contract (session-cwd-registry.ts), `lookup` propagates StorageError
-    // on transient failures (fail-closed) — so the caller distinguishes
-    // "not found" from "storage failed" and avoids wrong-runtime delivery.
-    const cachedCwd = yield* input.sessionCwdRegistry.lookup(input.sessionId)
-    const cwd = cachedCwd ?? (yield* input.sessionStorage.getSession(input.sessionId))?.cwd
-
-    const runtime =
-      cwd !== undefined && input.profileCache !== undefined
-        ? yield* input.profileCache.resolve(cwd).pipe(
-            Effect.map((profile) => profile.extensionStateRuntime),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("session.delete.profileRuntimeLookupFailed").pipe(
-                Effect.annotateLogs({
-                  sessionId: input.sessionId,
-                  cwd,
-                  error: String(cause),
-                }),
-                Effect.as(undefined),
-              ),
-            ),
-          )
-        : input.ambientRuntime
-
-    if (runtime === undefined) return
-
-    yield* runtime.terminateAll(input.sessionId).pipe(
-      // Session deletion owns cleanup best-effort actor termination, then
-      // propagates durable store failures below.
-      Effect.catchDefect(() => Effect.void),
-    )
-  },
-)
-
 const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
   function* (input: {
     readonly sessionId: SessionId
-    readonly sessionStorage: SessionStorageService
-    readonly ambientRuntime: MachineEngineService
-    readonly profileCache?: SessionProfileCacheService
     readonly sessionRuntimeTerminator: SessionRuntimeTerminatorService
-    readonly eventPublisher: EventPublisherService
-    readonly eventStore: EventStoreService
-    readonly sessionCwdRegistry: SessionCwdRegistryService
   }) {
     yield* input.sessionRuntimeTerminator.terminateSession(input.sessionId)
-    yield* terminateSessionMachineRuntime(input)
   },
 )
 
@@ -215,7 +159,6 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionStorage
   | BranchStorage
   | MessageStorage
-  | MachineEngine
   | SessionCwdRegistry
   | SessionRuntimeTerminator
 > = Effect.gen(function* () {
@@ -225,11 +168,8 @@ const makeSessionMutationsService: Effect.Effect<
   const messageStorage = yield* MessageStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
-  const extensionStateRuntime = yield* MachineEngine
   const sessionCwdRegistry = yield* SessionCwdRegistry
   const sessionRuntimeTerminator = yield* SessionRuntimeTerminator
-  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-  const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -313,16 +253,7 @@ const makeSessionMutationsService: Effect.Effect<
   const cleanupSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.cleanupSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* cleanupSessionRuntimeState({
-      sessionId,
-      sessionStorage,
-      ambientRuntime: extensionStateRuntime,
-      ...(profileCache !== undefined ? { profileCache } : {}),
-      sessionRuntimeTerminator,
-      eventPublisher,
-      eventStore,
-      sessionCwdRegistry,
-    })
+    yield* cleanupSessionRuntimeState({ sessionId, sessionRuntimeTerminator })
   })
 
   const restoreSessionRuntimeStateForMutation = Effect.fn(

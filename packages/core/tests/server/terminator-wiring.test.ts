@@ -70,7 +70,15 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
         }),
       ),
     getMetrics: () =>
-      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+      Effect.succeed({
+        turns: 0,
+        tokens: 0,
+        toolCalls: 0,
+        retries: 0,
+        durationMs: 0,
+        costUsd: 0,
+        lastInputTokens: 0,
+      }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: (sessionId) =>
       Effect.sync(() => {
@@ -80,11 +88,8 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
   } satisfies SessionRuntimeService)
 
 const machineProbeLayer: Layer.Layer<MachineEngine> = Layer.succeed(MachineEngine, {
-  publish: () => Effect.succeed([]),
   send: () => Effect.void,
   execute: () => Effect.die("unexpected machine request"),
-  getActorStatuses: () => Effect.succeed([]),
-  terminateAll: () => Effect.void,
 } satisfies MachineEngineService)
 
 const baseDeps = ({

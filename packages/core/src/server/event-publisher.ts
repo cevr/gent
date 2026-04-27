@@ -13,8 +13,6 @@ import {
   type EventStoreError,
   type EventStoreService,
 } from "../domain/event.js"
-import type { MachineEngineService } from "../runtime/extensions/resource-host/machine-engine.js"
-import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import {
   SubscriptionEngine,
   type SubscriptionEngineService,
@@ -32,7 +30,6 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 
 interface InnerPublisherDeps {
   readonly baseEventStore: EventStoreService
-  readonly stateRuntime: MachineEngineService
   readonly bus: SubscriptionEngineService | undefined
 }
 
@@ -56,7 +53,25 @@ const deliverInner = (
     const branchId = getEventBranchId(event)
     const extensionSession = { sessionId }
 
-    yield* deps.stateRuntime.publish(event, { sessionId, branchId })
+    // Yield the calling fiber before fanning out pulses + bus.emit.
+    //
+    // The legacy publisher routed every event through a per-session
+    // mailbox (`mailbox.submit`), which forced a fiber yield as it
+    // serialized via semaphore. Sites that publish on the same fiber
+    // that drives the agent loop (e.g. EventPublisher dispatched from a
+    // turn-control command) implicitly relied on that yield to let the
+    // loop's driver fiber pick up the transition before deliverInner
+    // returns. Without this `yieldNow`, the regression caught by
+    // `packages/e2e/tests/queue-contract.test.ts` ("direct runs steer
+    // before queued follow-up") slips back in: the runtime-state
+    // subscriber observes initial Idle and never sees the
+    // Idle → Running edge before the test polls.
+    //
+    // The honest fix is to restructure the agent-loop driver so it does
+    // not depend on publisher fiber-yields (tracked separately as a
+    // future architecture wave). Until then, yielding here preserves
+    // the contract.
+    yield* Effect.yieldNow
 
     // Pulse-on-event: extensions that declared `pulseTags` for this
     // event tag receive an `ExtensionStateChanged` envelope so their UI
@@ -139,16 +154,15 @@ const makePublisherContext = (publisher: EventPublisherService) =>
 export const EventPublisherLive: Layer.Layer<
   EventPublisher | BuiltinEventSink,
   never,
-  EventStore | MachineEngine | ExtensionRegistry
+  EventStore | ExtensionRegistry
 > = Layer.effectContext(
   Effect.gen(function* () {
     const baseEventStore = yield* EventStore
-    const stateRuntime = yield* MachineEngine
     const registry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
-    const deps: InnerPublisherDeps = { baseEventStore, stateRuntime, bus }
+    const deps: InnerPublisherDeps = { baseEventStore, bus }
     const pulseByTag = buildPulseIndex(registry)
     const deliver = makeIdempotentDeliver((envelope) => deliverInner(envelope, deps, pulseByTag))
 
@@ -196,7 +210,7 @@ export const makeEventPublisherRouter = (): {
   readonly layer: Layer.Layer<
     EventPublisher | BuiltinEventSink,
     never,
-    EventStore | MachineEngine | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
+    EventStore | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
   >
 } => {
   const handle: EventPublisherRouterHandle = { profileCache: undefined }
@@ -204,7 +218,6 @@ export const makeEventPublisherRouter = (): {
   const layer = Layer.effectContext(
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
-      const primaryStateRuntime = yield* MachineEngine
       const primaryRegistry = yield* ExtensionRegistry
       const primaryBusOpt = yield* Effect.serviceOption(SubscriptionEngine)
       const primaryBus = primaryBusOpt._tag === "Some" ? primaryBusOpt.value : undefined
@@ -214,7 +227,6 @@ export const makeEventPublisherRouter = (): {
       const primaryCwd = platform.cwd
       const primaryDeps: InnerPublisherDeps = {
         baseEventStore,
-        stateRuntime: primaryStateRuntime,
         bus: primaryBus,
       }
       const primaryPulseByTag = buildPulseIndex(primaryRegistry)
@@ -291,7 +303,6 @@ export const makeEventPublisherRouter = (): {
 
           const cwdDeps: InnerPublisherDeps = {
             baseEventStore,
-            stateRuntime: profile.extensionStateRuntime,
             bus: profile.subscriptionEngine,
           }
 

@@ -8,25 +8,21 @@
  * (requests) the actor.
  *
  * Public surface:
- *   - `publish`: broadcast an `AgentEvent` to every actor-backed
- *     extension. Returns `[]` (no transition signal exists for
- *     Behaviors — extensions opt into pulses via `pulseTags`).
  *   - `send`: cast a typed command message
  *   - `execute`: request/reply against the actor protocol
- *   - `getActorStatuses`: returns `[]` (Behaviors are process-scoped,
- *     no per-session lifecycle to inspect — kept for surface compat)
- *   - `terminateAll`: no-op (Behaviors do not terminate per session)
+ *
+ * Note: there is no `publish(event, ctx)` — Behaviors do not receive
+ * `AgentEvent` automatically. Extensions react to events via declared
+ * `reactions:` handlers (which explicitly `tell` their actor) or
+ * declared `pulseTags` (which trigger `ExtensionStateChanged` pulses
+ * inside `EventPublisherLive`, not on the actor). See `auto.ts` /
+ * `handoff.ts` for the reaction pattern.
  *
  * @module
  */
 
 import { Context, Effect, Layer } from "effect"
-import type { AgentEvent } from "../../../domain/event.js"
-import type {
-  ExtensionActorStatusInfo,
-  ExtensionReduceContext,
-  LoadedExtension,
-} from "../../../domain/extension.js"
+import type { LoadedExtension } from "../../../domain/extension.js"
 import { ExtensionId } from "../../../domain/ids.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type {
@@ -45,10 +41,6 @@ import {
 } from "./machine-protocol.js"
 
 export interface MachineEngineService {
-  readonly publish: (
-    event: AgentEvent,
-    ctx: ExtensionReduceContext,
-  ) => Effect.Effect<ReadonlyArray<string>>
   readonly send: (
     sessionId: SessionId,
     message: AnyExtensionCommandMessage,
@@ -59,10 +51,6 @@ export interface MachineEngineService {
     message: M,
     branchId?: BranchId,
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
-  readonly getActorStatuses: (
-    sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<ExtensionActorStatusInfo>>
-  readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 const makeMachineEngine = (
@@ -85,25 +73,6 @@ const makeMachineEngine = (
 
     const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
-
-    // After W10-PhaseB, AgentEvent → behavior delivery is no longer
-    // automatic. Behaviors that need to react to AgentEvents do so via
-    // explicit `tell` from their `reactions:` handlers (see
-    // `auto.ts`/`handoff.ts` for the pattern). `publish` remains for
-    // protocol-surface compat — it still flows into `pulseTags`-driven
-    // `ExtensionStateChanged` envelopes via `event-publisher.ts`.
-    //
-    // The `yieldNow` is load-bearing: the legacy publisher routed every
-    // event through a per-session mailbox (`mailbox.submit`), which
-    // forces a fiber yield as it serializes. Sites that publish on the
-    // same fiber that drives the agent loop (e.g. `EventPublisher`
-    // dispatched from a turn-control command) implicitly relied on that
-    // yield to let the loop's driver fiber pick up the transition before
-    // the publisher returned. With the mailbox gone, a no-op publish
-    // never yields, and downstream waiters miss the `Idle → Running`
-    // edge in the runtime state stream.
-    const publishImmediate = (_event: AgentEvent, _ctx: ExtensionReduceContext) =>
-      Effect.yieldNow.pipe(Effect.as<ReadonlyArray<string>>([]))
 
     const sendImmediate = (
       sessionId: SessionId,
@@ -210,11 +179,6 @@ const makeMachineEngine = (
       })
 
     const service: MachineEngineService = {
-      publish: (event, ctx) =>
-        Effect.withSpan("MachineEngine.publish", {
-          attributes: { "extension.event": event._tag },
-        })(withSession(ctx.sessionId, publishImmediate(event, ctx))),
-
       send: (sessionId, message, branchId) =>
         Effect.withSpan("MachineEngine.send", {
           attributes: {
@@ -234,11 +198,6 @@ const makeMachineEngine = (
             "extension.message": message._tag,
           },
         })(withSession(sessionId, executeImmediate(sessionId, message, branchId))),
-
-      getActorStatuses: (_sessionId: SessionId) =>
-        Effect.succeed<ReadonlyArray<ExtensionActorStatusInfo>>([]),
-
-      terminateAll: (_sessionId: SessionId) => Effect.void,
     }
 
     // Suppress unused — kept on the closure scope so the `extensions`

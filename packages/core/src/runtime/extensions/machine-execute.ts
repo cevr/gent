@@ -4,12 +4,12 @@
  * Projections need to query a machine's current state via the typed
  * request/reply protocol but must NOT be able to send commands or
  * publish events. `MachineExecute` is the narrow Tag that exposes only
- * the read path (`execute<M>`); writes (`send`/`publish`/`terminateAll`)
- * live on `MachineEngine`, the substrate's wide write surface.
+ * the read path (`execute<M>`); writes (`send`) live on `MachineEngine`,
+ * the substrate's wide write surface.
  *
  * B11.4 brands `MachineExecute` with the `ReadOnly` tag so projection
  * R-channels enforce read-only at the type level — `MachineEngine`
- * exposes `send` + `publish` and can't honestly carry the brand.
+ * exposes `send` and can't honestly carry the brand.
  *
  * Delegates to `engine.execute` (renamed from `engine.ask` in B11.3d).
  *

@@ -103,11 +103,9 @@ const resolveExtensionSession = (
 export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.listStatus": ({ sessionId }: ListExtensionStatusInput) =>
     Effect.gen(function* () {
-      const { registry, stateRuntime } = yield* deps.resolveSessionServices(sessionId)
+      const { registry } = yield* deps.resolveSessionServices(sessionId)
       const activationStatuses = yield* registry.listExtensionStatuses()
-      const actorStatuses =
-        sessionId === undefined ? [] : yield* stateRuntime.getActorStatuses(sessionId)
-      return buildExtensionHealthSnapshot(activationStatuses, actorStatuses)
+      return buildExtensionHealthSnapshot(activationStatuses)
     }),
 
   "extension.send": ({ sessionId, message, branchId }: SendExtensionMessageInput) =>
