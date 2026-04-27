@@ -10,7 +10,7 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 - `Profile` — cwd-scoped policy and extension graph: permissions, drivers, projections, resources, capabilities.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Capability` — the only callable primitive.
-- `Resource` — long-lived services, machines, schedules, subscriptions, lifecycle.
+- `Resource` — long-lived services, schedules, subscriptions, lifecycle. Stateful actors live in the `actors:` bucket as Behaviors.
 - `Projection` — pure derived views for prompt, policy, runtime, and client state.
 
 Everything else is adapter code around those nouns.
@@ -317,7 +317,7 @@ Rules:
 - actor snapshot schema is enforced at runtime — invalid public snapshots are dropped, not passed through
 - activation/startup failures degrade the extension instead of crashing host startup
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
-- actor transition side effects cross explicit slots, not ambient service lookup inside machine handlers
+- actor side effects cross explicit slots (`reactions:`, declared `services`), not ambient service lookup inside Behavior handlers
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
@@ -327,7 +327,7 @@ One authoring shape: `defineExtension({ id, resources?, capabilities?, projectio
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- **Resource** — `defineResource({ scope, layer?, machine?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Carries optional `effect-machine` machine + declared effects when the extension owns one. Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ scope, layer?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering to a single `CapabilityContribution`. `tool` = model-facing tool (audiences `["model"]`); `request` = typed extension request callable from transport-public or agent-protocol surfaces (with `intent: "read" | "write"`); `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories and the `audiences + intent` flag matrix are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts` and `runtime/extensions/capability-host.ts`.
 - **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
@@ -374,33 +374,35 @@ Other notes:
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
 
-### Extension State Runtime Lifecycle
+### Extension Actor Substrate
 
-Extension actors (state machines) are managed by `ExtensionStateRuntime`. Key patterns:
+After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `actors:` bucket) into one, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and extensions opt into pulse-on-event via declared `pulseTags`.
 
-**Lazy init with Deferred readiness** (`state-runtime.ts`):
+**ActorHost** (`runtime/extensions/resource-host/actor-host.ts`):
 
-- `getOrSpawnActors(sessionId)` registers a Deferred placeholder under `spawnSemaphore`, then spawns + inits actors OUTSIDE the lock. Concurrent callers await the Deferred.
-- This prevents deadlocks where extension actor spawn triggers events that re-enter `getOrSpawnActors`.
+- Profile-scoped: one `ActorHost` per cwd-profile, spawning each `actors:` Behavior once per profile and registering its `ActorRef` against the Behavior's `ServiceKey` in the Receptionist.
+- Snapshot writer: a periodic background fiber persists each actor's state to the `actor_persistence` table; on respawn the host loads the snapshot and resumes from there.
+- `start` failures degrade only the failing actor — sibling actors keep running.
 
-**Queued delivery after append** (`dependencies.ts`, `state-runtime.ts`):
+**Receptionist + ActorEngine** (`runtime/extensions/receptionist.ts`, `runtime/extensions/actor-engine.ts`):
 
-- `EventStore.publish` appends and fanouts storage subscribers only
-- extension delivery is a separate queued runtime concern owned by `ExtensionStateRuntime`
-- per-session workers serialize actor delivery and queue nested publishes instead of skipping them
-- ordinary command paths still await delivery where causal consistency matters
+- `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
+- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` (registers) and `MachineEngine` (routes) share the same actor map.
 
-**effect-machine integration**:
+**MachineEngine** (`runtime/extensions/resource-host/machine-engine.ts`):
 
-- `Machine.spawn` is cold — no I/O, no inspector, no supervisor before `actor.start`. Recovery (state loading) and supervisor arming happen during `start`.
-- Extension actors use `spawn-machine-ref.ts` to bind one actor-shaped definition onto the runtime boundary.
-- Machine transitions stay explicit: pure state changes in handlers, side effects through declared slots.
-- `AgentLoop` uses effect-machine's `Lifecycle` API: `recovery.resolve` loads checkpoints + runs `makeRecoveryDecision`, `durability.save` persists checkpoints after transitions.
+- A thin actor-router over `ActorEngine` + `Receptionist`. Decodes the `ExtensionMessage` envelope, looks up the target Behavior's `ServiceKey`, and dispatches via `tell` (commands) or `ask` (requests).
+- `publish(event, ctx)` is a near-no-op — Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`/`handoff.ts`). The implementation includes a load-bearing `Effect.yieldNow` to preserve the fiber-scheduling behavior that the old per-session mailbox provided implicitly via semaphore serialization — without it, the agent loop's driver fiber can miss the `Idle → Running` transition edge.
+- `getActorStatuses` returns `[]` and `terminateAll` is a no-op — kept on the interface for surface compat. Behaviors are process-scoped, not per-session.
 
-**Actor semantics — `MachineEngine` / `MachineExecute`**:
+**Pulse-on-event** (`server/event-publisher.ts`):
 
-- `MachineEngine` (`runtime/extensions/resource-host/machine-engine.ts`) — internal service. Owns actor spawn/supervision and exposes the full write surface: `send` (commands), `execute` (request/reply), `publish` (events), `terminateAll`.
-- `MachineExecute` (`runtime/extensions/machine-execute.ts`) — read-only surface for projections and `request`-intent capabilities. Exposes only `execute<M>`; write operations (`send`/`publish`) are structurally absent. The `R` type of every `ProjectionContribution` is fenced to `ReadOnly`-branded tags — `MachineExecute` carries that brand, `MachineEngine` does not. Projection and read-intent capability authors receive `MachineExecute`; resource `start`/`stop` and write-intent capabilities receive `MachineEngine` from the ephemeral layer.
+- Extensions declare `pulseTags: AgentEventTag[]` to receive an `ExtensionStateChanged` envelope when matching events fire. After W10-PhaseB this is the **only** pulse path — the FSM-transition signal is gone.
+- `EventPublisherLive` builds a `pulseByTag` index from the registry once at boot and emits pulses inline after `stateRuntime.publish` returns. Extensions that need pulse-on-state-change must declare the relevant agent event tags.
+
+**MachineExecute** (`runtime/extensions/machine-execute.ts`):
+
+- Read-only surface for projections and `request`-intent capabilities. Exposes only `execute<M>`; write operations (`send`/`publish`) are structurally absent. The `R` type of every `ProjectionContribution` is fenced to `ReadOnly`-branded tags — `MachineExecute` carries that brand, `MachineEngine` does not. Projection and read-intent capability authors receive `MachineExecute`; resource `start`/`stop` and write-intent capabilities receive `MachineEngine` from the ephemeral layer.
 
 **Compositor `withOverrides`**:
 
