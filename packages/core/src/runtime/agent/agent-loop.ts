@@ -83,6 +83,8 @@ import { withRetry } from "../retry"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
+import { ActorEngine } from "../extensions/actor-engine.js"
+import { Receptionist } from "../extensions/receptionist.js"
 import {
   MachineEngine,
   type MachineEngineService,
@@ -2151,6 +2153,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ResourceManager
     | ConfigService
     | ModelRegistry
+    | ActorEngine
+    | Receptionist
   > =>
     Layer.effect(
       AgentLoop,
@@ -2161,6 +2165,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
         const extensionStateRuntime = yield* MachineEngine
+        const actorEngine = yield* ActorEngine
+        const receptionist = yield* Receptionist
         const extensionTurnControl = yield* ExtensionTurnControl
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
@@ -2272,6 +2278,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               extensionStateRuntime,
               extensionRegistry,
               storage,
+              actorEngine,
+              receptionist,
             })
 
             const profileCache =

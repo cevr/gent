@@ -45,6 +45,7 @@ import {
 } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
 import { ActorHost, ActorHostFailures, type ActorSpawnFailure } from "./extensions/actor-host.js"
+import { Receptionist } from "./extensions/receptionist.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -391,6 +392,8 @@ export const buildProfileRuntime = (params: {
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)
     const extensionStateRuntime = Context.get(layerContext, MachineEngine)
+    const actorEngine = Context.get(layerContext, ActorEngine)
+    const receptionist = Context.get(layerContext, Receptionist)
     const subscriptionEngineOpt = Context.getOption(layerContext, SubscriptionEngine)
     const subscriptionEngine =
       subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
@@ -412,6 +415,8 @@ export const buildProfileRuntime = (params: {
       registryService,
       driverRegistryService,
       extensionStateRuntime,
+      actorEngine,
+      receptionist,
       subscriptionEngine,
       actorHostFailures,
       baseSections,

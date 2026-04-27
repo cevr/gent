@@ -7,6 +7,7 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 describe("ToolRunner", () => {
@@ -33,6 +34,7 @@ describe("ToolRunner", () => {
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       MachineEngine.Test(),
+      ActorEngine.Live,
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -79,6 +81,7 @@ describe("ToolRunner", () => {
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       MachineEngine.Test(),
+      ActorEngine.Live,
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -126,6 +129,7 @@ describe("ToolRunner", () => {
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       MachineEngine.Test(),
+      ActorEngine.Live,
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -179,6 +183,7 @@ describe("ToolRunner", () => {
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       MachineEngine.Test(),
+      ActorEngine.Live,
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)

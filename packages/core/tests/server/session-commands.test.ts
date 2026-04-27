@@ -19,6 +19,7 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
@@ -74,6 +75,7 @@ const failingSessionCommandsLayer = () => {
     failingPublisherLayer,
     Provider.Debug(),
     MachineEngine.Test(),
+    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -111,6 +113,7 @@ const postCommitFailingSessionCommandsLayer = () => {
     postCommitFailingPublisherLayer,
     Provider.Debug(),
     MachineEngine.Test(),
+    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -169,6 +172,7 @@ const sendFailingSessionCommandsLayer = () => {
     EventPublisher.Test(),
     Provider.Debug(),
     MachineEngine.Test(),
+    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -188,6 +192,7 @@ const sessionCommandsLayer = () => {
     EventPublisher.Test(),
     Provider.Debug(),
     MachineEngine.Test(),
+    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -2014,6 +2019,7 @@ describe("requestId idempotency", () => {
         EventPublisher.Test(),
         Provider.Debug(),
         MachineEngine.Test(),
+        ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(
@@ -2082,6 +2088,7 @@ describe("requestId idempotency", () => {
         EventPublisher.Test(),
         Provider.Debug(),
         MachineEngine.Test(),
+        ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(

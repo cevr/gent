@@ -29,6 +29,8 @@ import {
   ExtensionRegistry,
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
+import { ActorEngine, type ActorEngineService } from "./extensions/actor-engine.js"
+import { Receptionist, type ReceptionistService } from "./extensions/receptionist.js"
 import {
   MachineEngine,
   type MachineEngineService,
@@ -59,6 +61,8 @@ export interface SessionProfile {
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly extensionStateRuntime: MachineEngineService
+  readonly actorEngine: ActorEngineService
+  readonly receptionist: ReceptionistService
   /** Per-cwd subscription bus. Used by EventPublisher router for per-cwd dispatch. */
   readonly subscriptionEngine: SubscriptionEngineService | undefined
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -185,6 +189,8 @@ export class SessionProfileCache extends Context.Service<
               registryService: runtime.registryService,
               driverRegistryService: runtime.driverRegistryService,
               extensionStateRuntime: runtime.extensionStateRuntime,
+              actorEngine: runtime.actorEngine,
+              receptionist: runtime.receptionist,
               subscriptionEngine: runtime.subscriptionEngine,
               baseSections: runtime.baseSections,
               instructions: profileData.instructions,
@@ -259,6 +265,7 @@ export class SessionProfileCache extends Context.Service<
                   externalDrivers: resolved.externalDrivers,
                 }),
                 MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Live)),
+                ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),
           )
@@ -271,6 +278,8 @@ export class SessionProfileCache extends Context.Service<
             registryService: Context.get(layerContext, ExtensionRegistry),
             driverRegistryService: Context.get(layerContext, DriverRegistry),
             extensionStateRuntime: Context.get(layerContext, MachineEngine),
+            actorEngine: Context.get(layerContext, ActorEngine),
+            receptionist: Context.get(layerContext, Receptionist),
             subscriptionEngine: undefined,
             baseSections: [],
             instructions: "",

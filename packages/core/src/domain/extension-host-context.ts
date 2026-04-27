@@ -1,4 +1,5 @@
 import { Schema, type Effect, type PlatformError } from "effect"
+import type { ActorAskTimeout, ActorRef, ServiceKey } from "./actor"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
@@ -50,6 +51,9 @@ export interface ExtensionHostContext {
   /** Extension actor RPC */
   readonly extension: ExtensionHostContext.Extension
 
+  /** Actor primitive lookup (Receptionist + ActorEngine pass-through). */
+  readonly actors: ExtensionHostContext.Actors
+
   /** Agent registry + runner */
   readonly agent: ExtensionHostContext.Agent
 
@@ -79,6 +83,24 @@ export declare namespace ExtensionHostContext {
       ref: CapabilityRef<I, O>,
       input: I,
     ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
+  }
+
+  /**
+   * Actor primitive lookup surface for non-actor callers (slot
+   * handlers, capability handlers). Inside an actor's `receive`, use
+   * `ActorContext.find/tell/ask` instead — this facet exists so
+   * non-actor code can talk to actors without holding the engine
+   * directly. Thin pass-through to `Receptionist.find` and
+   * `ActorEngine.{tell,ask}`.
+   */
+  interface Actors {
+    readonly find: <M>(key: ServiceKey<M>) => Effect.Effect<ReadonlyArray<ActorRef<M>>>
+    readonly tell: <M>(ref: ActorRef<M>, msg: M) => Effect.Effect<void>
+    readonly ask: <M, A>(
+      ref: ActorRef<M>,
+      msg: M,
+      replyKey: (a: A) => M,
+    ) => Effect.Effect<A, ActorAskTimeout>
   }
 
   interface Agent {

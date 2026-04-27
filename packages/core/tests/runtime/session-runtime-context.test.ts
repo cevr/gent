@@ -14,6 +14,8 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
+import { Receptionist } from "../../src/runtime/extensions/receptionist"
 import {
   AllowAllPermission,
   resolveSessionEnvironment,
@@ -78,6 +80,7 @@ describe("resolveSessionEnvironment", () => {
       BunServices.layer,
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
       runtimePlatformLive,
@@ -112,6 +115,8 @@ describe("resolveSessionEnvironment", () => {
               storage,
               extensionRegistry,
               extensionStateRuntime,
+              actorEngine: yield* ActorEngine,
+              receptionist: yield* Receptionist,
               overrides: { platform },
             }),
             defaults: {
@@ -182,6 +187,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       extensionRegistryLayer,
       driverRegistryLayer,
       runtimePlatformLayer,
@@ -213,6 +219,8 @@ describe("resolveSessionEnvironment", () => {
               storage,
               extensionRegistry,
               extensionStateRuntime,
+              actorEngine: yield* ActorEngine,
+              receptionist: yield* Receptionist,
               overrides: { platform },
             }),
             defaults: {
@@ -288,6 +296,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       extensionRegistryLayer,
       driverRegistryLayer,
       runtimePlatformLayer,
@@ -339,6 +348,8 @@ describe("resolveSessionEnvironment", () => {
                 storage,
                 extensionRegistry,
                 extensionStateRuntime,
+                actorEngine: yield* ActorEngine,
+                receptionist: yield* Receptionist,
                 overrides: { platform },
               }),
               defaults: {
@@ -397,6 +408,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       emptyRegistryLayer,
       runtimePlatformLayer,
     )
@@ -416,6 +428,8 @@ describe("resolveSessionEnvironment", () => {
             storage,
             extensionRegistry,
             extensionStateRuntime,
+            actorEngine: yield* ActorEngine,
+            receptionist: yield* Receptionist,
             overrides: { platform },
           }),
           defaults,
@@ -443,6 +457,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
       runtimePlatformLayer,
@@ -468,6 +483,8 @@ describe("resolveSessionEnvironment", () => {
               storage: failingStorage,
               extensionRegistry,
               extensionStateRuntime,
+              actorEngine: yield* ActorEngine,
+              receptionist: yield* Receptionist,
               overrides: { platform },
             }),
             defaults: {
@@ -491,6 +508,8 @@ describe("resolveSessionEnvironment", () => {
               storage: failingStorage,
               extensionRegistry,
               extensionStateRuntime,
+              actorEngine: yield* ActorEngine,
+              receptionist: yield* Receptionist,
               overrides: { platform },
             }),
             defaults: {
@@ -544,6 +563,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
       MachineEngine.Test(),
+      ActorEngine.Live,
       emptyRegistryLayer,
       defaultDriverRegistryLayer,
       runtimePlatformLayer,
@@ -603,6 +623,8 @@ describe("resolveSessionEnvironment", () => {
             storage,
             extensionRegistry,
             extensionStateRuntime,
+            actorEngine: yield* ActorEngine,
+            receptionist: yield* Receptionist,
             overrides: { platform },
           }),
           defaults: {

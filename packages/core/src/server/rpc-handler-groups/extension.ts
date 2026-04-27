@@ -208,7 +208,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           message: "Storage unavailable for transport-public capability dispatch",
         })
       }
-      const { registry, stateRuntime, capabilityContext } =
+      const { registry, stateRuntime, actorEngine, receptionist, capabilityContext } =
         yield* deps.resolveSessionServices(sessionId)
       // Transport-public action handlers are typed against `ModelCapabilityContext`
       // (wide host surface — `extension.send/ask`, `session.*`, `agent.*`, etc.).
@@ -219,6 +219,8 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionStateRuntime: stateRuntime,
         extensionRegistry: registry,
+        actorEngine,
+        receptionist,
         storage: deps.storage,
         ...(capabilityContext !== undefined ? { capabilityContext } : {}),
       })

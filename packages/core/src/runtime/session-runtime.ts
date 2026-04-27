@@ -20,6 +20,8 @@ import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
+import { ActorEngine } from "./extensions/actor-engine.js"
+import { Receptionist } from "./extensions/receptionist.js"
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
@@ -326,6 +328,8 @@ const makeLiveSessionRuntime: Effect.Effect<
   | ExtensionRegistry
   | DriverRegistry
   | MachineEngine
+  | ActorEngine
+  | Receptionist
   | Permission
   | SessionProfileCache
   | ModelRegistry
@@ -340,10 +344,14 @@ const makeLiveSessionRuntime: Effect.Effect<
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
   const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
   const extensionStateRuntime = yield* MachineEngine
+  const actorEngine = yield* ActorEngine
+  const receptionist = yield* Receptionist
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({
     extensionStateRuntime,
     extensionRegistry,
     storage,
+    actorEngine,
+    receptionist,
   })
 
   // Every public session-scoped boundary (dispatch + reads + subscriptions) MUST

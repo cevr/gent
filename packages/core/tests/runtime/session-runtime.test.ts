@@ -28,6 +28,7 @@ import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -90,6 +91,7 @@ const makeRuntimeLayer = (
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
@@ -133,6 +135,7 @@ const makeRuntimeLayerWithEventPublisher = (
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
@@ -207,6 +210,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
@@ -278,6 +282,7 @@ const makeLiveToolRuntimeLayer = (
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,

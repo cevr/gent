@@ -37,6 +37,7 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
@@ -102,6 +103,7 @@ const withEventPublisher = (
     Layer.mergeAll(
       baseEventStoreLayer,
       stateRuntimeLayer,
+      ActorEngine.Live,
       testRegistryLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
@@ -129,6 +131,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       eventStoreLayer,
       registryLayer,
       MachineEngine.Test(),
+      ActorEngine.Live,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
@@ -144,6 +147,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     providerLayer,
     ToolRunner.Test(),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),

@@ -36,6 +36,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -230,6 +231,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         driverRegistryLive,
         extensionRuntimeLive,
         machineExecuteLive,
+        ActorEngine.Live,
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),

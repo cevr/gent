@@ -20,6 +20,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -81,6 +82,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     extensionRegistryLive,
     extensionRuntimeLive,
     machineExecuteLive,
+    ActorEngine.Live,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),

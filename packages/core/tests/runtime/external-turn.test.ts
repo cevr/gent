@@ -11,6 +11,7 @@ import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -156,6 +157,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     makeExtRegistry(executor),
     makeDriverRegistry(executor),
     MachineEngine.Test(),
+    ActorEngine.Live,
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
@@ -341,6 +343,7 @@ describe("external turn execution", () => {
         externalDrivers: agentsResolved.externalDrivers,
       }),
       MachineEngine.Test(),
+      ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),
@@ -523,6 +526,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         externalDrivers: e2eResolved.externalDrivers,
       }),
       MachineEngine.Test(),
+      ActorEngine.Live,
       ExtensionTurnControl.Test(),
       // Messages go through Storage directly — EventStore path is orthogonal.
       makeCountingEventStore(eventsRef),
@@ -624,6 +628,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         externalDrivers: e2eResolved.externalDrivers,
       }),
       MachineEngine.Test(),
+      ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),
@@ -727,6 +732,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         externalDrivers: e2eResolved.externalDrivers,
       }),
       MachineEngine.Test(),
+      ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),
@@ -830,6 +836,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         externalDrivers: e2eResolved.externalDrivers,
       }),
       MachineEngine.Test(),
+      ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),

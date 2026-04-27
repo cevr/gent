@@ -324,6 +324,11 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     ask: dieStub("extension.ask"),
     request: dieStub("extension.request"),
   },
+  actors: {
+    find: dieStub("actors.find"),
+    tell: dieStub("actors.tell"),
+    ask: dieStub("actors.ask"),
+  },
   agent: {
     get: dieStub("agent.get"),
     require: dieStub("agent.require"),
