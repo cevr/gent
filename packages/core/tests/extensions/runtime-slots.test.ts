@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Data, Effect, Exit, Layer } from "effect"
+import { Cause, Data, Effect, Exit } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type {
   ContextMessagesInput,
@@ -13,7 +13,6 @@ import type {
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { defineResource } from "@gent/core/domain/contribution"
 import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 
 const stubHostCtx = {
@@ -163,26 +162,14 @@ describe("runtime slots", () => {
   it.live("toolResult applies explicit resource enrichments in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              toolResult: (input) => Effect.succeed(`${String(input.result)}-builtin`),
-            },
-          }),
-        ],
+        reactions: {
+          toolResult: (input) => Effect.succeed(`${String(input.result)}-builtin`),
+        },
       }),
       makeExt("explicit", "project", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              toolResult: (input) => Effect.succeed(`${String(input.result)}-explicit`),
-            },
-          }),
-        ],
+        reactions: {
+          toolResult: (input) => Effect.succeed(`${String(input.result)}-explicit`),
+        },
       }),
     ]
 
@@ -208,55 +195,37 @@ describe("runtime slots", () => {
     const calls: string[] = []
     const extensions = [
       makeExt("continue", "builtin", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              turnAfter: {
-                failureMode: "continue",
-                handler: () => {
-                  calls.push("continue")
-                  return Effect.fail(new BoomError({ reason: "continue" }))
-                },
-              },
+        reactions: {
+          turnAfter: {
+            failureMode: "continue",
+            handler: () => {
+              calls.push("continue")
+              return Effect.fail(new BoomError({ reason: "continue" }))
             },
-          }),
-        ],
+          },
+        },
       }),
       makeExt("isolate", "user", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              turnAfter: {
-                failureMode: "isolate",
-                handler: () => {
-                  calls.push("isolate")
-                  return Effect.fail(new BoomError({ reason: "isolate" }))
-                },
-              },
+        reactions: {
+          turnAfter: {
+            failureMode: "isolate",
+            handler: () => {
+              calls.push("isolate")
+              return Effect.fail(new BoomError({ reason: "isolate" }))
             },
-          }),
-        ],
+          },
+        },
       }),
       makeExt("halt", "project", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              turnAfter: {
-                failureMode: "halt",
-                handler: () => {
-                  calls.push("halt")
-                  return Effect.fail(new BoomError({ reason: "halt" }))
-                },
-              },
+        reactions: {
+          turnAfter: {
+            failureMode: "halt",
+            handler: () => {
+              calls.push("halt")
+              return Effect.fail(new BoomError({ reason: "halt" }))
             },
-          }),
-        ],
+          },
+        },
       }),
     ]
 
@@ -287,38 +256,26 @@ describe("runtime slots", () => {
     const calls: string[] = []
     const slots = compileRuntimeSlots([
       makeExt("builtin", "builtin", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              turnBefore: {
-                failureMode: "continue",
-                handler: () =>
-                  Effect.sync(() => {
-                    calls.push("builtin")
-                  }),
-              },
-            },
-          }),
-        ],
+        reactions: {
+          turnBefore: {
+            failureMode: "continue",
+            handler: () =>
+              Effect.sync(() => {
+                calls.push("builtin")
+              }),
+          },
+        },
       }),
       makeExt("project", "project", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              turnBefore: {
-                failureMode: "continue",
-                handler: () =>
-                  Effect.sync(() => {
-                    calls.push("project")
-                  }),
-              },
-            },
-          }),
-        ],
+        reactions: {
+          turnBefore: {
+            failureMode: "continue",
+            handler: () =>
+              Effect.sync(() => {
+                calls.push("project")
+              }),
+          },
+        },
       }),
     ])
 
@@ -340,38 +297,26 @@ describe("runtime slots", () => {
     const calls: string[] = []
     const slots = compileRuntimeSlots([
       makeExt("builtin", "builtin", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              messageOutput: {
-                failureMode: "continue",
-                handler: () =>
-                  Effect.sync(() => {
-                    calls.push("builtin")
-                  }),
-              },
-            },
-          }),
-        ],
+        reactions: {
+          messageOutput: {
+            failureMode: "continue",
+            handler: () =>
+              Effect.sync(() => {
+                calls.push("builtin")
+              }),
+          },
+        },
       }),
       makeExt("project", "project", {
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            runtime: {
-              messageOutput: {
-                failureMode: "continue",
-                handler: () =>
-                  Effect.sync(() => {
-                    calls.push("project")
-                  }),
-              },
-            },
-          }),
-        ],
+        reactions: {
+          messageOutput: {
+            failureMode: "continue",
+            handler: () =>
+              Effect.sync(() => {
+                calls.push("project")
+              }),
+          },
+        },
       }),
     ])
 

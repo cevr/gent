@@ -365,14 +365,13 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("resource runtime reactions, subscriptions, and lifecycle hooks reject Promise handlers", () => {
-    defineResource({
-      scope: "process",
-      layer: Layer.empty,
-      runtime: {
+  test("extension reactions, resource subscriptions, and lifecycle hooks reject Promise handlers", () => {
+    defineExtension({
+      id: "purity-reaction",
+      reactions: {
         turnAfter: {
           failureMode: "isolate",
-          // @ts-expect-error — async handler must not be assignable to Effect-returning runtime reaction
+          // @ts-expect-error — async handler must not be assignable to Effect-returning extension reaction
           handler: async () => undefined,
         },
       },
@@ -421,6 +420,12 @@ describe("Effect-purity locks (compile-time)", () => {
           systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
         },
       ],
+      reactions: {
+        turnAfter: {
+          failureMode: "continue",
+          handler: () => Effect.void,
+        },
+      },
       resources: [
         resource(
           defineResource({
@@ -428,12 +433,6 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.empty,
             start: Effect.void,
             stop: Effect.void,
-            runtime: {
-              turnAfter: {
-                failureMode: "continue",
-                handler: () => Effect.void,
-              },
-            },
             subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
             schedule: [
               {

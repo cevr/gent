@@ -36,18 +36,11 @@ import type { Context, Effect, Layer, Schema } from "effect"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentName } from "./agent.js"
 import type { AgentEvent } from "./event.js"
-import type {
-  ExtensionEffect,
-  MessageOutputInput,
-  ToolResultInput,
-  TurnAfterInput,
-  TurnBeforeInput,
-} from "./extension.js"
+import type { ExtensionEffect } from "./extension.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
 } from "./extension-protocol.js"
-import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "./scope-brand.js"
 
@@ -129,33 +122,6 @@ export interface ResourceSchedule {
     readonly prompt: string
     readonly cwd?: string
   }
-}
-
-// ── Explicit runtime slots ──
-
-/** Failure policy for explicit Resource-owned runtime reactions. */
-export type ResourceReactionFailureMode = "continue" | "isolate" | "halt"
-
-export interface ResourceReaction<Input, E = never, R = never> {
-  readonly failureMode: ResourceReactionFailureMode
-  readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
-}
-
-export interface ResourceRuntimeSlots<E = never, R = never> {
-  readonly turnBefore?: ResourceReaction<TurnBeforeInput, E, R>
-  readonly turnAfter?: ResourceReaction<TurnAfterInput, E, R>
-  readonly messageOutput?: ResourceReaction<MessageOutputInput, E, R>
-  /**
-   * Explicit tool-result rewrite slot.
-   *
-   * Replaces the generic `"tool.result"` pipeline for long-lived behaviors
-   * that enrich or persist tool results based on resource-owned state.
-   * The handler receives the current result and returns the next result.
-   */
-  readonly toolResult?: (
-    input: ToolResultInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<unknown, E, R>
 }
 
 // ── The Resource machine sub-shape (C3.5) ──
@@ -260,7 +226,6 @@ export interface ResourceContribution<
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
   readonly machine?: AnyResourceMachine
-  readonly runtime?: ResourceRuntimeSlots<E, A | R>
 }
 
 /**
@@ -295,7 +260,6 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
   readonly machine?: AnyResourceMachine
-  readonly runtime?: ResourceRuntimeSlots<E, NoInfer<A> | R>
 }
 
 /**

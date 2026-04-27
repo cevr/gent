@@ -1,6 +1,8 @@
 import { Cause, Effect } from "effect"
 import type {
   ContextMessagesInput,
+  ExtensionReaction,
+  ExtensionReactions,
   ExtensionScope,
   LoadedExtension,
   MessageInputInput,
@@ -17,8 +19,6 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
-import type { ResourceReaction, ResourceRuntimeSlots } from "../../domain/resource.js"
-import type { ExtensionReactions } from "../../domain/contribution.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 
 export interface RuntimeSlotContext {
@@ -80,12 +80,12 @@ interface ProjectionContextMessagesSlot {
 
 interface RegisteredReaction<Input> {
   readonly extensionId: ExtensionId
-  readonly slot: ResourceReaction<Input, unknown, unknown>
+  readonly slot: ExtensionReaction<Input, unknown, unknown>
 }
 
 interface RegisteredToolResultTransform {
   readonly extensionId: ExtensionId
-  readonly handler: NonNullable<ResourceRuntimeSlots<unknown, unknown>["toolResult"]>
+  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["toolResult"]>
 }
 
 const SCOPE_ORDER: Record<ExtensionScope, number> = { builtin: 0, user: 1, project: 2 }
@@ -124,7 +124,7 @@ const runReaction = <Input>(
   reaction: RegisteredReaction<Input>,
 ) =>
   Effect.gen(function* () {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous ResourceReaction
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous ExtensionReaction
     const exit = yield* exitErasedEffect(() => reaction.slot.handler(input, ctx))
     if (exit._tag === "Success") return
     const cause = exit.cause
@@ -187,32 +187,20 @@ export const compileRuntimeSlots = (
       }
     }
 
-    const registerReactions = (
-      reactions: ExtensionReactions | ResourceRuntimeSlots<unknown, unknown> | undefined,
-    ) => {
-      if (reactions === undefined) return
-      if (reactions.turnBefore !== undefined) {
-        turnBeforeSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnBefore })
-      }
-      if (reactions.turnAfter !== undefined) {
-        turnAfterSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnAfter })
-      }
-      if (reactions.messageOutput !== undefined) {
-        messageOutputSlots.push({ extensionId: ext.manifest.id, slot: reactions.messageOutput })
-      }
-      if (reactions.toolResult !== undefined) {
-        toolResultSlots.push({ extensionId: ext.manifest.id, handler: reactions.toolResult })
-      }
+    const reactions = ext.contributions.reactions
+    if (reactions === undefined) continue
+    if (reactions.turnBefore !== undefined) {
+      turnBeforeSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnBefore })
     }
-
-    for (const resource of ext.contributions.resources ?? []) {
-      registerReactions(resource.runtime)
+    if (reactions.turnAfter !== undefined) {
+      turnAfterSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnAfter })
     }
-    // W10-5/C-1: top-level `defineExtension({ reactions })` lives alongside
-    // `Resource.runtime`; both are slotted into the same dispatch lists.
-    // After W10-5/C-4 the resource branch above goes away and this is the
-    // only path.
-    registerReactions(ext.contributions.reactions)
+    if (reactions.messageOutput !== undefined) {
+      messageOutputSlots.push({ extensionId: ext.manifest.id, slot: reactions.messageOutput })
+    }
+    if (reactions.toolResult !== undefined) {
+      toolResultSlots.push({ extensionId: ext.manifest.id, handler: reactions.toolResult })
+    }
   }
 
   return {

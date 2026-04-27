@@ -31,28 +31,16 @@ import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ExtensionProtocol } from "./extension-protocol.js"
 import type { AnyProjectionContribution } from "./projection.js"
-import type {
-  AnyResourceContribution,
-  ResourceContribution,
-  ResourceRuntimeSlots,
-  ResourceScope,
-} from "./resource.js"
+import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
+import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
 
 /**
- * Per-extension lifecycle reactions — handlers fired by the runtime at the
- * `turnBefore` / `turnAfter` / `messageOutput` / `toolResult` seams.
- *
- * The shape is identical to `Resource.runtime` (deliberately — the `resource:`
- * path will be deleted in W10-5/C-4 and these handlers are its only remaining
- * job). It lives at the extension top level because reactions are per-extension
- * and per-session, not per-Resource: tying them to a `Resource` slot forced
- * authors to spin up an empty Resource purely as a wrapper for the handler.
- *
- * Until W10-5/C-4 deletes `Resource`, `compileRuntimeSlots` reads from BOTH
- * `contribs.reactions` and `Resource.runtime`; new authors should use this
- * field directly.
+ * Re-export for the bucket boundary. The native definition lives in
+ * `domain/extension.ts` next to the lifecycle inputs the reactions consume.
+ * Erased to `unknown`/`unknown` at the bucket leaf — handlers close their
+ * own E/R at the declaration site (e.g. `Effect.provide(Layer)`).
  */
-export type ExtensionReactions = ResourceRuntimeSlots<unknown, unknown>
+export type ExtensionReactions = ExtensionReactionsType<unknown, unknown>
 
 /**
  * Bucket leaf for the `actors` field. The `Behavior` shape is

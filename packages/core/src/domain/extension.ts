@@ -17,6 +17,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
+import type { ExtensionHostContext } from "./extension-host-context.js"
 
 // Extension Manifest — authored by extension author
 
@@ -226,6 +227,55 @@ export interface MessageInputInput {
   readonly content: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
+}
+
+// ── Lifecycle reactions ──
+//
+// Per-extension, per-session handlers run by the runtime at the
+// `turnBefore` / `turnAfter` / `messageOutput` / `toolResult` seams.
+// Authored on `defineExtension({ reactions })`.
+
+/**
+ * Failure policy for a single reaction handler.
+ *
+ * - `continue` — log at debug; the failure is shrugged off (use for handlers
+ *   whose absence is acceptable).
+ * - `isolate` — log at warn; the failure is contained (use for best-effort
+ *   side effects, e.g. context-fill handoff).
+ * - `halt` — log at error and tear down the runtime (use only when a failed
+ *   handler implies the session is unsafe to continue).
+ */
+export type ExtensionReactionFailureMode = "continue" | "isolate" | "halt"
+
+/** Single reaction handler with explicit failure policy. */
+export interface ExtensionReaction<Input, E = never, R = never> {
+  readonly failureMode: ExtensionReactionFailureMode
+  readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
+}
+
+/**
+ * The full reactions bag accepted by `defineExtension({ reactions })`. Every
+ * field is optional; an extension that listens to nothing returns `{}` (or
+ * omits the field).
+ *
+ * Type parameters `E`/`R` are erased to `unknown` at the bucket boundary —
+ * the runtime reseals the failure channel at `runReaction` and the R channel
+ * is closed at the declaration site (e.g. `Effect.provide(Layer)`).
+ */
+export interface ExtensionReactions<E = never, R = never> {
+  readonly turnBefore?: ExtensionReaction<TurnBeforeInput, E, R>
+  readonly turnAfter?: ExtensionReaction<TurnAfterInput, E, R>
+  readonly messageOutput?: ExtensionReaction<MessageOutputInput, E, R>
+  /**
+   * Tool-result rewrite. The handler receives the current result and returns
+   * the next result; runs after the tool produces output and before downstream
+   * consumers see it. Used for journaling, redaction, and structured-result
+   * enrichment.
+   */
+  readonly toolResult?: (
+    input: ToolResultInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<unknown, E, R>
 }
 
 // Extension State Machine — server-owned state that drives tool policy, prompt, and UI

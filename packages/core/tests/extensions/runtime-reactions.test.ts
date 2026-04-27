@@ -1,13 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Data, Effect, Exit, Layer } from "effect"
+import { Cause, Data, Effect, Exit } from "effect"
 import type {
   ExtensionContributions,
+  ExtensionReactions,
   LoadedExtension,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { defineResource } from "@gent/core/domain/contribution"
 import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 
 const stubCtx = {
@@ -35,20 +35,12 @@ class BoomError extends Data.TaggedError("@gent/core/tests/runtime-reactions/Boo
   readonly reason: string
 }> {}
 
-const turnAfter = (
+const turnAfterReactions = (
   failureMode: "continue" | "isolate" | "halt",
   handler: () => Effect.Effect<void, BoomError>,
-) =>
-  defineResource({
-    scope: "process",
-    layer: Layer.empty,
-    runtime: {
-      turnAfter: {
-        failureMode,
-        handler,
-      },
-    },
-  })
+): ExtensionReactions => ({
+  turnAfter: { failureMode, handler },
+})
 
 describe("runtime reactions", () => {
   it.live('"continue": failure swallowed, later reactions still fire', () =>
@@ -56,21 +48,17 @@ describe("runtime reactions", () => {
       const calls: string[] = []
       const compiled = compileRuntimeSlots([
         ext("a", "builtin", {
-          resources: [
-            turnAfter("continue", () => {
-              calls.push("failing")
-              return Effect.fail(new BoomError({ reason: "intentional" }))
-            }),
-          ],
+          reactions: turnAfterReactions("continue", () => {
+            calls.push("failing")
+            return Effect.fail(new BoomError({ reason: "intentional" }))
+          }),
         }),
         ext("b", "builtin", {
-          resources: [
-            turnAfter("continue", () =>
-              Effect.sync(() => {
-                calls.push("after")
-              }),
-            ),
-          ],
+          reactions: turnAfterReactions("continue", () =>
+            Effect.sync(() => {
+              calls.push("after")
+            }),
+          ),
         }),
       ])
 
@@ -85,21 +73,17 @@ describe("runtime reactions", () => {
       const calls: string[] = []
       const compiled = compileRuntimeSlots([
         ext("a", "builtin", {
-          resources: [
-            turnAfter("isolate", () => {
-              calls.push("failing")
-              return Effect.fail(new BoomError({ reason: "intentional" }))
-            }),
-          ],
+          reactions: turnAfterReactions("isolate", () => {
+            calls.push("failing")
+            return Effect.fail(new BoomError({ reason: "intentional" }))
+          }),
         }),
         ext("b", "builtin", {
-          resources: [
-            turnAfter("isolate", () =>
-              Effect.sync(() => {
-                calls.push("after")
-              }),
-            ),
-          ],
+          reactions: turnAfterReactions("isolate", () =>
+            Effect.sync(() => {
+              calls.push("after")
+            }),
+          ),
         }),
       ])
 
@@ -114,21 +98,17 @@ describe("runtime reactions", () => {
       const calls: string[] = []
       const compiled = compileRuntimeSlots([
         ext("a", "builtin", {
-          resources: [
-            turnAfter("halt", () => {
-              calls.push("halting")
-              return Effect.fail(new BoomError({ reason: "critical" }))
-            }),
-          ],
+          reactions: turnAfterReactions("halt", () => {
+            calls.push("halting")
+            return Effect.fail(new BoomError({ reason: "critical" }))
+          }),
         }),
         ext("b", "builtin", {
-          resources: [
-            turnAfter("continue", () =>
-              Effect.sync(() => {
-                calls.push("after-halt")
-              }),
-            ),
-          ],
+          reactions: turnAfterReactions("continue", () =>
+            Effect.sync(() => {
+              calls.push("after-halt")
+            }),
+          ),
         }),
       ])
 
@@ -145,16 +125,16 @@ describe("runtime reactions", () => {
     Effect.gen(function* () {
       const calls: string[] = []
       const make = (label: string) =>
-        turnAfter("continue", () =>
+        turnAfterReactions("continue", () =>
           Effect.sync(() => {
             calls.push(label)
           }),
         )
 
       const compiled = compileRuntimeSlots([
-        ext("z-project", "project", { resources: [make("project")] }),
-        ext("a-builtin", "builtin", { resources: [make("builtin")] }),
-        ext("m-user", "user", { resources: [make("user")] }),
+        ext("z-project", "project", { reactions: make("project") }),
+        ext("a-builtin", "builtin", { reactions: make("builtin") }),
+        ext("m-user", "user", { reactions: make("user") }),
       ])
 
       yield* compiled.emitTurnAfter(stubEvent, stubCtx)
