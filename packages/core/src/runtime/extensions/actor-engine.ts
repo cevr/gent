@@ -65,6 +65,7 @@ import {
   type JsonValueT,
   type ServiceKey,
 } from "../../domain/actor.js"
+import type { AskBranded, ExtractAskReply } from "../../domain/schema-tagged-enum-class.js"
 import { ActorId } from "../../domain/ids.js"
 import { Receptionist } from "./receptionist.js"
 
@@ -157,12 +158,19 @@ export interface ActorEngineService {
     options?: SpawnOptions,
   ) => Effect.Effect<ActorRef<M>, ActorRestoreError | ActorPersistenceKeyCollision>
   readonly tell: <M>(target: ActorRef<M>, msg: M) => Effect.Effect<void>
-  readonly ask: <M, A>(
+  /**
+   * Ask-correlated send. The reply type is inferred from the message's
+   * `AskBranded<Reply>` brand attached by `TaggedEnumClass.askVariant<R>()`.
+   * Tell-only variants do not carry the brand and are rejected at the type
+   * level. The runtime channel is the same as before (per-correlation
+   * `Deferred` plus a per-receive `reply` shim) — only the type signature
+   * changed.
+   */
+  readonly ask: <M, ReplyMsg extends M & AskBranded<unknown>>(
     target: ActorRef<M>,
-    msg: M,
-    replyKey: (a: A) => M,
+    msg: ReplyMsg,
     options?: { askMs?: number },
-  ) => Effect.Effect<A, ActorAskTimeout>
+  ) => Effect.Effect<ExtractAskReply<ReplyMsg>, ActorAskTimeout>
   /**
    * Encoded snapshot of every live durable actor's current state.
    * Ephemeral actors are omitted; mailboxes are not captured.
@@ -235,13 +243,13 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             yield* entry.offer({ msg })
           })
 
-        const ask = <M, A>(
+        const ask = <M, ReplyMsg extends M & AskBranded<unknown>>(
           target: ActorRef<M>,
-          msg: M,
-          _replyKey: (a: A) => M,
+          msg: ReplyMsg,
           options?: { askMs?: number },
-        ): Effect.Effect<A, ActorAskTimeout> =>
+        ): Effect.Effect<ExtractAskReply<ReplyMsg>, ActorAskTimeout> =>
           Effect.gen(function* () {
+            type Reply = ExtractAskReply<ReplyMsg>
             const entry = yield* lookup(target.id)
             if (entry === undefined) {
               return yield* new ActorAskTimeout({
@@ -250,10 +258,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               })
             }
             const askId = crypto.randomUUID()
-            const deferred = yield* Deferred.make<A, ActorAskTimeout>()
+            const deferred = yield* Deferred.make<Reply, ActorAskTimeout>()
             const resolve = (answer: unknown): Effect.Effect<void> =>
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased ask correlation; A pinned by replyKey at the call site
-              Effect.asVoid(Deferred.succeed(deferred, answer as A))
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased ask correlation; Reply pinned by AskBranded<R> on the message at the call site
+              Effect.asVoid(Deferred.succeed(deferred, answer as Reply))
             const cleanup = Ref.update(pendingAsks, (m) => {
               const next = new Map(m)
               next.delete(askId)
@@ -398,8 +406,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             const ctxFor = (askId: string | undefined): ActorContext<M> => ({
               self: ref,
               tell: <N>(target: ActorRef<N>, msg: N) => tell(target, msg),
-              ask: <N, A>(target: ActorRef<N>, msg: N, replyKey: (a: A) => N) =>
-                ask(target, msg, replyKey),
+              ask: <N, ReplyMsg extends N & AskBranded<unknown>>(
+                target: ActorRef<N>,
+                msg: ReplyMsg,
+              ) => ask(target, msg),
               reply: replyFor(askId),
               find: <N>(key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.find(key),

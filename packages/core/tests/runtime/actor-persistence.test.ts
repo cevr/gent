@@ -28,7 +28,7 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
 const CounterMsg = TaggedEnumClass("CounterMsg", {
   Inc: {},
-  Get: {},
+  Get: TaggedEnumClass.askVariant<number>()({}),
 })
 type CounterMsg = Schema.Schema.Type<typeof CounterMsg>
 
@@ -75,9 +75,7 @@ describe("ActorEngine — persistence", () => {
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           // Sync via ask — guarantees prior tells were processed.
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           return yield* engine.snapshot()
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -93,9 +91,7 @@ describe("ActorEngine — persistence", () => {
           const engine = yield* ActorEngine
           const ref = yield* engine.spawn(ephemeralCounter)
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           return yield* engine.snapshot()
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -111,9 +107,7 @@ describe("ActorEngine — persistence", () => {
           // Encoded form mirrors the schema's `Encoded` (here equal to
           // the type — plain Struct of Number).
           const ref = yield* engine.spawn(durableCounter, { restoredState: { count: 7 } })
-          return yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          return yield* engine.ask(ref, CounterMsg.Get.make({}))
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -129,9 +123,7 @@ describe("ActorEngine — persistence", () => {
           const ref = yield* engine.spawn(durableCounter)
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           return yield* engine.snapshot()
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -148,9 +140,7 @@ describe("ActorEngine — persistence", () => {
           const ref = yield* engine.spawn(durableCounter, {
             restoredState: snap.get("counter"),
           })
-          return yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          return yield* engine.ask(ref, CounterMsg.Get.make({}))
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -163,13 +153,9 @@ describe("ActorEngine — persistence", () => {
         Effect.gen(function* () {
           const engine = yield* ActorEngine
           const ref = yield* engine.spawn(durableCounter)
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           return yield* engine.snapshot()
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -183,9 +169,7 @@ describe("ActorEngine — persistence", () => {
         Effect.gen(function* () {
           const engine = yield* ActorEngine
           const ref = yield* engine.spawn(durableCounter, { restoredState: undefined })
-          return yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          return yield* engine.ask(ref, CounterMsg.Get.make({}))
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -241,15 +225,11 @@ describe("ActorEngine — persistence", () => {
           const engine = yield* ActorEngine
           const ref = yield* engine.spawn(durableCounter)
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           const snap = yield* engine.snapshot()
           expect(snap.get("counter")).toEqual({ count: 1 })
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          yield* engine.ask(ref, CounterMsg.Get.make({}))
           // The first snapshot is unchanged — it's a Map<string, unknown> snapshot.
           expect(snap.get("counter")).toEqual({ count: 1 })
         }).pipe(Effect.provide(ActorEngine.Live)),
@@ -279,9 +259,7 @@ describe("ActorEngine — persistence", () => {
           // claim was released on failure.
           const ref = yield* engine.spawn(durableCounter)
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          const count = yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          const count = yield* engine.ask(ref, CounterMsg.Get.make({}))
           expect(count).toBe(1)
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),

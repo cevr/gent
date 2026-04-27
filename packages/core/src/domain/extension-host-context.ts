@@ -1,5 +1,6 @@
 import { Schema, type Effect, type PlatformError } from "effect"
 import type { ActorAskTimeout, ActorRef, ServiceKey } from "./actor"
+import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
@@ -96,11 +97,10 @@ export declare namespace ExtensionHostContext {
   interface Actors {
     readonly find: <M>(key: ServiceKey<M>) => Effect.Effect<ReadonlyArray<ActorRef<M>>>
     readonly tell: <M>(ref: ActorRef<M>, msg: M) => Effect.Effect<void>
-    readonly ask: <M, A>(
+    readonly ask: <M, ReplyMsg extends M & AskBranded<unknown>>(
       ref: ActorRef<M>,
-      msg: M,
-      replyKey: (a: A) => M,
-    ) => Effect.Effect<A, ActorAskTimeout>
+      msg: ReplyMsg,
+    ) => Effect.Effect<ExtractAskReply<ReplyMsg>, ActorAskTimeout>
   }
 
   interface Agent {

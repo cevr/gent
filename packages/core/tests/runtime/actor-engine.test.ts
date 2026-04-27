@@ -19,7 +19,7 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
 const CounterMsg = TaggedEnumClass("CounterMsg", {
   Inc: {},
-  Get: {},
+  Get: TaggedEnumClass.askVariant<number>()({}),
   Boom: {},
 })
 type CounterMsg = Schema.Schema.Type<typeof CounterMsg>
@@ -75,9 +75,7 @@ describe("ActorEngine — runtime", () => {
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          const count = yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          const count = yield* engine.ask(ref, CounterMsg.Get.make({}))
           expect(count).toBe(3)
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -90,12 +88,7 @@ describe("ActorEngine — runtime", () => {
         Effect.gen(function* () {
           const engine = yield* ActorEngine
           const phantomRef = { _tag: "ActorRef", id: "phantom-actor-id" } as never
-          return yield* engine.ask<CounterMsg, number>(
-            phantomRef,
-            CounterMsg.Get.make({}),
-            () => CounterMsg.Get.make({}),
-            { askMs: 50 },
-          )
+          return yield* engine.ask(phantomRef, CounterMsg.Get.make({}), { askMs: 50 })
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -107,7 +100,9 @@ describe("ActorEngine — runtime", () => {
   })
 
   test("ask times out when no reply arrives", async () => {
-    const SilentMsg = TaggedEnumClass("SilentMsg", { NoReply: {} })
+    const SilentMsg = TaggedEnumClass("SilentMsg", {
+      NoReply: TaggedEnumClass.askVariant<number>()({}),
+    })
     type SilentMsg = Schema.Schema.Type<typeof SilentMsg>
     const silent: Behavior<SilentMsg, null, never> = {
       initialState: null,
@@ -118,12 +113,7 @@ describe("ActorEngine — runtime", () => {
         Effect.gen(function* () {
           const engine = yield* ActorEngine
           const ref = yield* engine.spawn(silent)
-          return yield* engine.ask<SilentMsg, number>(
-            ref,
-            SilentMsg.NoReply.make({}),
-            () => SilentMsg.NoReply.make({}),
-            { askMs: 50 },
-          )
+          return yield* engine.ask(ref, SilentMsg.NoReply.make({}), { askMs: 50 })
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -143,9 +133,7 @@ describe("ActorEngine — runtime", () => {
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           yield* engine.tell(ref, CounterMsg.Boom.make({}))
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          const count = yield* engine.ask<CounterMsg, number>(ref, CounterMsg.Get.make({}), () =>
-            CounterMsg.Get.make({}),
-          )
+          const count = yield* engine.ask(ref, CounterMsg.Get.make({}))
           expect(count).toBe(2)
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
@@ -218,7 +206,7 @@ describe("ActorEngine — runtime", () => {
     // (no mailbox).
     const PoisonMsg = TaggedEnumClass("PoisonMsg", {
       Die: {},
-      Ping: {},
+      Ping: TaggedEnumClass.askVariant<number>()({}),
     })
     type PoisonMsg = Schema.Schema.Type<typeof PoisonMsg>
 
@@ -245,12 +233,7 @@ describe("ActorEngine — runtime", () => {
           // The actor's fiber is dead; mailbox entry is still in the
           // map but the receive fiber is no longer pulling from the
           // queue. ask must observe a timeout.
-          return yield* engine.ask<PoisonMsg, number>(
-            ref,
-            PoisonMsg.Ping.make({}),
-            () => PoisonMsg.Ping.make({}),
-            { askMs: 50 },
-          )
+          return yield* engine.ask(ref, PoisonMsg.Ping.make({}), { askMs: 50 })
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
@@ -454,7 +437,10 @@ describe("ActorEngine — subscribeState", () => {
     // `Stream.changes` collapses duplicates downstream. `Probe`
     // serves as a fence: receive replies, so awaiting `engine.ask`
     // proves all prior Touch messages have been processed.
-    const TouchMsg = TaggedEnumClass("TouchMsg", { Touch: {}, Probe: {} })
+    const TouchMsg = TaggedEnumClass("TouchMsg", {
+      Touch: {},
+      Probe: TaggedEnumClass.askVariant<number>()({}),
+    })
     type TouchMsg = Schema.Schema.Type<typeof TouchMsg>
     interface IdleState {
       readonly _tag: "Idle"
@@ -490,9 +476,7 @@ describe("ActorEngine — subscribeState", () => {
           // Fence: ask drains the mailbox up through this point. By
           // the time the reply lands, every Touch has been processed
           // and any non-deduped publishes would have been observed.
-          const v = yield* engine.ask<TouchMsg, number>(ref, TouchMsg.Probe.make({}), () =>
-            TouchMsg.Probe.make({}),
-          )
+          const v = yield* engine.ask(ref, TouchMsg.Probe.make({}))
           expect(v).toBe(0)
           yield* Fiber.interrupt(fiber)
           expect(collected).toEqual([0])

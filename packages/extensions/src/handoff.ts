@@ -29,7 +29,7 @@ const EXTENSION_ID = HANDOFF_EXTENSION_ID
 export const CooldownMsg = TaggedEnumClass("CooldownMsg", {
   TurnCompleted: {},
   Suppress: { count: Schema.Number },
-  GetCooldown: {},
+  GetCooldown: TaggedEnumClass.askVariant<number>()({}),
 })
 export type CooldownMsg = Schema.Schema.Type<typeof CooldownMsg>
 
@@ -94,13 +94,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     if (autoActive) return
 
     const cooldown = yield* ctx.actors
-      .ask(cooldownRef, CooldownMsg.GetCooldown.make({}), (n: number) => {
-        // Reply token pins the answer type `A = number` for ask
-        // correlation. The returned message is never enqueued — the
-        // engine threads `n` back through the pending Deferred.
-        void n
-        return CooldownMsg.GetCooldown.make({})
-      })
+      .ask(cooldownRef, CooldownMsg.GetCooldown.make({}))
       .pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldown > 0) return
 

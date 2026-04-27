@@ -29,7 +29,7 @@ import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-st
 
 const PingMsg = TaggedEnumClass("PingMsg", {
   Bump: {},
-  Get: {},
+  Get: TaggedEnumClass.askVariant<number>()({}),
 })
 type PingMsg = Schema.Schema.Type<typeof PingMsg>
 
@@ -104,9 +104,7 @@ describe("ActorHost", () => {
           const ref = refs[0] as ActorRef<PingMsg>
           yield* engine.tell(ref, PingMsg.Bump.make({}))
           yield* engine.tell(ref, PingMsg.Bump.make({}))
-          return yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
-            PingMsg.Get.make({}),
-          )
+          return yield* engine.ask(ref, PingMsg.Get.make({}))
         }).pipe(Effect.provide(layer)),
       ),
     )
@@ -325,9 +323,7 @@ describe("ActorHost", () => {
           // Drain via ask — guarantees the three Bump messages have been
           // processed and the post-state is in the per-actor stateRef
           // before we close the scope.
-          const drained = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
-            PingMsg.Get.make({}),
-          )
+          const drained = yield* engine.ask(ref, PingMsg.Get.make({}))
           expect(drained).toBe(3)
           // Poll the storage row until the periodic writer has emitted
           // it. With writeInterval=1ms the first tick fires almost
@@ -364,9 +360,7 @@ describe("ActorHost", () => {
           const reg = Context.get(wave2Ctx, Receptionist)
           const refs = yield* reg.find(PingService)
           const ref = refs[0] as ActorRef<PingMsg>
-          const hits = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
-            PingMsg.Get.make({}),
-          )
+          const hits = yield* engine.ask(ref, PingMsg.Get.make({}))
           yield* Scope.close(wave2Scope, Exit.void)
           return hits
         })
@@ -437,9 +431,7 @@ describe("ActorHost", () => {
         yield* engine.tell(ref, PingMsg.Bump.make({}))
         yield* engine.tell(ref, PingMsg.Bump.make({}))
         yield* engine.tell(ref, PingMsg.Bump.make({}))
-        const drained = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
-          PingMsg.Get.make({}),
-        )
+        const drained = yield* engine.ask(ref, PingMsg.Get.make({}))
         expect(drained).toBe(3)
 
         yield* Scope.close(wave1Scope, Exit.void)
@@ -526,7 +518,10 @@ describe("ActorHost — engine integration", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ref = yield* Ref.make(0)
-          const Tick = TaggedEnumClass("Tick", { Bump: {}, Read: {} })
+          const Tick = TaggedEnumClass("Tick", {
+            Bump: {},
+            Read: TaggedEnumClass.askVariant<number>()({}),
+          })
           type Tick = Schema.Schema.Type<typeof Tick>
           const TickKey = ServiceKey<Tick>("tick-key")
           const behavior: Behavior<Tick, { n: number }, never> = {
@@ -557,9 +552,7 @@ describe("ActorHost — engine integration", () => {
               yield* engine.tell(target, Tick.Bump.make({}))
               yield* engine.tell(target, Tick.Bump.make({}))
               yield* engine.tell(target, Tick.Bump.make({}))
-              const seen = yield* engine.ask<Tick, number>(target, Tick.Read.make({}), () =>
-                Tick.Read.make({}),
-              )
+              const seen = yield* engine.ask(target, Tick.Read.make({}))
               return seen
             }).pipe(Effect.provide(layer)),
           )

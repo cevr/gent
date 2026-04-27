@@ -17,8 +17,16 @@ import {
   type Behavior,
 } from "@gent/core/domain/actor"
 import { ActorId } from "@gent/core/domain/ids"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
 type Ping = { readonly tag: "Ping" } | { readonly tag: "Pong" }
+
+const PingMsg = TaggedEnumClass("PingMsg", {
+  Ping: {},
+  Pong: {},
+  GetCount: TaggedEnumClass.askVariant<number>()({}),
+})
+type PingMsg = Schema.Schema.Type<typeof PingMsg>
 
 describe("ServiceKey", () => {
   test("factory builds a key with the supplied name", () => {
@@ -81,11 +89,17 @@ describe("type-level — ActorContext threads M end-to-end", () => {
     expect(behavior.serviceKey?.name).toBe("ping")
   })
 
-  test("ctx.ask infers reply-payload type from the replyKey lift", () => {
-    // Compile-time check: `ask<N, A>` carries A through replyKey: (a: A) => N.
-    // Body never executes — it's the inference pin.
-    const _stub = (ctx: ActorContext<Ping>, target: ActorRef<Ping>) =>
-      ctx.ask<Ping, "ack">(target, { tag: "Ping" }, () => ({ tag: "Pong" }))
+  test("ctx.ask infers reply type from the AskBranded variant", () => {
+    // Compile-time check: askVariant<R>()(fields) brands the variant; ctx.ask
+    // pulls R off the message type without a replyKey lambda. Body never
+    // executes — it's the inference pin.
+    const _stub = (ctx: ActorContext<PingMsg>, target: ActorRef<PingMsg>) => {
+      const reply: Effect.Effect<number, ActorAskTimeout> = ctx.ask(
+        target,
+        PingMsg.GetCount.make({}),
+      )
+      return reply
+    }
     void _stub
     expect(true).toBe(true)
   })

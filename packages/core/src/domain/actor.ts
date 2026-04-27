@@ -2,6 +2,7 @@ import { Schema, type Effect, type Stream } from "effect"
 import { ActorId } from "./ids.js"
 import type { ToolPolicyFragment } from "./extension.js"
 import type { PromptSection } from "./prompt.js"
+import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
 
 /**
  * Actor primitives — W9 foundation.
@@ -62,11 +63,17 @@ export const ServiceKey = <M>(name: string): ServiceKey<M> => ({
 export interface ActorContext<M> {
   readonly self: ActorRef<M>
   readonly tell: <N>(target: ActorRef<N>, msg: N) => Effect.Effect<void>
-  readonly ask: <N, A>(
+  /**
+   * Ask-correlated send. Reply type is inferred from the message's
+   * `AskBranded<Reply>` brand, which is attached at variant declaration time
+   * via `TaggedEnumClass.askVariant<R>()(fields)`. Tell-only variants do not
+   * carry the brand and are rejected at the type level — callers cannot
+   * accidentally `ask` a fire-and-forget variant.
+   */
+  readonly ask: <N, ReplyMsg extends N & AskBranded<unknown>>(
     target: ActorRef<N>,
-    msg: N,
-    replyKey: (a: A) => N,
-  ) => Effect.Effect<A, ActorAskTimeout>
+    msg: ReplyMsg,
+  ) => Effect.Effect<ExtractAskReply<ReplyMsg>, ActorAskTimeout>
   /**
    * Fulfill the ask correlation that delivered the current message.
    *

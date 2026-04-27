@@ -166,7 +166,7 @@ export const AutoMsg = TaggedEnumClass("AutoMsg", {
   IsActive: {},
   GetSnapshot: {},
   /** Slot-handler-only: read & clear the pending follow-up content. */
-  DrainFollowUp: {},
+  DrainFollowUp: TaggedEnumClass.askVariant<string | undefined>()({}),
 })
 export type AutoMsg = Schema.Schema.Type<typeof AutoMsg>
 
@@ -531,9 +531,7 @@ const drainAndQueueFollowUp = (ctx: ExtensionHostContext) =>
     if (ref === undefined) return
 
     const followUp = yield* ctx.actors
-      .ask(ref, AutoMsg.DrainFollowUp.make({}), (_value: string | undefined) =>
-        AutoMsg.DrainFollowUp.make({}),
-      )
+      .ask(ref, AutoMsg.DrainFollowUp.make({}))
       .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
 
     if (followUp === undefined || followUp === "") return

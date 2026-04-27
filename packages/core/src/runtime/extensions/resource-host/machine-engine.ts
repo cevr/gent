@@ -123,16 +123,6 @@ export const makeMachineEngine = (
     const findActorRefForRoute = (route: ActorBackedRoute) =>
       receptionist.find(route.serviceKey).pipe(Effect.map((refs) => refs[0]))
 
-    // Reply-key thunk for actor-route ask. The phantom callback exists
-    // to pin the answer's TS type; the engine never calls it. Returning
-    // the request itself satisfies the `(a: A) => M` shape without
-    // building a synthetic envelope. `void a` keeps lint quiet.
-    const askReplyKey =
-      <M>(message: M) =>
-      (_a: unknown) => {
-        void _a
-        return message
-      }
     const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
     const notifyPublishListener = (transitioned: ReadonlyArray<string>) =>
@@ -289,7 +279,7 @@ export const makeMachineEngine = (
             }
             const replyValue = yield* actorEngine
               // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ExtensionMessage envelope IS the actor message; reply correlation handled by the engine
-              .ask(actorRef, decoded as never, askReplyKey(decoded as never))
+              .ask(actorRef, decoded as never)
               .pipe(
                 Effect.mapError((cause) =>
                   protocolError(
