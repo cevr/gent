@@ -224,7 +224,6 @@
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
-    "effect": "catalog:",
-    "effect-machine": "catalog:"
+    "effect": "catalog:"
   }
 }

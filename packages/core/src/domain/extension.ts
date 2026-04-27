@@ -1,22 +1,15 @@
 import type { Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { AnyCapabilityContribution } from "./capability"
-import type { AgentEvent } from "./event"
 import { BranchId, ExtensionId, SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
-import type {
-  AnyExtensionCommandMessage,
-  AnyExtensionRequestMessage,
-  ExtensionProtocolError,
-  ExtractExtensionReply,
-} from "./extension-protocol.js"
+import type { AnyExtensionCommandMessage } from "./extension-protocol.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 
 // Extension Manifest — authored by extension author
@@ -338,72 +331,6 @@ export interface ReduceResult<State> {
 export interface RequestResult<State, Reply> extends ReduceResult<State> {
   readonly reply: Reply
 }
-
-export interface ExtensionSnapshot {
-  readonly state: unknown
-  readonly epoch: number
-}
-
-/**
- * Session-scoped extension actor/ref.
- * Lifecycle: spawn → start → publish/send/ask → snapshot → stop
- *
- * `ask` is always part of the boundary. Requests with no meaningful payload
- * reply should use `void` / `null` schemas. Unsupported requests fail loudly.
- */
-export interface ExtensionRef {
-  readonly id: string
-  readonly start: Effect.Effect<void, ExtensionProtocolError>
-  readonly publish: (
-    event: AgentEvent,
-    ctx: ExtensionReduceContext,
-  ) => Effect.Effect<boolean, ExtensionProtocolError>
-  readonly send: (
-    message: AnyExtensionCommandMessage,
-    branchId?: BranchId,
-  ) => Effect.Effect<void, ExtensionProtocolError>
-  readonly execute: <M extends AnyExtensionRequestMessage>(
-    message: M,
-    branchId?: BranchId,
-  ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
-  readonly snapshot: Effect.Effect<ExtensionSnapshot, ExtensionProtocolError>
-  readonly stop: Effect.Effect<void>
-}
-
-export interface ExtensionActorDefinition<
-  State extends { readonly _tag: string } = { readonly _tag: string },
-  Event extends { readonly _tag: string } = { readonly _tag: string },
-  SlotsR = never,
-  SD extends SlotsDef = Record<string, never>,
-> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  readonly machine: Machine.Machine<State, Event, never, any, any, SD>
-  readonly slots?: (ctx: {
-    readonly sessionId: SessionId
-    readonly branchId?: BranchId
-  }) => Effect.Effect<ProvideSlots<SD>, never, SlotsR>
-  readonly mapEvent?: (event: AgentEvent) => Event | undefined
-  readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
-  readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
-  /** State schema enables persistence — if set, the actor's state is persisted
-   *  via effect-machine's Recovery + Durability lifecycle. */
-  readonly stateSchema?: Schema.Schema<State>
-  /** Protocol definitions owned by this actor. */
-  readonly protocols?: Readonly<Record<string, unknown>>
-  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
-  readonly onInit?: (ctx: {
-    readonly sessionId: SessionId
-    readonly snapshot: Effect.Effect<State>
-    readonly send: (event: Event) => Effect.Effect<boolean>
-    readonly sessionCwd?: string
-    readonly parentSessionId?: SessionId
-    readonly getSessionAncestors: () => Effect.Effect<ReadonlyArray<{ readonly id: string }>>
-    readonly slots?: SlotCalls<SD>
-  }) => Effect.Effect<void>
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any, any>
 
 // `CommandContribution` (server slash commands) was deleted in C8 — no
 // extension contributes one anymore (executor migrated to a Capability with

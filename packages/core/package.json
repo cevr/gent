@@ -175,7 +175,6 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/"
   },
   "dependencies": {
-    "effect-machine": "catalog:",
     "effect-wide-event": "catalog:"
   },
   "peerDependencies": {
