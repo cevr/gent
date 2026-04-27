@@ -223,17 +223,6 @@ const spawnWithPersistence = (
   })
 
 /**
- * Periodic durable-snapshot loop. Walks every live durable actor via
- * `engine.snapshot()` and upserts each row through
- * `ActorPersistenceStorage.saveActorState`. Runs as a forked fiber on
- * the host scope so teardown stops the writer cleanly.
- *
- * Failures are logged + skipped (per row, not per cycle) — a single
- * encode/IO failure must not stall the rest. The semaphore in
- * `actor-engine.snapshotForActor` guarantees each row is the post-state
- * of a completed `receive`, so we never persist a torn intermediate.
- */
-/**
  * Single durable-write pass. Walks every live durable actor via
  * `engine.snapshot()` and upserts each row through
  * `ActorPersistenceStorage.saveActorState`. Used by the periodic
