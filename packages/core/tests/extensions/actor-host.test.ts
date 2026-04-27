@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import { ActorHost } from "@gent/core/runtime/extensions/actor-host"
 import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
@@ -108,40 +108,56 @@ describe("ActorHost", () => {
   })
 
   test("host-scope teardown interrupts spawned actor fibers", async () => {
-    const resolved = makeResolved([makeLoaded("@test/ping", [makePingBehavior()])])
-    const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+    // Block the spawned receive on `Effect.never`, signal via Deferred
+    // when the fiber actually reaches receive, signal a second Deferred
+    // via `Effect.onInterrupt` when it is interrupted. Closing the host
+    // scope must fire the interrupt finalizer.
+    const HoldMsg = TaggedEnumClass("HoldMsg", { Hold: {} })
+    type HoldMsg = Schema.Schema.Type<typeof HoldMsg>
+    const HoldKey = ServiceKey<HoldMsg>("hold-service")
 
-    // Capture a ref while the scope is open, then attempt to use it in
-    // a *new* scope. The new engine has its own mailbox table and
-    // does not know about the dead actor's id, so `ask` against the
-    // captured ref must time out — proving the previous scope's
-    // spawn was actually torn down (not leaked into the second engine).
-    const capturedRef = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const reg = yield* Receptionist
-          const refs = yield* reg.find(PingService)
-          return refs[0]
-        }).pipe(Effect.provide(layer)),
-      ),
-    )
-    expect(capturedRef).toBeDefined()
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const reachedReceive = yield* Deferred.make<void>()
+        const interrupted = yield* Deferred.make<void>()
 
-    const exit = await Effect.runPromiseExit(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const engine = yield* ActorEngine
-          // Dead ref + 100ms ask deadline → timeout immediately.
-          return yield* engine.ask<PingMsg, number>(
-            capturedRef as ActorRef<PingMsg>,
-            PingMsg.Get.make({}),
-            () => PingMsg.Get.make({}),
-            { askMs: 100 },
-          )
-        }).pipe(Effect.provide(layer)),
-      ),
+        const holdBehavior: Behavior<HoldMsg, null, never> = {
+          initialState: null,
+          serviceKey: HoldKey,
+          receive: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(reachedReceive, undefined)
+              yield* Effect.never
+              return null
+            }).pipe(
+              Effect.onInterrupt(() => Effect.asVoid(Deferred.succeed(interrupted, undefined))),
+            ) as Effect.Effect<null, never, never>,
+        }
+
+        const resolved = makeResolved([
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only reads `manifest.id` + `contributions.actors`
+          makeLoaded("@test/hold", [
+            holdBehavior as unknown as Behavior<PingMsg, PingState, never>,
+          ]),
+        ])
+        const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+
+        const hostScope = yield* Scope.make()
+        const ctx = yield* Layer.buildWithScope(layer, hostScope)
+        const engine = Context.get(ctx, ActorEngine)
+        const reg = Context.get(ctx, Receptionist)
+
+        const refs = yield* reg.find(HoldKey)
+        const ref = refs[0] as ActorRef<HoldMsg>
+        yield* engine.tell(ref, HoldMsg.Hold.make({}))
+        yield* Deferred.await(reachedReceive)
+
+        yield* Scope.close(hostScope, Exit.void)
+
+        const result = yield* Deferred.await(interrupted).pipe(Effect.timeoutOption("1 second"))
+        expect(result._tag).toBe("Some")
+      }),
     )
-    expect(exit._tag).toBe("Failure")
   })
 
   test("two extensions contributing one actor each: both reach the registry", async () => {

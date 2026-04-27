@@ -5,6 +5,7 @@
   },
   "include": [
     "src",
+    "tests/domain/actor.test.ts",
     "tests/runtime/scope-brands.test.ts",
     "tests/runtime/runtime-profile.test.ts",
     "tests/extensions/extension-surface-locks.test.ts",

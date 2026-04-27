@@ -69,8 +69,8 @@ describe("type-level — ActorContext threads M end-to-end", () => {
           if (msg.tag === "Ping") yield* ctx.tell(ctx.self, { tag: "Pong" })
           // ctx.find returns ActorRef<Ping>[].
           const peers: ReadonlyArray<ActorRef<Ping>> = yield* ctx.find(PingKey)
-          // ctx.subscribe yields ActorRef<Ping> events.
-          const stream: Stream.Stream<ActorRef<Ping>> = ctx.subscribe(PingKey)
+          // ctx.subscribe yields ref-set snapshots.
+          const stream: Stream.Stream<ReadonlyArray<ActorRef<Ping>>> = ctx.subscribe(PingKey)
           void peers
           void stream
           return { count: state.count + 1 }
