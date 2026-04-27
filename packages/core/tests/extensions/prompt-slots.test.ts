@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubHostCtx = {
@@ -48,7 +48,7 @@ const ext = (
 
 describe("prompt slots", () => {
   it.live("compose in scope order: builtin then user then project", () => {
-    const compiled = compileRuntimeSlots([
+    const compiled = compileExtensionReactions([
       ext("p", "project", "[project]"),
       ext("a", "builtin", "[builtin]"),
       ext("u", "user", "[user]"),
@@ -65,7 +65,7 @@ describe("prompt slots", () => {
   })
 
   it.live("empty projection registry is a no-op", () =>
-    compileRuntimeSlots([])
+    compileExtensionReactions([])
       .resolveSystemPrompt(
         { basePrompt: "x", agent: Agents.cowork },
         { projection: stubProjectionCtx, host: stubHostCtx },

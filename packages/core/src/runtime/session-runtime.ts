@@ -410,14 +410,15 @@ const makeLiveSessionRuntime: Effect.Effect<
           ),
         )
         const { environment } = resolved
-        const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
-          {
-            content: command.content,
-            sessionId: command.sessionId,
-            branchId: command.branchId,
-          },
-          environment.hostCtx,
-        )
+        const content =
+          yield* environment.extensionRegistry.extensionReactions.normalizeMessageInput(
+            {
+              content: command.content,
+              sessionId: command.sessionId,
+              branchId: command.branchId,
+            },
+            environment.hostCtx,
+          )
 
         const message = Message.Regular.make({
           id: userMessageIdForCommand(commandId),

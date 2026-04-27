@@ -386,12 +386,7 @@ export interface DefineExtensionInput {
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
-   *
-   * During W10-5 the same shape lives at `Resource.runtime`; both are read
-   * by `compileRuntimeSlots`. After W10-5/C-4 `Resource` is gone and this
-   * is the only path. New code should use this field directly — declaring
-   * a Resource purely as a wrapper for a reaction is the smell that
-   * motivated the lift.
+   * Compiled by `compileExtensionReactions`.
    */
   readonly reactions?: ExtensionReactions
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>

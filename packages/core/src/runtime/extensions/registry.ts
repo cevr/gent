@@ -14,7 +14,10 @@ import type {
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
-import { compileRuntimeSlots, type CompiledRuntimeSlots } from "./runtime-slots.js"
+import {
+  compileExtensionReactions,
+  type CompiledExtensionReactions,
+} from "./extension-reactions.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
@@ -48,7 +51,7 @@ export interface ResolvedExtensions {
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly permissionRules: ReadonlyArray<PermissionRule>
-  readonly runtimeSlots: CompiledRuntimeSlots
+  readonly extensionReactions: CompiledExtensionReactions
   readonly projections: CompiledProjections
   readonly capabilities: CompiledCapabilities
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -185,7 +188,7 @@ export const resolveExtensions = (
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
   }
 
-  const runtimeSlots = compileRuntimeSlots(sorted)
+  const extensionReactions = compileExtensionReactions(sorted)
   const projections = compileProjections(sorted)
   const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -214,7 +217,7 @@ export const resolveExtensions = (
     externalDrivers,
     promptSections: promptSectionsMap,
     permissionRules,
-    runtimeSlots,
+    extensionReactions,
     projections,
     capabilities,
     extensions: sorted,
@@ -333,7 +336,7 @@ export interface ExtensionRegistryService {
   readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
 
-  readonly runtimeSlots: CompiledRuntimeSlots
+  readonly extensionReactions: CompiledExtensionReactions
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
@@ -393,7 +396,7 @@ export class ExtensionRegistry extends Context.Service<
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
-      runtimeSlots: resolved.runtimeSlots,
+      extensionReactions: resolved.extensionReactions,
       getResolved: () => resolved,
     })
 

@@ -8,7 +8,7 @@ import type {
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 
 const stubCtx = {
   sessionId: "test-session",
@@ -46,7 +46,7 @@ describe("runtime reactions", () => {
   it.live('"continue": failure swallowed, later reactions still fire', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const compiled = compileRuntimeSlots([
+      const compiled = compileExtensionReactions([
         ext("a", "builtin", {
           reactions: turnAfterReactions("continue", () => {
             calls.push("failing")
@@ -71,7 +71,7 @@ describe("runtime reactions", () => {
   it.live('"isolate": failure swallowed with warning, later reactions still fire', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const compiled = compileRuntimeSlots([
+      const compiled = compileExtensionReactions([
         ext("a", "builtin", {
           reactions: turnAfterReactions("isolate", () => {
             calls.push("failing")
@@ -96,7 +96,7 @@ describe("runtime reactions", () => {
   it.live('"halt": failure surfaces as defect; later reactions do not fire', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const compiled = compileRuntimeSlots([
+      const compiled = compileExtensionReactions([
         ext("a", "builtin", {
           reactions: turnAfterReactions("halt", () => {
             calls.push("halting")
@@ -131,7 +131,7 @@ describe("runtime reactions", () => {
           }),
         )
 
-      const compiled = compileRuntimeSlots([
+      const compiled = compileExtensionReactions([
         ext("z-project", "project", { reactions: make("project") }),
         ext("a-builtin", "builtin", { reactions: make("builtin") }),
         ext("m-user", "user", { reactions: make("user") }),

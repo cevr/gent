@@ -21,12 +21,12 @@ import type { PermissionResult } from "../../domain/permission.js"
 import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 
-export interface RuntimeSlotContext {
+export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
   readonly host: ExtensionHostContext
 }
 
-export interface CompiledRuntimeSlots {
+export interface CompiledExtensionReactions {
   readonly normalizeMessageInput: (
     input: MessageInputInput,
     ctx: ExtensionHostContext,
@@ -38,11 +38,11 @@ export interface CompiledRuntimeSlots {
   ) => Effect.Effect<PermissionResult>
   readonly resolveContextMessages: (
     input: ContextMessagesInput,
-    ctx: RuntimeSlotContext,
+    ctx: ExtensionReactionContext,
   ) => Effect.Effect<ReadonlyArray<Message>>
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
-    ctx: RuntimeSlotContext,
+    ctx: ExtensionReactionContext,
   ) => Effect.Effect<string>
   readonly executeTool: (
     input: ToolExecuteInput,
@@ -107,12 +107,12 @@ const runProjectionQuery = (
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential ProjectionContribution
   sealErasedEffect(() => query(ctx), {
     onFailure: (error) =>
-      Effect.logWarning("extension.runtime-slot.query.failed").pipe(
+      Effect.logWarning("extension.reaction.query.failed").pipe(
         Effect.annotateLogs({ extensionId, projectionId, error: String(error) }),
         Effect.as(undefined),
       ),
     onDefect: (defect) =>
-      Effect.logWarning("extension.runtime-slot.query.defect").pipe(
+      Effect.logWarning("extension.reaction.query.defect").pipe(
         Effect.annotateLogs({ extensionId, projectionId, defect: String(defect) }),
         Effect.as(undefined),
       ),
@@ -130,7 +130,7 @@ const runReaction = <Input>(
     const cause = exit.cause
     switch (reaction.slot.failureMode) {
       case "continue":
-        yield* Effect.logDebug("extension.runtime-reaction.failed").pipe(
+        yield* Effect.logDebug("extension.reaction.handler.failed").pipe(
           Effect.annotateLogs({
             extensionId: reaction.extensionId,
             cause: Cause.pretty(cause),
@@ -138,7 +138,7 @@ const runReaction = <Input>(
         )
         return
       case "isolate":
-        yield* Effect.logWarning("extension.runtime-reaction.failed").pipe(
+        yield* Effect.logWarning("extension.reaction.handler.failed").pipe(
           Effect.annotateLogs({
             extensionId: reaction.extensionId,
             cause: Cause.pretty(cause),
@@ -146,7 +146,7 @@ const runReaction = <Input>(
         )
         return
       case "halt":
-        yield* Effect.logError("extension.runtime-reaction.halt").pipe(
+        yield* Effect.logError("extension.reaction.handler.halt").pipe(
           Effect.annotateLogs({
             extensionId: reaction.extensionId,
             cause: Cause.pretty(cause),
@@ -156,9 +156,9 @@ const runReaction = <Input>(
     }
   })
 
-export const compileRuntimeSlots = (
+export const compileExtensionReactions = (
   extensions: ReadonlyArray<LoadedExtension>,
-): CompiledRuntimeSlots => {
+): CompiledExtensionReactions => {
   const sorted = sortExtensions(extensions)
   const systemPromptSlots: ProjectionSystemPromptSlot[] = []
   const contextMessageSlots: ProjectionContextMessagesSlot[] = []
@@ -223,7 +223,7 @@ export const compileRuntimeSlots = (
             .contextMessages(value, { ...input, messages: current }, ctx.projection)
             .pipe(
               Effect.catchEager((error) =>
-                Effect.logWarning("extension.runtime-slot.context-messages.failed").pipe(
+                Effect.logWarning("extension.reaction.context-messages.failed").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     projectionId: slot.projectionId,
@@ -233,7 +233,7 @@ export const compileRuntimeSlots = (
                 ),
               ),
               Effect.catchDefect((defect) =>
-                Effect.logWarning("extension.runtime-slot.context-messages.defect").pipe(
+                Effect.logWarning("extension.reaction.context-messages.defect").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     projectionId: slot.projectionId,
@@ -262,7 +262,7 @@ export const compileRuntimeSlots = (
             .systemPrompt(value, { ...input, basePrompt: current }, ctx.projection)
             .pipe(
               Effect.catchEager((error) =>
-                Effect.logWarning("extension.runtime-slot.system-prompt.failed").pipe(
+                Effect.logWarning("extension.reaction.system-prompt.failed").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     projectionId: slot.projectionId,
@@ -272,7 +272,7 @@ export const compileRuntimeSlots = (
                 ),
               ),
               Effect.catchDefect((defect) =>
-                Effect.logWarning("extension.runtime-slot.system-prompt.defect").pipe(
+                Effect.logWarning("extension.reaction.system-prompt.defect").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     projectionId: slot.projectionId,
@@ -297,7 +297,7 @@ export const compileRuntimeSlots = (
             () => slot.handler({ ...input, result: current }, ctx),
             {
               onFailure: (error) =>
-                Effect.logWarning("extension.runtime-slot.tool-result.failed").pipe(
+                Effect.logWarning("extension.reaction.tool-result.failed").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     error: String(error),
@@ -305,7 +305,7 @@ export const compileRuntimeSlots = (
                   Effect.as(current),
                 ),
               onDefect: (defect) =>
-                Effect.logWarning("extension.runtime-slot.tool-result.defect").pipe(
+                Effect.logWarning("extension.reaction.tool-result.defect").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
                     defect: String(defect),

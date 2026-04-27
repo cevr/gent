@@ -13,7 +13,7 @@ import type {
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 
 const stubHostCtx = {
   sessionId: "test-session",
@@ -47,13 +47,13 @@ const makeExt = (
   contributions,
 })
 
-class BoomError extends Data.TaggedError("@gent/core/tests/runtime-slots/BoomError")<{
+class BoomError extends Data.TaggedError("@gent/core/tests/extension-reactions/BoomError")<{
   readonly reason: string
 }> {}
 
 describe("runtime slots", () => {
   it.live("normalizeMessageInput is a pass-through without explicit rewrites", () => {
-    const slots = compileRuntimeSlots([])
+    const slots = compileExtensionReactions([])
     return slots
       .normalizeMessageInput(
         {
@@ -88,7 +88,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(extensions)
+    const slots = compileExtensionReactions(extensions)
 
     return slots
       .resolveSystemPrompt(
@@ -138,7 +138,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(extensions)
+    const slots = compileExtensionReactions(extensions)
 
     return slots
       .resolveContextMessages(
@@ -173,7 +173,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(extensions)
+    const slots = compileExtensionReactions(extensions)
 
     return slots
       .transformToolResult(
@@ -229,7 +229,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(extensions)
+    const slots = compileExtensionReactions(extensions)
 
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(
@@ -254,7 +254,7 @@ describe("runtime slots", () => {
 
   it.live("turnBefore explicit reactions fire in scope order", () => {
     const calls: string[] = []
-    const slots = compileRuntimeSlots([
+    const slots = compileExtensionReactions([
       makeExt("builtin", "builtin", {
         reactions: {
           turnBefore: {
@@ -295,7 +295,7 @@ describe("runtime slots", () => {
 
   it.live("messageOutput explicit reactions fire in scope order", () => {
     const calls: string[] = []
-    const slots = compileRuntimeSlots([
+    const slots = compileExtensionReactions([
       makeExt("builtin", "builtin", {
         reactions: {
           messageOutput: {

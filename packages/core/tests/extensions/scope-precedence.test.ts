@@ -15,7 +15,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -195,7 +195,7 @@ describe("scope precedence", () => {
         })
 
       // Pass out of order to prove sorting, not insertion
-      const compiled = compileRuntimeSlots([
+      const compiled = compileExtensionReactions([
         make("p", "project"),
         make("a", "builtin"),
         make("u", "user"),

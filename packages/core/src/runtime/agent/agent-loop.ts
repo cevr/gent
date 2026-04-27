@@ -416,7 +416,7 @@ const persistAssistantParts = (params: {
       params.hostCtx !== undefined &&
       params.parts.length > 0
     ) {
-      yield* params.extensionRegistry.runtimeSlots.emitMessageOutput(
+      yield* params.extensionRegistry.extensionReactions.emitMessageOutput(
         {
           sessionId: params.sessionId,
           branchId: params.branchId,
@@ -557,15 +557,16 @@ const resolveTurnContext = (params: {
       sessionCwd: params.hostCtx.cwd,
       turn: turnCtx,
     }
-    const interceptedMessages = yield* params.extensionRegistry.runtimeSlots.resolveContextMessages(
-      {
-        messages: rawMessages,
-        agent: effectiveAgent,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-      },
-      { projection: projectionCtx, host: params.hostCtx },
-    )
+    const interceptedMessages =
+      yield* params.extensionRegistry.extensionReactions.resolveContextMessages(
+        {
+          messages: rawMessages,
+          agent: effectiveAgent,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+        },
+        { projection: projectionCtx, host: params.hostCtx },
+      )
 
     // Filter out hidden messages — visible in transcript but excluded from LLM context
     const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
@@ -612,7 +613,7 @@ const resolveTurnContext = (params: {
     )
     const turnPrompt = compileSystemPrompt(sections)
     const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent, params.driverRegistry)
-    const systemPrompt = yield* params.extensionRegistry.runtimeSlots.resolveSystemPrompt(
+    const systemPrompt = yield* params.extensionRegistry.extensionReactions.resolveSystemPrompt(
       {
         basePrompt: turnPrompt,
         agent: dispatchAgent,
@@ -1164,7 +1165,7 @@ const runTurnBeforeHook = (
   branchId: BranchId,
   hostCtx: ExtensionHostContext,
 ) =>
-  extensionRegistry.runtimeSlots.emitTurnBefore(
+  extensionRegistry.extensionReactions.emitTurnBefore(
     {
       sessionId,
       branchId,
@@ -1662,7 +1663,7 @@ const finalizeTurnPhase = (params: {
     yield* params.eventPublisher.deliver(envelope)
 
     yield* Effect.logDebug("finalize.turn-after.start")
-    yield* params.extensionRegistry.runtimeSlots.emitTurnAfter(
+    yield* params.extensionRegistry.extensionReactions.emitTurnAfter(
       {
         sessionId: params.sessionId,
         branchId: params.branchId,

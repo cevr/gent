@@ -12,7 +12,7 @@ import { SessionToolsExtension } from "@gent/extensions/session-tools"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const stubCtx = {} as unknown as ExtensionHostContext
@@ -33,7 +33,7 @@ const stubProjectionCtx = {
 describe("SessionToolsExtension", () => {
   test("injects naming instruction for interactive prompts", async () => {
     const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
-    const compiled = compileRuntimeSlots([
+    const compiled = compileExtensionReactions([
       {
         manifest: SessionToolsExtension.manifest,
         scope: "builtin",
@@ -55,7 +55,7 @@ describe("SessionToolsExtension", () => {
 
   test("non-interactive prompts pass through unchanged", async () => {
     const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
-    const compiled = compileRuntimeSlots([
+    const compiled = compileExtensionReactions([
       {
         manifest: SessionToolsExtension.manifest,
         scope: "builtin",

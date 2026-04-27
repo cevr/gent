@@ -12,7 +12,7 @@ import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/d
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const baseAgent = AgentDefinition.make({
@@ -49,7 +49,7 @@ const getRuntimeSlots = async () => {
   const contributions = await Effect.runPromise(
     AcpAgentsExtension.setup({ cwd: "/tmp", home: "/home/x" } as never),
   )
-  return compileRuntimeSlots([
+  return compileExtensionReactions([
     {
       manifest: AcpAgentsExtension.manifest,
       scope: "builtin",

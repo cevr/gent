@@ -52,10 +52,10 @@ const resolveActivePermission = (
 const runPermissionCheck = (params: {
   toolCall: { toolName: string; input: unknown }
   ctx: ExtensionHostContext
-  runtimeSlots: ExtensionRegistryService["runtimeSlots"]
+  extensionReactions: ExtensionRegistryService["extensionReactions"]
   permission: PermissionService
 }): Effect.Effect<"allowed" | "denied"> =>
-  params.runtimeSlots.checkPermission(
+  params.extensionReactions.checkPermission(
     { toolName: params.toolCall.toolName, input: params.toolCall.input },
     (input) => params.permission.check(input.toolName, input.input),
     params.ctx,
@@ -107,7 +107,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const permCheckResult = yield* runPermissionCheck({
               toolCall,
               ctx,
-              runtimeSlots: activeRegistry.runtimeSlots,
+              extensionReactions: activeRegistry.extensionReactions,
               permission: activePermission,
             }).pipe(
               Effect.catchEager((e) =>
@@ -158,7 +158,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run the legacy tool.execute shim, falling back to direct tool execution.
-            const executeResult = yield* activeRegistry.runtimeSlots
+            const executeResult = yield* activeRegistry.extensionReactions
               .executeTool(
                 {
                   toolCallId: toolCall.toolCallId,
@@ -213,7 +213,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run explicit tool-result slots — extensions can enrich/append to tool results
-            const enrichedResult = yield* activeRegistry.runtimeSlots
+            const enrichedResult = yield* activeRegistry.extensionReactions
               .transformToolResult(
                 {
                   toolCallId: toolCall.toolCallId,

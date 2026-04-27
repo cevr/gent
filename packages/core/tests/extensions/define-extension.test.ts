@@ -17,7 +17,7 @@ import { PermissionRule } from "@gent/core/domain/permission"
 import type { ExtensionSetupContext } from "../../src/domain/extension.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -246,7 +246,7 @@ describe("defineExtension", () => {
       const resolved = resolveExtensions([loaded])
       expect(resolved.modelCapabilities.get("from-define")?.id).toBe("from-define")
 
-      const compiled = compileRuntimeSlots([loaded])
+      const compiled = compileExtensionReactions([loaded])
       const result = yield* compiled.resolveSystemPrompt(
         { basePrompt: "yo", agent: Agents.cowork },
         { projection: stubProjectionCtx, host: stubHostCtx },

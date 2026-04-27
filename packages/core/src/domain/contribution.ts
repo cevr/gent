@@ -140,11 +140,7 @@ export interface ExtensionContributions {
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
    * tool-result handlers. Per-extension, per-session — fired by the runtime
-   * at the corresponding seams.
-   *
-   * During W10-5 this lives alongside `Resource.runtime`; both are read by
-   * `compileRuntimeSlots`. After W10-5/C-4 `Resource` is gone and this is
-   * the only path.
+   * at the corresponding seams. Compiled by `compileExtensionReactions`.
    */
   readonly reactions?: ExtensionReactions
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
