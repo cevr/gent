@@ -227,6 +227,30 @@ const collectActorRoutes = (
   const actorRoutes = new Map<string, ActorBackedRoute>()
   for (const ext of extensions) {
     if (extractMachine(ext) !== undefined) continue
+
+    // Source 1: explicit `actorRoute` — declared when the protocol
+    // actor is spawned outside `actors:` (e.g. in `Resource.start` so
+    // services can be captured into closure). The actor itself is
+    // invisible to the static contribution scan, so the extension
+    // points at the serviceKey directly.
+    const explicit = ext.contributions.actorRoute
+    if (explicit !== undefined) {
+      const existing = actorRoutes.get(ext.manifest.id)
+      if (
+        existing === undefined ||
+        SCOPE_PRECEDENCE[ext.scope] > SCOPE_PRECEDENCE[existing.scope]
+      ) {
+        actorRoutes.set(ext.manifest.id, {
+          extensionId: ext.manifest.id,
+          scope: ext.scope,
+          serviceKey: explicit,
+        })
+      }
+      continue
+    }
+
+    // Source 2: `actors:` bucket — the host owns spawn lifecycle, the
+    // route is read off the first behavior with a `serviceKey`.
     const behaviors = ext.contributions.actors ?? []
     for (const b of behaviors) {
       if (b.serviceKey === undefined) continue

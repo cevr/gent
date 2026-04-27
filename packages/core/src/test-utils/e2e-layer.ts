@@ -36,6 +36,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ActorHost } from "../runtime/extensions/actor-host.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -171,20 +172,20 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       })
       const resolved = reconciled.resolved
 
-      // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
-      // Extension layers may require SqlClient, so provide it via storageLayer.
+      // Build the process-scope Resource layer the same way prod does
+      // (`buildResourceLayer` in profile.ts) so `Resource.start` fires —
+      // this is load-bearing for actor-only extensions whose Behavior is
+      // spawned inside `start` and discovered via Receptionist + the
+      // route fallback in MachineEngine. The legacy "extract `r.layer`
+      // and merge" path skipped lifecycle entirely.
+      //
+      // Extension layers may require SqlClient — provide it below via
+      // `provideMerge(resourceLayer, baseDeps)`.
       const storageLayer = Storage.MemoryWithSql()
-      const extensionLayers: Layer.Layer<never>[] = resolved.extensions.flatMap((ext) =>
-        (ext.contributions.resources ?? [])
-          .filter((r) => r.scope === "process")
-          .map((r) => {
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource layers carry their own R/E; consumers responsible for satisfying.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-            const provided = Layer.provide(r.layer as Layer.Layer<any>, storageLayer)
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-            return provided as unknown as Layer.Layer<never>
-          }),
-      )
+      // `buildResourceLayer` returns `ErasedResourceLayer = Layer.Layer<any>` — the
+      // membrane that `resource-layer.ts` uses to merge heterogeneous extension
+      // Resource layers. No additional cast needed here.
+      const extensionResourceLayer = buildResourceLayer(resolved.extensions, "process")
 
       // Subagent runner
       const defaultRunner: AgentRunner = {
@@ -231,7 +232,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
       // Base services — everything that doesn't depend on reducing event store
-      const baseDeps = Layer.mergeAll(
+      const baseDepsCore = Layer.mergeAll(
         BunServices.layer,
         storageLayer,
         subTagLayers(storageLayer),
@@ -257,9 +258,15 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         SessionCwdRegistry.Test(),
         SessionCommands.SessionRuntimeTerminatorLive,
         ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
-        ...extensionLayers,
         ...(config.extraLayers ?? []),
       )
+
+      // Mirror `buildExtensionLayers` in profile.ts: feed `baseDepsCore`
+      // (which carries `ActorEngine`, `Receptionist`, storage, …) into
+      // the Resource layer via `provideMerge` so `Resource.start` hooks
+      // see the full service set, while keeping `baseDepsCore`'s outputs
+      // in the merged result.
+      const baseDeps = Layer.provideMerge(extensionResourceLayer, baseDepsCore)
 
       const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)
       const eventPublisherLive = Layer.provide(

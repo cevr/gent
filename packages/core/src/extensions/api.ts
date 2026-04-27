@@ -51,6 +51,7 @@ import type {
   ExtensionManifest,
 } from "../domain/extension.js"
 import type { AnyBehavior, ExtensionContributions } from "../domain/contribution.js"
+import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
@@ -315,6 +316,22 @@ export interface DefineExtensionInput {
    * owns the state-holder.
    */
   readonly protocols?: ExtensionProtocol
+  /**
+   * Service key under which this extension's protocol-handling actor
+   * registers with the Receptionist. Set when the actor is spawned
+   * outside the static `actors:` bucket — e.g. inside `Resource.start`
+   * where R contains services the actor's `receive` needs to capture
+   * via closure. The route collector reads this directly so dispatch
+   * can resolve the live `ActorRef` via `Receptionist.find` even though
+   * the host never saw the behavior at build time.
+   *
+   * When the actor IS declared in `actors:`, the route collector picks
+   * the serviceKey off the behavior — `actorRoute` is then redundant
+   * and must be omitted (declaring both is a contribution-shape
+   * conflict; the loader rejects it).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: ServiceKey is contravariant in M; `any` opts out of variance checking so authors can pass any narrowly-typed key without an identity widener
+  readonly actorRoute?: ServiceKeyType<any>
   readonly projections?: FieldSpec<AnyProjectionContribution>
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
@@ -518,6 +535,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),
           ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),
+          ...(params.actorRoute !== undefined ? { actorRoute: params.actorRoute } : {}),
           ...(projections.length > 0 ? { projections } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),

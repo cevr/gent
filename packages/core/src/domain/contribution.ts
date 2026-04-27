@@ -21,7 +21,7 @@
  *
  * @module
  */
-import type { Behavior } from "./actor.js"
+import type { Behavior, ServiceKey } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
 import type { AgentEventTag } from "./event.js"
@@ -69,6 +69,22 @@ export interface ExtensionContributions {
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
+  /**
+   * Service key under which this extension's protocol-handling actor
+   * registers with the Receptionist. Set when the actor is spawned
+   * outside the static `actors:` bucket — e.g. inside `Resource.start`
+   * where R contains services the actor's receive needs to capture
+   * via closure. The route collector reads this directly so dispatch
+   * can resolve the live `ActorRef` via `Receptionist.find` even
+   * though the host never saw the behavior at build time.
+   *
+   * When the actor IS declared in `actors:`, the route collector picks
+   * the serviceKey off the behavior — `actorRoute` is then redundant
+   * and must be omitted (declaring both is a contribution-shape
+   * conflict; the loader will reject it).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: ServiceKey is contravariant in M; `any` opts out of variance checking so authors can pass any narrowly-typed key without an identity widener
+  readonly actorRoute?: ServiceKey<any>
   /**
    * ExtensionMessage definitions owned by this extension (the same shape
    * `Resource.actor.protocols` carries on the FSM path). Sourced separately

@@ -1,100 +1,29 @@
-import { Effect, Layer, Schema } from "effect"
-import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
+/**
+ * @gent/skills extension — exposes user/project skills (`.md` files
+ * under `~/.claude/skills/` and `<cwd>/.claude/skills/`) to agents.
+ *
+ * The store is a Behavior actor (W10-1d) spawned in `Resource.start`,
+ * where the resource layer's `Skills` service is in scope and can be
+ * captured into the actor's receive closure. The behavior reaches the
+ * bucket boundary with no remaining service requirements; service
+ * access flows entirely through the captured closure.
+ */
+
+import { Effect, Layer } from "effect"
 import {
   defineExtension,
   defineResource,
   ProjectionError,
+  ActorEngine,
   type ProjectionContribution,
-  type ResourceMachine,
 } from "@gent/core/extensions/api"
 import { Skills, formatSkillsForPrompt, type Skill } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
-import { SkillsProtocol, SkillEntry } from "./protocol.js"
+import { SkillsProtocol } from "./protocol.js"
+import { makeSkillsBehavior, SkillsService_Key } from "./actor.js"
 
-// ── Machine for extension protocol ──
-
-const SkillsMachineState = MState({
-  Active: { initialized: Schema.Boolean },
-})
-
-const SkillsMachineEvent = MEvent({
-  ListSkills: MEvent.reply({}, Schema.Array(SkillEntry)),
-  GetSkillContent: MEvent.reply({ name: Schema.String }, Schema.NullOr(SkillEntry)),
-})
-
-const SkillsMachineSlots = Slot.define({
-  listSkills: Slot.fn({}, Schema.Array(SkillEntry)),
-  getSkill: Slot.fn({ name: Schema.String }, Schema.NullOr(SkillEntry)),
-})
-
-const skillsMachine = Machine.make({
-  state: SkillsMachineState,
-  event: SkillsMachineEvent,
-  slots: SkillsMachineSlots,
-  initial: SkillsMachineState.Active({ initialized: true }),
-})
-  .on(SkillsMachineState.Active, SkillsMachineEvent.ListSkills, ({ state, slots }) =>
-    Effect.gen(function* () {
-      const entries = yield* slots.listSkills()
-      return Machine.reply(state, entries)
-    }),
-  )
-  .on(SkillsMachineState.Active, SkillsMachineEvent.GetSkillContent, ({ state, event, slots }) =>
-    Effect.gen(function* () {
-      const entry = yield* slots.getSkill({ name: event.name })
-      return Machine.reply(state, entry)
-    }),
-  )
-
-const skillsActor: ResourceMachine<
-  typeof SkillsMachineState.Type,
-  typeof SkillsMachineEvent.Type,
-  Skills,
-  typeof SkillsMachineSlots.definitions
-> = {
-  machine: skillsMachine,
-  slots: () =>
-    Effect.gen(function* () {
-      const skills = yield* Skills
-      return {
-        listSkills: () =>
-          skills.list().pipe(
-            Effect.map((all) =>
-              all.map((s) => ({
-                name: s.name,
-                description: s.description,
-                level: s.level,
-                filePath: s.filePath,
-                content: s.content,
-              })),
-            ),
-          ),
-        getSkill: ({ name }) =>
-          skills.get(name).pipe(
-            Effect.map((s) =>
-              s !== undefined
-                ? {
-                    name: s.name,
-                    description: s.description,
-                    level: s.level,
-                    filePath: s.filePath,
-                    content: s.content,
-                  }
-                : null,
-            ),
-          ),
-      }
-    }),
-  mapRequest: (message) => {
-    if (SkillsProtocol.ListSkills.is(message)) return SkillsMachineEvent.ListSkills
-    if (SkillsProtocol.GetSkillContent.is(message))
-      return SkillsMachineEvent.GetSkillContent(message)
-  },
-  protocols: SkillsProtocol,
-}
-
-// ── Projection (dynamic prompt section, was promptSectionContribution.resolve) ──
+// ── Projection (dynamic prompt section) ──
 
 const SkillsProjection: ProjectionContribution<ReadonlyArray<Skill>, Skills> = {
   id: "skills",
@@ -118,16 +47,28 @@ const SkillsProjection: ProjectionContribution<ReadonlyArray<Skill>, Skills> = {
 
 export const SkillsExtension = defineExtension({
   id: "@gent/skills",
-  // Single Resource carries the Skills service layer AND the skills
-  // machine. Per the C3.5 "Resource = layer + machine" merge.
   resources: ({ ctx }) => [
     defineResource({
       tag: Skills,
       scope: "process",
       layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie),
-      machine: skillsActor,
+      // Spawn the actor in `start` so the captured `Skills` and
+      // `ActorEngine` are both in scope. The actor's `R` is `never`
+      // at the bucket boundary; service access flows through the
+      // closure baked at spawn time. `StartR = ActorEngine` declares
+      // the additional service `start` may yield beyond the layer's
+      // own R.
+      start: Effect.gen(function* () {
+        const skills = yield* Skills
+        const engine = yield* ActorEngine
+        yield* engine.spawn(makeSkillsBehavior(skills))
+      }),
     }),
   ],
+  protocols: SkillsProtocol,
+  // The actor is spawned in `Resource.start` (not the static `actors:`
+  // bucket), so the route collector points at the serviceKey directly.
+  actorRoute: SkillsService_Key,
   capabilities: [SkillsTool, SearchSkillsTool],
   projections: [SkillsProjection],
 })

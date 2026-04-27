@@ -231,7 +231,13 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  * `defineResource(...)`. The `tag` is the canonical entry into the service
  * the Resource provides; consumers depend on the tag, not on Resource.
  */
-export interface ResourceContribution<A, S extends ResourceScope, R = never, E = never> {
+export interface ResourceContribution<
+  A,
+  S extends ResourceScope,
+  R = never,
+  E = never,
+  StartR = never,
+> {
   /**
    * Optional canonical service tag. When present, consumers may depend on the
    * tag without knowing about Resource. The `start`/`stop`/`subscriptions`
@@ -249,7 +255,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
   readonly tag?: Context.Key<A, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  readonly start?: Effect.Effect<void, E, A | R>
+  readonly start?: Effect.Effect<void, E, A | R | StartR>
   readonly stop?: Effect.Effect<void, never, A>
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
@@ -263,7 +269,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
  * route each Resource to the appropriate engine.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
+export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any, any>
 
 // ── Smart constructor ──
 
@@ -273,11 +279,18 @@ export type AnyResourceContribution = ResourceContribution<any, ResourceScope, a
  * a tag for a different service identity is then a type error rather
  * than a silent unification of `A` to a union supertype.
  */
-export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
+export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, StartR = never> {
   readonly tag?: Context.Key<NoInfer<A>, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  readonly start?: Effect.Effect<void, E, NoInfer<A> | R>
+  /**
+   * `StartR` is the additional services `start` may yield beyond the
+   * resource's own service `A` and the layer's `R`. Useful when the
+   * lifecycle action needs runtime services provided by sibling base
+   * layers (e.g. `ActorEngine`) without forcing the resource's layer
+   * itself to depend on them.
+   */
+  readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>
   readonly stop?: Effect.Effect<void, never, NoInfer<A>>
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
@@ -297,6 +310,6 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> 
  * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
  * identity exactly. Passing a tag for a different service is a type error.
  */
-export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
-  spec: ResourceSpec<A, S, R, E>,
-): ResourceContribution<A, S, R, E> => ({ ...spec })
+export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
+  spec: ResourceSpec<A, S, R, E, StartR>,
+): ResourceContribution<A, S, R, E, StartR> => ({ ...spec })

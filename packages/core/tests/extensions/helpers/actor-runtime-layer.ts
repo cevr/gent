@@ -10,6 +10,7 @@ import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
+import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ensureStorageParents } from "@gent/core/test-utils"
 
@@ -53,23 +54,29 @@ export const makeActorRuntimeLayer = (config: {
         ).pipe(Layer.provide(Layer.merge(machine, storage)))
       : machine
 
-  // Collect layers declared by extensions (e.g. Skills.Test)
-  const extLayers =
-    config.extensionLayers ??
-    config.extensions.flatMap((ext) =>
-      (ext.contributions.resources ?? [])
-        .filter((r) => r.scope === "process")
-        .map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-          (r) => r.layer as Layer.Layer<never>,
-        ),
-    )
-
-  return Layer.mergeAll(
+  // Build the process-scope Resource layer so `Resource.start` lifecycle
+  // hooks fire (e.g. spawning actors that capture services into closure
+  // via `ActorEngine`). When the caller passes `extensionLayers`
+  // explicitly, fall back to merging only those — used by tests that
+  // intentionally bypass setup.
+  const baseInfra = Layer.mergeAll(
     machineWithSeededParents,
     EventStore.Memory,
     turnControl,
-    ...extLayers,
     ...(config.withStorage ? [storage] : []),
   )
+
+  if (config.extensionLayers !== undefined) {
+    return Layer.mergeAll(baseInfra, ...config.extensionLayers)
+  }
+
+  // `buildResourceLayer` walks process-scope resources, merges their
+  // service layers, and threads `start`/`stop` sequentially with
+  // reverse-order teardown. `provideMerge(resourceLayer, baseInfra)`
+  // feeds baseInfra (ActorEngine, Receptionist, ...) into start hooks
+  // while keeping baseInfra's outputs in the merged layer. The result
+  // is `ErasedResourceLayer = Layer.Layer<any>` — that membrane lives
+  // inside `resource-layer.ts`, no further cast needed here.
+  const resourceLayer = buildResourceLayer(config.extensions, "process")
+  return Layer.provideMerge(resourceLayer, baseInfra)
 }
