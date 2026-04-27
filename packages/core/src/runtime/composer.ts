@@ -44,6 +44,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
+import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
 import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
 import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
@@ -150,6 +151,7 @@ type EphemeralOverrideProvides =
   | EventStorage
   | RelationshipStorage
   | ExtensionStateStorage
+  | ActorPersistenceStorage
   | CheckpointStorage
   | InteractionStorage
   | InteractionPendingReader
@@ -181,6 +183,7 @@ const OVERRIDE_TAG_SETS: Record<
     EventStorage,
     RelationshipStorage,
     ExtensionStateStorage,
+    ActorPersistenceStorage,
     CheckpointStorage,
     InteractionStorage,
     InteractionPendingReader,

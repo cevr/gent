@@ -23,6 +23,7 @@ import { BranchStorage } from "./branch-storage.js"
 import { MessageStorage } from "./message-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
+import { ActorPersistenceStorage } from "./actor-persistence-storage.js"
 import { ExtensionStateStorage } from "./extension-state-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 
@@ -194,6 +195,27 @@ export interface StorageService {
     sessionId: SessionId
     extensionId: ExtensionId
   }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
+
+  // Actor persistence (profile-scoped, key-namespaced).
+  readonly saveActorState: (params: {
+    profileId: string
+    persistenceKey: string
+    stateJson: string
+  }) => Effect.Effect<void, StorageError>
+  readonly loadActorState: (params: {
+    profileId: string
+    persistenceKey: string
+  }) => Effect.Effect<{ stateJson: string; updatedAt: number } | undefined, StorageError>
+  readonly listActorStatesForProfile: (profileId: string) => Effect.Effect<
+    ReadonlyArray<{
+      profileId: string
+      persistenceKey: string
+      stateJson: string
+      updatedAt: number
+    }>,
+    StorageError
+  >
+  readonly deleteActorStatesForProfile: (profileId: string) => Effect.Effect<void, StorageError>
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -1037,6 +1059,16 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS actor_persistence (
+      profile_id TEXT NOT NULL,
+      persistence_key TEXT NOT NULL,
+      state_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (profile_id, persistence_key)
+    )
+  `)
+
   yield* repairForeignKeyOrphans()
   yield* migrateForeignKeyConstraints()
   yield* assertForeignKeyIntegrity()
@@ -1688,6 +1720,52 @@ const makeStorage = Effect.gen(function* () {
       },
       Effect.mapError(mapError("Failed to load extension state")),
     ),
+
+    saveActorState: Effect.fn("Storage.saveActorState")(
+      function* (params: { profileId: string; persistenceKey: string; stateJson: string }) {
+        const updatedAt = yield* Clock.currentTimeMillis
+        yield* sql`INSERT OR REPLACE INTO actor_persistence (profile_id, persistence_key, state_json, updated_at) VALUES (${params.profileId}, ${params.persistenceKey}, ${params.stateJson}, ${updatedAt})`
+      },
+      Effect.mapError(mapError("Failed to save actor state")),
+    ),
+
+    loadActorState: Effect.fn("Storage.loadActorState")(
+      function* (params: { profileId: string; persistenceKey: string }) {
+        const rows = yield* sql<{
+          state_json: string
+          updated_at: number
+        }>`SELECT state_json, updated_at FROM actor_persistence WHERE profile_id = ${params.profileId} AND persistence_key = ${params.persistenceKey}`
+        const row = rows[0]
+        if (row === undefined) return undefined
+        return { stateJson: row.state_json, updatedAt: row.updated_at }
+      },
+      Effect.mapError(mapError("Failed to load actor state")),
+    ),
+
+    listActorStatesForProfile: Effect.fn("Storage.listActorStatesForProfile")(
+      function* (profileId: string) {
+        const rows = yield* sql<{
+          profile_id: string
+          persistence_key: string
+          state_json: string
+          updated_at: number
+        }>`SELECT profile_id, persistence_key, state_json, updated_at FROM actor_persistence WHERE profile_id = ${profileId}`
+        return rows.map((r) => ({
+          profileId: r.profile_id,
+          persistenceKey: r.persistence_key,
+          stateJson: r.state_json,
+          updatedAt: r.updated_at,
+        }))
+      },
+      Effect.mapError(mapError("Failed to list actor states")),
+    ),
+
+    deleteActorStatesForProfile: Effect.fn("Storage.deleteActorStatesForProfile")(
+      function* (profileId: string) {
+        yield* sql`DELETE FROM actor_persistence WHERE profile_id = ${profileId}`
+      },
+      Effect.mapError(mapError("Failed to delete actor states")),
+    ),
   } satisfies StorageService
 })
 
@@ -1707,6 +1785,7 @@ const subTagLayersFromService = (
   | EventStorage
   | RelationshipStorage
   | ExtensionStateStorage
+  | ActorPersistenceStorage
 > =>
   Layer.mergeAll(
     SessionStorage.fromStorage(s),
@@ -1715,6 +1794,7 @@ const subTagLayersFromService = (
     EventStorage.fromStorage(s),
     RelationshipStorage.fromStorage(s),
     ExtensionStateStorage.fromStorage(s),
+    ActorPersistenceStorage.fromStorage(s),
   )
 
 /**
@@ -1730,7 +1810,8 @@ export const subTagLayers = <E, R>(
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage,
+  | ExtensionStateStorage
+  | ActorPersistenceStorage,
   E,
   R
 > =>
@@ -1755,7 +1836,8 @@ const subTagsFromContext: Layer.Layer<
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage,
+  | ExtensionStateStorage
+  | ActorPersistenceStorage,
   never,
   Storage
 > = Layer.unwrap(
@@ -1801,7 +1883,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ExtensionStateStorage,
+    | ExtensionStateStorage
+    | ActorPersistenceStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -1844,6 +1927,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | EventStorage
     | RelationshipStorage
     | ExtensionStateStorage
+    | ActorPersistenceStorage
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
@@ -1874,5 +1958,6 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | EventStorage
     | RelationshipStorage
     | ExtensionStateStorage
+    | ActorPersistenceStorage
   > => Storage.MemoryWithSql()
 }
