@@ -382,7 +382,12 @@ export const buildExtensionLayers = (
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
-  return Layer.mergeAll(baseLayers, resourceLayer)
+  // Resource layers may declare `R` deps on services from `baseLayers`
+  // (e.g. `ExecutorConnectionRunnerLayer` consumes `ActorEngine` +
+  // `Receptionist`). `Layer.mergeAll` does NOT cross-wire siblings, so
+  // we feed `baseLayers` into the resource layer via `provideMerge` —
+  // resource deps are satisfied AND base outputs stay in the result.
+  return Layer.provideMerge(resourceLayer, baseLayers)
 }
 
 export const buildProfileRuntime = (params: {

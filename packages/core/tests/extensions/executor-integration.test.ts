@@ -41,7 +41,8 @@ import { ActorHost } from "../../src/runtime/extensions/actor-host"
 import { EventStore, SessionStarted } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
-import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
+import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
+import { buildExtensionLayers } from "../../src/runtime/profile"
 
 // ── Tool test helpers ──
 
@@ -607,4 +608,40 @@ describe("Executor actor lifecycle", () => {
   // from `Idle` via autoStart. Cross-process persistence is covered by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state`
   // for actors that DO opt in.
+
+  // Regression for W10-1c B1: production composer must cross-wire
+  // `ActorEngine | Receptionist` into the resource layer's R channel.
+  // `Layer.mergeAll(baseLayers, resourceLayer)` does NOT cross-wire,
+  // so the `ExecutorConnectionRunner` layer would build silently dead
+  // (its bootstrap fork swallows the "Service not found" defect).
+  // Validation: drive autoStart through `buildExtensionLayers` (the
+  // production composer) and assert state reaches `ready`.
+  it.live(
+    "buildExtensionLayers wires runner so autoStart reaches Ready (B1 regression)",
+    () => {
+      const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
+      const resolved = resolveExtensions([extension])
+      const layer = buildExtensionLayers(resolved).pipe(
+        Layer.provideMerge(Storage.Test()),
+        Layer.provideMerge(EventStore.Memory),
+      )
+      return Effect.gen(function* () {
+        const runtime = yield* MachineEngine
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        yield* waitForExecutorStatus(runtime, "ready")
+        const reply = (yield* runtime.execute(
+          sessionId,
+          ExecutorProtocol.GetSnapshot.make(),
+          branchId,
+        )) as ExecutorSnapshotReply
+        expect(reply.status).toBe("ready")
+      })
+        .pipe(Effect.provide(layer))
+        .pipe(Effect.timeout("8 seconds"))
+    },
+    { timeout: 10_000 },
+  )
 })
