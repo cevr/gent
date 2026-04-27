@@ -1,62 +1,59 @@
 import { Effect, Layer, Schema } from "effect"
-import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
   defineResource,
   resource,
+  behavior,
+  ServiceKey,
+  TaggedEnumClass,
+  type Behavior,
   type ExtensionHostContext,
   type Message,
-  type ResourceMachine,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
-import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
+import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
 import { AutoProtocol } from "./auto-protocol.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
-// ── Workflow: cooldown counter ──
+// ── Cooldown actor ──
 //
 // State: a single integer. Suppressed by `Suppress(count)`, decremented on
-// every `TurnCompleted`. Replaces the pre-C8b actor that conflated this
-// state with a UI snapshot (the snapshot was only used for self-reads).
-// Self-reads now go through `GetCooldown` reply — typed and explicit.
+// every `TurnCompleted`. The slot handler below tells the actor on every
+// post-turn tick (interim until W10-4 lifts subscriptions to actor messages).
+// `GetCooldown` is the only legitimate cross-call read — workflows / actors
+// declare effects, projections derive views, and neither owns ad-hoc state
+// peeks (per `composability-not-flags`).
 
-const CooldownState = MState({
-  Active: { cooldown: Schema.Number },
-})
-
-const CooldownEvent = MEvent({
+export const CooldownMsg = TaggedEnumClass("CooldownMsg", {
   TurnCompleted: {},
   Suppress: { count: Schema.Number },
-  GetCooldown: MEvent.reply({}, Schema.Number),
+  GetCooldown: {},
 })
+export type CooldownMsg = Schema.Schema.Type<typeof CooldownMsg>
 
-const cooldownMachine = Machine.make({
-  state: CooldownState,
-  event: CooldownEvent,
-  initial: CooldownState.Active({ cooldown: 0 }),
-})
-  .on(CooldownState.Active, CooldownEvent.TurnCompleted, ({ state }) =>
-    state.cooldown > 0 ? CooldownState.Active({ cooldown: state.cooldown - 1 }) : state,
-  )
-  .on(CooldownState.Active, CooldownEvent.Suppress, ({ event }) =>
-    CooldownState.Active({ cooldown: event.count }),
-  )
-  .on(CooldownState.Active, CooldownEvent.GetCooldown, ({ state }) =>
-    Machine.reply(state, state.cooldown),
-  )
+interface CooldownState {
+  readonly cooldown: number
+}
 
-const cooldownWorkflow: ResourceMachine<typeof CooldownState.Type, typeof CooldownEvent.Type> = {
-  machine: cooldownMachine,
-  mapEvent: (event) => (event._tag === "TurnCompleted" ? CooldownEvent.TurnCompleted : undefined),
-  mapCommand: (message) =>
-    HandoffProtocol.Suppress.is(message)
-      ? CooldownEvent.Suppress({ count: message.count })
-      : undefined,
-  mapRequest: (message) =>
-    HandoffProtocol.GetCooldown.is(message) ? CooldownEvent.GetCooldown : undefined,
-  protocols: HandoffProtocol,
+export const CooldownService = ServiceKey<CooldownMsg>("@gent/handoff/cooldown")
+
+const cooldownBehavior: Behavior<CooldownMsg, CooldownState, never> = {
+  initialState: { cooldown: 0 },
+  serviceKey: CooldownService,
+  receive: (msg, state, ctx) =>
+    Effect.gen(function* () {
+      switch (msg._tag) {
+        case "TurnCompleted":
+          return state.cooldown > 0 ? { cooldown: state.cooldown - 1 } : state
+        case "Suppress":
+          return { cooldown: msg.count }
+        case "GetCooldown":
+          yield* ctx.reply(state.cooldown)
+          return state
+      }
+    }),
 }
 
 // ── Subscription: turn.after — auto-handoff at context-fill threshold ──
@@ -80,19 +77,32 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
+    const refs = yield* ctx.actors.find(CooldownService)
+    const cooldownRef = refs[0]
+    if (cooldownRef === undefined) return
+
+    // Decrement bridge: turnAfter is the natural place to drive the
+    // cooldown clock until W10-4 lifts subscriptions to actor messages.
+    yield* ctx.actors
+      .tell(cooldownRef, CooldownMsg.TurnCompleted.make({}))
+      .pipe(Effect.catchEager(() => Effect.void))
+
     // Auto owns its own handoff flow — skip generic threshold handoff when active
     const autoActive = yield* ctx.extension
       .ask(AutoProtocol.IsActive.make())
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 
-    // Self-read of cooldown via typed protocol — replaces the C8a-era
-    // `getUiSnapshot` self-read. Workflows do NOT carry UI snapshots; cross-
-    // and self-reads of workflow state go through typed reply messages.
-    const cooldown = yield* ctx.extension
-      .ask(HandoffProtocol.GetCooldown.make())
+    const cooldown = yield* ctx.actors
+      .ask(cooldownRef, CooldownMsg.GetCooldown.make({}), (n: number) => {
+        // Reply token pins the answer type `A = number` for ask
+        // correlation. The returned message is never enqueued — the
+        // engine threads `n` back through the pending Deferred.
+        void n
+        return CooldownMsg.GetCooldown.make({})
+      })
       .pipe(Effect.catchEager(() => Effect.succeed(0)))
-    if (cooldown > 0) return // Cooldown active — workflow handles decrement via TurnCompleted
+    if (cooldown > 0) return
 
     const contextPercent = yield* ctx.session.estimateContextPercent()
     const handoffThreshold = 85
@@ -117,8 +127,8 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
 
     if (!decision.approved) {
-      yield* ctx.extension
-        .send(HandoffProtocol.Suppress.make({ count: 5 }))
+      yield* ctx.actors
+        .tell(cooldownRef, CooldownMsg.Suppress.make({ count: 5 }))
         .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))
@@ -126,13 +136,14 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   capabilities: [HandoffTool],
-  // Cooldown machine — process-scope, no service, supervised by MachineEngine.
+  actors: [behavior(cooldownBehavior)],
+  // Resource shell carries the turnAfter slot until W10-5 lifts slots
+  // off Resource and W10-4 turns turn.after into an actor message.
   resources: [
     resource(
       defineResource({
         scope: "process",
         layer: Layer.empty,
-        machine: cooldownWorkflow,
         runtime: {
           turnAfter: {
             failureMode: "isolate",

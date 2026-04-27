@@ -6,6 +6,8 @@ import type { AgentName } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { StorageError, StorageService } from "../storage/sqlite-storage.js"
+import type { ActorEngineService } from "./extensions/actor-engine.js"
+import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
@@ -48,6 +50,8 @@ export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
   readonly extensionStateRuntime: MachineEngineService
+  readonly actorEngine: ActorEngineService
+  readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -70,6 +74,8 @@ const resolveActiveRuntimeBindings = (params: {
   extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
   extensionStateRuntime:
     params.profile?.extensionStateRuntime ?? params.hostDeps.extensionStateRuntime,
+  actorEngine: params.profile?.actorEngine ?? params.hostDeps.actorEngine,
+  receptionist: params.profile?.receptionist ?? params.hostDeps.receptionist,
   capabilityContext: params.profile?.layerContext ?? params.hostDeps.capabilityContext,
   driverRegistry: params.profile?.driverRegistryService ?? params.defaults.driverRegistry,
   permission: params.profile?.permissionService ?? params.defaults.permission,
@@ -95,6 +101,8 @@ const buildSessionEnvironment = (params: {
       ...params.hostDeps,
       extensionRegistry: params.bindings.extensionRegistry,
       extensionStateRuntime: params.bindings.extensionStateRuntime,
+      actorEngine: params.bindings.actorEngine,
+      receptionist: params.bindings.receptionist,
       ...(params.bindings.capabilityContext !== undefined
         ? { capabilityContext: params.bindings.capabilityContext }
         : {}),

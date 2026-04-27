@@ -1,16 +1,18 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { HandoffTool } from "@gent/extensions/handoff-tool"
-import { HandoffExtension } from "@gent/extensions/handoff"
-import { HandoffProtocol, HANDOFF_EXTENSION_ID } from "@gent/extensions/handoff-protocol"
+import { HandoffExtension, CooldownMsg, CooldownService } from "@gent/extensions/handoff"
+import { HANDOFF_EXTENSION_ID } from "@gent/extensions/handoff-protocol"
 import { type AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { spawnMachineExtensionRef } from "../../src/runtime/extensions/spawn-machine-ref"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
-import { TurnCompleted } from "@gent/core/domain/event"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import type { ActorRef } from "@gent/core/domain/actor"
+import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
+import { ActorHost } from "@gent/core/runtime/extensions/actor-host"
+import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
+import type { LoadedExtension } from "@gent/core/runtime/extensions/loader"
+import type { ResolvedExtensions } from "@gent/core/runtime/extensions/registry"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -88,82 +90,79 @@ describe("HandoffTool", () => {
 })
 
 // ============================================================================
-// Cooldown workflow protocol (C8b regression lock)
+// Cooldown actor (C8b regression lock — re-pinned to actor primitive in W10-1a)
 //
-// Pin the cooldown semantics that the handoff actor used to expose via
-// `getUiSnapshot`: `Suppress(n)` sets the counter to N; `GetCooldown` reads
-// it; every `TurnCompleted` decrements it. Workflows have no UI snapshot per
-// `composability-not-flags`, so the only legitimate cross-call read is the
-// typed `GetCooldown` reply.
+// Pin the cooldown semantics that the legacy `Resource.machine` exposed via
+// `getUiSnapshot`: `Suppress(n)` SETS the counter to N (overwrite, not add);
+// `GetCooldown` reads it; every `TurnCompleted` decrements until zero.
 // ============================================================================
 
-describe("Handoff cooldown workflow", () => {
-  it.live("Suppress → GetCooldown → TurnCompleted decrement round-trips through the workflow", () =>
+describe("Handoff cooldown actor", () => {
+  it.live("Suppress → GetCooldown → TurnCompleted decrement round-trips through the actor", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("handoff-cooldown-session")
-      const branchId = BranchId.make("handoff-cooldown-branch")
-
-      // The workflow is lowered into setup.actor by `defineExtension`, so we
-      // can drive it through the same actor boundary used in production.
       const contributions = yield* HandoffExtension.setup(testSetupCtx())
-      const actorDef = (contributions.resources ?? []).find((r) => r.machine !== undefined)?.machine
-      expect(actorDef).toBeDefined()
+      const actors = contributions.actors ?? []
+      expect(actors.length).toBe(1)
 
-      const actor = yield* spawnMachineExtensionRef(HANDOFF_EXTENSION_ID, actorDef!, {
-        sessionId,
-        branchId,
-      }).pipe(Effect.provide(ExtensionTurnControl.Test()))
+      const loaded = {
+        manifest: { id: HANDOFF_EXTENSION_ID },
+        contributions: { actors },
+        scope: "builtin" as const,
+        sourcePath: "test",
+        sealedRequirements: undefined,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only reads `manifest.id` + `contributions.actors`
+      } as unknown as LoadedExtension
+      const resolved = {
+        extensions: [loaded],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only walks `extensions`
+      } as unknown as ResolvedExtensions
 
-      yield* actor.start
+      const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
-      // Initial cooldown is 0.
-      const initial = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(initial).toBe(0)
+      const askCooldown = (
+        engine: ActorEngine,
+        ref: ActorRef<CooldownMsg>,
+      ): Effect.Effect<number, never> =>
+        engine
+          .ask<CooldownMsg, number>(ref, CooldownMsg.GetCooldown.make({}), () =>
+            CooldownMsg.GetCooldown.make({}),
+          )
+          .pipe(Effect.catchEager(() => Effect.succeed(0)))
 
-      // Suppress(5) sets cooldown to 5.
-      yield* actor.send(HandoffProtocol.Suppress.make({ count: 5 }))
-      const afterSuppress = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(afterSuppress).toBe(5)
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const reg = yield* Receptionist
+          const refs = yield* reg.find(CooldownService)
+          expect(refs.length).toBe(1)
+          const ref = refs[0]!
 
-      // Each TurnCompleted decrements the counter.
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      const afterOne = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(afterOne).toBe(4)
+          // Initial cooldown is 0.
+          expect(yield* askCooldown(engine, ref)).toBe(0)
 
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      const afterThree = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(afterThree).toBe(2)
+          // Suppress(5) sets cooldown to 5.
+          yield* engine.tell(ref, CooldownMsg.Suppress.make({ count: 5 }))
+          expect(yield* askCooldown(engine, ref)).toBe(5)
 
-      // Suppress(2) re-arms the counter (overwrite, not add).
-      yield* actor.send(HandoffProtocol.Suppress.make({ count: 2 }))
-      const reArmed = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(reArmed).toBe(2)
+          // Each TurnCompleted decrements the counter.
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          expect(yield* askCooldown(engine, ref)).toBe(4)
 
-      // Decrement clamps at zero.
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
-        sessionId,
-        branchId,
-      })
-      const drained = yield* actor.execute(HandoffProtocol.GetCooldown.make())
-      expect(drained).toBe(0)
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          expect(yield* askCooldown(engine, ref)).toBe(2)
+
+          // Suppress(2) re-arms (overwrite, not add).
+          yield* engine.tell(ref, CooldownMsg.Suppress.make({ count: 2 }))
+          expect(yield* askCooldown(engine, ref)).toBe(2)
+
+          // Decrement clamps at zero.
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
+          expect(yield* askCooldown(engine, ref)).toBe(0)
+        }).pipe(Effect.provide(layer)),
+      )
     }),
   )
 })

@@ -199,6 +199,14 @@ export {
   resource,
   behavior,
 } from "../domain/contribution.js"
+export {
+  ServiceKey,
+  type ActorContext,
+  type ActorRef,
+  type ActorView,
+  type Behavior,
+  type ServiceKey as ServiceKeyT,
+} from "../domain/actor.js"
 
 // B11.5 typed capability factories — `audiences[] + intent` flag matrix
 // is gone from the author surface. `CapabilityHost` dispatches by

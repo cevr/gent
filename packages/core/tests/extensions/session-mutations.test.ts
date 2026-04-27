@@ -225,6 +225,18 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       getActorStatuses: die("MachineEngine"),
       terminateAll: die("MachineEngine"),
     } as unknown as MakeExtensionHostContextDeps["extensionStateRuntime"],
+    actorEngine: {
+      spawn: die("ActorEngine"),
+      tell: die("ActorEngine"),
+      ask: die("ActorEngine"),
+      snapshot: die("ActorEngine"),
+    } as unknown as MakeExtensionHostContextDeps["actorEngine"],
+    receptionist: {
+      register: die("Receptionist"),
+      unregister: die("Receptionist"),
+      find: die("Receptionist"),
+      subscribe: die("Receptionist"),
+    } as unknown as MakeExtensionHostContextDeps["receptionist"],
     approvalService: {
       present: die("ApprovalService"),
       storeResolution: die("ApprovalService"),
