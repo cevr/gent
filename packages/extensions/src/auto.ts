@@ -10,21 +10,29 @@
  * Gate: peer review via review tool (AwaitingReview blocks until review tool called)
  * Safety: maxIterations ceiling + turnsSinceCheckpoint watchdog
  *
- * Uses effect-machine directly for state transitions and actor runtime.
+ * Hand-rolled FSM hosted on a `Behavior` actor (W10-1b). The actor owns
+ * pure transitions; turn/tool boundary AgentEvents (`auto_checkpoint`,
+ * `review`, `TurnCompleted`) are observed by the Resource shell's
+ * `runtime.toolResult` / `runtime.turnAfter` slots which translate them
+ * to actor messages and drain pending follow-ups via
+ * `ctx.session.queueFollowUp`. ExtensionMessage envelopes route through
+ * the actor-route fallback in MachineEngine (W10-1b.0).
  */
 
 import { Effect, Schema } from "effect"
-import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
+  behavior,
   defineExtension,
   isRecord,
+  ServiceKey,
+  TaggedEnumClass,
+  type Behavior,
   type ToolResultInput,
   type TurnAfterInput,
-  type AgentEvent,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { defineBuiltinResource, type BuiltinResourceMachine } from "../internal/builtin.js"
-import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
+import { defineBuiltinResource } from "../internal/builtin.js"
+import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
 import { AutoProjection } from "./auto-projection.js"
@@ -59,7 +67,7 @@ const REVIEW_TOOL = "review"
 const DEFAULT_MAX_ITERATIONS = 10
 const MAX_TURNS_WITHOUT_CHECKPOINT = 5
 
-/** Schema for checkpoint tool output — used for typed sync parsing in mapEvent */
+/** Schema for checkpoint tool output — used for typed sync parsing in slot handler */
 const CheckpointOutput = Schema.Struct({
   status: Schema.optional(Schema.Literals(["continue", "complete", "abandon"])),
   summary: Schema.optional(Schema.String),
@@ -67,7 +75,14 @@ const CheckpointOutput = Schema.Struct({
   metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
   nextIdea: Schema.optional(Schema.String),
 })
-const decodeCheckpointOutput = Schema.decodeUnknownSync(Schema.fromJsonString(CheckpointOutput))
+const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointOutput)
+/** Tool result reaches the slot as the parsed object (Effect AI tool runner
+ * returns the tool's structured output, not the JSON string). Older paths
+ * that hand-stringified the result are still supported by re-parsing. */
+const parseCheckpointResult = (result: unknown) => {
+  const value = typeof result === "string" ? JSON.parse(result) : result
+  return decodeCheckpointOutput(value)
+}
 
 // ── State ──
 
@@ -86,12 +101,15 @@ type AutoMetricEntry = typeof AutoMetricEntry.Type
 const TerminationReason = Schema.Literals(["completed", "abandoned", "cancelled", "wedged"])
 type TerminationReason = typeof TerminationReason.Type
 
-// Machine-branded state (single source of truth)
-const MachineState = MState({
+// Actor state — discriminated by `_tag`. Mirrors the old `MachineState`
+// shape and adds `pendingFollowUp` so slot handlers can drain a single
+// queued follow-up message without re-deriving transition deltas.
+export const AutoState = TaggedEnumClass("AutoState", {
   Inactive: {
     reason: Schema.optional(TerminationReason),
     finalLearnings: Schema.optional(Schema.Array(AutoLearning)),
     finalMetrics: Schema.optional(Schema.Array(AutoMetricEntry)),
+    pendingFollowUp: Schema.optional(Schema.String),
   },
   Working: {
     iteration: Schema.Number,
@@ -103,8 +121,9 @@ const MachineState = MState({
     turnsSinceCheckpoint: Schema.Number,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
-    handoffRequestSeq: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
+    handoffRequestSeq: Schema.Number,
     handoffContent: Schema.optional(Schema.String),
+    pendingFollowUp: Schema.optional(Schema.String),
   },
   AwaitingReview: {
     iteration: Schema.Number,
@@ -115,23 +134,26 @@ const MachineState = MState({
     promptPending: Schema.Boolean,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
-    handoffRequestSeq: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
+    handoffRequestSeq: Schema.Number,
     handoffContent: Schema.optional(Schema.String),
+    pendingFollowUp: Schema.optional(Schema.String),
   },
 })
-type MachineState = typeof MachineState.Type
+export type AutoState = Schema.Schema.Type<typeof AutoState>
 
-export const AutoState = MachineState
-export type AutoState = typeof MachineState.Type
+// ── Actor messages ──
+//
+// `_tag` strings are shared with `AutoProtocol.*` ExtensionMessage envelopes
+// so the actor-route fallback in MachineEngine (W10-1b.0) can forward
+// envelopes directly into the actor mailbox without re-encoding.
 
-// ── Machine Events ──
-
-const MachineEvent = MEvent({
-  StartAuto: {
-    goal: Schema.String,
+export const AutoMsg = TaggedEnumClass("AutoMsg", {
+  StartAuto: { goal: Schema.String, maxIterations: Schema.optional(Schema.Number) },
+  CancelAuto: {},
+  ToggleAuto: {
+    goal: Schema.optional(Schema.String),
     maxIterations: Schema.optional(Schema.Number),
   },
-  CancelAuto: {},
   AutoSignal: {
     status: Schema.Literals(["continue", "complete", "abandon"]),
     summary: Schema.String,
@@ -139,210 +161,22 @@ const MachineEvent = MEvent({
     metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
     nextIdea: Schema.optional(Schema.String),
   },
-  RequestHandoff: {
-    content: Schema.String,
-  },
+  RequestHandoff: { content: Schema.String },
   ReviewSignal: {},
   TurnCompleted: {},
-  IsActive: MEvent.reply({}, Schema.Boolean),
-  /** Typed self-read for interceptors: replaces the workflow's loss of
-   *  `getUiSnapshot` by exposing the projected snapshot through a typed
-   *  protocol reply. The reply schema is `AutoSnapshotReply` end-to-end —
-   *  machine event, protocol envelope, and consumer all share one schema. */
-  GetSnapshot: MEvent.reply({}, AutoSnapshotReply),
+  IsActive: {},
+  GetSnapshot: {},
+  /** Slot-handler-only: read & clear the pending follow-up content. */
+  DrainFollowUp: {},
 })
-type MachineEvent = typeof MachineEvent.Type
+export type AutoMsg = Schema.Schema.Type<typeof AutoMsg>
 
-// ── Intents (external API) ──
+export const AutoService = ServiceKey<AutoMsg>("@gent/auto/workflow")
 
-export const StartAutoIntent = Schema.TaggedStruct("StartAuto", {
-  goal: Schema.String,
-  maxIterations: Schema.optional(Schema.Number),
-})
+// ── Snapshot projection ──
 
-export const CancelAutoIntent = Schema.TaggedStruct("CancelAuto", {})
-
-export const ToggleAutoIntent = Schema.TaggedStruct("ToggleAuto", {
-  goal: Schema.optional(Schema.String),
-  maxIterations: Schema.optional(Schema.Number),
-})
-
-export const AutoIntent = Schema.Union([StartAutoIntent, CancelAutoIntent, ToggleAutoIntent])
-export type AutoIntent = typeof AutoIntent.Type
-
-const ReplayCheckpoint = Schema.Struct({
-  type: Schema.Literal("checkpoint"),
-  iteration: Schema.Number,
-  status: Schema.Literals(["continue", "complete", "abandon"]),
-  summary: Schema.String,
-  learnings: Schema.optional(Schema.String),
-  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
-  nextIdea: Schema.optional(Schema.String),
-})
-
-const ReplayReview = Schema.Struct({
-  type: Schema.Literal("review"),
-  iteration: Schema.Number,
-})
-
-const ReplaySeedWithOrigin = Schema.Struct({
-  sessionId: Schema.optional(Schema.String),
-  goal: Schema.String,
-  maxIterations: Schema.Number,
-  rows: Schema.Array(Schema.Union([ReplayCheckpoint, ReplayReview])),
-})
-
-const AutoMachineSlots = Slot.define({
-  loadReplaySeed: Slot.fn({}, Schema.NullOr(ReplaySeedWithOrigin)),
-})
-
-// Prompt sections live in `auto-projection.ts` now — the projection reads
-// the workflow's typed snapshot and produces the system-prompt section.
-
-// ── Machine definition ──
-
-const autoMachine = Machine.make({
-  state: MachineState,
-  event: MachineEvent,
-  slots: AutoMachineSlots,
-  initial: MachineState.Inactive({}),
-})
-  // Inactive + StartAuto → Working
-  .on(MachineState.Inactive, MachineEvent.StartAuto, ({ event }) =>
-    MachineState.Working({
-      iteration: 1,
-      maxIterations: event.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-      goal: event.goal,
-      learnings: [],
-      metrics: [],
-      promptPending: true,
-      turnsSinceCheckpoint: 0,
-      handoffRequestSeq: 0,
-    }),
-  )
-  // Working + AutoSignal → AwaitingReview or Inactive (complete/abandon)
-  .on(MachineState.Working, MachineEvent.AutoSignal, ({ state, event }) => {
-    const newLearnings =
-      event.learnings !== undefined
-        ? [...state.learnings, { iteration: state.iteration, content: event.learnings }]
-        : state.learnings
-    const newMetrics =
-      event.metrics !== undefined
-        ? [...state.metrics, { iteration: state.iteration, values: event.metrics }]
-        : state.metrics
-
-    if (event.status === "complete") {
-      return MachineState.Inactive({
-        reason: "completed",
-        finalLearnings: newLearnings,
-        finalMetrics: newMetrics,
-      })
-    }
-    if (event.status === "abandon") {
-      return MachineState.Inactive({
-        reason: "abandoned",
-        finalLearnings: newLearnings,
-        finalMetrics: newMetrics,
-      })
-    }
-
-    // continue → mandate peer review via review tool
-    return MachineState.AwaitingReview({
-      iteration: state.iteration,
-      maxIterations: state.maxIterations,
-      goal: state.goal,
-      learnings: newLearnings,
-      metrics: newMetrics,
-      promptPending: true,
-      lastSummary: event.summary,
-      nextIdea: event.nextIdea,
-      handoffRequestSeq: state.handoffRequestSeq,
-      handoffContent: state.handoffContent,
-    })
-  })
-  // AwaitingReview + ReviewSignal → Working (next iteration) or Inactive (max reached)
-  .on(MachineState.AwaitingReview, MachineEvent.ReviewSignal, ({ state }) => {
-    if (state.iteration >= state.maxIterations) {
-      return MachineState.Inactive({
-        reason: "completed",
-        finalLearnings: state.learnings,
-        finalMetrics: state.metrics,
-      })
-    }
-    return MachineState.Working({
-      iteration: state.iteration + 1,
-      maxIterations: state.maxIterations,
-      goal: state.goal,
-      learnings: state.learnings,
-      metrics: state.metrics,
-      promptPending: true,
-      turnsSinceCheckpoint: 0,
-      lastSummary: state.lastSummary,
-      nextIdea: state.nextIdea,
-      handoffRequestSeq: state.handoffRequestSeq,
-      handoffContent: state.handoffContent,
-    })
-  })
-  .on(MachineState.Working, MachineEvent.RequestHandoff, ({ state, event }) =>
-    MachineState.Working({
-      ...state,
-      handoffRequestSeq: state.handoffRequestSeq + 1,
-      handoffContent: event.content,
-    }),
-  )
-  .on(MachineState.AwaitingReview, MachineEvent.RequestHandoff, ({ state, event }) =>
-    MachineState.AwaitingReview({
-      ...state,
-      handoffRequestSeq: state.handoffRequestSeq + 1,
-      handoffContent: event.content,
-    }),
-  )
-  // Working + TurnCompleted → Working (increment) or Inactive (wedge threshold)
-  .on(MachineState.Working, MachineEvent.TurnCompleted, ({ state }) => {
-    const next = state.turnsSinceCheckpoint + 1
-    if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
-      return MachineState.Inactive({ reason: "wedged" })
-    }
-    return MachineState.Working({
-      ...state,
-      promptPending: false,
-      turnsSinceCheckpoint: next,
-    })
-  })
-  .on(MachineState.AwaitingReview, MachineEvent.TurnCompleted, ({ state }) =>
-    MachineState.AwaitingReview({
-      ...state,
-      promptPending: false,
-    }),
-  )
-  // Cancel from any active state
-  .on(MachineState.Working, MachineEvent.CancelAuto, () =>
-    MachineState.Inactive({ reason: "cancelled" }),
-  )
-  .on(MachineState.AwaitingReview, MachineEvent.CancelAuto, () =>
-    MachineState.Inactive({ reason: "cancelled" }),
-  )
-  // IsActive — pure read, returns boolean without state change
-  .on(MachineState.Inactive, MachineEvent.IsActive, ({ state }) => Machine.reply(state, false))
-  .on(MachineState.Working, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
-  .on(MachineState.AwaitingReview, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
-  // GetSnapshot — pure read, returns projected UI model
-  .on(MachineState.Inactive, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, projectSnapshot(state)),
-  )
-  .on(MachineState.Working, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, projectSnapshot(state)),
-  )
-  .on(MachineState.AwaitingReview, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, projectSnapshot(state)),
-  )
-
-// ── Snapshot projection (reply for AutoProtocol.GetSnapshot) ──
-
-const projectSnapshot = (state: MachineState): AutoSnapshotReply => {
-  if (state._tag === "Inactive") {
-    return { active: false }
-  }
+const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
+  if (state._tag === "Inactive") return { active: false }
   if (state._tag === "Working") {
     return {
       active: true,
@@ -367,271 +201,322 @@ const projectSnapshot = (state: MachineState): AutoSnapshotReply => {
   }
 }
 
-// ── afterTransition ──
-
-const afterTransition = (before: MachineState, after: MachineState) => {
-  const effects: Array<{
-    readonly _tag: "QueueFollowUp"
-    readonly content: string
-    readonly metadata?: { readonly extensionId: string; readonly hidden: boolean }
-  }> = []
-
-  // Emit queued follow-ups only after the turn boundary. That prevents
-  // transient mid-turn states (continue → review → complete) from leaving
-  // stale hidden follow-ups behind.
-  if (
-    before._tag === "Working" &&
-    after._tag === "Working" &&
-    before.promptPending &&
-    !after.promptPending
-  ) {
-    if (after.iteration === 1) {
-      effects.push({
-        _tag: "QueueFollowUp",
-        content: `Begin: ${after.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`,
-        metadata: { extensionId: "auto", hidden: true },
-      })
-    } else {
-      const hint = after.nextIdea ?? after.goal
-      effects.push({
-        _tag: "QueueFollowUp",
-        content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`,
-        metadata: { extensionId: "auto", hidden: true },
-      })
-    }
-  }
-
-  if (
-    before._tag === "AwaitingReview" &&
-    after._tag === "AwaitingReview" &&
-    before.promptPending &&
-    !after.promptPending
-  ) {
-    effects.push({
-      _tag: "QueueFollowUp",
-      content:
-        "Run the `review` tool to perform an adversarial review of this iteration before continuing.",
-      metadata: { extensionId: "auto", hidden: true },
-    })
-  }
-
-  if (
-    before._tag === "Working" &&
-    after._tag === "Working" &&
-    after.handoffRequestSeq !== before.handoffRequestSeq &&
-    after.handoffContent !== undefined
-  ) {
-    effects.push({
-      _tag: "QueueFollowUp",
-      content: after.handoffContent,
-      metadata: { extensionId: "auto", hidden: true },
-    })
-  }
-
-  if (
-    before._tag === "AwaitingReview" &&
-    after._tag === "AwaitingReview" &&
-    after.handoffRequestSeq !== before.handoffRequestSeq &&
-    after.handoffContent !== undefined
-  ) {
-    effects.push({
-      _tag: "QueueFollowUp",
-      content: after.handoffContent,
-      metadata: { extensionId: "auto", hidden: true },
-    })
-  }
-
-  return effects
-}
-
-// ── Map AgentEvent → Machine Event ──
-
-const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
-  if (event._tag === "ToolCallSucceeded") {
-    if (event.toolName === AUTO_CHECKPOINT_TOOL) {
-      try {
-        const parsed = decodeCheckpointOutput(event.output ?? "{}")
-        return MachineEvent.AutoSignal({
-          status: parsed.status ?? "continue",
-          summary: parsed.summary ?? event.summary ?? "Checkpoint",
-          learnings: parsed.learnings,
-          metrics: parsed.metrics,
-          nextIdea: parsed.nextIdea,
-        })
-      } catch {
-        return MachineEvent.AutoSignal({
-          status: "continue",
-          summary: event.summary ?? "Checkpoint",
-        })
-      }
-    }
-    if (event.toolName === REVIEW_TOOL) {
-      return MachineEvent.ReviewSignal
-    }
-  }
-
-  if (event._tag === "TurnCompleted") {
-    return MachineEvent.TurnCompleted
-  }
-
-  return undefined
-}
-
-// ── Map Message → Machine Event ──
-
-const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | undefined => {
-  switch (message._tag) {
-    case "StartAuto":
-      return MachineEvent.StartAuto({
-        goal: message.goal,
-        maxIterations: message.maxIterations,
-      })
-    case "CancelAuto":
-      return MachineEvent.CancelAuto
-    case "ToggleAuto":
-      if (state._tag === "Inactive") {
-        return MachineEvent.StartAuto({
-          goal: message.goal ?? "Continue working autonomously",
-          maxIterations: message.maxIterations,
-        })
-      }
-      return MachineEvent.CancelAuto
-  }
-}
-
-// ── Workflow (effect-machine based) ──
+// ── Follow-up content (formerly `afterTransition`) ──
 //
-// The auto extension is a genuine state machine with declared effects. The
-// machine is hosted on the AutoJournal Resource (one Resource per extension
-// owns the long-lived state — service layer + machine — per the C3.5
-// "Resource = layer + lifecycle + machine" merge). UI / turn projections
-// moved out of the machine; the TUI widget reads state via
-// `AutoProtocol.GetSnapshot` (typed `ctx.ask`), and per-turn prompt comes
-// from a separate `ProjectionContribution` (auto-projection.ts).
+// Pure functions — given a transition or a sequenced handoff, return the
+// content for the queued follow-up. The actor sets these onto its state's
+// `pendingFollowUp` field whenever the relevant transition fires, and the
+// Resource shell's `turn.after` slot drains them via `DrainFollowUp`.
 
-const autoWorkflow: BuiltinResourceMachine<
-  MachineState,
-  MachineEvent,
-  AutoJournal,
-  typeof AutoMachineSlots.definitions
-> = {
-  machine: autoMachine,
-  slots: () =>
+const followUpForWorkingTurn = (state: {
+  readonly iteration: number
+  readonly maxIterations: number
+  readonly goal: string
+  readonly nextIdea?: string | undefined
+}): string => {
+  if (state.iteration === 1) {
+    return `Begin: ${state.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`
+  }
+  const hint = state.nextIdea ?? state.goal
+  return `Iteration ${state.iteration}/${state.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`
+}
+
+const FOLLOW_UP_AWAITING_REVIEW =
+  "Run the `review` tool to perform an adversarial review of this iteration before continuing."
+
+// ── Pure transitions ──
+
+const transitionStartAuto = (
+  state: AutoState,
+  msg: { readonly goal: string; readonly maxIterations?: number | undefined },
+): AutoState => {
+  if (state._tag !== "Inactive") return state
+  return AutoState.Working.make({
+    iteration: 1,
+    maxIterations: msg.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+    goal: msg.goal,
+    learnings: [],
+    metrics: [],
+    promptPending: true,
+    turnsSinceCheckpoint: 0,
+    handoffRequestSeq: 0,
+    pendingFollowUp: followUpForWorkingTurn({
+      iteration: 1,
+      maxIterations: msg.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+      goal: msg.goal,
+    }),
+  })
+}
+
+const transitionAutoSignal = (
+  state: AutoState,
+  msg: {
+    readonly status: "continue" | "complete" | "abandon"
+    readonly summary: string
+    readonly learnings?: string | undefined
+    readonly metrics?: Record<string, number> | undefined
+    readonly nextIdea?: string | undefined
+  },
+): AutoState => {
+  if (state._tag !== "Working") return state
+
+  const newLearnings: ReadonlyArray<AutoLearning> =
+    msg.learnings !== undefined
+      ? [...state.learnings, { iteration: state.iteration, content: msg.learnings }]
+      : state.learnings
+  const newMetrics: ReadonlyArray<AutoMetricEntry> =
+    msg.metrics !== undefined
+      ? [...state.metrics, { iteration: state.iteration, values: msg.metrics }]
+      : state.metrics
+
+  if (msg.status === "complete") {
+    return AutoState.Inactive.make({
+      reason: "completed",
+      finalLearnings: newLearnings,
+      finalMetrics: newMetrics,
+    })
+  }
+  if (msg.status === "abandon") {
+    return AutoState.Inactive.make({
+      reason: "abandoned",
+      finalLearnings: newLearnings,
+      finalMetrics: newMetrics,
+    })
+  }
+
+  return AutoState.AwaitingReview.make({
+    iteration: state.iteration,
+    maxIterations: state.maxIterations,
+    goal: state.goal,
+    learnings: newLearnings,
+    metrics: newMetrics,
+    promptPending: true,
+    lastSummary: msg.summary,
+    nextIdea: msg.nextIdea,
+    handoffRequestSeq: state.handoffRequestSeq,
+    handoffContent: state.handoffContent,
+    pendingFollowUp: FOLLOW_UP_AWAITING_REVIEW,
+  })
+}
+
+const transitionReviewSignal = (state: AutoState): AutoState => {
+  if (state._tag !== "AwaitingReview") return state
+  if (state.iteration >= state.maxIterations) {
+    return AutoState.Inactive.make({
+      reason: "completed",
+      finalLearnings: state.learnings,
+      finalMetrics: state.metrics,
+    })
+  }
+  const nextIteration = state.iteration + 1
+  return AutoState.Working.make({
+    iteration: nextIteration,
+    maxIterations: state.maxIterations,
+    goal: state.goal,
+    learnings: state.learnings,
+    metrics: state.metrics,
+    promptPending: true,
+    turnsSinceCheckpoint: 0,
+    lastSummary: state.lastSummary,
+    nextIdea: state.nextIdea,
+    handoffRequestSeq: state.handoffRequestSeq,
+    handoffContent: state.handoffContent,
+    pendingFollowUp: followUpForWorkingTurn({
+      iteration: nextIteration,
+      maxIterations: state.maxIterations,
+      goal: state.goal,
+      nextIdea: state.nextIdea,
+    }),
+  })
+}
+
+const transitionRequestHandoff = (
+  state: AutoState,
+  msg: { readonly content: string },
+): AutoState => {
+  if (state._tag === "Working") {
+    return AutoState.Working.make({
+      ...state,
+      handoffRequestSeq: state.handoffRequestSeq + 1,
+      handoffContent: msg.content,
+      pendingFollowUp: msg.content,
+    })
+  }
+  if (state._tag === "AwaitingReview") {
+    return AutoState.AwaitingReview.make({
+      ...state,
+      handoffRequestSeq: state.handoffRequestSeq + 1,
+      handoffContent: msg.content,
+      pendingFollowUp: msg.content,
+    })
+  }
+  return state
+}
+
+const transitionTurnCompleted = (state: AutoState): AutoState => {
+  if (state._tag === "Working") {
+    const next = state.turnsSinceCheckpoint + 1
+    if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
+      return AutoState.Inactive.make({ reason: "wedged" })
+    }
+    return AutoState.Working.make({
+      ...state,
+      promptPending: false,
+      turnsSinceCheckpoint: next,
+    })
+  }
+  if (state._tag === "AwaitingReview") {
+    return AutoState.AwaitingReview.make({ ...state, promptPending: false })
+  }
+  return state
+}
+
+const transitionCancelAuto = (state: AutoState): AutoState => {
+  if (state._tag === "Working" || state._tag === "AwaitingReview") {
+    return AutoState.Inactive.make({ reason: "cancelled" })
+  }
+  return state
+}
+
+const transitionToggleAuto = (
+  state: AutoState,
+  msg: { readonly goal?: string | undefined; readonly maxIterations?: number | undefined },
+): AutoState => {
+  if (state._tag === "Inactive") {
+    return transitionStartAuto(state, {
+      goal: msg.goal ?? "Continue working autonomously",
+      maxIterations: msg.maxIterations,
+    })
+  }
+  return transitionCancelAuto(state)
+}
+
+const clearFollowUp = (state: AutoState): AutoState => {
+  if (state._tag === "Inactive") {
+    return AutoState.Inactive.make({ ...state, pendingFollowUp: undefined })
+  }
+  if (state._tag === "Working") {
+    return AutoState.Working.make({ ...state, pendingFollowUp: undefined })
+  }
+  return AutoState.AwaitingReview.make({ ...state, pendingFollowUp: undefined })
+}
+
+// ── Behavior ──
+
+const autoBehavior: Behavior<AutoMsg, AutoState, never> = {
+  initialState: AutoState.Inactive.make({}),
+  serviceKey: AutoService,
+  receive: (msg, state, ctx) =>
     Effect.gen(function* () {
-      const journalOpt = yield* Effect.serviceOption(AutoJournal)
-      if (journalOpt._tag === "None") {
-        return {
-          loadReplaySeed: () => Effect.succeed(null),
-        }
-      }
-      const journal = journalOpt.value
-      return {
-        loadReplaySeed: () =>
-          Effect.gen(function* () {
-            const active = yield* journal.readActive()
-            if (active === undefined) return null
-
-            const config = active.rows.find((row) => row.type === "config")
-            if (config === undefined || config.type !== "config") return null
-
-            return {
-              sessionId: active.sessionId,
-              goal: config.goal,
-              maxIterations: config.maxIterations,
-              rows: active.rows.filter(
-                (row): row is typeof ReplayCheckpoint.Type | typeof ReplayReview.Type =>
-                  row.type === "checkpoint" || row.type === "review",
-              ),
-            }
-          }),
+      switch (msg._tag) {
+        case "StartAuto":
+          return transitionStartAuto(state, msg)
+        case "CancelAuto":
+          return transitionCancelAuto(state)
+        case "ToggleAuto":
+          return transitionToggleAuto(state, msg)
+        case "AutoSignal":
+          return transitionAutoSignal(state, msg)
+        case "ReviewSignal":
+          return transitionReviewSignal(state)
+        case "RequestHandoff":
+          return transitionRequestHandoff(state, msg)
+        case "TurnCompleted":
+          return transitionTurnCompleted(state)
+        case "IsActive":
+          yield* ctx.reply(state._tag !== "Inactive")
+          return state
+        case "GetSnapshot":
+          yield* ctx.reply(projectSnapshot(state))
+          return state
+        case "DrainFollowUp":
+          yield* ctx.reply(state.pendingFollowUp)
+          return clearFollowUp(state)
       }
     }),
-  mapEvent,
-  mapCommand: (message, state) => {
-    if (Schema.is(AutoIntent)(message)) {
-      return mapMessage(message, state)
-    }
-    if (AutoProtocol.RequestHandoff.is(message)) {
-      return MachineEvent.RequestHandoff({ content: message.content })
-    }
-    return undefined
+  persistence: {
+    key: "@gent/auto/workflow",
+    state: AutoState,
   },
-  mapRequest: (message) => {
-    if (message.extensionId !== AUTO_EXTENSION_ID) return undefined
-    if (message._tag === "IsActive") return MachineEvent.IsActive
-    if (message._tag === "GetSnapshot") return MachineEvent.GetSnapshot
-    return undefined
-  },
-  stateSchema: MachineState.schema,
-  afterTransition,
-  onInit: (ctx) =>
-    Effect.gen(function* () {
-      if (ctx.slots === undefined) return
-      const replaySeed = yield* ctx.slots.loadReplaySeed()
-      if (replaySeed === null) return
-
-      // Root sessions never replay — must be a child session
-      if (ctx.parentSessionId === undefined) return
-
-      // Legacy pointers without sessionId are rejected
-      if (replaySeed.sessionId === undefined) return
-
-      // Verify the journal's origin session is in the ancestry chain (includes self)
-      const ancestors = yield* ctx.getSessionAncestors()
-      const ancestorIds = new Set(ancestors.map((a) => a.id))
-      if (!ancestorIds.has(replaySeed.sessionId)) return
-
-      // Check if current state is already non-Inactive (hydrated from persistence)
-      const current = yield* ctx.snapshot
-      if (current._tag !== "Inactive") return
-
-      // Start the machine
-      yield* ctx.send(
-        MachineEvent.StartAuto({
-          goal: replaySeed.goal,
-          maxIterations: replaySeed.maxIterations,
-        }),
-      )
-
-      // Replay checkpoints and review signals in order
-      for (const row of replaySeed.rows) {
-        if (row.type === "checkpoint") {
-          yield* ctx.send(
-            MachineEvent.AutoSignal({
-              status: row.status,
-              summary: row.summary,
-              learnings: row.learnings,
-              metrics: row.metrics,
-              nextIdea: row.nextIdea,
-            }),
-          )
-        }
-        if (row.type === "review") {
-          yield* ctx.send(MachineEvent.ReviewSignal)
-        }
-      }
-
-      yield* Effect.logInfo("auto.onInit.replayed").pipe(
-        Effect.annotateLogs({
-          rowCount: replaySeed.rows.length + 1,
-        }),
-      )
-    }),
-  protocols: AutoProtocol,
 }
 
-// ── tool.result pipeline — JSONL append on checkpoint/review ──
-//
-// Reads the workflow snapshot via `AutoProtocol.GetSnapshot` typed reply
-// instead of the actor-era `getUiSnapshot` self-read — workflows have no
-// UI snapshot pipe (per `composability-not-flags`).
+// ── Slot handler helpers ──
 
-const EXTENSION_ID = AUTO_EXTENSION_ID
+const findAutoRef = (ctx: ExtensionHostContext) =>
+  Effect.gen(function* () {
+    const refs = yield* ctx.actors.find(AutoService)
+    return refs[0]
+  })
+
+const drainAndQueueFollowUp = (ctx: ExtensionHostContext) =>
+  Effect.gen(function* () {
+    const ref = yield* findAutoRef(ctx)
+    if (ref === undefined) return
+
+    const followUp = yield* ctx.actors
+      .ask(ref, AutoMsg.DrainFollowUp.make({}), (_value: string | undefined) =>
+        AutoMsg.DrainFollowUp.make({}),
+      )
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+
+    if (followUp === undefined || followUp === "") return
+
+    yield* ctx.session
+      .queueFollowUp({
+        content: followUp,
+        metadata: { extensionId: "auto", hidden: true },
+      })
+      .pipe(Effect.catchEager(() => Effect.void))
+  })
+
+// ── tool.result slot ──
+//
+// Translates `auto_checkpoint` / `review` tool results to actor messages
+// (formerly `mapEvent`'s job) and writes the journal. Also drains any
+// follow-up the resulting transition queued.
 
 const readSnapshot = (ctx: ExtensionHostContext) =>
   ctx.extension
     .ask(AutoProtocol.GetSnapshot.make())
     .pipe(Effect.catchEager(() => Effect.succeed(undefined as AutoSnapshotReply | undefined)))
+
+const tellAutoFromTool = (input: ToolResultInput, ctx: ExtensionHostContext) =>
+  Effect.gen(function* () {
+    const ref = yield* findAutoRef(ctx)
+    if (ref === undefined) return
+
+    if (input.toolName === AUTO_CHECKPOINT_TOOL) {
+      let parsed:
+        | {
+            status?: "continue" | "complete" | "abandon"
+            summary?: string
+            learnings?: string
+            metrics?: Record<string, number>
+            nextIdea?: string
+          }
+        | undefined
+      try {
+        parsed = parseCheckpointResult(input.result)
+      } catch {
+        parsed = undefined
+      }
+      const msg = AutoMsg.AutoSignal.make({
+        status: parsed?.status ?? "continue",
+        summary: parsed?.summary ?? "Checkpoint",
+        learnings: parsed?.learnings,
+        metrics: parsed?.metrics,
+        nextIdea: parsed?.nextIdea,
+      })
+      yield* ctx.actors.tell(ref, msg).pipe(Effect.catchEager(() => Effect.void))
+      return
+    }
+
+    if (input.toolName === REVIEW_TOOL) {
+      yield* ctx.actors
+        .tell(ref, AutoMsg.ReviewSignal.make({}))
+        .pipe(Effect.catchEager(() => Effect.void))
+    }
+  })
 
 const journalInterceptorImpl = (
   input: ToolResultInput,
@@ -641,7 +526,10 @@ const journalInterceptorImpl = (
   Effect.gen(function* () {
     const result = yield* next(input)
 
-    // Journal writes are best-effort side effects — never fail the tool result
+    // Tell the actor about the tool event before reading the snapshot so
+    // the journal write reflects the post-transition iteration count.
+    yield* tellAutoFromTool(input, ctx).pipe(Effect.catchEager(() => Effect.void))
+
     yield* Effect.gen(function* () {
       const journal = yield* Effect.serviceOption(AutoJournal)
       if (journal._tag === "None") return
@@ -649,7 +537,7 @@ const journalInterceptorImpl = (
       const snapshot = yield* readSnapshot(ctx)
       if (snapshot === undefined || !snapshot.active) return
 
-      if (input.toolName === "auto_checkpoint" && isRecord(input.input)) {
+      if (input.toolName === AUTO_CHECKPOINT_TOOL && isRecord(input.input)) {
         const cp = parseCheckpointParams(input.input)
 
         const activePath = yield* journal.value.getActivePath()
@@ -671,7 +559,7 @@ const journalInterceptorImpl = (
         }
       }
 
-      if (input.toolName === "review") {
+      if (input.toolName === REVIEW_TOOL) {
         yield* journal.value.appendReview(snapshot.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))
@@ -679,17 +567,31 @@ const journalInterceptorImpl = (
     return result
   })
 
-// ── turn.after subscription — auto-handoff on context fill ──
+// ── turn.after slot ──
+//
+// Drives the `TurnCompleted` actor message (formerly `mapEvent`'s job),
+// drains pending follow-ups, and triggers handoff at the context-fill
+// threshold.
 
 const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
-    // Check if auto is active via typed reply protocol
+    // Tell the actor about the turn boundary first so the wedge watchdog
+    // and AwaitingReview promptPending flag advance before snapshot reads.
+    const ref = yield* findAutoRef(ctx)
+    if (ref !== undefined) {
+      yield* ctx.actors
+        .tell(ref, AutoMsg.TurnCompleted.make({}))
+        .pipe(Effect.catchEager(() => Effect.void))
+    }
+
+    // Drain any follow-up queued by transitions during this turn cycle.
+    yield* drainAndQueueFollowUp(ctx).pipe(Effect.catchEager(() => Effect.void))
+
     const snapshot = yield* readSnapshot(ctx)
     if (snapshot === undefined || !snapshot.active) return
 
-    // Estimate context fill
     const contextPercent = yield* ctx.session.estimateContextPercent()
     if (contextPercent < 85) return
 
@@ -697,8 +599,6 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       Effect.annotateLogs({ contextPercent, iteration: snapshot.iteration }),
     )
 
-    // Ensure journal exists before handoff — if no checkpoint has fired yet,
-    // create the journal now so the child session can replay from it
     const journal = yield* Effect.serviceOption(AutoJournal)
     let journalPath: string | undefined
     if (journal._tag === "Some") {
@@ -712,8 +612,6 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       }
     }
 
-    // Queue follow-up telling model to call the handoff tool.
-    // @gent/handoff owns presentation — auto just requests the handoff.
     yield* ctx.extension.send(
       AutoProtocol.RequestHandoff.make({
         content: [
@@ -727,27 +625,56 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
           .join("\n"),
       }),
     )
+
+    // RequestHandoff queues a follow-up via the actor; drain it now so the
+    // handoff prompt lands on the upcoming turn rather than the next one.
+    yield* drainAndQueueFollowUp(ctx).pipe(Effect.catchEager(() => Effect.void))
   }).pipe(Effect.catchEager(() => Effect.void))
 
+// ── Replay (formerly `onInit` on the workflow) ──
+
+const ReplayCheckpoint = Schema.Struct({
+  type: Schema.Literal("checkpoint"),
+  iteration: Schema.Number,
+  status: Schema.Literals(["continue", "complete", "abandon"]),
+  summary: Schema.String,
+  learnings: Schema.optional(Schema.String),
+  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  nextIdea: Schema.optional(Schema.String),
+})
+
+const ReplayReview = Schema.Struct({
+  type: Schema.Literal("review"),
+  iteration: Schema.Number,
+})
+
+// Replay is staged for W10-1c+: needs cross-extension Receptionist
+// discovery (find AutoService from a non-host slot) plus session-ancestry
+// guard. Tracked in #102 follow-up. The journal interceptor still appends
+// rows; replay just doesn't seed the actor on a fresh child session.
+void ReplayCheckpoint
+void ReplayReview
+
 // ── Extension ──
+
+const EXTENSION_ID = AUTO_EXTENSION_ID
 
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   projections: [AutoProjection],
   capabilities: [AutoCheckpointTool],
-  // Single Resource carries the AutoJournal service layer AND the auto
-  // workflow machine. The machine declares `AutoJournal` in its `slots`
-  // requirements; the `layer` here provides it. C3.5b merge per the
-  // "Resource = layer + lifecycle + machine" design intent.
+  actors: [behavior(autoBehavior)],
+  protocols: AutoProtocol,
+  // Resource shell carries the AutoJournal service layer + slot handlers
+  // until W10-4 lifts subscriptions/slots to actor messages.
   resources: ({ ctx }) => [
     defineBuiltinResource({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
-      machine: autoWorkflow,
       runtime: {
         toolResult: (input, hostCtx) =>
-          journalInterceptorImpl(input, (state) => Effect.succeed(state.result), hostCtx),
+          journalInterceptorImpl(input, (next) => Effect.succeed(next.result), hostCtx),
         turnAfter: {
           failureMode: "isolate",
           handler: autoHandoffImpl,

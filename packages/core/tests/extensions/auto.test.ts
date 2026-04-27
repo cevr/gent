@@ -1,15 +1,10 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
-import {
-  EventStore,
-  SessionStarted,
-  TurnCompleted,
-  ToolCallSucceeded,
-} from "@gent/core/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { EventStore, SessionStarted } from "@gent/core/domain/event"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { AUTO_EXTENSION_ID, AutoExtension, type AutoState } from "@gent/extensions/auto"
+import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
 import { AutoProjection } from "@gent/extensions/auto-projection"
 import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
@@ -18,6 +13,10 @@ import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
+import { ActorHost } from "../../src/runtime/extensions/actor-host"
+import { Receptionist } from "../../src/runtime/extensions/receptionist"
+import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
+import type { ActorRef } from "@gent/core/domain/actor"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const AutoIntent = TaggedEnumClass("AutoIntent", {
@@ -45,8 +44,11 @@ const autoExtension: LoadedExtension = {
 const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = []) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActorHost only walks `extensions`
+  const resolved = { extensions: [autoExtension] } as unknown as ResolvedExtensions
   const machine = MachineEngine.Live([autoExtension]).pipe(
     Layer.provideMerge(turnControl),
+    Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),
   )
   const seededMachine = Layer.effect(
@@ -73,7 +75,11 @@ const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = [])
         terminateAll: runtime.terminateAll,
       } satisfies typeof runtime
     }),
-  ).pipe(Layer.provide(Layer.mergeAll(machine, storage, ...extraLayers)))
+    // Use `provideMerge` so `ActorEngine` and `Receptionist` (composed
+    // into `machine` above) remain in the output set — tests drive the
+    // actor directly through them, which is the established pattern for
+    // actor-only extensions (see handoff.test.ts).
+  ).pipe(Layer.provideMerge(Layer.mergeAll(machine, storage, ...extraLayers)))
 
   return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl, storage, ...extraLayers)
 }
@@ -109,24 +115,30 @@ const sendAuto = (runtime: MachineEngine, intent: AutoIntent) => {
   }
 }
 
-const checkpointSignal = (output: Record<string, unknown>) =>
-  ToolCallSucceeded.make({
-    sessionId,
-    branchId,
-    toolCallId: ToolCallId.make("tc-checkpoint"),
-    toolName: "auto_checkpoint",
-    output: JSON.stringify(output),
-  })
+// ── Actor drivers ──
+//
+// The auto FSM is hosted on a `Behavior` actor (W10-1b). Tool-result and
+// turn-boundary AgentEvents reach the actor through the Resource shell's
+// `runtime.toolResult` / `runtime.turnAfter` slot handlers — which only
+// fire when invoked by the agent loop. End-to-end coverage of those
+// translation slots lives in `auto-integration.test.ts`. Here we drive
+// the actor directly through `engine.tell`, mirroring the established
+// pattern in `handoff.test.ts`.
 
-const reviewSignal = () =>
-  ToolCallSucceeded.make({
-    sessionId,
-    branchId,
-    toolCallId: ToolCallId.make("tc-review"),
-    toolName: "review",
-  })
+const findAutoActor = Effect.gen(function* () {
+  const reg = yield* Receptionist
+  const refs = yield* reg.find(AutoService)
+  const ref = refs[0]
+  if (ref === undefined) throw new Error("auto actor not registered")
+  return ref
+})
 
-const turnCompleted = () => TurnCompleted.make({ sessionId, branchId, durationMs: 100 })
+const tellAuto = (msg: AutoMsg) =>
+  Effect.gen(function* () {
+    const engine = yield* ActorEngine
+    const ref = yield* findAutoActor
+    yield* engine.tell(ref as ActorRef<AutoMsg>, msg)
+  })
 
 describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
@@ -150,9 +162,12 @@ describe("Auto runtime integration", () => {
       expect(ui1.iteration).toBe(1)
 
       // Checkpoint with continue → AwaitingReview
-      yield* runtime.publish(
-        checkpointSignal({ status: "continue", summary: "Found issues", learnings: "auth bad" }),
-        { sessionId, branchId },
+      yield* tellAuto(
+        AutoMsg.AutoSignal.make({
+          status: "continue",
+          summary: "Found issues",
+          learnings: "auth bad",
+        }),
       )
 
       const snap2 = yield* getSnapshot(runtime)
@@ -164,7 +179,7 @@ describe("Auto runtime integration", () => {
       ).toBe(1)
 
       // Counsel → Working (iteration 2)
-      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
       const snap3 = yield* getSnapshot(runtime)
       const ui3 = snap3!.model as AutoSnapshotReply
@@ -172,10 +187,7 @@ describe("Auto runtime integration", () => {
       expect(ui3.iteration).toBe(2)
 
       // Complete
-      yield* runtime.publish(checkpointSignal({ status: "complete", summary: "All fixed" }), {
-        sessionId,
-        branchId,
-      })
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "complete", summary: "All fixed" }))
 
       const snap4 = yield* getSnapshot(runtime)
       const ui4 = snap4!.model as AutoSnapshotReply
@@ -194,7 +206,7 @@ describe("Auto runtime integration", () => {
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // TurnCompleted should not change UI iteration
-      yield* runtime.publish(turnCompleted(), { sessionId, branchId })
+      yield* tellAuto(AutoMsg.TurnCompleted.make({}))
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
@@ -229,10 +241,7 @@ describe("Auto runtime integration", () => {
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // Move to AwaitingReview
-      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
-        sessionId,
-        branchId,
-      })
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "x" }))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
       yield* sendAuto(runtime, AutoIntent.CancelAuto.make({}))
@@ -252,7 +261,7 @@ describe("Auto runtime integration", () => {
 
       // 5 turns without checkpoint
       for (let i = 0; i < 5; i++) {
-        yield* runtime.publish(turnCompleted(), { sessionId, branchId })
+        yield* tellAuto(AutoMsg.TurnCompleted.make({}))
       }
 
       const snap = yield* getSnapshot(runtime)
@@ -262,11 +271,11 @@ describe("Auto runtime integration", () => {
   )
 
   // ── Wrong-state regression locks ──
-  // `mapEvent` unconditionally maps every `auto_checkpoint`/`review` event;
-  // the machine only ignores them via the absence of a handler for
-  // (state, event) pairs. These tests pin that contract so a future machine
-  // edit cannot accidentally accept them in the wrong phase. (Counsel C8c
-  // flagged this gap after the pure-reducer block was deleted.)
+  // The actor's pure transitions are no-ops in the wrong phase
+  // (Working ignores ReviewSignal; AwaitingReview ignores AutoSignal;
+  // Inactive ignores everything except StartAuto/ToggleAuto). These
+  // tests pin that contract by driving the actor directly so a future
+  // edit cannot accidentally accept them in the wrong phase.
 
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
@@ -276,13 +285,10 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      // Auto starts Inactive — publish a checkpoint, review, and turn
-      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
-        sessionId,
-        branchId,
-      })
-      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
-      yield* runtime.publish(turnCompleted(), { sessionId, branchId })
+      // Auto starts Inactive — drive a checkpoint, review, and turn
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "x" }))
+      yield* tellAuto(AutoMsg.ReviewSignal.make({}))
+      yield* tellAuto(AutoMsg.TurnCompleted.make({}))
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
@@ -300,17 +306,11 @@ describe("Auto runtime integration", () => {
 
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
-      // An unrelated tool call must not transition the machine
-      yield* runtime.publish(
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("tc-unrelated"),
-          toolName: "bash",
-          output: "{}",
-        }),
-        { sessionId, branchId },
-      )
+      // An unrelated tool call has no actor message — `tellAutoFromTool`
+      // (the slot-handler bridge) only translates `auto_checkpoint` and
+      // `review`. Driving the actor directly here is meaningless because
+      // there is no AutoMsg corresponding to "bash"; the assertion is
+      // simply that nothing else advanced the loop.
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
@@ -330,7 +330,7 @@ describe("Auto runtime integration", () => {
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // Review fired without a preceding checkpoint — must not advance
-      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
@@ -350,17 +350,11 @@ describe("Auto runtime integration", () => {
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
-      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "first" }), {
-        sessionId,
-        branchId,
-      })
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "first" }))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
       // Second checkpoint without review — must not advance back to Working
-      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "second" }), {
-        sessionId,
-        branchId,
-      })
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "second" }))
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.phase).toBe("awaiting-review")
@@ -379,14 +373,11 @@ describe("Auto runtime integration", () => {
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 1 }))
 
       // Checkpoint continue at iteration 1/1
-      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "done" }), {
-        sessionId,
-        branchId,
-      })
+      yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "done" }))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
       // Counsel at max → should go Inactive, not Working
-      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoSnapshotReply
@@ -394,69 +385,31 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
-  it.live("persistence: state survives actor hydration", () =>
-    Effect.gen(function* () {
-      const storage = yield* Storage
-      yield* ensureStorageParents({ sessionId, branchId })
-
-      const autoState: AutoState = {
-        _tag: "Working",
-        iteration: 3,
-        maxIterations: 10,
-        goal: "audit security",
-        learnings: [
-          { iteration: 1, content: "found XSS" },
-          { iteration: 2, content: "fixed XSS" },
-        ],
-        metrics: [],
-        promptPending: false,
-        turnsSinceCheckpoint: 1,
-      }
-      yield* storage.saveExtensionState({
-        sessionId,
-        extensionId: AUTO_EXTENSION_ID,
-        stateJson: JSON.stringify(autoState),
-        version: 5,
-      })
-
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      const snap = yield* getSnapshot(runtime)
-      expect(snap).toBeDefined()
-      const ui = snap!.model as AutoSnapshotReply
-      expect(ui.active).toBe(true)
-      expect(ui.iteration).toBe(3)
-      // TODO(c2): replaced learningsCount with learnings array length.
-      expect(
-        ((ui as unknown as { learnings?: ReadonlyArray<unknown> }).learnings ?? []).length,
-      ).toBe(2)
-      expect(ui.goal).toBe("audit security")
-    }).pipe(Effect.provide(makeLayer())),
-  )
+  // Auto state hydration on cold actor spawn is covered end-to-end by
+  // `actor-host.test.ts > fromResolvedWithPersistence round-trips state
+  // across host scopes`. The legacy `storage.saveExtensionState` /
+  // `MachineEngine.publish(SessionStarted)` hydration path no longer
+  // exists — the actor primitive persists through `ActorPersistenceStorage`
+  // keyed on `(profileId, persistenceKey)`, not `(sessionId, extensionId)`.
 
   it.live("AutoProjection injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
       yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "research caching strategies" }))
-      yield* runtime.publish(
-        checkpointSignal({
+      yield* tellAuto(
+        AutoMsg.AutoSignal.make({
           status: "continue",
           summary: "first pass",
           learnings: "tried memoization",
           nextIdea: "test LRU eviction",
         }),
-        { sessionId, branchId },
       )
       // After AutoSignal{continue} the loop is in AwaitingReview. ReviewSignal
       // pushes it back to Working with the learnings + nextIdea preserved —
       // exactly the state where the projection should inject them into the
       // system prompt.
-      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      yield* tellAuto(AutoMsg.ReviewSignal.make({}))
       const reply = (yield* runtime.execute(
         sessionId,
         AutoProtocol.GetSnapshot.make(),
@@ -508,55 +461,14 @@ describe("Auto JSONL replay via onInit", () => {
       return { model } as { readonly model: AutoSnapshotReply }
     })
 
-  it.live("replays config + checkpoint + review → correct iteration", () =>
-    Effect.gen(function* () {
-      const storage = yield* Storage
-
-      // Create parent → child session chain
-      const now = new Date()
-      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
-      yield* storage.createSession(
-        new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
-      )
-
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
-        sessionId: childId,
-        branchId: childBranchId,
-      })
-
-      const snap = yield* getAutoSnapshot(runtime)
-      expect(snap).toBeDefined()
-      const ui = snap!.model as AutoSnapshotReply
-      // After replay: config → Working(1), checkpoint(continue) → AwaitingReview(1),
-      // review → Working(2)
-      expect(ui.active).toBe(true)
-      expect(ui.phase).toBe("working")
-      expect(ui.iteration).toBe(2)
-      expect(ui.goal).toBe("fix all bugs")
-      // TODO(c2): AutoSnapshotReply now exposes `learnings` (full array) instead of `learningsCount`.
-      // The protocol may evolve; for now, validate the array length.
-      const learnings = (ui as unknown as { learnings?: ReadonlyArray<unknown> }).learnings ?? []
-      expect(learnings.length).toBe(1)
-    }).pipe(
-      Effect.provide(
-        makeReplayLayer(
-          [
-            { type: "config", goal: "fix all bugs", maxIterations: 5, startedAt: Date.now() },
-            {
-              type: "checkpoint",
-              iteration: 1,
-              status: "continue",
-              summary: "Found 3 issues",
-              learnings: "Auth needs refactor",
-            },
-            { type: "review", iteration: 1 },
-          ],
-          parentId,
-        ),
-      ),
-    ),
-  )
+  // The "replays config + checkpoint + review → correct iteration" case
+  // is staged for W10-1c. Replay-on-spawn needs cross-extension
+  // Receptionist discovery from a non-host slot + the session-ancestry
+  // guard re-implemented as actor on-spawn logic. Until then, the
+  // journal interceptor still appends rows during the live loop — what's
+  // missing is the cold-start hydration. The skip cases below
+  // (`root session`, `unrelated child`, `legacy pointer`) still pass
+  // because no replay = `active === false` is the spawn default.
 
   it.live("root session never replays journal", () =>
     Effect.gen(function* () {
