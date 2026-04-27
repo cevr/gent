@@ -8,15 +8,16 @@
  * died between requests.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
-import type { LoadedExtension, ReduceResult, RequestResult } from "../../src/domain/extension.js"
+import { Effect, Schema } from "effect"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
+import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import { defineResource } from "@gent/core/domain/contribution"
+import { behavior } from "@gent/core/extensions/api"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
-import { reducerActor } from "./helpers/reducer-actor"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ============================================================================
@@ -30,6 +31,18 @@ interface CounterState {
 }
 
 const CounterReply = Schema.Struct({ count: Schema.Number })
+type CounterReply = typeof CounterReply.Type
+
+// `_tag` strings are shared with `CounterProtocol.*` ExtensionMessage envelopes
+// so the actor-route fallback forwards envelopes directly into the actor mailbox.
+const CounterMsg = TaggedEnumClass("CounterMsg", {
+  Increment: TaggedEnumClass.askVariant<CounterReply>()({ delta: Schema.Number }),
+  GetCount: TaggedEnumClass.askVariant<CounterReply>()({}),
+  TurnCompleted: {},
+})
+type CounterMsg = Schema.Schema.Type<typeof CounterMsg>
+
+const CounterService = ServiceKey<CounterMsg>("lifecycle-counter/service")
 
 const CounterProtocol = {
   Increment: ExtensionMessage.reply(
@@ -41,42 +54,34 @@ const CounterProtocol = {
   GetCount: ExtensionMessage.reply(EXTENSION_ID, "GetCount", {}, CounterReply),
 }
 
-type CounterRequest =
-  | ReturnType<typeof CounterProtocol.Increment>
-  | ReturnType<typeof CounterProtocol.GetCount>
-
-const counterActor = reducerActor<CounterState, never, CounterRequest>({
-  id: EXTENSION_ID,
-  initial: { count: 0 },
-  stateSchema: Schema.Struct({ count: Schema.Number }),
-  reduce: (state, event): ReduceResult<CounterState> =>
-    event._tag === "TurnCompleted" ? { state: { count: state.count + 100 } } : { state },
-  request: (state, message): Effect.Effect<RequestResult<CounterState, unknown>> => {
-    if (message._tag === "Increment") {
-      const m = message as CounterRequest & { _tag: "Increment"; delta: number }
-      const next = { count: state.count + m.delta }
-      return Effect.succeed({ state: next, reply: next })
-    }
-    return Effect.succeed({ state, reply: { count: state.count } })
-  },
-  derive: (state) => ({ uiModel: state }),
-})
-
-// Attach protocol definitions so MachineEngine validates ask() calls
-const counterActorWithProtocol = { ...counterActor, protocols: CounterProtocol }
+const counterBehavior: Behavior<CounterMsg, CounterState, never> = {
+  initialState: { count: 0 },
+  serviceKey: CounterService,
+  receive: (msg, state, ctx) =>
+    Effect.gen(function* () {
+      switch (msg._tag) {
+        case "Increment": {
+          const next = { count: state.count + msg.delta }
+          yield* ctx.reply(next)
+          return next
+        }
+        case "GetCount": {
+          yield* ctx.reply({ count: state.count })
+          return state
+        }
+        case "TurnCompleted":
+          return { count: state.count + 100 }
+      }
+    }),
+}
 
 const counterExtension: LoadedExtension = {
   manifest: { id: EXTENSION_ID },
   scope: "builtin",
   sourcePath: "builtin",
   contributions: {
-    resources: [
-      defineResource({
-        scope: "process",
-        layer: Layer.empty as Layer.Layer<unknown>,
-        machine: counterActorWithProtocol,
-      }),
-    ],
+    actors: [behavior(counterBehavior)],
+    protocols: CounterProtocol,
   },
 }
 

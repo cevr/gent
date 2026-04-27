@@ -24,8 +24,6 @@ import {
 } from "../../src/runtime/extensions/resource-host"
 import type { AnyResourceContribution, ResourceBusEnvelope } from "@gent/core/domain/resource"
 import { defineResource } from "@gent/core/domain/contribution"
-import { defineExtension } from "@gent/core/extensions/api"
-import { testSetupCtx } from "@gent/core/test-utils"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── SubscriptionEngine ──
@@ -222,68 +220,6 @@ describe("defineResource", () => {
     expect(r.schedule).toHaveLength(1)
     expect(r.schedule![0]!.id).toBe("tick")
     expect(r.schedule![0]!.cron).toBe("0 * * * *")
-  })
-
-  test("machine field round-trips and surfaces via extractMachine", () => {
-    // Minimal `ResourceMachine` shape — the runtime cares about field
-    // presence + structural identity to `effect-machine`'s Machine.
-    // We only need to assert the field round-trips through defineResource +
-    // extractMachine; the actual supervision is tested by machine-engine
-    // tests that drive a real machine end-to-end.
-    const stubMachine = {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-      machine: { _stub: true } as any,
-    }
-    const r = defineResource({
-      scope: "process",
-      layer: layerA,
-      machine: stubMachine,
-    })
-    expect(r.machine).toBe(stubMachine)
-    const ext = makeStubExtension("ext-with-machine", [r])
-    const found = (ext.contributions.resources ?? []).find(
-      (res) => res.machine !== undefined,
-    )?.machine
-    expect(found).toBe(stubMachine)
-  })
-})
-
-// ── defineExtension validation locks (codex C3.5a BLOCKs 1 + 3) ──
-
-describe("defineExtension validation: Resource.machine constraints", () => {
-  // Both fixtures use a stub machine — defineExtension validates structure
-  // (counts, scopes), not Machine.Machine internals.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  const stubMachine = { machine: { _stub: true } as any }
-
-  test("rejects extension with 2+ Resources declaring `machine` (codex BLOCK 1)", async () => {
-    const ext = defineExtension({
-      id: "@test/two-resource-machines",
-      resources: [
-        defineResource({ scope: "process", layer: layerA, machine: stubMachine }),
-        defineResource({ scope: "process", layer: layerB, machine: stubMachine }),
-      ],
-    })
-    const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const message = String(exit.cause)
-      expect(message).toContain("at most one Resource may declare `machine`")
-    }
-  })
-
-  test("rejects Resource.machine on session/branch scope until composers are wired (codex BLOCK 3)", async () => {
-    const ext = defineExtension({
-      id: "@test/session-scope-machine",
-      resources: [defineResource({ scope: "session", layer: layerA, machine: stubMachine })],
-    })
-    const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const message = String(exit.cause)
-      expect(message).toContain('Resource.machine on scope "session"')
-      expect(message).toContain("not yet supported")
-    }
   })
 })
 

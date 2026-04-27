@@ -30,10 +30,11 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
-import { action, request, tool } from "@gent/core/extensions/api"
+import { action, behavior, request, tool } from "@gent/core/extensions/api"
 import { BranchId, type ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-import { reducerActor } from "../extensions/helpers/reducer-actor"
+import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { ConfigService } from "../../src/runtime/config-service"
 
 class ProfileToken extends Context.Service<
@@ -151,38 +152,35 @@ describe("extension command RPCs", () => {
       Schema.Struct({ ok: Schema.Boolean }),
     ),
   }
+  const BoundaryReply = Schema.Struct({ ok: Schema.Boolean })
+  type BoundaryReply = typeof BoundaryReply.Type
+  const BoundaryMsg = TaggedEnumClass("BoundaryMsg", {
+    Touch: { label: Schema.String },
+    Ping: TaggedEnumClass.askVariant<BoundaryReply>()({ label: Schema.String }),
+  })
+  type BoundaryMsg = Schema.Schema.Type<typeof BoundaryMsg>
+  const BoundaryService = ServiceKey<BoundaryMsg>("@test/transport-boundary/service")
+  const boundaryBehavior: Behavior<BoundaryMsg, Record<string, never>, never> = {
+    initialState: {},
+    serviceKey: BoundaryService,
+    receive: (msg, state, ctx) =>
+      Effect.gen(function* () {
+        if (msg._tag === "Touch") {
+          boundaryReceived.push({ kind: "send", label: msg.label })
+          return state
+        }
+        boundaryReceived.push({ kind: "ask", label: msg.label })
+        yield* ctx.reply({ ok: true })
+        return state
+      }),
+  }
   const boundaryExtension: LoadedExtension = {
     manifest: { id: "@test/transport-boundary" },
     scope: "builtin",
     sourcePath: "test",
     contributions: {
-      resources: [
-        defineResource({
-          scope: "process",
-          layer: Layer.empty as Layer.Layer<unknown>,
-          machine: {
-            ...reducerActor({
-              id: "@test/transport-boundary",
-              initial: {},
-              stateSchema: Schema.Struct({}),
-              reduce: (state) => ({ state }),
-              messageSchema: Schema.Unknown,
-              requestSchema: Schema.Unknown,
-              receive: (state, message) => {
-                const payload = message as { readonly label: string }
-                boundaryReceived.push({ kind: "send", label: payload.label })
-                return { state }
-              },
-              request: (state, message) => {
-                const payload = message as { readonly label: string }
-                boundaryReceived.push({ kind: "ask", label: payload.label })
-                return Effect.succeed({ state, reply: { ok: true } })
-              },
-            }),
-            protocols: BoundaryProtocol,
-          },
-        }),
-      ],
+      actors: [behavior(boundaryBehavior)],
+      protocols: BoundaryProtocol,
     },
   }
 
