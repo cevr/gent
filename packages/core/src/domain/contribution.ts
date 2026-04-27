@@ -24,6 +24,7 @@
 import type { Behavior, ServiceKey } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
+import type { ActionToken } from "./capability/action.js"
 import type { ToolToken } from "./capability/tool.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
@@ -76,6 +77,17 @@ export interface ExtensionContributions {
    * entries so as-yet-unmigrated `tool({...})` call sites keep working.
    */
   readonly tools?: ReadonlyArray<ToolToken>
+  /**
+   * Human-driven UI commands authored via `action({...})`. Bucket name IS the
+   * audience cluster: every entry is an `ActionToken` whose `audiences` is a
+   * subset of `{"human-slash", "human-palette", "transport-public"}` — no
+   * runtime tag check needed downstream.
+   *
+   * Until W10-5, `capabilities:` is also scanned for `human-slash` /
+   * `human-palette` entries so as-yet-unmigrated `action({...})` call sites
+   * keep working.
+   */
+  readonly commands?: ReadonlyArray<ActionToken>
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
@@ -144,6 +156,27 @@ export const modelCapabilities = (
     c.audiences.includes("model"),
   )
   return [...fromTools, ...fromCapabilities]
+}
+
+/**
+ * Read all human-surface capabilities (slash / palette) from a contributions
+ * bag — the union of the typed `commands:` bucket and any `capabilities:`
+ * entries with a `human-slash` or `human-palette` audience. Used by the
+ * slash-command list assembler and any future palette consumer.
+ *
+ * Like {@link modelCapabilities}, the shim exists during W10-3c — `commands:`
+ * migration is incremental and unmigrated `action({...})` call sites still
+ * slot into `capabilities:`. After W10-5, `capabilities:` is gone and this
+ * helper just returns `commands ?? []`.
+ */
+export const humanCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<CapabilityToken> => {
+  const fromCommands = contribs.commands ?? []
+  const fromCapabilities = (contribs.capabilities ?? []).filter(
+    (c) => c.audiences.includes("human-slash") || c.audiences.includes("human-palette"),
+  )
+  return [...fromCommands, ...fromCapabilities]
 }
 
 // ── Smart constructors ──

@@ -585,6 +585,47 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
 
+  // W10-3c regression: the typed `commands:` bucket is a separate field on
+  // `ExtensionContributions`. `listSlashCommands` must include entries from
+  // BOTH `commands:` (new path) and `capabilities:` (legacy shim path until
+  // W10-5). Bypass `makeExt` to write straight into the contributions bag —
+  // the helper currently routes everything through `capabilities:`.
+  test("listSlashCommands reads from both `commands:` and `capabilities:` buckets", () => {
+    const fromCommandsBucket: AnyCapabilityContribution = {
+      id: "from-commands",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const fromLegacyBucket: AnyCapabilityContribution = {
+      id: "from-legacy",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const a: LoadedExtension = {
+      manifest: { id: "@test/cmd-bucket" },
+      scope: "builtin",
+      sourcePath: "/test/cmd-bucket",
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the ActionToken brand
+      contributions: { commands: [fromCommandsBucket as never] },
+    }
+    const b: LoadedExtension = {
+      manifest: { id: "@test/legacy-bucket" },
+      scope: "builtin",
+      sourcePath: "/test/legacy-bucket",
+      contributions: { capabilities: [fromLegacyBucket] },
+    }
+    const resolved = resolveExtensions([a, b])
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).toContain("from-commands")
+    expect(commands.map((c) => c.name)).toContain("from-legacy")
+  })
+
   test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
     // Builtin exposes a slash command via human-slash capability.
     const builtinCap: AnyCapabilityContribution = {

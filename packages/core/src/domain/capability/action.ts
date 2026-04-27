@@ -32,6 +32,28 @@ import type {
 
 export type ActionSurface = "slash" | "palette" | "both"
 
+/**
+ * `ActionToken` — `action({...})` return type. Narrows `CapabilityToken` so
+ * `audiences` is fixed to the human-surface cluster (`"human-slash"` and/or
+ * `"human-palette"`, optionally with `"transport-public"`) at the type level.
+ * The `ExtensionContributions.commands` bucket only accepts this narrowed
+ * shape — non-action capabilities (`tool`, `request`) cannot be slotted into
+ * `commands:`, so the bucket name IS the audience discrimination (consistent
+ * with W10-3a's `tools:` bucket).
+ *
+ * `ActionToken` extends `CapabilityToken`, so authors mid-migration may still
+ * pass an action token through the legacy `capabilities:` bucket — the latter
+ * is deleted in the W10-5 sweep once every site lives in its typed bucket.
+ */
+declare const ActionTokenBrand: unique symbol
+export interface ActionToken<Input = unknown, Output = unknown> extends CapabilityToken<
+  Input,
+  Output
+> {
+  readonly [ActionTokenBrand]: true
+  readonly audiences: ReadonlyArray<"human-slash" | "human-palette" | "transport-public">
+}
+
 /** Author-facing input to `action(...)`. */
 export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   /** Stable id (extension-local). Used for routing. */
@@ -84,11 +106,13 @@ const surfaceToAudiences = (
  * derived `audiences[]` (one per surface, plus `"transport-public"`
  * when `public: true`) and `intent: "write"`.
  */
-export const action = <Input, Output, R>(input: ActionInput<Input, Output, R>): CapabilityToken => {
+export const action = <Input, Output, R>(
+  input: ActionInput<Input, Output, R>,
+): ActionToken<Input, Output> => {
   const audiences: ReadonlyArray<Audience> = input.public
     ? [...surfaceToAudiences(input.surface), "transport-public"]
     : surfaceToAudiences(input.surface)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
   return {
     id: input.id,
     description: input.description,
@@ -102,5 +126,5 @@ export const action = <Input, Output, R>(input: ActionInput<Input, Output, R>): 
     ...(input.keybind !== undefined ? { keybind: input.keybind } : {}),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as AnyCapabilityContribution["effect"],
-  } as unknown as CapabilityToken
+  } as unknown as ActionToken<Input, Output>
 }

@@ -7,7 +7,11 @@ import type {
   GentExtension,
   LoadedExtension,
 } from "../../domain/extension.js"
-import { type ExtensionContributions, modelCapabilities } from "../../domain/contribution.js"
+import {
+  type ExtensionContributions,
+  humanCapabilities,
+  modelCapabilities,
+} from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const hasMachine = (contribs: ExtensionContributions): boolean =>
@@ -263,6 +267,11 @@ export const collectValidationFailures = (
     "tool",
   )
   collectScopedCollisions(
+    (cs) => humanCapabilities(cs),
+    (cap) => cap.id,
+    "command",
+  )
+  collectScopedCollisions(
     (cs) => cs.agents ?? [],
     (agent) => agent.name,
     "agent",
@@ -281,7 +290,7 @@ export const collectValidationFailures = (
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
-      [...(cs.tools ?? []), ...(cs.capabilities ?? [])]
+      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.capabilities ?? [])]
         .map((c) => c.prompt)
         .filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,

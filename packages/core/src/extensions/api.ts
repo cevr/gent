@@ -54,6 +54,7 @@ import type { AnyBehavior, ExtensionContributions } from "../domain/contribution
 import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
+import type { ActionToken } from "../domain/capability/action.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { ExtensionProtocol } from "../domain/extension-protocol.js"
@@ -232,7 +233,12 @@ export {
   type ReadRequestInput,
   type WriteRequestInput,
 } from "../domain/capability/request.js"
-export { action, type ActionInput, type ActionSurface } from "../domain/capability/action.js"
+export {
+  action,
+  type ActionInput,
+  type ActionSurface,
+  type ActionToken,
+} from "../domain/capability/action.js"
 export type {
   CapabilityToken,
   CapabilityContribution,
@@ -319,6 +325,17 @@ export interface DefineExtensionInput {
    * their typed buckets land. After W10-5 it is deleted.
    */
   readonly tools?: FieldSpec<ToolToken>
+  /**
+   * Human-driven UI commands authored via `action({...})`. The bucket name is
+   * the audience cluster: every entry must be an `ActionToken` (i.e.
+   * `audiences ⊆ {"human-slash", "human-palette", "transport-public"}`) —
+   * `tool({...})` and `request({...})` outputs cannot be slotted here.
+   *
+   * `capabilities:` remains during W10-3 migration as a heterogeneous bucket
+   * for unmigrated `action({...})` call sites and for `request` until its
+   * typed bucket lands. After W10-5 it is deleted.
+   */
+  readonly commands?: FieldSpec<ActionToken>
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
@@ -457,6 +474,17 @@ const validateCapabilities = (contribs: ExtensionContributions): string | undefi
     }
     capIds.set(cap.id, `tools[${i}]`)
   }
+  // `ActionToken.audiences` is the literal `ReadonlyArray<"human-slash" |
+  // "human-palette" | "transport-public">` at the type level — empty audiences
+  // cannot be constructed through `action({...})`, so we only check
+  // id-uniqueness here. Description is informational for human surfaces, not
+  // wire-protocol — keep the check lenient.
+  for (const [i, cap] of (contribs.commands ?? []).entries()) {
+    if (capIds.has(cap.id)) {
+      return `commands[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+    }
+    capIds.set(cap.id, `commands[${i}]`)
+  }
   for (const [i, cap] of (contribs.capabilities ?? []).entries()) {
     if (cap.audiences === undefined || cap.audiences.length === 0) {
       return `capabilities[${i}] (${cap.id ?? "<no id>"}): \`audiences\` must be a non-empty array`
@@ -549,6 +577,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
       Effect.gen(function* () {
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
+        const commands = yield* resolveField(manifest, "commands", params.commands, ctx)
         const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
@@ -563,6 +592,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const contribs: ExtensionContributions = {
           ...(resources.length > 0 ? { resources } : {}),
           ...(tools.length > 0 ? { tools } : {}),
+          ...(commands.length > 0 ? { commands } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),

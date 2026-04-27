@@ -146,6 +146,9 @@ export const compileCapabilities = (
     for (const capability of ext.contributions.tools ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }
+    for (const capability of ext.contributions.commands ?? []) {
+      entries.push({ extensionId: ext.manifest.id, capability })
+    }
     for (const capability of ext.contributions.capabilities ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }
