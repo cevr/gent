@@ -31,7 +31,28 @@ import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ExtensionProtocol } from "./extension-protocol.js"
 import type { AnyProjectionContribution } from "./projection.js"
-import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
+import type {
+  AnyResourceContribution,
+  ResourceContribution,
+  ResourceRuntimeSlots,
+  ResourceScope,
+} from "./resource.js"
+
+/**
+ * Per-extension lifecycle reactions — handlers fired by the runtime at the
+ * `turnBefore` / `turnAfter` / `messageOutput` / `toolResult` seams.
+ *
+ * The shape is identical to `Resource.runtime` (deliberately — the `resource:`
+ * path will be deleted in W10-5/C-4 and these handlers are its only remaining
+ * job). It lives at the extension top level because reactions are per-extension
+ * and per-session, not per-Resource: tying them to a `Resource` slot forced
+ * authors to spin up an empty Resource purely as a wrapper for the handler.
+ *
+ * Until W10-5/C-4 deletes `Resource`, `compileRuntimeSlots` reads from BOTH
+ * `contribs.reactions` and `Resource.runtime`; new authors should use this
+ * field directly.
+ */
+export type ExtensionReactions = ResourceRuntimeSlots<unknown, unknown>
 
 /**
  * Bucket leaf for the `actors` field. The `Behavior` shape is
@@ -128,6 +149,16 @@ export interface ExtensionContributions {
    */
   readonly protocols?: ExtensionProtocol
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
+  /**
+   * Lifecycle reactions: turn-before / turn-after / message-output /
+   * tool-result handlers. Per-extension, per-session — fired by the runtime
+   * at the corresponding seams.
+   *
+   * During W10-5 this lives alongside `Resource.runtime`; both are read by
+   * `compileRuntimeSlots`. After W10-5/C-4 `Resource` is gone and this is
+   * the only path.
+   */
+  readonly reactions?: ExtensionReactions
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
   /**

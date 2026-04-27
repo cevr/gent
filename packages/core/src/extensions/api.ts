@@ -50,7 +50,11 @@ import type {
   ExtensionSetupContext,
   ExtensionManifest,
 } from "../domain/extension.js"
-import type { AnyBehavior, ExtensionContributions } from "../domain/contribution.js"
+import type {
+  AnyBehavior,
+  ExtensionContributions,
+  ExtensionReactions,
+} from "../domain/contribution.js"
 import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
@@ -198,6 +202,7 @@ export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
 export {
   type ExtensionContributions,
+  type ExtensionReactions,
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
@@ -378,6 +383,17 @@ export interface DefineExtensionInput {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: ServiceKey is contravariant in M; `any` opts out of variance checking so authors can pass any narrowly-typed key without an identity widener
   readonly actorRoute?: ServiceKeyType<any>
   readonly projections?: FieldSpec<AnyProjectionContribution>
+  /**
+   * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
+   * `toolResult` handlers run by the runtime. Per-extension, per-session.
+   *
+   * During W10-5 the same shape lives at `Resource.runtime`; both are read
+   * by `compileRuntimeSlots`. After W10-5/C-4 `Resource` is gone and this
+   * is the only path. New code should use this field directly — declaring
+   * a Resource purely as a wrapper for a reaction is the smell that
+   * motivated the lift.
+   */
+  readonly reactions?: ExtensionReactions
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
   readonly pulseTags?: ReadonlyArray<AgentEventTag>
@@ -644,6 +660,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),
           ...(params.actorRoute !== undefined ? { actorRoute: params.actorRoute } : {}),
           ...(projections.length > 0 ? { projections } : {}),
+          ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
           ...(params.pulseTags !== undefined && params.pulseTags.length > 0

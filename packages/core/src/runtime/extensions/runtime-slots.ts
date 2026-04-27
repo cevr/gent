@@ -18,6 +18,7 @@ import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
 import type { ResourceReaction, ResourceRuntimeSlots } from "../../domain/resource.js"
+import type { ExtensionReactions } from "../../domain/contribution.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 
 export interface RuntimeSlotContext {
@@ -186,21 +187,32 @@ export const compileRuntimeSlots = (
       }
     }
 
-    for (const resource of ext.contributions.resources ?? []) {
-      const runtime = resource.runtime
-      if (runtime?.turnBefore !== undefined) {
-        turnBeforeSlots.push({ extensionId: ext.manifest.id, slot: runtime.turnBefore })
+    const registerReactions = (
+      reactions: ExtensionReactions | ResourceRuntimeSlots<unknown, unknown> | undefined,
+    ) => {
+      if (reactions === undefined) return
+      if (reactions.turnBefore !== undefined) {
+        turnBeforeSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnBefore })
       }
-      if (runtime?.turnAfter !== undefined) {
-        turnAfterSlots.push({ extensionId: ext.manifest.id, slot: runtime.turnAfter })
+      if (reactions.turnAfter !== undefined) {
+        turnAfterSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnAfter })
       }
-      if (runtime?.messageOutput !== undefined) {
-        messageOutputSlots.push({ extensionId: ext.manifest.id, slot: runtime.messageOutput })
+      if (reactions.messageOutput !== undefined) {
+        messageOutputSlots.push({ extensionId: ext.manifest.id, slot: reactions.messageOutput })
       }
-      if (runtime?.toolResult !== undefined) {
-        toolResultSlots.push({ extensionId: ext.manifest.id, handler: runtime.toolResult })
+      if (reactions.toolResult !== undefined) {
+        toolResultSlots.push({ extensionId: ext.manifest.id, handler: reactions.toolResult })
       }
     }
+
+    for (const resource of ext.contributions.resources ?? []) {
+      registerReactions(resource.runtime)
+    }
+    // W10-5/C-1: top-level `defineExtension({ reactions })` lives alongside
+    // `Resource.runtime`; both are slotted into the same dispatch lists.
+    // After W10-5/C-4 the resource branch above goes away and this is the
+    // only path.
+    registerReactions(ext.contributions.reactions)
   }
 
   return {
