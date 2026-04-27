@@ -196,9 +196,14 @@ export const renderWithProviders = async (
     width?: number
     height?: number
     cwd?: string
+    /**
+     * Test-only override for the platform services context (e.g. supplying
+     * a `LinkOpener.Test` layer). Defaults to the shared host context.
+     */
+    services?: Context.Context<unknown>
   },
 ) => {
-  const services = await getServices()
+  const services = options?.services ?? (await getServices())
   const client = options?.client ?? createMockClient()
   const runtime = options?.runtime ?? createMockRuntime()
 
@@ -223,6 +228,7 @@ export const renderWithProviders = async (
                     <ClientProvider
                       client={client}
                       runtime={runtime}
+                      services={services}
                       log={noopLog}
                       initialSession={toInitialSession(options?.initialSession)}
                       initialAgent={options?.initialAgent}

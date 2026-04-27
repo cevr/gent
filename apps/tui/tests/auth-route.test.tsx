@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { Context, Effect, Layer, Scope } from "effect"
 import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import { Auth } from "../src/routes/auth"
 import { useClient } from "../src/client"
@@ -11,7 +12,6 @@ import { SessionId } from "@gent/core/domain/ids"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
 import { onMount } from "solid-js"
-import type { GentRuntime } from "../src/client"
 
 function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
   const client = useClient()
@@ -19,22 +19,22 @@ function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => voi
   return <box />
 }
 
-const runtimeWithLinkOpener = (
+/**
+ * Build a services Context that includes a test `LinkOpener` impl.
+ *
+ * Per [[central-provider-wiring]], component effects requiring `LinkOpener`
+ * resolve it through the host-provided services Context — the same path
+ * production uses (`uiServices` in main.tsx). Tests that need to override
+ * the opener pass this Context via `renderWithProviders({ services })`.
+ */
+const servicesWithLinkOpener = async (
   open: (url: string) => Effect.Effect<void, LinkOpenerError>,
-): GentRuntime => {
-  const base = createMockRuntime()
-  const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: any R the caller supplies is satisfied by LinkOpener.Test
-    effect.pipe(Effect.provide(LinkOpener.Test({ open }))) as Effect.Effect<A, E, never>
-
-  return {
-    ...base,
-    cast: (effect) => {
-      Effect.runFork(provide(effect))
-    },
-    fork: (effect) => Effect.runFork(provide(effect)),
-    run: (effect) => Effect.runPromise(provide(effect)),
-  }
+): Promise<Context.Context<unknown>> => {
+  const layer = Layer.merge(BunServices.layer, LinkOpener.Test({ open }))
+  const scope = await Effect.runPromise(Scope.make())
+  const built = await Effect.runPromise(Layer.buildWithScope(layer, scope))
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: foreign-runtime context shape is validated at use sites
+  return Context.add(built, Scope.Scope, scope) as unknown as Context.Context<unknown>
 }
 
 describe("Auth route", () => {
@@ -382,11 +382,13 @@ describe("Auth route", () => {
           }),
       },
     })
-    const runtime = runtimeWithLinkOpener(() => Effect.void)
+    const services = await servicesWithLinkOpener(() => Effect.void)
+    const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
+      services,
       initialAgent: AgentName.make("cowork"),
     })
 
@@ -460,11 +462,12 @@ describe("Auth route", () => {
         },
       },
     })
-    const runtime = runtimeWithLinkOpener(() =>
+    const services = await servicesWithLinkOpener(() =>
       Effect.callback<void, LinkOpenerError>((resume) => {
         rejectOpen = (error) => resume(Effect.fail(error))
       }),
     )
+    const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(
       () => (
@@ -476,6 +479,7 @@ describe("Auth route", () => {
       {
         client,
         runtime,
+        services,
         initialAgent: AgentName.make("cowork"),
       },
     )
@@ -539,15 +543,17 @@ describe("Auth route", () => {
         },
       },
     })
-    const runtime = runtimeWithLinkOpener(() =>
+    const services = await servicesWithLinkOpener(() =>
       Effect.callback<void, LinkOpenerError>((resume) => {
         rejectOpen = (error) => resume(Effect.fail(error))
       }),
     )
+    const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
+      services,
       initialAgent: AgentName.make("cowork"),
     })
 

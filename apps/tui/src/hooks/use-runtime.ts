@@ -1,9 +1,14 @@
 /**
  * Effect execution hook for Solid
- * Provides call (tracked) and cast (fire-and-forget) for Effect execution
+ * Provides call (tracked) and cast (fire-and-forget) for Effect execution.
+ *
+ * Effects are forked against the host-provided `services` context — wired
+ * once at the TUI root (`<ClientProvider services={uiServices}>`) per
+ * [[central-provider-wiring]]. Component effects requiring platform
+ * services (`FileSystem`, `ChildProcessSpawner`, …) execute without any
+ * per-call-site `Effect.provide`.
  */
-import { Exit, Fiber, Cause } from "effect"
-import type { Effect } from "effect"
+import { Effect, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
 import { useClientRuntime } from "../client/index"
@@ -16,16 +21,20 @@ export interface UseRuntimeReturn {
 }
 
 /**
- * Hook to run Effects via the client's GentRuntime
+ * Hook to run Effects with the host-provided platform context.
  */
 export function useRuntime(): UseRuntimeReturn {
-  const { runtime, log } = useClientRuntime()
+  const { services, log } = useClientRuntime()
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary: caller-supplied services context covers any R the caller declares
+  const fork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.runForkWith(services as Parameters<typeof Effect.runForkWith<R>>[0])(effect)
 
   const call = <A, E, R>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
 
     let cancelled = false
-    const fiber = runtime.fork(effect)
+    const fiber = fork(effect)
 
     fiber.addObserver((exit) => {
       if (cancelled) return
@@ -38,7 +47,7 @@ export function useRuntime(): UseRuntimeReturn {
 
     const cancel = () => {
       cancelled = true
-      runtime.cast(Fiber.interrupt(fiber))
+      Effect.runFork(Fiber.interrupt(fiber))
     }
 
     onCleanup(cancel)
@@ -47,7 +56,7 @@ export function useRuntime(): UseRuntimeReturn {
   }
 
   const cast = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {
-    const fiber = runtime.fork(effect)
+    const fiber = fork(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
         log.error("cast.failed", { error: Cause.pretty(exit.cause) })

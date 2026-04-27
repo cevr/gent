@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { unlink } from "node:fs/promises"
-import { resolveEditor, makeTmpPath, parseEditorCommand } from "../src/utils/external-editor"
+import { resolveEditor, parseEditorCommand } from "../src/utils/external-editor"
 
 // ── Editor resolution ─────────────────────────────────────────────────
 
@@ -50,23 +50,6 @@ describe("parseEditorCommand", () => {
 
   test("empty string falls back to vi", () => {
     expect(parseEditorCommand("")).toEqual(["vi"])
-  })
-})
-
-// ── Tmp file path generation ─────────────────────────────────────────
-
-describe("makeTmpPath", () => {
-  test("generates path in tmpdir with gent-edit prefix", () => {
-    const path = makeTmpPath()
-    expect(path.startsWith(tmpdir())).toBe(true)
-    expect(path).toContain("gent-edit-")
-    expect(path.endsWith(".md")).toBe(true)
-  })
-
-  test("generates unique paths", () => {
-    const a = makeTmpPath()
-    const b = makeTmpPath()
-    expect(a).not.toBe(b)
   })
 })
 

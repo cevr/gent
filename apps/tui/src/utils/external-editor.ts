@@ -3,10 +3,9 @@
  * with the current textarea content, returning the edited result.
  */
 
-import { tmpdir } from "node:os"
-import { randomUUID } from "node:crypto"
-import { removeFile } from "../platform/fs-runtime-boundary"
-import { joinPath } from "../platform/path-runtime"
+import { Effect, FileSystem } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
+import { runProcess } from "@gent/core/utils/run-process"
 
 export function resolveEditor(visual: string | undefined, editor: string | undefined): string {
   return visual || editor || "vi"
@@ -20,53 +19,70 @@ export function parseEditorCommand(editor: string): [string, ...string[]] {
   return [cmd, ...parts.slice(1)]
 }
 
-export function makeTmpPath(): string {
-  return joinPath(tmpdir(), `gent-edit-${randomUUID()}.md`)
-}
-
 export type EditorResult =
   | { _tag: "applied"; content: string }
   | { _tag: "cancelled" }
   | { _tag: "error"; message: string }
 
-export async function openExternalEditor(
+export const openExternalEditor = (
   currentContent: string,
   suspend: () => void,
   resume: () => void,
   editor: string,
-): Promise<EditorResult> {
-  const tmpPath = makeTmpPath()
-  const [cmd, ...args] = parseEditorCommand(editor)
+): Effect.Effect<
+  EditorResult,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const [cmd, ...args] = parseEditorCommand(editor)
 
-  try {
-    // Write current content to tmp file
-    await Bun.write(tmpPath, currentContent)
-  } catch (err) {
-    return { _tag: "error", message: `Failed to write tmp file: ${err}` }
-  }
+      const tmpFile = yield* fs
+        .makeTempFileScoped({ prefix: "gent-edit-", suffix: ".md" })
+        .pipe(Effect.result)
+      if (tmpFile._tag === "Failure") {
+        return {
+          _tag: "error",
+          message: `Failed to create tmp file: ${tmpFile.failure.message}`,
+        }
+      }
+      const tmpPath = tmpFile.success
 
-  suspend()
-  try {
-    // Spawn editor with inherited stdio
-    const proc = Bun.spawn([cmd, ...args, tmpPath], {
-      stdio: ["inherit", "inherit", "inherit"],
-    })
-    const exitCode = await proc.exited
+      const writeResult = yield* fs.writeFileString(tmpPath, currentContent).pipe(Effect.result)
+      if (writeResult._tag === "Failure") {
+        return {
+          _tag: "error",
+          message: `Failed to write tmp file: ${writeResult.failure.message}`,
+        }
+      }
 
-    if (exitCode !== 0) {
-      return { _tag: "cancelled" }
-    }
+      yield* Effect.sync(suspend)
 
-    // Read back edited content
-    const file = Bun.file(tmpPath)
-    const exists = await file.exists()
-    if (!exists) return { _tag: "cancelled" }
-    const content = await file.text()
-    return { _tag: "applied", content }
-  } catch (err) {
-    return { _tag: "error", message: `Editor failed: ${err}` }
-  } finally {
-    resume()
-    await removeFile(tmpPath)
-  }
-}
+      const editorOutcome = yield* runProcess(cmd, [...args, tmpPath], {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      }).pipe(
+        Effect.map((r) => r.exitCode),
+        Effect.catchTag("ProcessError", (e) =>
+          Effect.succeed({ _tag: "spawn-error" as const, message: e.message }),
+        ),
+        Effect.ensuring(Effect.sync(resume)),
+      )
+
+      if (typeof editorOutcome !== "number") {
+        return { _tag: "error", message: `Editor failed: ${editorOutcome.message}` }
+      }
+      if (editorOutcome !== 0) {
+        return { _tag: "cancelled" }
+      }
+
+      const content = yield* fs.readFileString(tmpPath).pipe(Effect.result)
+      if (content._tag === "Failure") {
+        return { _tag: "error", message: `Failed to read tmp file: ${content.failure.message}` }
+      }
+      return { _tag: "applied", content: content.success }
+    }),
+  )

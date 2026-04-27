@@ -19,8 +19,9 @@ export interface RunProcessOptions {
   readonly cwd?: string
   readonly env?: Record<string, string | undefined>
   readonly timeout?: Duration.Duration
-  readonly stdout?: "pipe" | "ignore"
-  readonly stderr?: "pipe" | "ignore"
+  readonly stdin?: "pipe" | "ignore" | "inherit"
+  readonly stdout?: "pipe" | "ignore" | "inherit"
+  readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
@@ -37,21 +38,28 @@ export const runProcess = (
 ): Effect.Effect<ProcessResult, ProcessError, ChildProcessSpawner.ChildProcessSpawner> => {
   const program = Effect.scoped(
     Effect.gen(function* () {
+      const stdoutMode = options.stdout ?? "pipe"
+      const stderrMode = options.stderr ?? "pipe"
       const spawn = ChildProcess.make(command, [...args], {
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
-        stdout: options.stdout ?? "pipe",
-        stderr: options.stderr ?? "pipe",
+        ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+        stdout: stdoutMode,
+        stderr: stderrMode,
       })
       const handle = yield* spawn
+      const collectStdout =
+        stdoutMode === "pipe" ? Stream.runCollect(handle.stdout) : Effect.succeed(null)
+      const collectStderr =
+        stderrMode === "pipe" ? Stream.runCollect(handle.stderr) : Effect.succeed(null)
       const [exitCode, stdoutChunks, stderrChunks] = yield* Effect.all(
-        [handle.exitCode, Stream.runCollect(handle.stdout), Stream.runCollect(handle.stderr)],
+        [handle.exitCode, collectStdout, collectStderr],
         { concurrency: "unbounded" },
       )
       return {
         exitCode: Number(exitCode),
-        stdout: decodeUtf8(stdoutChunks),
-        stderr: decodeUtf8(stderrChunks),
+        stdout: stdoutChunks === null ? "" : decodeUtf8(stdoutChunks),
+        stderr: stderrChunks === null ? "" : decodeUtf8(stderrChunks),
       } satisfies ProcessResult
     }),
   ).pipe(

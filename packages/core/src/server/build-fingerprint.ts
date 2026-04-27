@@ -4,6 +4,8 @@
  */
 
 import { Config, Effect, FileSystem, Option, Path } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
+import { runProcess } from "../utils/run-process.js"
 
 /** True when process.execPath is a compiled gent binary, not a generic runtime like bun. */
 const isCompiledBinary = (): boolean => {
@@ -18,7 +20,7 @@ const isCompiledBinary = (): boolean => {
 export const computeLocalFingerprint: Effect.Effect<
   string,
   never,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -37,15 +39,15 @@ export const computeLocalFingerprint: Effect.Effect<
     decodeURIComponent(new URL(import.meta.url).pathname),
     "../../../..",
   )
-  // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off — error immediately caught by Effect.option
-  const result = yield* Effect.try({
-    try: () => {
-      const proc = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: gentRoot })
-      return new TextDecoder().decode(proc.stdout).trim()
-    },
-    catch: () => new Error("git failed"),
-  }).pipe(Effect.option)
-  if (result._tag === "Some" && result.value.length > 0) return `src-${result.value}`
+  const result = yield* runProcess("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: gentRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  }).pipe(
+    Effect.map((r) => (r.exitCode === 0 ? r.stdout.trim() : "")),
+    Effect.catchTag("ProcessError", () => Effect.succeed("")),
+  )
+  if (result.length > 0) return `src-${result}`
 
   return "unknown"
 })
@@ -54,7 +56,7 @@ export const computeLocalFingerprint: Effect.Effect<
 export const resolveBuildFingerprint: Effect.Effect<
   string,
   never,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > = computeLocalFingerprint.pipe(
   Effect.flatMap((local) =>
     Effect.gen(function* () {

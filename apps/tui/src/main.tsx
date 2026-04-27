@@ -320,6 +320,7 @@ const main = Command.make(
                 <ClientProvider
                   client={bundle.client}
                   runtime={bundle.runtime}
+                  services={uiServices}
                   log={log}
                   initialSession={bootstrap.initialSession}
                   initialAgent={initialAgent}

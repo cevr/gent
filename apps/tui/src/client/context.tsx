@@ -10,6 +10,7 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore } from "solid-js/store"
+import type { Context } from "effect"
 import { Effect, Fiber, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
@@ -121,6 +122,13 @@ export interface ClientTransportValue {
   client: GentNamespacedClient
   /** Runtime for executing Effects */
   runtime: GentRuntime
+  /**
+   * Host-provided platform services (FileSystem, ChildProcessSpawner, …).
+   * `useRuntime` uses this to fork component effects via
+   * `Effect.runForkWith(services)`, so call sites don't need
+   * per-effect platform provisioning.
+   */
+  services: Context.Context<unknown>
   /** Structured logger — flows through Effect's logger layer */
   log: ClientLog
 
@@ -247,9 +255,9 @@ export function useClient(): ClientContextValue {
   }
 }
 
-export function useClientRuntime(): Pick<ClientTransportValue, "runtime" | "log"> {
-  const { runtime, log } = useClientTransport()
-  return { runtime, log }
+export function useClientRuntime(): Pick<ClientTransportValue, "runtime" | "services" | "log"> {
+  const { runtime, services, log } = useClientTransport()
+  return { runtime, services, log }
 }
 
 export function useClientTransportState(): Pick<
@@ -291,6 +299,15 @@ interface ClientProviderProps extends ParentProps {
   log: ClientLog
   initialSession: Session | undefined
   initialAgent?: AgentName
+  /**
+   * Host-provided platform services (e.g. `FileSystem`, `ChildProcessSpawner`).
+   * Used by `useRuntime`'s `cast` / `call` so component effects requiring
+   * platform services can be executed without per-call-site `Effect.provide`.
+   * Per [[central-provider-wiring]], the host wires this once at root —
+   * required, never optional. Tests that need a clean slate pass
+   * `Context.empty()`.
+   */
+  services: Context.Context<unknown>
 }
 
 export function ClientProvider(props: ClientProviderProps) {
@@ -298,6 +315,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const client = props.client
   const runtime = props.runtime
   const log = props.log
+  const services = props.services
   const workspace = useWorkspace()
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
@@ -660,6 +678,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const transportValue: ClientTransportValue = {
     client,
     runtime,
+    services,
     log,
 
     connectionState,

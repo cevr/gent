@@ -1,5 +1,4 @@
 import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
-import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -231,8 +230,6 @@ export function useComposerController(): ComposerController {
             client.setError(message)
           }),
         ),
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(BunServices.layer),
       ),
     )
   }
@@ -304,28 +301,30 @@ export function useComposerController(): ComposerController {
 
     const currentContent = inputRef?.plainText ?? ""
     const editor = resolveEditor(env.visual, env.editor)
-    openExternalEditor(
-      currentContent,
-      () => renderer.suspend(),
-      () => renderer.resume(),
-      editor,
+    cast(
+      openExternalEditor(
+        currentContent,
+        () => renderer.suspend(),
+        () => renderer.resume(),
+        editor,
+      ).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (result._tag === "applied" && inputRef !== null) {
+              inputRef.replaceText(result.content)
+              inputRef.cursorOffset = result.content.length
+              sc.onComposerInteraction(
+                ComposerInteractionEvent.RestoreDraft.make({ text: result.content }),
+              )
+              return
+            }
+            if (result._tag === "error") {
+              client.setError(result.message)
+            }
+          }),
+        ),
+      ),
     )
-      .then((result) => {
-        if (result._tag === "applied" && inputRef !== null) {
-          inputRef.replaceText(result.content)
-          inputRef.cursorOffset = result.content.length
-          sc.onComposerInteraction(
-            ComposerInteractionEvent.RestoreDraft.make({ text: result.content }),
-          )
-          return
-        }
-        if (result._tag === "error") {
-          client.setError(result.message)
-        }
-      })
-      .catch((error: unknown) => {
-        client.setError(`Editor error: ${error}`)
-      })
 
     return true
   }
