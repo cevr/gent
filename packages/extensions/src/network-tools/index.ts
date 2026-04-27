@@ -4,5 +4,5 @@ import { WebSearchTool } from "./websearch.js"
 
 export const NetworkToolsExtension = defineExtension({
   id: "@gent/network-tools",
-  capabilities: [WebFetchTool, WebSearchTool],
+  tools: [WebFetchTool, WebSearchTool],
 })

@@ -69,6 +69,6 @@ export const SkillsExtension = defineExtension({
   // The actor is spawned in `Resource.start` (not the static `actors:`
   // bucket), so the route collector points at the serviceKey directly.
   actorRoute: SkillsService_Key,
-  capabilities: [SkillsTool, SearchSkillsTool],
+  tools: [SkillsTool, SearchSkillsTool],
   projections: [SkillsProjection],
 })

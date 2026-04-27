@@ -725,7 +725,7 @@ const EXTENSION_ID = AUTO_EXTENSION_ID
 
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
-  capabilities: [AutoCheckpointTool],
+  tools: [AutoCheckpointTool],
   actors: [behavior(autoBehavior)],
   protocols: AutoProtocol,
   // Resource shell carries the AutoJournal service layer + slot handlers

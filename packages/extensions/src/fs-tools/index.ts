@@ -7,5 +7,5 @@ import { GrepTool } from "./grep.js"
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
-  capabilities: [ReadTool, WriteTool, EditTool, GlobTool, GrepTool],
+  tools: [ReadTool, WriteTool, EditTool, GlobTool, GrepTool],
 })

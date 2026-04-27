@@ -135,7 +135,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
-  capabilities: [HandoffTool],
+  tools: [HandoffTool],
   actors: [behavior(cooldownBehavior)],
   // Resource shell carries the turnAfter slot until W10-5 lifts slots
   // off Resource and W10-4 turns turn.after into an actor message.

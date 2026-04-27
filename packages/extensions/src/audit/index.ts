@@ -19,6 +19,6 @@ export const auditor = defineAgent({
 
 export const AuditExtension = defineExtension({
   id: "@gent/audit",
-  capabilities: [AuditTool],
+  tools: [AuditTool],
   agents: [auditor],
 })

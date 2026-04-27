@@ -22,6 +22,6 @@ export const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interactio
 
 export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,
-  capabilities: [AskUserTool, PromptTool],
+  tools: [AskUserTool, PromptTool],
   projections: [InteractionProjection],
 })

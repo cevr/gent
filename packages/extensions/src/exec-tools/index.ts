@@ -18,5 +18,5 @@ import { EXEC_TOOLS_EXTENSION_ID } from "./protocol.js"
 
 export const ExecToolsExtension = defineExtension({
   id: EXEC_TOOLS_EXTENSION_ID,
-  capabilities: [BashTool],
+  tools: [BashTool],
 })

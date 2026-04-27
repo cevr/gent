@@ -19,6 +19,6 @@ const SessionNamingProjection: ProjectionContribution<true> = {
 
 export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
-  capabilities: [SearchSessionsTool, ReadSessionTool, RenameSessionTool],
+  tools: [SearchSessionsTool, ReadSessionTool, RenameSessionTool],
   projections: [SessionNamingProjection],
 })

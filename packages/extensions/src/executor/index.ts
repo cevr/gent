@@ -17,9 +17,8 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
+  tools: [ExecuteTool, ResumeTool],
   capabilities: [
-    ExecuteTool,
-    ResumeTool,
     action({
       id: "executor-start",
       name: "Executor: Start",

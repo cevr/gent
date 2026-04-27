@@ -14,5 +14,5 @@ export const PLAN_EXTENSION_ID = ExtensionId.make("@gent/plan")
 
 export const PlanExtension = defineExtension({
   id: PLAN_EXTENSION_ID,
-  capabilities: [PlanTool],
+  tools: [PlanTool],
 })

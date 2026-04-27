@@ -23,6 +23,6 @@ export const architect = defineAgent({
 
 export const ResearchExtension = defineExtension({
   id: "@gent/research",
-  capabilities: [ResearchTool],
+  tools: [ResearchTool],
   agents: [architect],
 })

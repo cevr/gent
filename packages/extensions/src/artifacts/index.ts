@@ -130,5 +130,5 @@ export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
   actors: [artifactsActor],
   protocols: ArtifactProtocol,
-  capabilities: [ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool],
+  tools: [ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool],
 })

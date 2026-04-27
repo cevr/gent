@@ -33,7 +33,7 @@ export const MEMORY_EXTENSION_ID = ExtensionId.make("@gent/memory")
 
 export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
-  capabilities: [...MemoryTools],
+  tools: [...MemoryTools],
   agents: [...MemoryAgents],
   projections: [MemoryVaultProjection],
   resources: [

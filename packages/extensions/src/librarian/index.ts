@@ -27,7 +27,7 @@ export const librarian = defineAgent({
 
 export const LibrarianExtension = defineExtension({
   id: "@gent/librarian",
-  capabilities: [RepoTool],
+  tools: [RepoTool],
   agents: [librarian],
   resources: ({ ctx }) => [
     defineResource({ tag: GitReader, scope: "process", layer: GitReader.Live(ctx.home) }),
