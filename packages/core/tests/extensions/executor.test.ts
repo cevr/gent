@@ -6,6 +6,7 @@ import {
   transitionConnectionFailed,
   transitionDisconnect,
   executorBehavior,
+  viewForState,
 } from "@gent/extensions/executor/actor"
 import {
   resolveSettings,
@@ -13,7 +14,6 @@ import {
   type ExecutorSettings,
 } from "@gent/extensions/executor/domain"
 import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/mcp-bridge"
-import { ExecutorProjection } from "@gent/extensions/executor/projection"
 
 // ── State machine ──
 //
@@ -115,52 +115,63 @@ describe("Executor state machine", () => {
   })
 })
 
-// ── Turn projection (new C2 path) ──
+// ── Actor view (new W10-2 path) ──
 //
 // `ExecutorActorConfig.derive` is gone. Prompt/policy come from
-// `ExecutorProjection.prompt(snapshot)` / `.policy(snapshot)` — pure
-// functions of the typed reply schema. We test those directly.
+// `viewForState(state)` — a pure function of `ExecutorState` sampled by
+// the projection registry via `ActorEngine.peekView`. We test it directly.
 
-describe("ExecutorProjection prompt + policy", () => {
+describe("executor viewForState — prompt + tool policy", () => {
+  test("executorBehavior.view is wired so the projection registry samples it", () => {
+    // Regression-locks the W10-2 seam: if `view` is unset on the
+    // behavior, `ActorEngine.peekView` returns undefined and the
+    // executor-guidance prompt section / policy exclusions never
+    // reach prompt assembly — even though `viewForState` itself
+    // would still pass its pure tests.
+    expect(executorBehavior.view).toBeDefined()
+    expect(executorBehavior.view).toBe(viewForState)
+  })
+
   test("Idle: excludes execute + resume, no prompt section", () => {
-    const policy = ExecutorProjection.policy!({ status: "idle" }, undefined as never)
-    expect(policy).toEqual({ exclude: ["execute", "resume"] })
-    const sections = ExecutorProjection.prompt!({ status: "idle" })
-    expect(sections).toEqual([])
+    const view = viewForState(ExecutorState.Idle.make({}))
+    expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
+    expect(view.prompt).toBeUndefined()
   })
 
   test("Connecting: excludes execute + resume", () => {
-    const policy = ExecutorProjection.policy!({ status: "connecting" }, undefined as never)
-    expect(policy).toEqual({ exclude: ["execute", "resume"] })
+    const view = viewForState(ExecutorState.Connecting.make({ cwd: "/test" }))
+    expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
   })
 
   test("Error: excludes execute + resume", () => {
-    const policy = ExecutorProjection.policy!(
-      { status: "error", errorMessage: "boom", baseUrl: undefined, executorPrompt: undefined },
-      undefined as never,
-    )
-    expect(policy).toEqual({ exclude: ["execute", "resume"] })
+    const view = viewForState(ExecutorState.Error.make({ message: "boom" }))
+    expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
   })
 
   test("Ready without instructions: no prompt section, no policy exclusions", () => {
-    const policy = ExecutorProjection.policy!(
-      { status: "ready", baseUrl: "http://x" },
-      undefined as never,
+    const view = viewForState(
+      ExecutorState.Ready.make({
+        mode: "local",
+        baseUrl: "http://x",
+        scopeId: "scope-1",
+      }),
     )
-    expect(policy).toEqual({})
-    const sections = ExecutorProjection.prompt!({ status: "ready", baseUrl: "http://x" })
-    expect(sections).toEqual([])
+    expect(view.toolPolicy).toEqual({})
+    expect(view.prompt).toBeUndefined()
   })
 
   test("Ready with instructions: prompt section includes guidance", () => {
-    const sections = ExecutorProjection.prompt!({
-      status: "ready",
-      baseUrl: "http://x",
-      executorPrompt: "use frobnicator API",
-    })
-    expect(sections.length).toBe(1)
-    expect(sections[0]!.id).toBe("executor-guidance")
-    expect(sections[0]!.content).toContain("use frobnicator API")
+    const view = viewForState(
+      ExecutorState.Ready.make({
+        mode: "local",
+        baseUrl: "http://x",
+        scopeId: "scope-1",
+        executorPrompt: "use frobnicator API",
+      }),
+    )
+    expect(view.prompt?.length).toBe(1)
+    expect(view.prompt![0]!.id).toBe("executor-guidance")
+    expect(view.prompt![0]!.content).toContain("use frobnicator API")
   })
 })
 

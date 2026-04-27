@@ -16,7 +16,14 @@
  */
 
 import { Effect, Schema } from "effect"
-import { behavior, ServiceKey, TaggedEnumClass, type Behavior } from "@gent/core/extensions/api"
+import {
+  behavior,
+  ServiceKey,
+  TaggedEnumClass,
+  type ActorView,
+  type Behavior,
+  type PromptSection,
+} from "@gent/core/extensions/api"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 
@@ -86,6 +93,50 @@ const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
   }
 }
 
+// ── Actor view (prompt + tool policy) ──
+//
+// Pure derivation from `ExecutorState`, sampled via
+// `ActorEngine.peekView` from the projection registry. Replaces the
+// retired `ExecutorProjection` (W10-2): when state is `Ready` and an
+// `executorPrompt` is present, contribute the executor-guidance prompt
+// section; otherwise exclude `execute`/`resume` from the active policy
+// until the connection is up.
+
+const buildExecutorPrompt = (instructions: string): string =>
+  [
+    "## Executor Runtime",
+    "",
+    "You have access to the `execute` tool which runs TypeScript in a sandboxed runtime with configured API tools.",
+    "",
+    "### Executor Instructions",
+    instructions,
+    "",
+    "### Usage Tips",
+    "- Use `tools.search({ query })` inside execute to discover available API tools.",
+    "- Use `tools.describe.tool({ path })` to get TypeScript shapes before calling.",
+    "- If execution pauses for approval, use the `resume` tool with the returned executionId.",
+  ].join("\n")
+
+const buildPromptSection = (snapshot: ExecutorSnapshotReply): PromptSection | undefined => {
+  if (snapshot.status !== "ready") return undefined
+  if (snapshot.executorPrompt === undefined || snapshot.executorPrompt.length === 0)
+    return undefined
+  return {
+    id: "executor-guidance",
+    content: buildExecutorPrompt(snapshot.executorPrompt),
+    priority: 85,
+  }
+}
+
+export const viewForState = (state: ExecutorState): ActorView => {
+  const snapshot = projectSnapshot(state)
+  const section = buildPromptSection(snapshot)
+  return {
+    ...(section !== undefined ? { prompt: [section] } : {}),
+    toolPolicy: snapshot.status === "ready" ? {} : { exclude: ["execute", "resume"] },
+  }
+}
+
 // ── Pure transitions ──
 
 export const transitionConnect = (state: ExecutorState, cwd: string): ExecutorState => {
@@ -136,6 +187,7 @@ export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
 export const executorBehavior: Behavior<ExecutorMsg, ExecutorState, never> = {
   initialState: ExecutorState.Idle.make({}),
   serviceKey: ExecutorService,
+  view: viewForState,
   receive: (msg, state, ctx) =>
     Effect.gen(function* () {
       switch (msg._tag) {

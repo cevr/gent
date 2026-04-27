@@ -11,14 +11,12 @@ import { executorActor } from "./actor.js"
 import { ExecutorConnectionRunner, ExecutorConnectionRunnerLayer } from "./connection-runner.js"
 import { ExecuteTool, ResumeTool } from "./tools.js"
 import { ExecutorProtocol } from "./protocol.js"
-import { ExecutorProjection } from "./projection.js"
 
 export { ExecutorUiModel } from "./actor.js"
 export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
-  projections: [ExecutorProjection],
   capabilities: [
     ExecuteTool,
     ResumeTool,
