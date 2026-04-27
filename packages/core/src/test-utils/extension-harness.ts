@@ -344,6 +344,7 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     renameCurrent: dieStub("session.renameCurrent"),
     estimateContextPercent: dieStub("session.estimateContextPercent"),
     search: dieStub("session.search"),
+    queueFollowUp: dieStub("session.queueFollowUp"),
     listBranches: dieStub("session.listBranches"),
     createBranch: dieStub("session.createBranch"),
     forkBranch: dieStub("session.forkBranch"),

@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Context, Effect } from "effect"
+import { Context, Effect, Stream } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -26,6 +26,10 @@ import { BranchId, SessionId } from "../domain/ids.js"
 import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
+import {
+  ExtensionTurnControl,
+  type ExtensionTurnControlService,
+} from "./extensions/turn-control.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
@@ -54,6 +58,13 @@ export interface MakeExtensionHostContextDeps {
    */
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
+  /**
+   * Turn-control surface. Threaded into the `session.queueFollowUp`
+   * facet so slot handlers (and any non-FSM caller) can enqueue
+   * follow-ups without going through the legacy FSM
+   * `afterTransition` runEffects pipeline.
+   */
+  readonly turnControl: ExtensionTurnControlService
 }
 
 export interface MakeExtensionHostContextRunInfo {
@@ -72,6 +83,7 @@ type AmbientHostContextDefaults = Pick<
   | "searchStorage"
   | "agentRunner"
   | "sessionMutations"
+  | "turnControl"
 >
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
@@ -145,6 +157,18 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
     }),
   },
 )
+export const HostTurnControlRef = Context.Reference<ExtensionTurnControlService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostTurnControlRef",
+  {
+    defaultValue: () => ({
+      queueFollowUp: unavailable("ExtensionTurnControl"),
+      interject: unavailable("ExtensionTurnControl"),
+      commands: Stream.empty,
+      withOwner: (_owner, effect) => effect,
+    }),
+  },
+)
+
 export const HostSessionMutationsRef = Context.Reference<SessionMutationsService>(
   "@gent/core/src/runtime/make-extension-host-context/HostSessionMutationsRef",
   {
@@ -169,6 +193,7 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   searchStorage: Effect.service(HostSearchStorageRef),
   agentRunner: Effect.service(HostAgentRunnerRef),
   sessionMutations: Effect.service(HostSessionMutationsRef),
+  turnControl: Effect.service(HostTurnControlRef),
 })
 type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
 
@@ -181,6 +206,7 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
       sessionMutations: Effect.serviceOption(SessionMutations),
+      turnControl: Effect.serviceOption(ExtensionTurnControl),
     })
 
     return {
@@ -199,6 +225,9 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
         : {}),
       ...(available.sessionMutations._tag === "Some"
         ? { sessionMutations: available.sessionMutations.value }
+        : {}),
+      ...(available.turnControl._tag === "Some"
+        ? { turnControl: available.turnControl.value }
         : {}),
     }
   },
@@ -226,6 +255,9 @@ const withAmbientHostContextOverrides = <A, E, R>(
   }
   if (overrides.sessionMutations !== undefined) {
     next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
+  }
+  if (overrides.turnControl !== undefined) {
+    next = next.pipe(Effect.provideService(HostTurnControlRef, overrides.turnControl))
   }
   return next
 }
@@ -263,6 +295,7 @@ export const makeAmbientExtensionHostContextDeps = (
       sessionMutations: defaults.sessionMutations,
       actorEngine: input.actorEngine,
       receptionist: input.receptionist,
+      turnControl: defaults.turnControl,
     }
   })
 
@@ -369,6 +402,16 @@ export const makeExtensionHostContext = (
         ),
         Effect.mapError(toHostError("session.search")),
       ),
+
+    queueFollowUp: (params) =>
+      deps.turnControl
+        .queueFollowUp({
+          sessionId: runInfo.sessionId,
+          branchId: params.branchId ?? runInfo.branchId,
+          content: params.content,
+          ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
+        })
+        .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
 
     listBranches: () =>
       deps.storage

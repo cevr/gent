@@ -235,12 +235,10 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("tool context does not expose follow-up queue mutation", () => {
-    const bad = (_ctx: ExtensionHostContext) =>
-      // @ts-expect-error — follow-up queueing is internal runtime state, not author surface
-      _ctx.session.queueFollowUp({ content: "x" })
+  test("session.queueFollowUp is exposed for slot handlers and extension authors", () => {
+    const ok = (_ctx: ExtensionHostContext) => _ctx.session.queueFollowUp({ content: "x" })
 
-    void bad
+    void ok
     expect(true).toBe(true)
   })
 

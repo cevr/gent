@@ -15,7 +15,7 @@ import type {
   ApprovalRequest,
   InteractionPendingError,
 } from "./interaction-request"
-import type { Branch, Message, Session } from "./message"
+import type { Branch, Message, MessageMetadata, Session } from "./message"
 import type { ModelId } from "./model"
 
 export class ExtensionHostError extends Schema.TaggedErrorClass<ExtensionHostError>()(
@@ -154,6 +154,18 @@ export declare namespace ExtensionHostContext {
         limit?: number
       },
     ) => Effect.Effect<ReadonlyArray<ExtensionHostSearchResult>, ExtensionHostError>
+
+    // Turn control — slot handlers and direct callers can enqueue a
+    // follow-up to the current turn without going through the legacy
+    // FSM `afterTransition` runEffects pipeline. Wraps
+    // `ExtensionTurnControl.queueFollowUp` and surfaces failures as
+    // `ExtensionHostError` so callers don't have to import a runtime
+    // error type.
+    readonly queueFollowUp: (params: {
+      readonly content: string
+      readonly metadata?: MessageMetadata
+      readonly branchId?: BranchId
+    }) => Effect.Effect<void, ExtensionHostError>
 
     // Branch operations
 
