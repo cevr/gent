@@ -31,12 +31,19 @@ import type {
   ExtractExtensionReply,
   ExtensionProtocolError,
 } from "../../../domain/extension-protocol.js"
+import { ActorEngine } from "../actor-engine.js"
+import { Receptionist } from "../receptionist.js"
 import { CurrentExtensionSession } from "../extension-actor-shared.js"
 import { ExtensionTurnControl } from "../turn-control.js"
 import { makeMachineLifecycle } from "./machine-lifecycle.js"
 import { makeSessionMailbox } from "./machine-mailbox.js"
 import { CurrentMachinePublishListener } from "./machine-publish-listener.js"
-import { collectMachineProtocol, extractMachine, protocolError } from "./machine-protocol.js"
+import {
+  collectMachineProtocol,
+  extractMachine,
+  protocolError,
+  type ActorBackedRoute,
+} from "./machine-protocol.js"
 
 export interface MachineEngineService {
   readonly publish: (
@@ -64,11 +71,13 @@ export const makeMachineEngine = (
 ): Effect.Effect<
   { runtimeScope: Scope.Closeable; service: MachineEngineService },
   never,
-  ExtensionTurnControl
+  ExtensionTurnControl | ActorEngine | Receptionist
 > =>
   Effect.gen(function* () {
-    const { spawnSpecs, spawnByExtension, shadowedScopesByExtension, protocols } =
+    const { spawnSpecs, spawnByExtension, actorRoutes, shadowedScopesByExtension, protocols } =
       collectMachineProtocol(extensions)
+    const actorEngine = yield* ActorEngine
+    const receptionist = yield* Receptionist
 
     const shadowedSummary = [...shadowedScopesByExtension.entries()]
       .flatMap(([id, scopes]) => scopes.map((scope) => `${id}@${scope}`))
@@ -104,6 +113,26 @@ export const makeMachineEngine = (
           entries,
         })),
       )
+
+    // Actor-route fallback. When the extension has no FSM entry but
+    // declares a serviceKey-bearing Behavior, find the live ActorRef
+    // through the Receptionist and dispatch via the engine. Returns
+    // `undefined` when no live actor is registered (the spawn either
+    // hasn't happened yet or failed) — caller treats it the same as
+    // "extension not loaded" with a routed-via-actor protocol error.
+    const findActorRefForRoute = (route: ActorBackedRoute) =>
+      receptionist.find(route.serviceKey).pipe(Effect.map((refs) => refs[0]))
+
+    // Reply-key thunk for actor-route ask. The phantom callback exists
+    // to pin the answer's TS type; the engine never calls it. Returning
+    // the request itself satisfies the `(a: A) => M` shape without
+    // building a synthetic envelope. `void a` keeps lint quiet.
+    const askReplyKey =
+      <M>(message: M) =>
+      (_a: unknown) => {
+        void _a
+        return message
+      }
     const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
     const notifyPublishListener = (transitioned: ReadonlyArray<string>) =>
@@ -163,6 +192,33 @@ export const makeMachineEngine = (
           branchId,
         )
         if (entry === undefined) {
+          // Actor-route fallback: extension declared `actors:` with a
+          // serviceKey but no FSM. Tell the live ActorRef directly.
+          // Per-session routing is the actor's own concern — it sees
+          // the message envelope and decides if it's a no-op for this
+          // session vs a state mutation.
+          const route = actorRoutes.get(decoded.extensionId)
+          if (route !== undefined) {
+            const actorRef = yield* findActorRefForRoute(route)
+            if (actorRef === undefined) {
+              yield* Effect.logWarning("extension.send.actor-not-spawned").pipe(
+                Effect.annotateLogs({
+                  extensionId: decoded.extensionId,
+                  tag: decoded._tag,
+                  sessionId,
+                }),
+              )
+              return yield* protocolError(
+                decoded.extensionId,
+                decoded._tag,
+                "command",
+                `extension "${decoded.extensionId}" actor not registered`,
+              )
+            }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ExtensionMessage envelope IS the actor message (same _tag + payload); the actor matches on _tag
+            yield* actorEngine.tell(actorRef, decoded as never)
+            return
+          }
           yield* Effect.logWarning("extension.send.not-loaded").pipe(
             Effect.annotateLogs({
               extensionId: decoded.extensionId,
@@ -207,6 +263,45 @@ export const makeMachineEngine = (
           branchId,
         )
         if (entry === undefined) {
+          // Actor-route fallback (mirror of sendImmediate). `ask` with a
+          // phantom replyKey pins the answer's TS type for the ask
+          // correlation — the engine threads `ctx.reply(value)` from the
+          // actor back through the pending Deferred regardless of what
+          // the replyKey returns. `ActorAskTimeout` surfaces here as a
+          // protocol error so callers see one consistent failure shape.
+          const route = actorRoutes.get(decoded.extensionId)
+          if (route !== undefined) {
+            const actorRef = yield* findActorRefForRoute(route)
+            if (actorRef === undefined) {
+              yield* Effect.logWarning("extension.execute.actor-not-spawned").pipe(
+                Effect.annotateLogs({
+                  extensionId: decoded.extensionId,
+                  tag: decoded._tag,
+                  sessionId,
+                }),
+              )
+              return yield* protocolError(
+                decoded.extensionId,
+                decoded._tag,
+                "request",
+                `extension "${decoded.extensionId}" actor not registered`,
+              )
+            }
+            const replyValue = yield* actorEngine
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ExtensionMessage envelope IS the actor message; reply correlation handled by the engine
+              .ask(actorRef, decoded as never, askReplyKey(decoded as never))
+              .pipe(
+                Effect.mapError((cause) =>
+                  protocolError(
+                    decoded.extensionId,
+                    decoded._tag,
+                    "reply",
+                    `actor ask timed out after ${cause.askMs}ms`,
+                  ),
+                ),
+              )
+            return yield* protocols.decodeRequestReply(decoded, definition.replySchema, replyValue)
+          }
           yield* Effect.logWarning("extension.execute.not-loaded").pipe(
             Effect.annotateLogs({
               extensionId: decoded.extensionId,
@@ -300,9 +395,16 @@ export const makeMachineEngine = (
 export class MachineEngine extends Context.Service<MachineEngine, MachineEngineService>()(
   "@gent/core/src/runtime/extensions/resource-host/machine-engine/MachineEngine",
 ) {
+  // The actor-route fallback (W10-1b.0) reaches actor-only extensions
+  // via the same Receptionist that ActorHost registers behaviors with —
+  // both surfaces MUST share one ActorEngine instance, so the engine is
+  // a requirement here, not a baked-in dependency. Callers wire
+  // `ActorEngine.Live` (or a Test variant) ONCE at the composition
+  // boundary so MachineEngine and ActorHost route through the same
+  // mailbox map.
   static fromExtensions = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl> =>
+  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl | ActorEngine | Receptionist> =>
     Layer.effect(
       MachineEngine,
       Effect.acquireRelease(makeMachineEngine(extensions), ({ runtimeScope }) =>
@@ -312,9 +414,12 @@ export class MachineEngine extends Context.Service<MachineEngine, MachineEngineS
 
   static Live = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl> =>
+  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl | ActorEngine | Receptionist> =>
     MachineEngine.fromExtensions(extensions)
 
   static Test = (): Layer.Layer<MachineEngine> =>
-    MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Test()))
+    MachineEngine.fromExtensions([]).pipe(
+      Layer.provide(ExtensionTurnControl.Test()),
+      Layer.provide(ActorEngine.Live),
+    )
 }

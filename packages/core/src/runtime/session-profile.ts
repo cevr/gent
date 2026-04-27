@@ -264,7 +264,10 @@ export class SessionProfileCache extends Context.Service<
                   modelDrivers: resolved.modelDrivers,
                   externalDrivers: resolved.externalDrivers,
                 }),
-                MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Live)),
+                MachineEngine.fromExtensions([]).pipe(
+                  Layer.provide(ExtensionTurnControl.Live),
+                  Layer.provide(ActorEngine.Live),
+                ),
                 ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),

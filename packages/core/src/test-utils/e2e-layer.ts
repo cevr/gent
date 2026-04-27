@@ -214,6 +214,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
+        Layer.provideMerge(ActorEngine.Live),
       )
       // Read-only call surface for projections — must mirror profile.ts so
       // that projections like `AutoProjection`/`ExecutorProjection` (which
@@ -231,7 +232,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         driverRegistryLive,
         extensionRuntimeLive,
         machineExecuteLive,
-        ActorEngine.Live,
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),

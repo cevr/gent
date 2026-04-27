@@ -17,6 +17,7 @@ import { Session } from "@gent/core/domain/message"
 import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const AutoIntent = TaggedEnumClass("AutoIntent", {
@@ -44,7 +45,10 @@ const autoExtension: LoadedExtension = {
 const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = []) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  const machine = MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(turnControl))
+  const machine = MachineEngine.Live([autoExtension]).pipe(
+    Layer.provideMerge(turnControl),
+    Layer.provideMerge(ActorEngine.Live),
+  )
   const seededMachine = Layer.effect(
     MachineEngine,
     Effect.gen(function* () {

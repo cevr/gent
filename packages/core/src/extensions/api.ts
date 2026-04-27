@@ -54,6 +54,7 @@ import type { AnyBehavior, ExtensionContributions } from "../domain/contribution
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
+import type { ExtensionProtocol } from "../domain/extension-protocol.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AgentEvent, AgentEventTag } from "../domain/event.js"
@@ -302,6 +303,16 @@ export interface DefineExtensionInput {
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
+  /**
+   * ExtensionMessage protocol definitions owned by this extension.
+   * Mirrors the `actor.protocols` shape on the FSM path; sourced
+   * separately here because actor-only extensions have no FSM `actor:`
+   * field to attach the protocol record to. The runtime registers
+   * entries from BOTH this bucket and `Resource.actor.protocols`, so
+   * dispatch decoding finds a definition regardless of which primitive
+   * owns the state-holder.
+   */
+  readonly protocols?: ExtensionProtocol
   readonly projections?: FieldSpec<AnyProjectionContribution>
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
@@ -504,6 +515,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),
+          ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),
           ...(projections.length > 0 ? { projections } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),

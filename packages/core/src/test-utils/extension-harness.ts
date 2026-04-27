@@ -43,6 +43,7 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -278,6 +279,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       )
       const stateRuntimeLayer = MachineEngine.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),
+        Layer.provideMerge(ActorEngine.Live),
       )
       const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)
       const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)

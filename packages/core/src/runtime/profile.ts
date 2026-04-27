@@ -340,14 +340,6 @@ export const buildExtensionLayers = (
   // for `Resource.subscriptions`.
   const resourceSubscriptions = collectSubscriptions(resolved.extensions)
 
-  const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
-    Layer.provideMerge(ExtensionTurnControl.Live),
-  )
-  // Project `MachineEngine` onto the read-only `MachineExecute` surface
-  // for projection consumers. `MachineExecute` carries the `ReadOnly`
-  // brand so projections can't accidentally yield write-capable Tags.
-  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
-
   // Actor engine + host: ActorEngine.Live is self-contained (it
   // composes its own Receptionist). ActorHost walks every extension's
   // `actors` bucket at build time and spawns each Behavior into the
@@ -357,6 +349,11 @@ export const buildExtensionLayers = (
   // When `actorPersistence` is configured the host hydrates each
   // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
   // before spawn and forks a periodic writer. Absent → in-memory mode.
+  //
+  // Order matters: built before `extensionRuntimeLive` so MachineEngine
+  // can pick up `ActorEngine` from the same provideMerge chain — the
+  // engine's actor-route fallback (W10-1b.0) needs Receptionist + tell/ask
+  // to dispatch ExtensionMessages to actor-only extensions.
   const actorRuntimeLive =
     options?.actorPersistence !== undefined
       ? ActorHost.fromResolvedWithPersistence(resolved, {
@@ -364,6 +361,15 @@ export const buildExtensionLayers = (
           writeInterval: options.actorPersistence.writeInterval ?? Duration.seconds(30),
         }).pipe(Layer.provideMerge(ActorEngine.Live))
       : ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+
+  const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
+    Layer.provideMerge(ExtensionTurnControl.Live),
+    Layer.provideMerge(actorRuntimeLive),
+  )
+  // Project `MachineEngine` onto the read-only `MachineExecute` surface
+  // for projection consumers. `MachineExecute` carries the `ReadOnly`
+  // brand so projections can't accidentally yield write-capable Tags.
+  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -373,7 +379,6 @@ export const buildExtensionLayers = (
     }),
     extensionRuntimeLive,
     machineExecuteLive,
-    actorRuntimeLive,
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 

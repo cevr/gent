@@ -2,6 +2,7 @@ import { Cause, Effect, Schema } from "effect"
 import type { ExtensionScope, LoadedExtension, ExtensionRef } from "../../../domain/extension.js"
 import { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceMachine } from "../../../domain/resource.js"
+import type { ServiceKey } from "../../../domain/actor.js"
 import { SCOPE_PRECEDENCE } from "../disabled.js"
 import type {
   AnyExtensionCommandMessage,
@@ -27,6 +28,26 @@ export interface ActorSpawnSpec {
   readonly actor: AnyResourceMachine
 }
 
+/**
+ * Routing entry for an actor-only extension (no `Resource.machine`,
+ * uses the `actors:` contribution bucket). `MachineEngine` consults
+ * this map when `findEntry` returns no FSM-backed `ActorEntry` and
+ * falls back to `ActorEngine` discovery via the `serviceKey` —
+ * that's how ExtensionMessages reach a Behavior-backed state-holder
+ * without an FSM dispatch path.
+ *
+ * `serviceKey` is the same handle the Behavior registers with the
+ * Receptionist at spawn-time, so callers always see whichever live
+ * actor the host spawned (profile-scoped today; per-session can be
+ * layered in later by adding a session-scoped Receptionist surface).
+ */
+export interface ActorBackedRoute {
+  readonly extensionId: ExtensionId
+  readonly scope: ExtensionScope
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- routing table erases the message-shape phantom
+  readonly serviceKey: ServiceKey<any>
+}
+
 interface ExtensionProtocolRegistry {
   readonly get: (extensionId: string, tag: string) => AnyExtensionMessageDefinition | undefined
 }
@@ -34,6 +55,10 @@ interface ExtensionProtocolRegistry {
 export interface CollectedMachineProtocol {
   readonly spawnSpecs: ReadonlyArray<ActorSpawnSpec>
   readonly spawnByExtension: ReadonlyMap<string, ActorSpawnSpec>
+  /** Routes for actor-only extensions, keyed by extension id. Built from
+   *  the `actors:` bucket of extensions that do NOT also contribute an
+   *  FSM (FSM wins by precedence — actor-only is a lower-rank fallback). */
+  readonly actorRoutes: ReadonlyMap<string, ActorBackedRoute>
   /** Scopes that were shadowed out by a higher-precedence extension of the
    *  same id. Debug-logged at engine init; useful for diagnosing "why isn't
    *  my override running?". Does not affect dispatch. */
@@ -182,6 +207,46 @@ export class MachineProtocol {
   }
 }
 
+/** Routing table for actor-only extensions. Walks each extension's
+ *  `actors:` bucket and picks the first behavior whose `serviceKey` is
+ *  declared — that's the handle MachineEngine uses to find a live
+ *  ActorRef via the Receptionist. Extensions that already contribute an
+ *  FSM (`Resource.machine`) are skipped: FSM dispatch is the higher-
+ *  precedence path, and the routing-table fallback only fires when no
+ *  FSM entry exists for the requested extension id.
+ *
+ *  Picking only ONE behavior per extension is intentional: an extension
+ *  can declare multiple actors for internal decomposition, but the
+ *  ExtensionMessage surface is per-extension, so exactly one behavior
+ *  owns the protocol-handling role. Authors mark it by declaring its
+ *  `serviceKey`. Behaviors without a `serviceKey` are private workers
+ *  discoverable only by their declaring extension. */
+const collectActorRoutes = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): Map<string, ActorBackedRoute> => {
+  const actorRoutes = new Map<string, ActorBackedRoute>()
+  for (const ext of extensions) {
+    if (extractMachine(ext) !== undefined) continue
+    const behaviors = ext.contributions.actors ?? []
+    for (const b of behaviors) {
+      if (b.serviceKey === undefined) continue
+      const existing = actorRoutes.get(ext.manifest.id)
+      if (
+        existing === undefined ||
+        SCOPE_PRECEDENCE[ext.scope] > SCOPE_PRECEDENCE[existing.scope]
+      ) {
+        actorRoutes.set(ext.manifest.id, {
+          extensionId: ext.manifest.id,
+          scope: ext.scope,
+          serviceKey: b.serviceKey,
+        })
+      }
+      break
+    }
+  }
+  return actorRoutes
+}
+
 /** Resolve `(extensionId) → machine + protocol` by scope precedence
  *  (`builtin < user < project`). Two extensions sharing an id at different
  *  scopes are NOT spawned as separate actors — the highest-scope entry wins
@@ -238,9 +303,34 @@ export const collectMachineProtocol = (
     }
   }
 
+  // Actor-only extensions declare protocols on the contributions bucket
+  // because they have no FSM `actor:` field to carry them. Source those
+  // here so dispatch decoding (`MachineProtocol.decodeCommand` /
+  // `decodeRequest`) finds the definition regardless of which primitive
+  // owns the state. Iteration walks `extensions` (not `winnerByExtension`)
+  // because actor-only extensions never made it into the winner map —
+  // that map is keyed off `extractMachine`. Scope precedence still
+  // applies: a higher-scope FSM that also declares a protocol entry
+  // shadows the actor-only registration. `byTag.has` enforces that.
+  for (const ext of extensions) {
+    const protocols = ext.contributions.protocols
+    if (protocols === undefined) continue
+    const allDefs = listExtensionProtocolDefinitions(protocols)
+    for (const definition of allDefs) {
+      const byTag = protocolMap.get(definition.extensionId) ?? new Map()
+      if (!byTag.has(definition._tag)) {
+        byTag.set(definition._tag, definition)
+        protocolMap.set(definition.extensionId, byTag)
+      }
+    }
+  }
+
+  const actorRoutes = collectActorRoutes(extensions)
+
   return {
     spawnSpecs,
     spawnByExtension,
+    actorRoutes,
     shadowedScopesByExtension: shadowedByExtension,
     protocols: new MachineProtocol({
       get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),

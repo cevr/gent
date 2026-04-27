@@ -18,6 +18,7 @@ import {
   SubscriptionEngine,
 } from "../../src/runtime/extensions/resource-host"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
@@ -33,7 +34,10 @@ const makeRuntimeLayer = (
 ): Layer.Layer<MachineEngine | SubscriptionEngine | ExtensionTurnControl> => {
   const turnControl = ExtensionTurnControl.Test()
   return Layer.mergeAll(
-    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    MachineEngine.fromExtensions(extensions).pipe(
+      Layer.provideMerge(turnControl),
+      Layer.provideMerge(ActorEngine.Live),
+    ),
     SubscriptionEngine.withSubscriptions(collectSubscriptions(extensions)),
     turnControl,
   )
@@ -74,9 +78,9 @@ describe("extension concurrency", () => {
         },
       ] as Parameters<typeof MachineEngine.fromExtensions>[0]
 
-      const layer = Layer.provide(
-        MachineEngine.fromExtensions(extensions),
-        ExtensionTurnControl.Test(),
+      const layer = MachineEngine.fromExtensions(extensions).pipe(
+        Layer.provide(ExtensionTurnControl.Test()),
+        Layer.provide(ActorEngine.Live),
       )
 
       return Effect.gen(function* () {
@@ -139,6 +143,7 @@ describe("extension concurrency", () => {
         const baseLayer = Layer.mergeAll(
           MachineEngine.fromExtensions(extensions).pipe(
             Layer.provideMerge(ExtensionTurnControl.Test()),
+            Layer.provideMerge(ActorEngine.Live),
           ),
           EventStore.Memory,
           registryLayer,
@@ -1036,9 +1041,9 @@ describe("extension concurrency", () => {
         },
       ] as Parameters<typeof MachineEngine.fromExtensions>[0]
 
-      const layer = Layer.provide(
-        MachineEngine.fromExtensions(extensions),
-        ExtensionTurnControl.Test(),
+      const layer = MachineEngine.fromExtensions(extensions).pipe(
+        Layer.provide(ExtensionTurnControl.Test()),
+        Layer.provide(ActorEngine.Live),
       )
 
       return Effect.gen(function* () {

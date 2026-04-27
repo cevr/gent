@@ -26,6 +26,7 @@ import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
+import type { ExtensionProtocol } from "./extension-protocol.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
 
@@ -68,6 +69,15 @@ export interface ExtensionContributions {
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly actors?: ReadonlyArray<AnyBehavior>
+  /**
+   * ExtensionMessage definitions owned by this extension (the same shape
+   * `Resource.actor.protocols` carries on the FSM path). Sourced separately
+   * here because actor-only extensions have no FSM `actor:` field to attach
+   * protocols to. The loader registers entries from BOTH this bucket and the
+   * FSM's `actor.protocols` so callers reach the right state-holder
+   * regardless of which primitive owns it.
+   */
+  readonly protocols?: ExtensionProtocol
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>

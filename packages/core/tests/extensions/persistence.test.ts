@@ -10,6 +10,7 @@ import { defineResource } from "@gent/core/domain/contribution"
 import { ensureStorageParents, RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { reducerActor } from "./helpers/reducer-actor"
@@ -99,7 +100,10 @@ const makeFailureRuntimeLayer = (
   const turnControl = ExtensionTurnControl.Test()
   const storage = makeFailingStorageLayer(storageOptions)
   return Layer.mergeAll(
-    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    MachineEngine.fromExtensions(extensions).pipe(
+      Layer.provideMerge(turnControl),
+      Layer.provideMerge(ActorEngine.Live),
+    ),
     storage,
     turnControl,
   )
@@ -114,7 +118,10 @@ const makeFailurePublisherLayer = (
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const baseLayer = Layer.mergeAll(
-    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    MachineEngine.fromExtensions(extensions).pipe(
+      Layer.provideMerge(turnControl),
+      Layer.provideMerge(ActorEngine.Live),
+    ),
     storage,
     turnControl,
     ExtensionRegistry.fromResolved(resolveExtensions(extensions)),

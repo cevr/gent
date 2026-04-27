@@ -7,6 +7,7 @@
 import { Effect, Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
+import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -19,7 +20,10 @@ export const makeActorRuntimeLayer = (config: {
 }) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  const machine = MachineEngine.Live(config.extensions).pipe(Layer.provideMerge(turnControl))
+  const machine = MachineEngine.Live(config.extensions).pipe(
+    Layer.provideMerge(turnControl),
+    Layer.provideMerge(ActorEngine.Live),
+  )
   const machineWithSeededParents =
     config.withStorage === true
       ? Layer.effect(
