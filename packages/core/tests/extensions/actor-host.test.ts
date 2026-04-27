@@ -375,6 +375,87 @@ describe("ActorHost", () => {
     )
   })
 
+  test("flushes the trailing-window state on host scope close", async () => {
+    // The periodic writer's `Schedule.spaced` fires the first tick
+    // almost immediately, then waits the interval. With a long
+    // interval, the gap between the first tick and scope close is
+    // wide — any state mutation in that window is the trailing data
+    // that only the on-close finalizer can capture. We drive Bumps
+    // *after* letting the writer fire its first tick, so the row's
+    // pre-close `hits` is < the post-close `hits`. If the finalizer
+    // is removed, the post-close row stays at the writer's tick
+    // value, not the drained value.
+    const profileId = "test-finalizer"
+    const persistedBehavior = makePingBehavior("counter")
+    const resolved = makeResolved([makeLoaded("@test/finalizer", [persistedBehavior])])
+    const storageLayer = Storage.MemoryWithSql()
+    const namespacedKey = namespacePersistenceKey("@test/finalizer", "counter")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const ctx = yield* Layer.build(storageLayer)
+        const storage = Context.get(ctx, ActorPersistenceStorage)
+
+        const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId,
+          // Large enough that the writer fires only its first tick
+          // during this test run; the trailing window is everything
+          // afterward.
+          writeInterval: Duration.minutes(5),
+        }).pipe(
+          Layer.provideMerge(ActorEngine.Live),
+          Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
+        )
+
+        const wave1Scope = yield* Scope.make()
+        const wave1Ctx = yield* Layer.buildWithScope(hostLayer, wave1Scope)
+        const engine = Context.get(wave1Ctx, ActorEngine)
+        const reg = Context.get(wave1Ctx, Receptionist)
+        const refs = yield* reg.find(PingService)
+        const ref = refs[0] as ActorRef<PingMsg>
+
+        // Wait for the writer's first tick to land its row, so we
+        // have a stable "pre-close" snapshot to compare against.
+        const waitForRow = Effect.gen(function* () {
+          while (true) {
+            const row = yield* storage.loadActorState({
+              profileId,
+              persistenceKey: namespacedKey,
+            })
+            if (row !== undefined) return row
+            yield* Effect.sleep(Duration.millis(5))
+          }
+        })
+        const initialRow = yield* waitForRow.pipe(Effect.timeout("2 seconds"))
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode
+        const initialParsed = JSON.parse(initialRow.stateJson) as { hits: number }
+        expect(initialParsed.hits).toBe(0)
+
+        // Trailing-window mutations: writer can't tick again before
+        // scope close (5min interval), so only the finalizer can
+        // capture these.
+        yield* engine.tell(ref, PingMsg.Bump.make({}))
+        yield* engine.tell(ref, PingMsg.Bump.make({}))
+        yield* engine.tell(ref, PingMsg.Bump.make({}))
+        const drained = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
+          PingMsg.Get.make({}),
+        )
+        expect(drained).toBe(3)
+
+        yield* Scope.close(wave1Scope, Exit.void)
+
+        const afterClose = yield* storage.loadActorState({
+          profileId,
+          persistenceKey: namespacedKey,
+        })
+        expect(afterClose).toBeDefined()
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode
+        const parsed = JSON.parse(afterClose!.stateJson) as { hits: number }
+        expect(parsed.hits).toBe(3)
+      }).pipe(Effect.scoped),
+    )
+  })
+
   test("extension with empty actors bucket is a no-op", async () => {
     const resolved = makeResolved([makeLoaded("@test/empty", [])])
     const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))

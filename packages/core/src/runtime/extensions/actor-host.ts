@@ -233,45 +233,60 @@ const spawnWithPersistence = (
  * `actor-engine.snapshotForActor` guarantees each row is the post-state
  * of a completed `receive`, so we never persist a torn intermediate.
  */
-const runPeriodicWriter = (
+/**
+ * Single durable-write pass. Walks every live durable actor via
+ * `engine.snapshot()` and upserts each row through
+ * `ActorPersistenceStorage.saveActorState`. Used by the periodic
+ * writer AND by the on-close finalizer so a graceful shutdown does
+ * not leak the last interval's mutations.
+ *
+ * Typed failures (`ActorSnapshotError`, `StorageError`) log + skip per
+ * row so a single misencoded actor or transient IO failure does not
+ * stall the rest. Interrupts pass through `catchEager` untouched, so
+ * scope teardown stops the writer immediately without an extra log
+ * cycle — the actor-engine's per-actor permit guarantees no torn row.
+ */
+const writeAllActorsOnce = (
   persistence: ActorHostPersistence,
 ): Effect.Effect<void, never, ActorEngine | ActorPersistenceStorage> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     const storage = yield* ActorPersistenceStorage
-    const writeOnce = Effect.gen(function* () {
-      const snap = yield* engine
-        .snapshot()
+    const snap = yield* engine
+      .snapshot()
+      .pipe(
+        Effect.catchEager((error) =>
+          Effect.logWarning("actor-host.snapshot.failed").pipe(
+            Effect.annotateLogs({ error: String(error) }),
+            Effect.as(new Map<string, unknown>()),
+          ),
+        ),
+      )
+    for (const [persistenceKey, state] of snap) {
+      yield* storage
+        .saveActorState({
+          profileId: persistence.profileId,
+          persistenceKey,
+          // @effect-diagnostics-next-line preferSchemaOverJson:off -- snapshot rows are already-encoded JsonValueT from the engine; storage needs the textual form
+          stateJson: JSON.stringify(state),
+        })
         .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("actor-host.snapshot.failed").pipe(
-              Effect.annotateLogs({ error: String(Cause.squash(cause)) }),
-              Effect.as(new Map<string, unknown>()),
+          Effect.catchEager((error) =>
+            Effect.logWarning("actor-host.persist.write-failed").pipe(
+              Effect.annotateLogs({
+                persistenceKey,
+                error: String(error),
+              }),
             ),
           ),
         )
-      for (const [persistenceKey, state] of snap) {
-        yield* storage
-          .saveActorState({
-            profileId: persistence.profileId,
-            persistenceKey,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off -- snapshot rows are already-encoded JsonValueT from the engine; storage needs the textual form
-            stateJson: JSON.stringify(state),
-          })
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("actor-host.persist.write-failed").pipe(
-                Effect.annotateLogs({
-                  persistenceKey,
-                  error: String(Cause.squash(cause)),
-                }),
-              ),
-            ),
-          )
-      }
-    })
-    yield* writeOnce.pipe(Effect.repeat(Schedule.spaced(persistence.writeInterval)))
+    }
   })
+
+const runPeriodicWriter = (
+  persistence: ActorHostPersistence,
+): Effect.Effect<void, never, ActorEngine | ActorPersistenceStorage> =>
+  writeAllActorsOnce(persistence).pipe(Effect.repeat(Schedule.spaced(persistence.writeInterval)))
 
 /**
  * Layer that spawns every extension's `actors` into the running
@@ -309,6 +324,14 @@ export const ActorHost = {
         // scope. `forkScoped` ties it to layer teardown so profile
         // close stops the writer cleanly.
         yield* Effect.forkScoped(runPeriodicWriter(persistence))
+        // Flush-on-close: between the writer's last successful tick
+        // and scope teardown, in-flight state mutations would be
+        // lost (up to one `writeInterval`). The finalizer runs one
+        // last `writeAllActorsOnce` so a graceful shutdown does not
+        // silently drop the trailing window. `writeAllActorsOnce`
+        // already swallows typed errors per row, so the finalizer
+        // itself cannot fail.
+        yield* Effect.addFinalizer(() => writeAllActorsOnce(persistence))
         return { snapshot: Ref.get(failuresRef) }
       }),
     ),
