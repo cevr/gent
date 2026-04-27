@@ -6,13 +6,14 @@ import {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
 describe("buildExtensionHealthSnapshot", () => {
   test("merges activation, actor, and scheduler failures into typed issue rows", () => {
     const snapshot = buildExtensionHealthSnapshot(
       [
         {
-          manifest: { id: "@gent/memory" },
+          manifest: { id: ExtensionId.make("@gent/memory") },
           scope: "builtin",
           sourcePath: "builtin",
           status: "failed",
@@ -20,7 +21,7 @@ describe("buildExtensionHealthSnapshot", () => {
           error: "startup boom",
         },
         {
-          manifest: { id: "@gent/plan" },
+          manifest: { id: ExtensionId.make("@gent/plan") },
           scope: "builtin",
           sourcePath: "builtin",
           status: "active",
@@ -30,9 +31,9 @@ describe("buildExtensionHealthSnapshot", () => {
       [
         {
           _tag: "failed",
-          extensionId: "@gent/plan",
-          sessionId: "s1" as never,
-          branchId: "b1" as never,
+          extensionId: ExtensionId.make("@gent/plan"),
+          sessionId: SessionId.make("s1") as never,
+          branchId: BranchId.make("b1") as never,
           error: "actor boom",
           failurePhase: "runtime",
         },
@@ -65,8 +66,8 @@ describe("buildExtensionHealthSnapshot", () => {
         issues: [
           {
             _tag: "actor-failed",
-            sessionId: "s1",
-            branchId: "b1",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
             error: "actor boom",
             failurePhase: "runtime",
           },
@@ -83,7 +84,7 @@ describe("buildExtensionHealthSnapshot", () => {
   test("returns a healthy snapshot when every extension has no issues", () => {
     const snapshot = buildExtensionHealthSnapshot([
       {
-        manifest: { id: "@gent/memory" },
+        manifest: { id: ExtensionId.make("@gent/memory") },
         scope: "builtin",
         sourcePath: "builtin",
         status: "active",
@@ -95,7 +96,7 @@ describe("buildExtensionHealthSnapshot", () => {
       extensions: [
         {
           _tag: "healthy",
-          manifest: { id: "@gent/memory" },
+          manifest: { id: ExtensionId.make("@gent/memory") },
           scope: "builtin",
           sourcePath: "builtin",
         },
@@ -134,7 +135,7 @@ describe("buildExtensionHealthSnapshot", () => {
         sourcePath: "builtin",
         issues: [
           ExtensionHealthIssue.ActorFailed.make({
-            sessionId: "s1" as never,
+            sessionId: SessionId.make("s1") as never,
             error: "actor boom",
             failurePhase: "runtime",
           }),
@@ -148,7 +149,7 @@ describe("buildExtensionHealthSnapshot", () => {
       issues: [
         {
           _tag: "actor-failed",
-          sessionId: "s1",
+          sessionId: SessionId.make("s1"),
           error: "actor boom",
           failurePhase: "runtime",
         },
@@ -169,8 +170,8 @@ describe("buildExtensionHealthSnapshot", () => {
           issues: [
             {
               _tag: "actor-failed",
-              sessionId: "s1",
-              branchId: "b1",
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
               error: "actor boom",
               failurePhase: "runtime",
             },
@@ -184,8 +185,8 @@ describe("buildExtensionHealthSnapshot", () => {
     if (decoded._tag !== "degraded") return
     expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
       _tag: "actor-failed",
-      sessionId: "s1",
-      branchId: "b1",
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
       error: "actor boom",
       failurePhase: "runtime",
     })
@@ -199,8 +200,8 @@ describe("buildExtensionHealthSnapshot", () => {
           issues: [
             {
               _tag: "actor-failed",
-              sessionId: "s1",
-              branchId: "b1",
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
               error: "actor boom",
               failurePhase: "runtime",
             },
@@ -216,7 +217,7 @@ describe("buildExtensionHealthSnapshot", () => {
         _tag: "healthy",
         extensions: [
           {
-            manifest: { id: "@gent/memory" },
+            manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
             sourcePath: "builtin",
             _tag: "degraded",
@@ -244,7 +245,7 @@ describe("buildExtensionHealthSnapshot", () => {
         healthyExtensions: [],
         degradedExtensions: [
           {
-            manifest: { id: "@gent/memory" },
+            manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
             sourcePath: "builtin",
             _tag: "degraded",

@@ -16,7 +16,7 @@ import {
 } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/extensions/internal.js"
 import { ToolResultPart } from "../../src/domain/message.js"
-import { BranchId, SessionId, type ToolCallId } from "../../src/domain/ids.js"
+import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
 import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
 import type { ToolContext } from "../../src/domain/tool.js"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
@@ -27,7 +27,7 @@ import { makeAcpRunTool } from "../../../extensions/src/acp-agents/executor-boun
 // ── ACP → TurnEvent mapping ──
 
 const makeNotification = (update: unknown) =>
-  Schema.decodeUnknownSync(SessionNotification)({ sessionId: "s1", update })
+  Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
 
 describe("mapAcpUpdateToTurnEvent", () => {
   test("maps agent_message_chunk with text content to text-delta", () => {
@@ -56,11 +56,15 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call",
-        toolCallId: "tc-1",
+        toolCallId: ToolCallId.make("tc-1"),
         title: "read_file",
       }),
     )
-    expect(event).toEqual({ _tag: "tool-started", toolCallId: "tc-1", toolName: "read_file" })
+    expect(event).toEqual({
+      _tag: "tool-started",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read_file",
+    })
     expect(event).toBeInstanceOf(ToolStarted)
   })
 
@@ -68,11 +72,11 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-1",
+        toolCallId: ToolCallId.make("tc-1"),
         status: "completed",
       }),
     )
-    expect(event).toEqual({ _tag: "tool-completed", toolCallId: "tc-1" })
+    expect(event).toEqual({ _tag: "tool-completed", toolCallId: ToolCallId.make("tc-1") })
     expect(event).toBeInstanceOf(ToolCompleted)
   })
 
@@ -80,12 +84,16 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-2",
+        toolCallId: ToolCallId.make("tc-2"),
         status: "failed",
         error: "not found",
       }),
     )
-    expect(event).toEqual({ _tag: "tool-failed", toolCallId: "tc-2", error: "not found" })
+    expect(event).toEqual({
+      _tag: "tool-failed",
+      toolCallId: ToolCallId.make("tc-2"),
+      error: "not found",
+    })
     expect(event).toBeInstanceOf(ToolFailed)
   })
 
@@ -93,7 +101,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-out-1",
+        toolCallId: ToolCallId.make("tc-out-1"),
         status: "completed",
         content: [
           { type: "content", content: { type: "text", text: "first " } },
@@ -103,7 +111,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toEqual({
       _tag: "tool-completed",
-      toolCallId: "tc-out-1",
+      toolCallId: ToolCallId.make("tc-out-1"),
       output: "first second",
     })
     expect(event).toBeInstanceOf(ToolCompleted)
@@ -113,7 +121,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-out-2",
+        toolCallId: ToolCallId.make("tc-out-2"),
         status: "completed",
         content: [
           {
@@ -125,7 +133,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toEqual({
       _tag: "tool-completed",
-      toolCallId: "tc-out-2",
+      toolCallId: ToolCallId.make("tc-out-2"),
       output: { type: "image", data: "base64...", mimeType: "image/png" },
     })
   })
@@ -134,7 +142,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-out-mixed",
+        toolCallId: ToolCallId.make("tc-out-mixed"),
         status: "completed",
         content: [
           { type: "content", content: { type: "text", text: "see image:" } },
@@ -147,7 +155,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toEqual({
       _tag: "tool-completed",
-      toolCallId: "tc-out-mixed",
+      toolCallId: ToolCallId.make("tc-out-mixed"),
       output: [
         { type: "text", text: "see image:" },
         { type: "image", data: "base64...", mimeType: "image/png" },
@@ -159,11 +167,11 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-out-3",
+        toolCallId: ToolCallId.make("tc-out-3"),
         status: "completed",
       }),
     )
-    expect(event).toEqual({ _tag: "tool-completed", toolCallId: "tc-out-3" })
+    expect(event).toEqual({ _tag: "tool-completed", toolCallId: ToolCallId.make("tc-out-3") })
     expect(event).toBeInstanceOf(ToolCompleted)
   })
 
@@ -206,10 +214,14 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call",
-        toolCallId: "tc-3",
+        toolCallId: ToolCallId.make("tc-3"),
       }),
     )
-    expect(event).toEqual({ _tag: "tool-started", toolCallId: "tc-3", toolName: "unknown" })
+    expect(event).toEqual({
+      _tag: "tool-started",
+      toolCallId: ToolCallId.make("tc-3"),
+      toolName: "unknown",
+    })
     expect(event).toBeInstanceOf(ToolStarted)
   })
 
@@ -217,7 +229,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
         sessionUpdate: "tool_call_update",
-        toolCallId: "tc-1",
+        toolCallId: ToolCallId.make("tc-1"),
         status: "in_progress",
       }),
     )
@@ -349,6 +361,8 @@ const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   session: {} as ExtensionHostContext["session"],
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   interaction: {} as ExtensionHostContext["interaction"],
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
+  actors: {} as ExtensionHostContext["actors"],
 })
 
 describe("codemode proxy via makeAcpRunTool", () => {

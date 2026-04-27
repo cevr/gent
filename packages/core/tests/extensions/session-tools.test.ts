@@ -14,6 +14,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testSetupCtx } from "@gent/core/test-utils"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubCtx = {} as unknown as ExtensionHostContext
 const stubProjectionCtx = {
@@ -24,9 +25,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents.cowork,
+    agent: Agents["cowork"]!,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 
@@ -44,7 +45,7 @@ describe("SessionToolsExtension", () => {
 
     const prompt = await Effect.runPromise(
       compiled.resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents.cowork, interactive: true },
+        { basePrompt: "base", agent: Agents["cowork"]!, interactive: true },
         { projection: stubProjectionCtx, host: stubCtx },
       ),
     )
@@ -66,7 +67,7 @@ describe("SessionToolsExtension", () => {
 
     const prompt = await Effect.runPromise(
       compiled.resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents.cowork, interactive: false },
+        { basePrompt: "base", agent: Agents["cowork"]!, interactive: false },
         { projection: stubProjectionCtx, host: stubCtx },
       ),
     )

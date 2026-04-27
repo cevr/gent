@@ -5,8 +5,14 @@ import { Agents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+
+// Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
+// Tests provide everything via ctx; narrow R for it.live compatibility.
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -17,8 +23,8 @@ const makeCtx = (overrides: {
   reviewDecision?: "yes" | "no" | "edit"
 }): ToolContext => {
   const base = testToolContext({
-    sessionId: "test-session",
-    branchId: "test-branch",
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
     toolCallId: ToolCallId.make("test-call"),
     cwd: "/tmp",
     home: "/tmp",
@@ -48,7 +54,10 @@ const makeCtx = (overrides: {
       },
       run: agentRun,
       resolveDualModelPair: () =>
-        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+        Effect.succeed([
+          ModelId.make("anthropic/claude-opus-4-6"),
+          ModelId.make("openai/gpt-5.4"),
+        ] as const),
     },
     session: {
       ...base.session,
@@ -93,30 +102,32 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "implement caching" }, ctx).pipe(
-      Effect.map((result) => {
-        // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
-        expect(calls.length).toBe(7)
-        expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
+    return narrowR(
+      PlanTool.effect({ prompt: "implement caching" }, ctx).pipe(
+        Effect.map((result) => {
+          // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
+          expect(calls.length).toBe(7)
+          expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
 
-        // First two calls are parallel planning
-        expect(calls[0]!.prompt).toContain("implement caching")
-        expect(calls[1]!.prompt).toContain("implement caching")
+          // First two calls are parallel planning
+          expect(calls[0]!.prompt).toContain("implement caching")
+          expect(calls[1]!.prompt).toContain("implement caching")
 
-        // Next two are cross-reviews
-        expect(calls[2]!.prompt).toContain("Review this implementation plan")
-        expect(calls[3]!.prompt).toContain("Review this implementation plan")
+          // Next two are cross-reviews
+          expect(calls[2]!.prompt).toContain("Review this implementation plan")
+          expect(calls[3]!.prompt).toContain("Review this implementation plan")
 
-        // Next two are incorporations
-        expect(calls[4]!.prompt).toContain("Revise your implementation plan")
-        expect(calls[5]!.prompt).toContain("Revise your implementation plan")
+          // Next two are incorporations
+          expect(calls[4]!.prompt).toContain("Revise your implementation plan")
+          expect(calls[5]!.prompt).toContain("Revise your implementation plan")
 
-        // Last is synthesis
-        expect(calls[6]!.prompt).toContain("Synthesize these two")
+          // Last is synthesis
+          expect(calls[6]!.prompt).toContain("Synthesize these two")
 
-        expect(result.decision).toBe("yes")
-        expect(result.plan).toBeDefined()
-      }),
+          expect(result.decision).toBe("yes")
+          expect(result.plan).toBeDefined()
+        }),
+      ),
     )
   })
 
@@ -136,19 +147,21 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.effect(
-      {
-        prompt: "add auth",
-        context: "Using JWT tokens",
-        files: ["src/auth.ts", "src/middleware.ts"],
-      },
-      ctx,
-    ).pipe(
-      Effect.map(() => {
-        // Planning prompts should include context and files
-        expect(calls[0]!.prompt).toContain("JWT tokens")
-        expect(calls[0]!.prompt).toContain("src/auth.ts")
-      }),
+    return narrowR(
+      PlanTool.effect(
+        {
+          prompt: "add auth",
+          context: "Using JWT tokens",
+          files: ["src/auth.ts", "src/middleware.ts"],
+        },
+        ctx,
+      ).pipe(
+        Effect.map(() => {
+          // Planning prompts should include context and files
+          expect(calls[0]!.prompt).toContain("JWT tokens")
+          expect(calls[0]!.prompt).toContain("src/auth.ts")
+        }),
+      ),
     )
   })
 
@@ -165,10 +178,12 @@ describe("Plan Tool", () => {
       reviewDecision: "no",
     })
 
-    return PlanTool.effect({ prompt: "refactor" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.decision).toBe("no")
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "refactor" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.decision).toBe("no")
+        }),
+      ),
     )
   })
 
@@ -190,12 +205,14 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "test" }, ctx).pipe(
-      Effect.map(() => {
-        // Should have at least 2 different models used
-        const uniqueModels = new Set(models)
-        expect(uniqueModels.size).toBe(2)
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "test" }, ctx).pipe(
+        Effect.map(() => {
+          // Should have at least 2 different models used
+          const uniqueModels = new Set(models)
+          expect(uniqueModels.size).toBe(2)
+        }),
+      ),
     )
   })
 
@@ -232,25 +249,29 @@ describe("Plan Tool", () => {
         }),
     })
 
-    return PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
-      Effect.map((result) => {
-        // Single cycle: plan phases + execute (no evaluator loop)
-        expect(result.output).toBe("Executed batch 1 successfully.")
-        expect(
-          calls.some((prompt) =>
-            prompt.includes("Organize the output into a small number of ordered batches"),
-          ),
-        ).toBe(true)
-        expect(
-          calls.some((prompt) => prompt.includes("Work through the plan batch by batch, in order")),
-        ).toBe(true)
-        // No evaluator calls
-        expect(
-          calls.some((prompt) =>
-            prompt.includes("Evaluate whether the implementation is complete"),
-          ),
-        ).toBe(false)
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+        Effect.map((result) => {
+          // Single cycle: plan phases + execute (no evaluator loop)
+          expect(result.output).toBe("Executed batch 1 successfully.")
+          expect(
+            calls.some((prompt) =>
+              prompt.includes("Organize the output into a small number of ordered batches"),
+            ),
+          ).toBe(true)
+          expect(
+            calls.some((prompt) =>
+              prompt.includes("Work through the plan batch by batch, in order"),
+            ),
+          ).toBe(true)
+          // No evaluator calls
+          expect(
+            calls.some((prompt) =>
+              prompt.includes("Evaluate whether the implementation is complete"),
+            ),
+          ).toBe(false)
+        }),
+      ),
     )
   })
 })

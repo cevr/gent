@@ -3,6 +3,9 @@ import { Effect } from "effect"
 import { PromptTool } from "@gent/extensions/interaction-tools/prompt"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
+
 describe("Prompt Tool", () => {
   it.live("review mode: writes content and returns decision", () => {
     const ctx = testToolContext({
@@ -18,14 +21,16 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.effect({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.mode).toBe("review")
-        if (result.mode === "review") {
-          expect(result.decision).toBe("yes")
-          expect(result.path).toBe("/tmp/test-prompt.md")
-        }
-      }),
+    return narrowR(
+      PromptTool.effect({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.mode).toBe("review")
+          if (result.mode === "review") {
+            expect(result.decision).toBe("yes")
+            expect(result.path).toBe("/tmp/test-prompt.md")
+          }
+        }),
+      ),
     )
   })
 
@@ -39,13 +44,15 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.effect({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.mode).toBe("confirm")
-        if (result.mode === "confirm") {
-          expect(result.decision).toBe("no")
-        }
-      }),
+    return narrowR(
+      PromptTool.effect({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.mode).toBe("confirm")
+          if (result.mode === "confirm") {
+            expect(result.decision).toBe("no")
+          }
+        }),
+      ),
     )
   })
 
@@ -59,13 +66,15 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.effect({ mode: "present", content: "Info" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.mode).toBe("present")
-        if (result.mode === "present") {
-          expect(result.status).toBe("shown")
-        }
-      }),
+    return narrowR(
+      PromptTool.effect({ mode: "present", content: "Info" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.mode).toBe("present")
+          if (result.mode === "present") {
+            expect(result.status).toBe("shown")
+          }
+        }),
+      ),
     )
   })
 })

@@ -8,7 +8,12 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
-import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  ExternalDriverRef,
+  ModelDriverRef,
+} from "@gent/core/domain/agent"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
@@ -41,7 +46,7 @@ const stubProjectionCtx = {
     branchId: BranchId.make("test-branch"),
     agent: baseAgent,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 

@@ -5,7 +5,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
-import { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 
 // Single in-memory db: TestWithSql exposes both Storage and SqlClient.
 // TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
@@ -63,7 +63,7 @@ describe("Task Storage", () => {
       yield* storage.createTask(task)
       const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got).toBeDefined()
-      expect(got!.id).toBe("t1")
+      expect(got!.id).toBe(TaskId.make("t1"))
       expect(got!.subject).toBe("Task t1")
       expect(got!.description).toBe("Do something")
       expect(got!.status).toBe("pending")
@@ -128,8 +128,8 @@ describe("Task Storage", () => {
       const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got).toBeDefined()
       const meta = got!.metadata as Record<string, unknown>
-      expect(meta.key).toBe("value")
-      expect(meta.count).toBe(42)
+      expect(meta["key"]).toBe("value")
+      expect(meta["count"]).toBe(42)
     }))
 })
 
@@ -141,7 +141,7 @@ describe("Task Dependencies", () => {
       yield* storage.createTask(makeTask("t2"))
       yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
       const deps = yield* storage.getTaskDeps(TaskId.make("t2"))
-      expect(deps).toEqual(["t1"])
+      expect(deps).toEqual([TaskId.make("t1")])
     }))
 
   test("removeTaskDep", () =>
@@ -187,7 +187,7 @@ describe("Task Dependencies", () => {
 
       expect(error._tag).toBe("TaskStorageError")
       expect(yield* storage.getTask(TaskId.make("t1"))).toBeDefined()
-      expect(yield* storage.getTaskDeps(TaskId.make("t2"))).toEqual(["t1"])
+      expect(yield* storage.getTaskDeps(TaskId.make("t2"))).toEqual([TaskId.make("t1")])
     }))
 
   test("duplicate dep is idempotent", () =>

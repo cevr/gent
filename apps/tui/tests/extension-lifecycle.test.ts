@@ -8,12 +8,14 @@ import {
   makeClientLifecycleLayer,
 } from "../src/extensions/client-services"
 import { makeClientTransportLayer } from "../src/extensions/client-transport"
+import type { ClientContribution } from "../src/extensions/client-facets.js"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
 import tasksBuiltin from "../src/extensions/builtins/tasks.client"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const buildRuntime = (
-  activeSession: { value: { sessionId: string; branchId: string } | undefined },
+  activeSession: { value: { sessionId: SessionId; branchId: BranchId } | undefined },
   opts: {
     readonly askDeferred?: Deferred.Deferred<unknown, never>
     readonly requestDeferred?: Deferred.Deferred<unknown, never>
@@ -49,10 +51,10 @@ const buildRuntime = (
                 : Deferred.await(opts.requestDeferred),
             listCommands: () => Effect.succeed([]),
           },
-        } as Parameters<typeof makeClientTransportLayer>[0]["client"],
+        } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
         runtime: {
           run: <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect),
-        } as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
+        } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
         currentSession: () => activeSession.value,
         onExtensionStateChanged: () => () => {},
       }),
@@ -99,22 +101,28 @@ describe("transport-only extension widgets", () => {
 
   test("auto widget drops a stale refetch after the session changes", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(autoBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        autoBuiltin.setup as unknown as Effect.Effect<readonly ClientContribution[], never, never>,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "top-left",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "top-left",
       )
 
       expect(borderLabel).toBeDefined()
 
-      activeSession.value = { sessionId: "session-B", branchId: "branch-B" }
+      activeSession.value = {
+        sessionId: SessionId.make("session-B"),
+        branchId: BranchId.make("branch-B"),
+      }
       await Effect.runPromise(
         Deferred.succeed(askDeferred, { active: true, phase: "working", iteration: 1 }),
       )
@@ -129,17 +137,20 @@ describe("transport-only extension widgets", () => {
 
   test("auto widget renders a decoded snapshot", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(autoBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        autoBuiltin.setup as unknown as Effect.Effect<readonly ClientContribution[], never, never>,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "top-left",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "top-left",
       )
 
       expect(borderLabel).toBeDefined()
@@ -163,17 +174,20 @@ describe("transport-only extension widgets", () => {
 
   test("auto widget rejects undecodable snapshots at the client seam", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(autoBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        autoBuiltin.setup as unknown as Effect.Effect<readonly ClientContribution[], never, never>,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "top-left",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "top-left",
       )
 
       expect(borderLabel).toBeDefined()
@@ -190,22 +204,32 @@ describe("transport-only extension widgets", () => {
 
   test("artifacts widget drops a stale refetch after the branch changes", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(artifactsBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        artifactsBuiltin.setup as unknown as Effect.Effect<
+          readonly ClientContribution[],
+          never,
+          never
+        >,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "bottom-right",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "bottom-right",
       )
 
       expect(borderLabel).toBeDefined()
 
-      activeSession.value = { sessionId: "session-A", branchId: "branch-B" }
+      activeSession.value = {
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-B"),
+      }
       await Effect.runPromise(
         Deferred.succeed(askDeferred, [
           {
@@ -214,7 +238,7 @@ describe("transport-only extension widgets", () => {
             sourceTool: "plan",
             content: "body",
             status: "active",
-            branchId: "branch-A",
+            branchId: BranchId.make("branch-A"),
             createdAt: 1,
             updatedAt: 2,
           },
@@ -231,17 +255,24 @@ describe("transport-only extension widgets", () => {
 
   test("artifacts widget renders decoded artifacts", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(artifactsBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        artifactsBuiltin.setup as unknown as Effect.Effect<
+          readonly ClientContribution[],
+          never,
+          never
+        >,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "bottom-right",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "bottom-right",
       )
 
       expect(borderLabel).toBeDefined()
@@ -254,7 +285,7 @@ describe("transport-only extension widgets", () => {
             sourceTool: "plan",
             content: "body",
             status: "active",
-            branchId: "branch-A",
+            branchId: BranchId.make("branch-A"),
             createdAt: 1,
             updatedAt: 2,
           },
@@ -271,17 +302,24 @@ describe("transport-only extension widgets", () => {
 
   test("artifacts widget rejects undecodable artifacts at the client seam", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { askDeferred })
 
     try {
-      const contributions = await runtime.runPromise(artifactsBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        artifactsBuiltin.setup as unknown as Effect.Effect<
+          readonly ClientContribution[],
+          never,
+          never
+        >,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "bottom-right",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "bottom-right",
       )
 
       expect(borderLabel).toBeDefined()
@@ -298,17 +336,20 @@ describe("transport-only extension widgets", () => {
 
   test("tasks widget renders decoded task list responses", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const requestDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { requestDeferred })
 
     try {
-      const contributions = await runtime.runPromise(tasksBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        tasksBuiltin.setup as unknown as Effect.Effect<readonly ClientContribution[], never, never>,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "bottom-left",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "bottom-left",
       )
 
       expect(borderLabel).toBeDefined()
@@ -317,8 +358,8 @@ describe("transport-only extension widgets", () => {
         Deferred.succeed(requestDeferred, [
           {
             id: "task-1",
-            sessionId: "session-A",
-            branchId: "branch-A",
+            sessionId: SessionId.make("session-A"),
+            branchId: BranchId.make("branch-A"),
             subject: "Audit",
             status: "in_progress",
             createdAt: 1,
@@ -337,17 +378,20 @@ describe("transport-only extension widgets", () => {
 
   test("tasks widget rejects undecodable task lists at the client seam", async () => {
     const activeSession = {
-      value: { sessionId: "session-A", branchId: "branch-A" } as
-        | { sessionId: string; branchId: string }
+      value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
+        | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
     const requestDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
     const runtime = buildRuntime(activeSession, { requestDeferred })
 
     try {
-      const contributions = await runtime.runPromise(tasksBuiltin.setup)
+      const contributions = await runtime.runPromise(
+        tasksBuiltin.setup as unknown as Effect.Effect<readonly ClientContribution[], never, never>,
+      )
       const borderLabel = contributions.find(
-        (entry) => entry._tag === "border-label" && entry.position === "bottom-left",
+        (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+          entry._tag === "border-label" && entry.position === "bottom-left",
       )
 
       expect(borderLabel).toBeDefined()

@@ -17,6 +17,7 @@
 
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
+import { AgentName } from "@gent/core/domain/agent"
 import {
   SubscriptionEngine,
   collectSubscriptions,
@@ -178,7 +179,7 @@ const makeStubExtension = (
     scope: "builtin" as const,
     sourcePath: "builtin",
     contributions: { resources },
-  }) as LoadedExtension
+  }) as unknown as LoadedExtension
 
 describe("defineResource", () => {
   test("emits a contribution with the declared scope", () => {
@@ -213,7 +214,7 @@ describe("defineResource", () => {
         {
           id: "tick",
           cron: "0 * * * *",
-          target: { agent: "memory:dream", prompt: "reflect" },
+          target: { agent: AgentName.make("memory:dream"), prompt: "reflect" },
         },
       ],
     })

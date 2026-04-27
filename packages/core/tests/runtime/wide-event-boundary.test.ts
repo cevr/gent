@@ -18,7 +18,8 @@ import {
   agentRunBoundary,
 } from "../../src/runtime/wide-event-boundary"
 import type { LogEvent } from "../../src/runtime/wide-event-boundary"
-import { SessionId, BranchId, ToolCallId } from "../../src/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { AgentName } from "../../src/domain/agent"
 
 const captured = () => MutableRef.make<Array<LogEvent>>([])
 
@@ -32,7 +33,9 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ model: "claude-4" }).pipe(
-          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
+          withWideEvent(
+            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+          ),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -86,7 +89,7 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* WideEvent.set({ sessionId: "sess-1" }).pipe(
+        yield* WideEvent.set({ sessionId: SessionId.make("sess-1") }).pipe(
           withWideEvent(rpcBoundary("sendMessage")),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
@@ -103,7 +106,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ childSessionId: "child-1" }).pipe(
-          withWideEvent(agentRunBoundary("researcher", SessionId.make("parent-1"))),
+          withWideEvent(agentRunBoundary(AgentName.make("researcher"), SessionId.make("parent-1"))),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -123,7 +126,9 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* Effect.fail({ _tag: "AgentLoopError", message: "turn failed" }).pipe(
-          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
+          withWideEvent(
+            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+          ),
           Effect.catchIf(
             () => true,
             () => Effect.void,
@@ -150,7 +155,9 @@ describe("wide-event-boundary", () => {
             withWideEvent(toolBoundary("read", ToolCallId.make("tc-1"))),
           )
         }).pipe(
-          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
+          withWideEvent(
+            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+          ),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 

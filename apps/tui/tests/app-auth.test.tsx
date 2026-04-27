@@ -12,6 +12,7 @@ import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { renderFrame, waitForRenderedFrame } from "./helpers"
+import { AgentName } from "@gent/core/domain/agent"
 
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -92,7 +93,7 @@ describe("App auth gate", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.steer({ _tag: "SwitchAgent", agent: "deepwork" })
+    ctx.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
 
     const frame = await waitForRenderedFrame(
       setup,
@@ -135,7 +136,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
       client,
       runtime,
-      initialAgent: "deepwork",
+      initialAgent: AgentName.make("deepwork"),
       initialSession: {
         id: SessionId.make("session-a"),
         branchId: BranchId.make("branch-a"),
@@ -151,7 +152,10 @@ describe("App auth gate", () => {
       "API Keys from initial agent",
     )
 
-    expect(calls[0]).toEqual({ agentName: "deepwork", sessionId: "test-session" })
+    expect(calls[0]).toEqual({
+      agentName: AgentName.make("deepwork"),
+      sessionId: SessionId.make("test-session"),
+    })
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })
@@ -240,7 +244,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
       client,
       runtime,
-      initialAgent: "cowork",
+      initialAgent: AgentName.make("cowork"),
       initialSession: {
         id: SessionId.make("session-a"),
         branchId: BranchId.make("branch-a"),
@@ -312,7 +316,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
       client,
       runtime,
-      initialAgent: "cowork",
+      initialAgent: AgentName.make("cowork"),
       initialSession: {
         id: SessionId.make("session-a"),
         branchId: BranchId.make("branch-a"),
@@ -363,7 +367,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
       client,
       runtime,
-      initialAgent: "cowork",
+      initialAgent: AgentName.make("cowork"),
       initialSession: {
         id: SessionId.make("session-a"),
         branchId: BranchId.make("branch-a"),
@@ -405,7 +409,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
       client,
       runtime,
-      initialAgent: "cowork",
+      initialAgent: AgentName.make("cowork"),
       initialSession: {
         id: SessionId.make("session-a"),
         branchId: BranchId.make("branch-a"),
@@ -535,7 +539,7 @@ describe("App auth gate", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork",
+        initialAgent: AgentName.make("cowork"),
         initialSession: {
           id: alphaSessionId,
           branchId: alphaBranchId,
@@ -707,7 +711,7 @@ describe("App auth gate", () => {
       {
         client,
         runtime,
-        initialAgent: "cowork",
+        initialAgent: AgentName.make("cowork"),
         initialSession: {
           id: SessionId.make("session-a"),
           branchId: BranchId.make("branch-a"),
@@ -727,7 +731,7 @@ describe("App auth gate", () => {
     if (ctx === undefined) throw new Error("client context not ready")
 
     await waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
-    ctx.steer({ _tag: "SwitchAgent", agent: "deepwork" })
+    ctx.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
     await waitForRenderedFrame(
       setup,
       () => sessionAuthChecks >= 2,

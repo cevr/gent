@@ -1,8 +1,10 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
-import { type AgentRunResult } from "@gent/core/domain/agent"
+import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
+import { SessionId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -10,16 +12,21 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
+// Tool .effect signatures inherit R=any from the AnyCapabilityContribution
+// cast in tool(). Tests provide everything via ctx; narrow R to never for it.live.
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
+
 const makeSuccess = (
   text: string,
   sessionId: string = "s1",
   agentName: string = "architect",
-): AgentRunResult => ({
-  _tag: "success",
-  text,
-  sessionId,
-  agentName,
-})
+): AgentRunResult =>
+  AgentRunResult.Success.make({
+    text,
+    sessionId: SessionId.make(sessionId),
+    agentName: AgentName.make(agentName),
+  })
 
 const makeCtx = (overrides: {
   agentRun: (
@@ -28,7 +35,7 @@ const makeCtx = (overrides: {
   present?: ExtensionHostContext.Interaction["present"]
 }): ToolContext =>
   testToolContext({
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
     agent: {
       get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
       require: (name) => {
@@ -37,7 +44,10 @@ const makeCtx = (overrides: {
       },
       run: overrides.agentRun,
       resolveDualModelPair: () =>
-        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+        Effect.succeed([
+          ModelId.make("anthropic/claude-opus-4-6"),
+          ModelId.make("openai/gpt-5.4"),
+        ] as const),
     },
     interaction: {
       approve: dieStub("interaction.approve"),
@@ -88,35 +98,37 @@ describe("Audit Tool", () => {
           }),
       })
 
-      return AuditTool.effect(
-        {
-          prompt: "check error handling",
-          paths: ["src/foo.ts", "src/bar.ts"],
-          mode: "fix",
-        },
-        ctx,
-      ).pipe(
-        Effect.map((result) => {
-          // Single-cycle: detect + audit + synthesize + execute (no evaluator loop)
-          const detectCalls = calls.filter((c) => c.prompt.includes("Identify audit concerns"))
-          const auditCalls = calls.filter((c) =>
-            c.prompt.includes("Audit the code for this concern:"),
-          )
-          const synthesisCalls = calls.filter((c) =>
-            c.prompt.includes("Synthesize these audit notes into final findings"),
-          )
-          const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
+      return narrowR(
+        AuditTool.effect(
+          {
+            prompt: "check error handling",
+            paths: ["src/foo.ts", "src/bar.ts"],
+            mode: "fix",
+          },
+          ctx,
+        ).pipe(
+          Effect.map((result) => {
+            // Single-cycle: detect + audit + synthesize + execute (no evaluator loop)
+            const detectCalls = calls.filter((c) => c.prompt.includes("Identify audit concerns"))
+            const auditCalls = calls.filter((c) =>
+              c.prompt.includes("Audit the code for this concern:"),
+            )
+            const synthesisCalls = calls.filter((c) =>
+              c.prompt.includes("Synthesize these audit notes into final findings"),
+            )
+            const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
 
-          expect(detectCalls.length).toBe(1)
-          expect(auditCalls.length).toBe(4) // 2 concerns x 2 models
-          expect(synthesisCalls.length).toBe(1)
-          expect(executeCalls.length).toBe(1)
-          expect(result.findings.length).toBe(2)
-          expect(result.output).toBe("Applied all fixes.")
-          expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
-          expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
-        }),
-        Effect.provide(runtimePlatformLayer),
+            expect(detectCalls.length).toBe(1)
+            expect(auditCalls.length).toBe(4) // 2 concerns x 2 models
+            expect(synthesisCalls.length).toBe(1)
+            expect(executeCalls.length).toBe(1)
+            expect(result.findings.length).toBe(2)
+            expect(result.output).toBe("Applied all fixes.")
+            expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
+            expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
+          }),
+          Effect.provide(runtimePlatformLayer),
+        ),
       )
     },
   )
@@ -142,13 +154,15 @@ describe("Audit Tool", () => {
       },
     })
 
-    return AuditTool.effect({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.findings.length).toBe(1)
-        const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
-        expect(executeCalls.length).toBe(0)
-      }),
-      Effect.provide(runtimePlatformLayer),
+    return narrowR(
+      AuditTool.effect({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.findings.length).toBe(1)
+          const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
+          expect(executeCalls.length).toBe(0)
+        }),
+        Effect.provide(runtimePlatformLayer),
+      ),
     )
   })
 
@@ -157,12 +171,14 @@ describe("Audit Tool", () => {
       agentRun: () => Effect.succeed(makeSuccess("No specific concerns found for this code.")),
     })
 
-    return AuditTool.effect({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.findings.length).toBe(0)
-        expect(result.output).toBe("No findings to fix.")
-      }),
-      Effect.provide(runtimePlatformLayer),
+    return narrowR(
+      AuditTool.effect({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result.findings.length).toBe(0)
+          expect(result.output).toBe("No findings to fix.")
+        }),
+        Effect.provide(runtimePlatformLayer),
+      ),
     )
   })
 
@@ -188,12 +204,14 @@ describe("Audit Tool", () => {
         }),
     })
 
-    return AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
-      Effect.map(() => {
-        expect(executorAgents.length).toBeGreaterThan(0)
-        expect(executorAgents[0]).toBe("cowork")
-      }),
-      Effect.provide(runtimePlatformLayer),
+    return narrowR(
+      AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+        Effect.map(() => {
+          expect(executorAgents.length).toBeGreaterThan(0)
+          expect(executorAgents[0]).toBe("cowork")
+        }),
+        Effect.provide(runtimePlatformLayer),
+      ),
     )
   })
 
@@ -219,15 +237,17 @@ describe("Audit Tool", () => {
         }),
     })
 
-    return AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
-      Effect.map(() => {
-        expect(auditOverrides.length).toBeGreaterThan(0)
-        for (const overrides of auditOverrides) {
-          expect(overrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
-          expect(overrides?.["deniedTools"]).toEqual(["bash"])
-        }
-      }),
-      Effect.provide(runtimePlatformLayer),
+    return narrowR(
+      AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+        Effect.map(() => {
+          expect(auditOverrides.length).toBeGreaterThan(0)
+          for (const overrides of auditOverrides) {
+            expect(overrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
+            expect(overrides?.["deniedTools"]).toEqual(["bash"])
+          }
+        }),
+        Effect.provide(runtimePlatformLayer),
+      ),
     )
   })
 })

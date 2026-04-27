@@ -18,7 +18,7 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
@@ -64,14 +64,14 @@ const permissionSentinel = tool({
 // ── Extension stubs ─────────────────────────────────────────────────────────
 
 const bashExtension: LoadedExtension = {
-  manifest: { id: "test-bash-ext" },
+  manifest: { id: ExtensionId.make("test-bash-ext") },
   scope: "builtin",
   sourcePath: "test",
   contributions: { tools: [bashTool] },
 }
 
 const permissionRulesExtension: LoadedExtension = {
-  manifest: { id: "test-perm-rules-ext" },
+  manifest: { id: ExtensionId.make("test-perm-rules-ext") },
   scope: "builtin",
   sourcePath: "test",
   contributions: { tools: [permissionSentinel] },
@@ -98,6 +98,7 @@ describe("capability permissionRules E2E", () => {
 
         const e2eLayer = createE2ELayer({
           agents: AllBuiltinAgents,
+          extensionInputs: [],
           // Pass extensions directly — bypass setupBuiltinExtensions overhead
           extensions: [bashExtension, permissionRulesExtension],
           providerLayer,
@@ -139,7 +140,7 @@ describe("capability permissionRules E2E", () => {
           expect(succeeded.length).toBe(0)
         }).pipe(Effect.provide(e2eLayer))
       }).pipe(Effect.timeout("28 seconds")),
-    { timeout: 30_000 },
+    30_000,
   )
 
   it.live(
@@ -154,6 +155,7 @@ describe("capability permissionRules E2E", () => {
         // Default Permission.Test() — always allow; no extraLayers override
         const e2eLayer = createE2ELayer({
           agents: AllBuiltinAgents,
+          extensionInputs: [],
           extensions: [bashExtension],
           providerLayer,
         })
@@ -191,6 +193,6 @@ describe("capability permissionRules E2E", () => {
           expect(failed.length).toBe(0)
         }).pipe(Effect.provide(e2eLayer))
       }).pipe(Effect.timeout("28 seconds")),
-    { timeout: 30_000 },
+    30_000,
   )
 })

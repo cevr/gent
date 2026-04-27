@@ -172,7 +172,7 @@ describe("TaggedEnumClass — construction-time validation", () => {
   test("rejects payload field named `_tag`", () => {
     expect(() =>
       TaggedEnumClass("Bad", {
-        Variant: { _tag: Schema.String, value: Schema.Number },
+        Variant: { _tag: Schema.String, value: Schema.Number } as never,
       }),
     ).toThrow(/_tag/)
   })
@@ -180,8 +180,8 @@ describe("TaggedEnumClass — construction-time validation", () => {
   test("rejects schema utility names as direct variant members", () => {
     expect(() =>
       TaggedEnumClass("Weird", {
-        cases: { value: Schema.Number },
-        Match: { value: Schema.Number },
+        cases: { value: Schema.Number } as never,
+        Match: { value: Schema.Number } as never,
       }),
     ).toThrow(/PascalCase/)
   })
@@ -189,7 +189,7 @@ describe("TaggedEnumClass — construction-time validation", () => {
   test("rejects variant member named `__proto__`", () => {
     expect(() =>
       TaggedEnumClass("RejectsProto", {
-        ["__proto__"]: { value: Schema.Number },
+        ["__proto__"]: { value: Schema.Number } as never,
         Normal: { value: Schema.Number },
       }),
     ).toThrow(/prototype/)
@@ -235,15 +235,15 @@ describe("TaggedEnumClass — explicit wire tags", () => {
   test("`isAnyOf` accepts direct member names and wire tags", () => {
     const e = TurnEvent.TextDelta.make({ text: "hello" })
     expect(TurnEvent.isAnyOf(["TextDelta"])(e)).toBe(true)
-    expect(TurnEvent.isAnyOf(["text-delta"])(e)).toBe(true)
+    expect(TurnEvent.isAnyOf(["text-delta" as never])(e)).toBe(true)
     expect(TurnEvent.isAnyOf(["ToolCall"])(e)).toBe(false)
-    expect(TurnEvent.isAnyOf(["tool-call"])(e)).toBe(false)
+    expect(TurnEvent.isAnyOf(["tool-call" as never])(e)).toBe(false)
   })
 
   test("rejects lowercase or kebab members even when they would be valid wire tags", () => {
     expect(() =>
       TaggedEnumClass("BadTurnEvent", {
-        "text-delta": { text: Schema.String },
+        "text-delta": { text: Schema.String } as never,
       }),
     ).toThrow(/PascalCase/)
   })

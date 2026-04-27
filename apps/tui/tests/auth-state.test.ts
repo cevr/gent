@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method"
 import type { AuthProviderInfo } from "@gent/core/domain/auth-guard"
+import { ProviderId } from "@gent/core/domain/model"
 import { AuthState, transitionAuth } from "../src/routes/auth-state"
 
 const provider = {
-  provider: "anthropic",
+  provider: ProviderId.make("anthropic"),
   hasKey: false,
   required: true,
 } satisfies AuthProviderInfo

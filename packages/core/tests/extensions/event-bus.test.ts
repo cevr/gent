@@ -19,7 +19,7 @@ import { interpretEffects } from "../../src/runtime/extensions/extension-actor-s
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import type { ExtensionEffect } from "../../src/domain/extension.js"
 import type { ResourceBusEnvelope } from "@gent/core/domain/resource"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 describe("BusEmit dispatch", () => {
   test("BusEmit effect flows through interpretEffects to a SubscriptionEngine listener", async () => {
@@ -54,7 +54,7 @@ describe("BusEmit dispatch", () => {
     expect(received.length).toBe(1)
     expect(received[0]!.channel).toBe("ext:test-emit")
     expect(received[0]!.payload).toEqual({ from: "hook" })
-    expect(received[0]!.sessionId).toBe("s1")
-    expect(received[0]!.branchId).toBe("b1")
+    expect(received[0]!.sessionId as string | undefined).toBe("s1")
+    expect(received[0]!.branchId as string | undefined).toBe("b1")
   })
 })

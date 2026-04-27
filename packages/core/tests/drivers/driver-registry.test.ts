@@ -17,12 +17,12 @@ import type {
   ModelDriverContribution,
   ProviderAuthInfo,
   ProviderResolution,
-  TurnError,
   TurnEvent,
   TurnExecutor,
 } from "@gent/core/domain/driver"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
-import { Model, ModelId } from "@gent/core/domain/model"
+import { Model, ModelId, ProviderId } from "@gent/core/domain/model"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 const noopInvalidate = (): Effect.Effect<void> => Effect.void
 
@@ -38,13 +38,13 @@ const makeCatalogModel = (id: string, keep = true): Model =>
   Model.make({
     id: ModelId.make(id),
     name: id,
-    provider: id.split("/", 1)[0] ?? id,
+    provider: ProviderId.make(id.split("/", 1)[0] ?? id),
     contextLength: keep ? 1 : 0,
   })
 
 const makeExecutor = (label: string): TurnExecutor => ({
   executeTurn: () =>
-    Stream.fromIterable<TurnEvent, TurnError>([
+    Stream.fromIterable<TurnEvent>([
       { _tag: "text-delta", text: label },
       { _tag: "finished", stopReason: "stop" },
     ]),
@@ -63,7 +63,7 @@ const makeExt = (
     ...(opts.externalDrivers !== undefined && { externalDrivers: opts.externalDrivers }),
   }
   return {
-    manifest: { id },
+    manifest: { id: ExtensionId.make(id) },
     scope,
     sourcePath: `/test/${id}`,
     contributions,
@@ -257,7 +257,9 @@ describe("DriverRegistry", () => {
         return yield* reg.filterModelCatalog([makeCatalogModel("test/x")])
       }).pipe(
         Effect.provide(layer),
-        Effect.catchEager((error) => Effect.succeed(error.reason)),
+        Effect.catchEager((error) =>
+          Effect.succeed(error._tag === "DriverError" ? error.reason : error.message),
+        ),
       ),
     )
 

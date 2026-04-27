@@ -153,7 +153,7 @@ describe("FileIndex.Live", () => {
       if (Array.isArray(result)) {
         expect(result.length).toBe(0)
       } else {
-        expect(result.caught).toBeDefined()
+        expect((result as { caught: string }).caught).toBeDefined()
       }
     }).pipe(
       Effect.provide(

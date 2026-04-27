@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
 
 describe("copyMessageToBranch", () => {
@@ -19,9 +19,9 @@ describe("copyMessageToBranch", () => {
     })
 
     expect(copied._tag).toBe("interjection")
-    expect(copied.id).toBe("copied-message")
-    expect(copied.branchId).toBe("copied-branch")
-    expect(copied.sessionId).toBe("source-session")
+    expect(copied.id).toBe(MessageId.make("copied-message"))
+    expect(copied.branchId).toBe(BranchId.make("copied-branch"))
+    expect(copied.sessionId).toBe(SessionId.make("source-session"))
   })
 
   test("preserves regular variant and role when copying", () => {
@@ -41,9 +41,9 @@ describe("copyMessageToBranch", () => {
 
     expect(copied._tag).toBe("regular")
     expect(copied.role).toBe("assistant")
-    expect(copied.id).toBe("copy-msg")
-    expect(copied.branchId).toBe("copy-branch")
-    expect(copied.sessionId).toBe("src-session")
+    expect(copied.id).toBe(MessageId.make("copy-msg"))
+    expect(copied.branchId).toBe(BranchId.make("copy-branch"))
+    expect(copied.sessionId).toBe(SessionId.make("src-session"))
     expect(copied.parts).toEqual(message.parts)
   })
 
@@ -63,7 +63,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("copy-branch"),
     })
 
-    expect(copied.sessionId).toBe("override-session")
+    expect(copied.sessionId).toBe(SessionId.make("override-session"))
   })
 
   test("preserves optional fields (turnDurationMs, metadata) when present", () => {
@@ -75,7 +75,7 @@ describe("copyMessageToBranch", () => {
       parts: [new TextPart({ type: "text", text: "x" })],
       createdAt: new Date(0),
       turnDurationMs: 1234,
-      metadata: { customType: "demo", extensionId: "ext-x" },
+      metadata: { customType: "demo", extensionId: ExtensionId.make("ext-x") },
     })
 
     const copied = copyMessageToBranch(message, {

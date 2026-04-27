@@ -12,7 +12,7 @@ import {
   Message,
   type MessagePart,
 } from "@gent/core/domain/message"
-import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 describe("truncate", () => {
   test("under max → unchanged", () => {
@@ -34,7 +34,7 @@ describe("renderMessageParts", () => {
     const parts: MessagePart[] = [
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: "tc1",
+        toolCallId: ToolCallId.make("tc1"),
         toolName: "read",
         input: { path: "/tmp/test.txt" },
       }),
@@ -48,7 +48,7 @@ describe("renderMessageParts", () => {
     const parts: MessagePart[] = [
       new ToolResultPart({
         type: "tool-result",
-        toolCallId: "tc1",
+        toolCallId: ToolCallId.make("tc1"),
         toolName: "read",
         output: { type: "json", value: "file contents here" },
       }),
@@ -62,7 +62,7 @@ describe("renderMessageParts", () => {
       new TextPart({ type: "text", text: "start" }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: "tc1",
+        toolCallId: ToolCallId.make("tc1"),
         toolName: "bash",
         input: { command: "ls" },
       }),

@@ -10,14 +10,15 @@ import {
   listExtensionProtocolDefinitions,
   type ExtractExtensionReply,
 } from "@gent/core/domain/extension-protocol"
+import { ExtensionId, TaskId } from "@gent/core/domain/ids"
 
 describe("extension protocol branding", () => {
   test("command builders attach hidden runtime metadata", () => {
-    const TogglePlan = ExtensionMessage.command("plan", "TogglePlan", {})
+    const TogglePlan = ExtensionMessage.command(ExtensionId.make("plan"), "TogglePlan", {})
     const message = TogglePlan.make()
 
-    expect(message).toEqual({
-      extensionId: "plan",
+    expect(message).toMatchObject({
+      extensionId: ExtensionId.make("plan"),
       _tag: "TogglePlan",
     })
     expect(Object.keys(message)).toEqual(["extensionId", "_tag"])
@@ -28,7 +29,7 @@ describe("extension protocol branding", () => {
     expect(metadata?.tag).toBe("TogglePlan")
 
     const decoded = Schema.decodeUnknownSync(TogglePlan.schema)({
-      extensionId: "plan",
+      extensionId: ExtensionId.make("plan"),
       _tag: "TogglePlan",
     })
     expect(decoded).toEqual(message)
@@ -42,7 +43,7 @@ describe("extension protocol branding", () => {
       { taskId: Schema.String },
       Schema.Struct({ status: Schema.String }),
     )
-    const request = GetTask.make({ taskId: "task-1" })
+    const request = GetTask.make({ taskId: TaskId.make("task-1") })
     const _typedReply: ExtractExtensionReply<typeof request> = { status: "ok" }
     void _typedReply
 
@@ -65,7 +66,7 @@ describe("extension protocol branding", () => {
 
   test("command payloads cannot spoof envelope fields", () => {
     const Ping = ExtensionMessage.command("plan", "Ping", { text: Schema.String })
-    const extensionIdPayload = { text: "hello", extensionId: "other-extension" }
+    const extensionIdPayload = { text: "hello", extensionId: ExtensionId.make("other-extension") }
     const tagPayload = { text: "hello", _tag: "OtherMessage" }
 
     expect(() => Ping.make(extensionIdPayload)).toThrow("reserved keys")
@@ -79,8 +80,11 @@ describe("extension protocol branding", () => {
       { taskId: Schema.String },
       Schema.Struct({ status: Schema.String }),
     )
-    const extensionIdPayload = { taskId: "task-1", extensionId: "other-extension" }
-    const tagPayload = { taskId: "task-1", _tag: "OtherMessage" }
+    const extensionIdPayload = {
+      taskId: TaskId.make("task-1"),
+      extensionId: ExtensionId.make("other-extension"),
+    }
+    const tagPayload = { taskId: TaskId.make("task-1"), _tag: "OtherMessage" }
 
     expect(() => GetTask.make(extensionIdPayload)).toThrow("reserved keys")
     expect(() => GetTask.make(tagPayload)).toThrow("reserved keys")
@@ -108,18 +112,18 @@ describe("extension protocol branding", () => {
       Schema.Struct({ status: Schema.String }),
     )
 
-    const validRequest = GetTask.make({ taskId: "task-1" })
+    const validRequest = GetTask.make({ taskId: TaskId.make("task-1") })
     expect(GetTask.is(validRequest)).toBe(true)
 
     // Envelope tag matches but payload is missing the required field.
-    const envelopeOnly = { extensionId: "@gent/task-tools", _tag: "GetTask" }
+    const envelopeOnly = { extensionId: ExtensionId.make("@gent/task-tools"), _tag: "GetTask" }
     expect(GetTask.is(envelopeOnly)).toBe(false)
     // Escape hatch: envelope-level predicate for cheap routing.
     expect(GetTask.hasEnvelopeTag(envelopeOnly)).toBe(true)
 
     // Wrong payload shape — numeric where string is required.
     const badPayload = {
-      extensionId: "@gent/task-tools",
+      extensionId: ExtensionId.make("@gent/task-tools"),
       _tag: "GetTask",
       taskId: 42,
     }
@@ -128,9 +132,9 @@ describe("extension protocol branding", () => {
 
     // Wrong extensionId even with a valid-looking payload.
     const wrongExtension = {
-      extensionId: "@gent/other",
+      extensionId: ExtensionId.make("@gent/other"),
       _tag: "GetTask",
-      taskId: "task-1",
+      taskId: TaskId.make("task-1"),
     }
     expect(GetTask.is(wrongExtension)).toBe(false)
     expect(GetTask.hasEnvelopeTag(wrongExtension)).toBe(false)

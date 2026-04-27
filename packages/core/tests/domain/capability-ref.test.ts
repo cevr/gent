@@ -17,6 +17,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { action, ref, request, tool } from "@gent/core/extensions/api"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 describe("ref(token)", () => {
   test("returns the typed ref for a request token, preserving id + intent + schema identity", () => {
@@ -24,7 +25,7 @@ describe("ref(token)", () => {
     const outputSchema = Schema.Struct({ n: Schema.Number })
     const token = request({
       id: "test.read",
-      extensionId: "ext-test",
+      extensionId: ExtensionId.make("ext-test"),
       intent: "read",
       input: inputSchema,
       output: outputSchema,
@@ -33,7 +34,7 @@ describe("ref(token)", () => {
 
     const r = ref(token)
     expect(r.capabilityId).toBe("test.read")
-    expect(r.extensionId).toBe("ext-test")
+    expect(r.extensionId as string).toBe("ext-test")
     expect(r.intent).toBe("read")
     // Schema identity: refValue forwards author schemas by reference. A
     // future refactor that clones/wraps would silently change decode

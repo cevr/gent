@@ -11,13 +11,14 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubHostCtx = {
-  sessionId: "test-session",
-  branchId: "test-branch",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
@@ -30,9 +31,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents.cowork,
+    agent: Agents["cowork"]!,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 
@@ -41,7 +42,7 @@ const makeExt = (
   scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
 ): LoadedExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   scope,
   sourcePath: `/test/${id}`,
   contributions,
@@ -92,7 +93,7 @@ describe("runtime slots", () => {
 
     return slots
       .resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents.cowork } satisfies SystemPromptInput,
+        { basePrompt: "base", agent: Agents["cowork"]! } satisfies SystemPromptInput,
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
@@ -102,7 +103,7 @@ describe("runtime slots", () => {
 
   it.live("contextMessages applies explicit projection rewrites in sequence", () => {
     const baseMessage = Message.Regular.make({
-      id: "m1",
+      id: MessageId.make("m1"),
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       role: "user",
@@ -110,7 +111,7 @@ describe("runtime slots", () => {
       createdAt: new Date(),
     })
     const injectedMessage = Message.Regular.make({
-      id: "m2",
+      id: MessageId.make("m2"),
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       role: "system",
@@ -144,7 +145,7 @@ describe("runtime slots", () => {
       .resolveContextMessages(
         {
           messages: [baseMessage],
-          agent: Agents.cowork,
+          agent: Agents["cowork"]!,
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
         } satisfies ContextMessagesInput,
@@ -153,7 +154,11 @@ describe("runtime slots", () => {
       .pipe(
         Effect.tap((messages) =>
           Effect.sync(() =>
-            expect(messages.map((message) => message.id)).toEqual(["m1", "m1", "m2"]),
+            expect(messages.map((message) => message.id)).toEqual([
+              MessageId.make("m1"),
+              MessageId.make("m1"),
+              MessageId.make("m2"),
+            ]),
           ),
         ),
       )
@@ -178,13 +183,13 @@ describe("runtime slots", () => {
     return slots
       .transformToolResult(
         {
-          toolCallId: "tc-1",
+          toolCallId: ToolCallId.make("tc-1"),
           toolName: "echo",
           input: { text: "hello" },
           result: "base",
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
         },
         stubHostCtx,
       )
@@ -238,7 +243,7 @@ describe("runtime slots", () => {
             sessionId: SessionId.make("test-session"),
             branchId: BranchId.make("test-branch"),
             durationMs: 10,
-            agentName: "cowork",
+            agentName: AgentName.make("cowork"),
             interrupted: false,
           } satisfies TurnAfterInput,
           stubHostCtx,
@@ -284,7 +289,7 @@ describe("runtime slots", () => {
         {
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
           toolCount: 2,
           systemPromptLength: 42,
         } satisfies TurnBeforeInput,
@@ -325,7 +330,7 @@ describe("runtime slots", () => {
         {
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
           parts: [new TextPart({ type: "text", text: "hello" })],
         } satisfies MessageOutputInput,
         stubHostCtx,

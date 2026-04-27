@@ -10,7 +10,7 @@ import {
   type MemoryFrontmatter,
 } from "@gent/extensions/memory/vault"
 import type { ProjectionTurnContext } from "@gent/core/domain/projection"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 let tmpDir: string
 
@@ -66,7 +66,7 @@ describe("MemoryVaultProjection", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const value = yield* MemoryVaultProjection.query(turnCtx("/no/such/repo"))
-        const prompt = MemoryVaultProjection.prompt?.(value, turnCtx("/no/such/repo")) ?? []
+        const prompt = MemoryVaultProjection.prompt?.(value) ?? []
         return prompt
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
@@ -80,7 +80,7 @@ describe("MemoryVaultProjection", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const value = yield* MemoryVaultProjection.query(turnCtx("/no/such/repo"))
-        return MemoryVaultProjection.prompt?.(value, turnCtx("/no/such/repo")) ?? []
+        return MemoryVaultProjection.prompt?.(value) ?? []
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
     expect(result.length).toBe(1)
@@ -98,7 +98,7 @@ describe("MemoryVaultProjection", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const value = yield* MemoryVaultProjection.query(turnCtx("/test-repo"))
-        return MemoryVaultProjection.prompt?.(value, turnCtx("/test-repo")) ?? []
+        return MemoryVaultProjection.prompt?.(value) ?? []
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
     expect(result.length).toBe(1)

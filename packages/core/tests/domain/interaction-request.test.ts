@@ -5,10 +5,11 @@ import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import {
   makeInteractionService,
+  InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
 } from "@gent/core/domain/interaction-request"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
 
 // ============================================================================
 // Interaction Request — cold interaction mechanics
@@ -35,7 +36,10 @@ describe("Interaction Request", () => {
           onPresent: () => Effect.void,
           storage: storageCallbacks,
         })
-        yield* ensureStorageParents({ sessionId: "s1", branchId: "b1" })
+        yield* ensureStorageParents({
+          sessionId: SessionId.make("s1"),
+          branchId: BranchId.make("b1"),
+        })
 
         // present() should fail with InteractionPendingError
         const error = yield* Effect.flip(
@@ -45,15 +49,16 @@ describe("Interaction Request", () => {
           ),
         )
         expect(error._tag).toBe("InteractionPendingError")
+        if (!(error instanceof InteractionPendingError)) throw new Error("expected pending")
         expect(error.requestId).toBeTruthy()
-        expect(error.sessionId).toBe("s1")
-        expect(error.branchId).toBe("b1")
+        expect(error.sessionId).toBe(SessionId.make("s1"))
+        expect(error.branchId).toBe(BranchId.make("b1"))
 
         // Verify persisted to storage
         const pending = yield* is.listPending()
         expect(pending.length).toBe(1)
-        expect(pending[0]!.sessionId).toBe("s1")
-        expect(pending[0]!.branchId).toBe("b1")
+        expect(pending[0]!.sessionId).toBe(SessionId.make("s1"))
+        expect(pending[0]!.branchId).toBe(BranchId.make("b1"))
         expect(pending[0]!.status).toBe("pending")
       }).pipe(Effect.provide(storageLive)),
     )
@@ -66,7 +71,7 @@ describe("Interaction Request", () => {
 
         // Manually insert a pending record
         const record: InteractionRequestRecord = {
-          requestId: "req-manual-1",
+          requestId: InteractionRequestId.make("req-manual-1"),
           type: "approval",
           sessionId: SessionId.make("s2"),
           branchId: BranchId.make("b2"),
@@ -79,14 +84,18 @@ describe("Interaction Request", () => {
 
         // Verify it's pending
         const before = yield* is.listPending()
-        expect(before.some((r) => r.requestId === "req-manual-1")).toBe(true)
+        expect(before.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
+          true,
+        )
 
         // Resolve it
-        yield* is.resolve("req-manual-1")
+        yield* is.resolve(InteractionRequestId.make("req-manual-1"))
 
         // Verify it's no longer pending
         const after = yield* is.listPending()
-        expect(after.some((r) => r.requestId === "req-manual-1")).toBe(false)
+        expect(after.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
+          false,
+        )
       }).pipe(Effect.provide(storageLive)),
     )
   })
@@ -95,12 +104,18 @@ describe("Interaction Request", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const is = yield* InteractionStorage
-        yield* ensureStorageParents({ sessionId: "s3", branchId: "b3" })
-        yield* ensureStorageParents({ sessionId: "s3", branchId: "b4" })
+        yield* ensureStorageParents({
+          sessionId: SessionId.make("s3"),
+          branchId: BranchId.make("b3"),
+        })
+        yield* ensureStorageParents({
+          sessionId: SessionId.make("s3"),
+          branchId: BranchId.make("b4"),
+        })
 
         // Insert requests for two different branches
         yield* is.persist({
-          requestId: "req-del-1",
+          requestId: InteractionRequestId.make("req-del-1"),
           type: "approval",
           sessionId: SessionId.make("s3"),
           branchId: BranchId.make("b3"),
@@ -109,7 +124,7 @@ describe("Interaction Request", () => {
           createdAt: Date.now(),
         })
         yield* is.persist({
-          requestId: "req-del-2",
+          requestId: InteractionRequestId.make("req-del-2"),
           type: "approval",
           sessionId: SessionId.make("s3"),
           branchId: BranchId.make("b4"),
@@ -123,8 +138,8 @@ describe("Interaction Request", () => {
 
         // Only b4 should remain
         const remaining = yield* is.listPending()
-        expect(remaining.filter((r) => r.sessionId === "s3").length).toBe(1)
-        expect(remaining[0]!.branchId).toBe("b4")
+        expect(remaining.filter((r) => r.sessionId === SessionId.make("s3")).length).toBe(1)
+        expect(remaining[0]!.branchId).toBe(BranchId.make("b4"))
       }).pipe(Effect.provide(storageLive)),
     )
   })
@@ -144,6 +159,7 @@ describe("Interaction Request", () => {
           interaction.present({ text: "Approve?" }, { sessionId, branchId }),
         )
         expect(error._tag).toBe("InteractionPendingError")
+        if (!(error instanceof InteractionPendingError)) throw new Error("expected pending")
 
         // Store resolution keyed by requestId
         interaction.storeResolution(error.requestId, { approved: true })
@@ -165,7 +181,7 @@ describe("Interaction Request", () => {
 
         const sessionId = SessionId.make("s-restart")
         const branchId = BranchId.make("b-restart")
-        const requestId = "req-restart-1"
+        const requestId = InteractionRequestId.make("req-restart-1")
 
         // Rehydrate rebuilds the pendingByContext reverse lookup
         yield* interaction.rehydrate(requestId, { text: "Approve?" }, { sessionId, branchId })
@@ -209,6 +225,7 @@ describe("Interaction Request", () => {
           service1.present({ text: "Approve deployment?" }, { sessionId, branchId }),
         )
         expect(error._tag).toBe("InteractionPendingError")
+        if (!(error instanceof InteractionPendingError)) throw new Error("expected pending")
         const requestId = error.requestId
 
         // Verify persisted to SQL

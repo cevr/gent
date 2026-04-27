@@ -11,20 +11,23 @@ import {
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ResourceSchedule } from "@gent/core/domain/resource"
+import { ExtensionId } from "@gent/core/domain/ids"
+import { AgentName } from "@gent/core/domain/agent"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
 const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   scope: "builtin",
   sourcePath: "builtin",
   contributions: {
     resources: [
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
       defineResource({
         scope: "process",
         layer: Layer.empty,
         schedule: jobs,
-      }),
+      }) as never,
     ],
   },
 })
@@ -53,7 +56,7 @@ describe("scheduled jobs", () => {
             id: "reflect",
             cron: "0 21 * * 1-5",
             target: {
-              agent: "memory:reflect" as never,
+              agent: AgentName.make("memory:reflect"),
               prompt: "Reflect on recent sessions.",
               cwd: "/repo",
             },
@@ -105,6 +108,7 @@ describe("scheduled jobs", () => {
   it.live("scheduler install failure is isolated instead of crashing reconciliation", () =>
     Effect.gen(function* () {
       const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-scheduler-failure-"))
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test mock for private CronRuntime
       const runtime = {
         install: (_entryPath: string, _schedule: string, name: string) => {
           if (name.includes("meditate")) {
@@ -113,7 +117,7 @@ describe("scheduled jobs", () => {
           return Effect.void
         },
         remove: (_name: string) => Effect.void,
-      }
+      } as never
 
       const failures = yield* reconcileScheduledJobs({
         extensions: [
@@ -122,7 +126,7 @@ describe("scheduled jobs", () => {
               id: "reflect",
               cron: "0 21 * * 1-5",
               target: {
-                agent: "memory:reflect" as never,
+                agent: AgentName.make("memory:reflect"),
                 prompt: "Reflect on recent sessions.",
               },
             },
@@ -130,7 +134,7 @@ describe("scheduled jobs", () => {
               id: "meditate",
               cron: "0 9 * * 0",
               target: {
-                agent: "memory:meditate" as never,
+                agent: AgentName.make("memory:meditate"),
                 prompt: "Meditate on the memory vault.",
               },
             },
@@ -143,7 +147,7 @@ describe("scheduled jobs", () => {
       })
 
       expect(failures).toHaveLength(1)
-      expect(failures[0]!.extensionId).toBe("@gent/memory")
+      expect(failures[0]!.extensionId).toBe(ExtensionId.make("@gent/memory"))
       expect(failures[0]!.jobId).toBe("meditate")
       expect(failures[0]!.error).toContain("cron install boom")
 
@@ -163,6 +167,7 @@ describe("scheduled jobs", () => {
         ...sessionExt,
         contributions: {
           resources: [
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
             defineResource({
               scope: "session",
               layer: Layer.empty,
@@ -171,12 +176,12 @@ describe("scheduled jobs", () => {
                   id: "session-only",
                   cron: "* * * * *",
                   target: {
-                    agent: "session-agent" as never,
+                    agent: AgentName.make("session-agent"),
                     prompt: "session prompt",
                   },
                 },
               ],
-            }),
+            }) as never,
           ],
         },
       }
@@ -184,7 +189,7 @@ describe("scheduled jobs", () => {
         {
           id: "process-only",
           cron: "* * * * *",
-          target: { agent: "p" as never, prompt: "p" },
+          target: { agent: AgentName.make("p"), prompt: "p" },
         },
       ])
       const collected = collectSchedules([sessionLoaded, processExt])

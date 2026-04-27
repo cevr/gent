@@ -10,6 +10,7 @@
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
 import { ToolCallId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import { RunSpecSchema } from "@gent/core/domain/agent"
 
 // ── Tests ──
@@ -21,7 +22,7 @@ describe("RunSpec CLI serialization", () => {
     const runSpec = {
       persistence: "ephemeral" as const,
       overrides: {
-        modelId: "anthropic/claude-sonnet-4-6",
+        modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
         allowedTools: ["grep", "glob", "read"],
         deniedTools: ["bash"],
         reasoningEffort: "high" as const,
@@ -42,7 +43,7 @@ describe("RunSpec CLI serialization", () => {
     const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
     const json = Schema.encodeSync(codec)(runSpec)
     const decoded = Schema.decodeUnknownSync(codec)(json)
-    expect(decoded.parentToolCallId).toBe("tc-only")
+    expect(decoded.parentToolCallId as string | undefined).toBe("tc-only")
   })
 
   test("round-trips empty runSpec", () => {

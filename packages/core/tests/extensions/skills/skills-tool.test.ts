@@ -1,5 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { SkillsTool } from "@gent/extensions/skills/skills-tool"
 import { SearchSkillsTool } from "@gent/extensions/skills/search-skills"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
@@ -34,86 +37,102 @@ const ctx = testToolContext()
 
 describe("SkillsTool", () => {
   it.live("loads specific skill by name", () =>
-    SkillsTool.effect({ names: ["react"] }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("react")
-        expect(result).toContain("Use function components")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: ["react"] }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("react")
+          expect(result).toContain("Use function components")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("resolves local before global for ambiguous names", () =>
-    SkillsTool.effect({ names: ["effect-v4"] }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("Custom service layer patterns")
-        expect(result).toContain("local")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: ["effect-v4"] }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("Custom service layer patterns")
+          expect(result).toContain("local")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("supports $skill:global syntax", () =>
-    SkillsTool.effect({ names: ["$effect-v4:global"] }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("Use Effect.fn for tracing")
-        expect(result).toContain("global")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: ["$effect-v4:global"] }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("Use Effect.fn for tracing")
+          expect(result).toContain("global")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("reports not-found skills", () =>
-    SkillsTool.effect({ names: ["nonexistent"] }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("Not found: nonexistent")
-        expect(result).toContain("Available:")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: ["nonexistent"] }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("Not found: nonexistent")
+          expect(result).toContain("Available:")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("loads all skills", () =>
-    SkillsTool.effect({ names: "all" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("effect-v4")
-        expect(result).toContain("react")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: "all" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("effect-v4")
+          expect(result).toContain("react")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("filters all by level", () =>
-    SkillsTool.effect({ names: "all", level: "global" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result).toContain("Use Effect.fn for tracing")
-        expect(result).toContain("react")
-        expect(result).not.toContain("Custom service layer patterns")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SkillsTool.effect({ names: "all", level: "global" }, ctx).pipe(
+        Effect.map((result) => {
+          expect(result).toContain("Use Effect.fn for tracing")
+          expect(result).toContain("react")
+          expect(result).not.toContain("Custom service layer patterns")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 })
 
 describe("SearchSkillsTool", () => {
   it.live("finds skills by name", () =>
-    SearchSkillsTool.effect({ query: "effect" }, ctx).pipe(
-      Effect.map((result) => {
-        const r = result as { count: number; results: Array<{ name: string }> }
-        expect(r.count).toBe(2)
-        expect(r.results.every((s) => s.name === "effect-v4")).toBe(true)
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SearchSkillsTool.effect({ query: "effect" }, ctx).pipe(
+        Effect.map((result) => {
+          const r = result as { count: number; results: Array<{ name: string }> }
+          expect(r.count).toBe(2)
+          expect(r.results.every((s) => s.name === "effect-v4")).toBe(true)
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 
   it.live("includes level in results", () =>
-    SearchSkillsTool.effect({ query: "react" }, ctx).pipe(
-      Effect.map((result) => {
-        const r = result as { results: Array<{ level: string }> }
-        expect(r.results[0]?.level).toBe("global")
-      }),
-      Effect.provide(skillsLayer),
+    narrowR(
+      SearchSkillsTool.effect({ query: "react" }, ctx).pipe(
+        Effect.map((result) => {
+          const r = result as { results: Array<{ level: string }> }
+          expect(r.results[0]?.level).toBe("global")
+        }),
+        Effect.provide(skillsLayer),
+      ),
     ),
   )
 })

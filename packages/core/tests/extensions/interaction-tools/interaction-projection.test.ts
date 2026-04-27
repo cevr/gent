@@ -16,13 +16,15 @@
  *  - missing branchId in ctx returns empty model (defensive)
  */
 import { describe, it, expect } from "effect-bun-test"
+import type { Layer } from "effect"
 import { Effect } from "effect"
+import type { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { InteractionProjection } from "@gent/extensions/interaction-tools/projection"
 import { encodeInteractionParams } from "@gent/core/domain/interaction-request"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { ProjectionUiContext } from "@gent/core/domain/projection"
+import { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
+import type { ProjectionContext } from "@gent/core/domain/projection"
 import { ensureStorageParents } from "@gent/core/test-utils"
 
 // `Storage.MemoryWithSql()` provides `InteractionStorage` AND
@@ -33,14 +35,23 @@ const bid1 = BranchId.make("019d97e0-0000-7001-aaaa-000000000001")
 const sid2 = SessionId.make("019d97e0-0000-7000-bbbb-000000000002")
 const bid2 = BranchId.make("019d97e0-0000-7001-bbbb-000000000002")
 
-const ctx = (sessionId: SessionId, branchId?: BranchId): ProjectionUiContext => ({
-  sessionId,
-  ...(branchId !== undefined ? { branchId } : ({} as { branchId: BranchId })),
-  cwd: "/tmp",
-  home: "/tmp",
-})
+const ctx = (sessionId: SessionId, branchId?: BranchId): ProjectionContext =>
+  ({
+    sessionId,
+    ...(branchId !== undefined ? { branchId } : ({} as { branchId: BranchId })),
+    cwd: "/tmp",
+    home: "/tmp",
+  }) as never
 
-const layer = Storage.MemoryWithSql()
+// Storage.MemoryWithSql provides InteractionPendingReader at runtime via
+// Layer.provide, but the public type signature does not advertise it.
+const baseStorageLayer = Storage.MemoryWithSql()
+type ProvidedServices = typeof baseStorageLayer extends Layer.Layer<infer A> ? A : never
+const layer = baseStorageLayer as unknown as Layer.Layer<
+  ProvidedServices | InteractionPendingReader,
+  never,
+  never
+>
 
 describe("InteractionProjection", () => {
   it.live("empty pending returns empty model", () =>
@@ -59,7 +70,7 @@ describe("InteractionProjection", () => {
         metadata: { type: "prompt", mode: "confirm" },
       })
       yield* storage.persist({
-        requestId: "req-1",
+        requestId: InteractionRequestId.make("req-1"),
         type: "approval",
         sessionId: sid1,
         branchId: bid1,
@@ -81,7 +92,7 @@ describe("InteractionProjection", () => {
       yield* ensureStorageParents({ sessionId: sid1, branchId: bid1 })
       const paramsJson = yield* encodeInteractionParams({ text: "Approve?" })
       yield* storage.persist({
-        requestId: "req-2",
+        requestId: InteractionRequestId.make("req-2"),
         type: "approval",
         sessionId: sid1,
         branchId: bid1,
@@ -94,7 +105,7 @@ describe("InteractionProjection", () => {
       expect(before.model.requestId).toBe("req-2")
 
       // Resolve, then projection should report empty
-      yield* storage.resolve("req-2")
+      yield* storage.resolve(InteractionRequestId.make("req-2"))
       const after = yield* InteractionProjection.query(ctx(sid1, bid1))
       expect(after.model).toEqual({})
     }).pipe(Effect.provide(layer)),
@@ -106,7 +117,7 @@ describe("InteractionProjection", () => {
       yield* ensureStorageParents({ sessionId: sid2, branchId: bid2 })
       const paramsJson = yield* encodeInteractionParams({ text: "Other session" })
       yield* storage.persist({
-        requestId: "req-other",
+        requestId: InteractionRequestId.make("req-other"),
         type: "approval",
         sessionId: sid2,
         branchId: bid2,
@@ -125,7 +136,7 @@ describe("InteractionProjection", () => {
       yield* ensureStorageParents({ sessionId: sid1, branchId: bid1 })
       const paramsJson = yield* encodeInteractionParams({ text: "no meta" })
       yield* storage.persist({
-        requestId: "req-no-meta",
+        requestId: InteractionRequestId.make("req-no-meta"),
         type: "approval",
         sessionId: sid1,
         branchId: bid1,

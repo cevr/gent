@@ -2,8 +2,8 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { compileToolPolicy } from "../../src/runtime/extensions/registry"
-import { AgentDefinition } from "@gent/core/domain/agent"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 describe("compileToolPolicy", () => {
   const makeTool = (name: string): AnyCapabilityContribution => ({
@@ -35,14 +35,14 @@ describe("compileToolPolicy", () => {
   const names = (tools: ReadonlyArray<{ id: string }>) => tools.map((t) => t.id).sort()
 
   test("no allow-list → all tools", () => {
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
   test("allowedTools restricts to exact set", () => {
     const agent = AgentDefinition.make({
-      name: "cowork",
+      name: AgentName.make("cowork"),
       allowedTools: ["bash", "read"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
@@ -50,13 +50,13 @@ describe("compileToolPolicy", () => {
   })
 
   test("allowedTools: [] means no tools", () => {
-    const agent = AgentDefinition.make({ name: "cowork", allowedTools: [] })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: [] })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
     expect(tools).toEqual([])
   })
 
   test("extension projection exclude removes tools", () => {
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
     expect(names(tools)).not.toContain("bash")
@@ -65,7 +65,7 @@ describe("compileToolPolicy", () => {
 
   test("extension projection include adds tools when they are allowed", () => {
     const agent = AgentDefinition.make({
-      name: "cowork",
+      name: AgentName.make("cowork"),
       allowedTools: ["read", "grep", "glob", "search_skills"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -75,7 +75,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension projection overrideSet replaces tool list", () => {
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
     expect(names(tools)).toEqual(["grep", "read"])
@@ -83,7 +83,7 @@ describe("compileToolPolicy", () => {
 
   test("denied tools cannot be re-added by extension projection include", () => {
     const agent = AgentDefinition.make({
-      name: "cowork",
+      name: AgentName.make("cowork"),
       deniedTools: ["bash"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -92,7 +92,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension prompt sections collected", () => {
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const projections = [
       { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
       { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
@@ -114,7 +114,7 @@ describe("compileToolPolicy", () => {
       effect: () => Effect.succeed(null),
     }
     const nonInteractiveTool = makeTool("read")
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const ctx = { ...emptyCtx, interactive: false as const }
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
     expect(names(tools)).toEqual(["read"])
@@ -132,7 +132,7 @@ describe("compileToolPolicy", () => {
       output: Schema.Unknown,
       effect: () => Effect.succeed(null),
     }
-    const agent = AgentDefinition.make({ name: "cowork" })
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
     expect(names(tools)).toContain("ask_user")
   })

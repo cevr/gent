@@ -19,6 +19,7 @@ import {
   makeClientWorkspaceLayer,
 } from "../src/extensions/client-services"
 import { makeClientTransportLayer } from "../src/extensions/client-transport"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { builtinClientModules } from "../src/extensions/builtins/index"
 
@@ -292,6 +293,7 @@ export default defineClientExtension("@test/a", {
       join(collisionDir, "b.client.ts"),
       `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "../../../src/extensions/client-facets.js"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 export default defineClientExtension("@test/b", {
   setup: Effect.succeed([rendererContribution(["my_tool"], () => "b")]),
@@ -356,13 +358,13 @@ export default defineClientExtension("@test/b", {
               request: () => Effect.void,
               listCommands: () => Effect.succeed([]),
             },
-          } as Parameters<typeof makeClientTransportLayer>[0]["client"],
+          } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
           runtime: {
             run: () => Promise.reject(new Error("no transport in test")),
-          } as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
+          } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
           currentSession: () => ({
-            sessionId: "test-session-id" as never,
-            branchId: "test-branch-id" as never,
+            sessionId: SessionId.make("test-session-id"),
+            branchId: BranchId.make("test-branch-id"),
           }),
           onExtensionStateChanged: () => () => {},
         }),

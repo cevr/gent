@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
 const collectSnapshots = <A, E>(
   stream: Stream.Stream<A, E>,
-): Effect.Effect<Ref.Ref<A[]>, E, never> =>
+): Effect.Effect<Ref.Ref<A[]>, E, Scope.Scope> =>
   Effect.gen(function* () {
     const values = yield* Ref.make<A[]>([])
     const ready = yield* Deferred.make<void>()
@@ -33,67 +34,69 @@ describe("runtime watch contracts", () => {
       `${transport.name} watchRuntime emits current runtime and later updates`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session
+                .create({ cwd: process.cwd() })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const runtime = yield* collectSnapshots(
-              client.session.watchRuntime({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
-
-            const initial = yield* waitFor(
-              Ref.get(runtime),
-              (current) => current[0]?._tag === "Idle",
-              timeoutMs,
-            )
-            expect(initial[0]?._tag).toBe("Idle")
-            expect(initial[0]?.queue.followUp).toEqual([])
-            expect(initial[0]?.queue.steering).toEqual([])
-
-            yield* client.message
-              .send({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-                content: `watch-runtime ${transport.name}`,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-
-            const updated = yield* waitFor(
-              Ref.get(runtime),
-              (current) => current.some((state) => state._tag !== "Idle"),
-              timeoutMs,
-            )
-
-            expect(updated.some((state) => state._tag !== "Idle")).toBe(true)
-
-            const persisted = yield* waitFor(
-              client.session
-                .getSnapshot({
+              const runtime = yield* collectSnapshots(
+                client.session.watchRuntime({
                   sessionId: created.sessionId,
                   branchId: created.branchId,
+                }),
+              ).pipe(Effect.mapError((error) => new Error(String(error))))
+
+              const initial = yield* waitFor(
+                Ref.get(runtime),
+                (current) => current[0]?._tag === "Idle",
+                timeoutMs,
+              )
+              expect(initial[0]?._tag).toBe("Idle")
+              expect(initial[0]?.queue.followUp).toEqual([])
+              expect(initial[0]?.queue.steering).toEqual([])
+
+              yield* client.message
+                .send({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                  content: `watch-runtime ${transport.name}`,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
-              (snapshot) =>
-                snapshot.messages.some(
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+
+              const updated = yield* waitFor(
+                Ref.get(runtime),
+                (current) => current.some((state) => state._tag !== "Idle"),
+                timeoutMs,
+              )
+
+              expect(updated.some((state) => state._tag !== "Idle")).toBe(true)
+
+              const persisted = yield* waitFor(
+                client.session
+                  .getSnapshot({
+                    sessionId: created.sessionId,
+                    branchId: created.branchId,
+                  })
+                  .pipe(Effect.mapError((error) => new Error(String(error)))),
+                (snapshot) =>
+                  snapshot.messages.some(
+                    (message) =>
+                      message.role === "user" &&
+                      extractText(message.parts) === `watch-runtime ${transport.name}`,
+                  ),
+                timeoutMs,
+              )
+
+              expect(
+                persisted.messages.some(
                   (message) =>
                     message.role === "user" &&
                     extractText(message.parts) === `watch-runtime ${transport.name}`,
                 ),
-              timeoutMs,
-            )
-
-            expect(
-              persisted.messages.some(
-                (message) =>
-                  message.role === "user" &&
-                  extractText(message.parts) === `watch-runtime ${transport.name}`,
-              ),
-            ).toBe(true)
-          }),
+              ).toBe(true)
+            }),
+          ),
         )
       },
       timeoutMs,
@@ -110,62 +113,64 @@ describe("runtime watch contracts", () => {
     `${directSignalCase.name} watchRuntime emits queued follow-up snapshots`,
     async () => {
       await directSignalCase.run("done.", ({ client }, controls) =>
-        Effect.gen(function* () {
-          const created = yield* client.session
-            .create({ cwd: process.cwd() })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+        Effect.scoped(
+          Effect.gen(function* () {
+            const created = yield* client.session
+              .create({ cwd: process.cwd() })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const runtime = yield* collectSnapshots(
-            client.session.watchRuntime({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-          ).pipe(Effect.mapError((error) => new Error(String(error))))
+            const runtime = yield* collectSnapshots(
+              client.session.watchRuntime({
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+              }),
+            ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "first turn",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+            yield* client.message
+              .send({
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+                content: "first turn",
+              })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          // Stream is now paused mid-flight on the chunk gate
-          yield* controls.waitForStreamStart
+            // Stream is now paused mid-flight on the chunk gate
+            yield* controls.waitForStreamStart
 
-          yield* waitFor(
-            Ref.get(runtime),
-            (current) => current.some((state) => state._tag !== "Idle"),
-            timeoutMs,
-          )
+            yield* waitFor(
+              Ref.get(runtime),
+              (current) => current.some((state) => state._tag !== "Idle"),
+              timeoutMs,
+            )
 
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "queued follow-up",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+            yield* client.message
+              .send({
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+                content: "queued follow-up",
+              })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const updated = yield* waitFor(
-            Ref.get(runtime),
-            (current) =>
-              current.some((state) =>
+            const updated = yield* waitFor(
+              Ref.get(runtime),
+              (current) =>
+                current.some((state) =>
+                  state.queue.followUp.some((entry) => entry.content.includes("queued follow-up")),
+                ),
+              timeoutMs,
+            )
+
+            expect(
+              updated.some((state) =>
                 state.queue.followUp.some((entry) => entry.content.includes("queued follow-up")),
               ),
-            timeoutMs,
-          )
+            ).toBe(true)
 
-          expect(
-            updated.some((state) =>
-              state.queue.followUp.some((entry) => entry.content.includes("queued follow-up")),
-            ),
-          ).toBe(true)
-
-          // Release chunks for both turns so scope cleanup is fast
-          yield* controls.emitAll()
-          yield* controls.emitAll()
-        }),
+            // Release chunks for both turns so scope cleanup is fast
+            yield* controls.emitAll()
+            yield* controls.emitAll()
+          }),
+        ),
       )
     },
     timeoutMs,

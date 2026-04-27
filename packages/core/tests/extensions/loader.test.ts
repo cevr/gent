@@ -3,6 +3,7 @@ import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { Effect, Layer, Path } from "effect"
 import type { GentExtension } from "../../src/domain/extension.js"
 import { setupExtension } from "../../src/runtime/extensions/loader"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -13,9 +14,9 @@ const fsLayer = Layer.mergeAll(
 describe("setupExtension", () => {
   it.live("seals runtime-loaded setup failures to ExtensionLoadError", () =>
     Effect.gen(function* () {
-      const badSetup = (() => Effect.fail("boom")) as GentExtension["setup"]
+      const badSetup = (() => Effect.fail("boom")) as unknown as GentExtension["setup"]
       const extension: GentExtension = {
-        manifest: { id: "@gent/test-loader" },
+        manifest: { id: ExtensionId.make("@gent/test-loader") },
         setup: badSetup,
       }
 

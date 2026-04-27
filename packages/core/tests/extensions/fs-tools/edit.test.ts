@@ -1,5 +1,8 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { BunServices } from "@effect/platform-bun"
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -136,10 +139,12 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.effect(
-          { path: filePath, oldString: "hello world", newString: "hi there" },
-          stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        narrowR(
+          EditTool.effect(
+            { path: filePath, oldString: "hello world", newString: "hi there" },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
       )
 
       expect(result.replacements).toBe(1)
@@ -159,10 +164,12 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.effect(
-          { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
-          stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        narrowR(
+          EditTool.effect(
+            { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
       )
 
       expect(result.replacements).toBe(3)
@@ -181,11 +188,13 @@ describe("EditTool execution", () => {
 
     try {
       const exit = await Effect.runPromise(
-        Effect.exit(
-          EditTool.effect(
-            { path: filePath, oldString: "not here", newString: "replaced" },
-            stubCtx,
-          ).pipe(Effect.provide(editLayer)),
+        narrowR(
+          Effect.exit(
+            EditTool.effect(
+              { path: filePath, oldString: "not here", newString: "replaced" },
+              stubCtx,
+            ).pipe(Effect.provide(editLayer)),
+          ),
         ),
       )
 
@@ -202,9 +211,11 @@ describe("EditTool execution", () => {
 
     try {
       const exit = await Effect.runPromise(
-        Effect.exit(
-          EditTool.effect({ path: filePath, oldString: "foo", newString: "baz" }, stubCtx).pipe(
-            Effect.provide(editLayer),
+        narrowR(
+          Effect.exit(
+            EditTool.effect({ path: filePath, oldString: "foo", newString: "baz" }, stubCtx).pipe(
+              Effect.provide(editLayer),
+            ),
           ),
         ),
       )
@@ -222,10 +233,12 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.effect(
-          { path: filePath, oldString: "line1\\nline2", newString: "merged" },
-          stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        narrowR(
+          EditTool.effect(
+            { path: filePath, oldString: "line1\\nline2", newString: "merged" },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
       )
 
       expect(result.replacements).toBe(1)

@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
 import { testExtensionRegistryLayer } from "@gent/core/test-utils/reconciled-extensions"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 describe("reconcileTestExtensions", () => {
   it.live("degrades same-scope collisions before building helper registries", () =>
@@ -11,7 +12,7 @@ describe("reconcileTestExtensions", () => {
         const context = yield* Layer.build(
           testExtensionRegistryLayer([
             {
-              manifest: { id: "ext-a" },
+              manifest: { id: ExtensionId.make("ext-a") },
               scope: "builtin",
               sourcePath: "test-a",
               contributions: {
@@ -26,7 +27,7 @@ describe("reconcileTestExtensions", () => {
               },
             },
             {
-              manifest: { id: "ext-b" },
+              manifest: { id: ExtensionId.make("ext-b") },
               scope: "builtin",
               sourcePath: "test-b",
               contributions: {
@@ -48,7 +49,10 @@ describe("reconcileTestExtensions", () => {
         const failed = yield* registry.listFailedExtensions()
 
         expect(tools).toEqual([])
-        expect(failed.map((failure) => failure.manifest.id).sort()).toEqual(["ext-a", "ext-b"])
+        expect(failed.map((failure) => failure.manifest.id).sort()).toEqual([
+          ExtensionId.make("ext-a"),
+          ExtensionId.make("ext-b"),
+        ])
         expect(failed.every((failure) => failure.phase === "validation")).toBe(true)
       }),
     ),

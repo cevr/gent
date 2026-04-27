@@ -16,14 +16,15 @@ import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
 import type { ExtensionSetupContext } from "../../src/domain/extension.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubHostCtx = {
-  sessionId: "test-session",
-  branchId: "test-branch",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
@@ -36,9 +37,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents.cowork,
+    agent: Agents["cowork"]!,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 
@@ -49,7 +50,7 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({ id: "empty" })
       const contributions = yield* setupOf(ext)
-      expect(contributions.capabilities ?? []).toEqual([])
+      expect(contributions.tools ?? []).toEqual([])
       expect(contributions.agents ?? []).toEqual([])
       expect(contributions.modelDrivers ?? []).toEqual([])
       expect(contributions.resources ?? []).toEqual([])
@@ -70,11 +71,11 @@ describe("defineExtension", () => {
         prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
-      const myLayer = Layer.empty
+      const myLayer = Layer.empty as Layer.Layer<unknown>
       const ext = defineExtension({
         id: "all-kinds",
         tools: [myTool],
-        agents: [Agents.cowork],
+        agents: [Agents["cowork"]!],
         projections: [
           {
             id: "prompt-suffix",
@@ -94,7 +95,7 @@ describe("defineExtension", () => {
                 target: { agent: "cowork" as never, prompt: "hi" },
               },
             ],
-          }),
+          }) as never,
         ],
       })
       const contributions = yield* setupOf(ext)
@@ -102,7 +103,7 @@ describe("defineExtension", () => {
       expect(modelCaps[0]?.id).toBe("echo")
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
-      expect((contributions.agents ?? [])[0]?.name).toBe("cowork")
+      expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
       expect((contributions.projections ?? [])[0]?.id).toBe("prompt-suffix")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
@@ -122,16 +123,16 @@ describe("defineExtension", () => {
           resources: [
             defineResource({
               scope: "process",
-              layer: Layer.empty,
+              layer: Layer.empty as Layer.Layer<unknown>,
               start: append("startup-1"),
               stop: append("shutdown-1"),
-            }),
+            }) as never,
             defineResource({
               scope: "process",
-              layer: Layer.empty,
+              layer: Layer.empty as Layer.Layer<unknown>,
               start: append("startup-2"),
               stop: append("shutdown-2"),
-            }),
+            }) as never,
           ],
         })
         const contributions = yield* setupOf(ext)
@@ -160,12 +161,12 @@ describe("defineExtension", () => {
         resources: [
           defineResource({
             scope: "process",
-            layer: Layer.empty,
+            layer: Layer.empty as Layer.Layer<unknown>,
             subscriptions: [
               { pattern: "a:*", handler: () => Effect.void },
               { pattern: "b:*", handler: () => Effect.void },
             ],
-          }),
+          }) as never,
         ],
       })
       const contributions = yield* setupOf(ext)
@@ -235,7 +236,7 @@ describe("defineExtension", () => {
       })
       const contributions = yield* setupOf(ext)
       const loaded = {
-        manifest: { id: "wired" },
+        manifest: { id: ExtensionId.make("wired") },
         scope: "builtin" as const,
         sourcePath: "/test/wired",
         contributions,
@@ -245,7 +246,7 @@ describe("defineExtension", () => {
 
       const compiled = compileExtensionReactions([loaded])
       const result = yield* compiled.resolveSystemPrompt(
-        { basePrompt: "yo", agent: Agents.cowork },
+        { basePrompt: "yo", agent: Agents["cowork"]! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       expect(result).toBe("yo!!")
@@ -256,7 +257,7 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        tools: () => Effect.fail("nope"),
+        tools: () => Effect.fail("nope" as never),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")

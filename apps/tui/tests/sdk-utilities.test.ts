@@ -7,7 +7,9 @@ import {
   extractToolCallsWithResults,
   type MessageInfoReadonly,
 } from "@gent/sdk"
-import type { MessagePart } from "@gent/core/domain/message"
+import { type MessagePart, ToolCallPart, ToolResultPart, TextPart } from "@gent/core/domain/message"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { MessageInfo } from "@gent/core/server/transport-contract"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
@@ -17,7 +19,7 @@ describe("extractText", () => {
 
   test("returns empty string when no text part", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
     ]
     expect(extractText(parts)).toBe("")
   })
@@ -32,7 +34,7 @@ describe("extractText", () => {
 
   test("handles mixed parts", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
       { type: "text", text: "Response after tool" },
     ]
     expect(extractText(parts)).toBe("Response after tool")
@@ -77,7 +79,7 @@ describe("extractImages", () => {
     const parts: MessagePart[] = [
       { type: "text", text: "Before" },
       { type: "image", image: "abc", mediaType: "image/gif" },
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
       { type: "image", image: "xyz", mediaType: "image/webp" },
     ]
 
@@ -91,9 +93,19 @@ describe("extractImages", () => {
 describe("extractToolCalls", () => {
   test("extracts tool calls from parts", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: { path: "/foo" } },
+      {
+        type: "tool-call",
+        toolCallId: ToolCallId.make("tc1"),
+        toolName: "read",
+        input: { path: "/foo" },
+      },
       { type: "text", text: "Some text" },
-      { type: "tool-call", toolCallId: "tc2", toolName: "edit", input: { path: "/bar" } },
+      {
+        type: "tool-call",
+        toolCallId: ToolCallId.make("tc2"),
+        toolName: "edit",
+        input: { path: "/bar" },
+      },
     ]
 
     const calls = extractToolCalls(parts)
@@ -126,27 +138,36 @@ describe("buildToolResultMap", () => {
   const makeMsg = (
     role: "user" | "assistant" | "tool",
     parts: MessagePart[],
-  ): MessageInfoReadonly => ({
-    id: Bun.randomUUIDv7(),
-    sessionId: "s1",
-    branchId: "b1",
-    role,
-    parts,
-    createdAt: Date.now(),
-    turnDurationMs: undefined,
-  })
+  ): MessageInfoReadonly =>
+    MessageInfo.Regular.make({
+      id: MessageId.make(Bun.randomUUIDv7()),
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+      role,
+      parts,
+      createdAt: Date.now(),
+      turnDurationMs: undefined,
+    })
 
   // Helper to create tool result parts with all required fields
-  const toolResult = (toolCallId: string, value: unknown, isError = false): MessagePart => ({
-    type: "tool-result",
-    toolCallId,
-    toolName: "test-tool",
-    output: { type: isError ? "error-json" : "json", value },
-  })
+  const toolResult = (toolCallId: string, value: unknown, isError = false): MessagePart =>
+    ToolResultPart.make({
+      type: "tool-result",
+      toolCallId: ToolCallId.make(toolCallId),
+      toolName: "test-tool",
+      output: { type: isError ? "error-json" : "json", value },
+    })
 
   test("builds map from tool messages", () => {
     const messages: MessageInfoReadonly[] = [
-      makeMsg("assistant", [{ type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} }]),
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+      ]),
       makeMsg("tool", [toolResult("tc1", "file contents here")]),
     ]
 
@@ -215,8 +236,8 @@ describe("buildToolResultMap", () => {
 
   test("ignores non-tool messages", () => {
     const messages: MessageInfoReadonly[] = [
-      makeMsg("user", [{ type: "text", text: "Hello" }]),
-      makeMsg("assistant", [{ type: "text", text: "Hi there" }]),
+      makeMsg("user", [TextPart.make({ type: "text", text: "Hello" })]),
+      makeMsg("assistant", [TextPart.make({ type: "text", text: "Hi there" })]),
     ]
 
     const map = buildToolResultMap(messages)
@@ -227,7 +248,12 @@ describe("buildToolResultMap", () => {
 describe("extractToolCallsWithResults", () => {
   test("joins tool calls with results from map", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: { path: "/foo" } },
+      {
+        type: "tool-call",
+        toolCallId: ToolCallId.make("tc1"),
+        toolName: "read",
+        input: { path: "/foo" },
+      },
     ]
     const resultMap = new Map([
       ["tc1", { summary: "50 lines", output: "full content", isError: false }],
@@ -246,7 +272,7 @@ describe("extractToolCallsWithResults", () => {
 
   test("marks error results with error status", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
     ]
     const resultMap = new Map([
       ["tc1", { summary: "Error", output: "File not found", isError: true }],
@@ -258,7 +284,7 @@ describe("extractToolCallsWithResults", () => {
 
   test("missing result marks tool call as running", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
     ]
     const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
 

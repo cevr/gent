@@ -6,9 +6,9 @@ import {
 import type { AutocompleteContribution } from "../src/extensions/client-facets.js"
 
 const testContributions: AutocompleteContribution[] = [
-  { prefix: "$", title: "Skills", items: () => [] },
-  { prefix: "@", title: "Files", items: () => [] },
-  { prefix: "/", title: "Commands", items: () => [] },
+  { _tag: "autocomplete", prefix: "$", title: "Skills", items: () => [] },
+  { _tag: "autocomplete", prefix: "@", title: "Files", items: () => [] },
+  { _tag: "autocomplete", prefix: "/", title: "Commands", items: () => [] },
 ]
 
 describe("transitionComposerInteraction", () => {
@@ -61,7 +61,9 @@ describe("transitionComposerInteraction", () => {
   })
 
   test("detects custom inline prefix when registered", () => {
-    const custom: AutocompleteContribution[] = [{ prefix: "#", title: "Tags", items: () => [] }]
+    const custom: AutocompleteContribution[] = [
+      { _tag: "autocomplete", prefix: "#", title: "Tags", items: () => [] },
+    ]
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
       { _tag: "DraftChanged", text: "use #tag" },

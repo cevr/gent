@@ -15,8 +15,10 @@ import {
   TurnFinished,
 } from "@gent/core/extensions/api"
 import { mapSdkMessage } from "@gent/extensions/acp-agents/claude-code-executor"
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK types are noisy; tests only build the fields the mapper reads.
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+// SDK types are noisy; tests only build the fields the mapper reads.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK external dep not in @gent/core deps
+type SDKMessage = any
+import { ToolCallId } from "@gent/core/domain/ids"
 
 const stubBase = { uuid: "u-1", session_id: "s-1", parent_tool_use_id: null }
 
@@ -78,7 +80,12 @@ describe("mapSdkMessage", () => {
     } as unknown as SDKMessage
     const events = mapSdkMessage(msg)
     expect(events).toEqual([
-      { _tag: "tool-started", toolCallId: "t-1", toolName: "read", input: { path: "/x" } },
+      {
+        _tag: "tool-started",
+        toolCallId: ToolCallId.make("t-1"),
+        toolName: "read",
+        input: { path: "/x" },
+      },
     ])
     expect(events[0]).toBeInstanceOf(ToolStarted)
   })
@@ -94,7 +101,9 @@ describe("mapSdkMessage", () => {
       },
     } as unknown as SDKMessage
     const events = mapSdkMessage(msg)
-    expect(events).toEqual([{ _tag: "tool-completed", toolCallId: "t-1", output: "ok" }])
+    expect(events).toEqual([
+      { _tag: "tool-completed", toolCallId: ToolCallId.make("t-1"), output: "ok" },
+    ])
     expect(events[0]).toBeInstanceOf(ToolCompleted)
   })
 
@@ -109,7 +118,9 @@ describe("mapSdkMessage", () => {
       },
     } as unknown as SDKMessage
     const events = mapSdkMessage(msg)
-    expect(events).toEqual([{ _tag: "tool-failed", toolCallId: "t-2", error: "boom" }])
+    expect(events).toEqual([
+      { _tag: "tool-failed", toolCallId: ToolCallId.make("t-2"), error: "boom" },
+    ])
     expect(events[0]).toBeInstanceOf(ToolFailed)
   })
 

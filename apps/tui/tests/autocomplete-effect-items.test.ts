@@ -31,8 +31,8 @@ import {
   makeClientWorkspaceLayer,
 } from "../src/extensions/client-services"
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const ListThings = ExtensionMessage.reply(
   "@test/autocomplete",
@@ -47,10 +47,14 @@ const makeFakeTransport = (
     readonly askReply?: unknown
   } = {},
 ): ClientTransportShape => {
-  const ask = () => Effect.succeed(opts.askReply ?? [])
+  const extension = {
+    ask: ((): Effect.Effect<unknown, unknown> => Effect.succeed(opts.askReply ?? [])) as (
+      ...args: unknown[]
+    ) => Effect.Effect<unknown, unknown>,
+  }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const fakeClient = {
-    extension: { ask },
+    extension,
   } as unknown as GentNamespacedClient
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const fakeRuntime = {} as GentRuntime
@@ -60,11 +64,10 @@ const makeFakeTransport = (
     currentSession:
       opts.currentSession ??
       (() => ({
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-        sessionId: "sess-1" as SessionId,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-        branchId: "branch-1" as BranchId,
+        sessionId: SessionId.make("sess-1"),
+        branchId: BranchId.make("branch-1"),
       })),
+    onExtensionStateChanged: () => () => {},
   }
 }
 
@@ -161,7 +164,9 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
 
   test("askExtension seals transport failures to ClientTransportRequestError", async () => {
     const transport = makeFakeTransport()
-    transport.client.extension.ask = () => Effect.fail(new Error("transport boom"))
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- mutate test fixture
+    ;(transport.client.extension as unknown as { ask: () => Effect.Effect<unknown, unknown> }).ask =
+      () => Effect.fail(new Error("transport boom"))
     const runtime = makeTestRuntime(transport)
 
     const exit = await runtime.runPromiseExit(askExtension(ListThings.make()))
@@ -196,8 +201,8 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
       }),
     )
     expect(resolved.currentSession()).toEqual({
-      sessionId: "sess-1" as SessionId,
-      branchId: "branch-1" as BranchId,
+      sessionId: SessionId.make("sess-1") as SessionId,
+      branchId: BranchId.make("branch-1") as BranchId,
     })
     await runtime.dispose()
   })

@@ -1,11 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { BunServices } from "@effect/platform-bun"
 import { AskUserTool } from "@gent/extensions/interaction-tools/ask-user"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
-import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const makeCtx = (approvalService: {
@@ -70,7 +73,7 @@ describe("AskUser Tool", () => {
       expect(result.answers.length).toBe(1)
       expect(result.answers[0]).toEqual(["Option A"])
       expect(result.cancelled).toBeUndefined()
-    }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(layer), narrowR)
   })
 
   it.live("cancel returns cancelled flag with empty answers", () => {
@@ -100,6 +103,6 @@ describe("AskUser Tool", () => {
 
       expect(result.cancelled).toBe(true)
       expect(result.answers).toEqual([])
-    }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(layer), narrowR)
   })
 })

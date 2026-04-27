@@ -50,8 +50,8 @@ const seedAuth = async (authFilePath: string, authKeyPath: string) => {
 
 const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
   const childEnv = { ...Bun.env }
-  delete childEnv.FORCE_COLOR
-  delete childEnv.NO_COLOR
+  delete childEnv["FORCE_COLOR"]
+  delete childEnv["NO_COLOR"]
 
   return {
     ...childEnv,

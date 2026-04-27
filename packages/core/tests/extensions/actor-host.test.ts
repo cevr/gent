@@ -21,7 +21,7 @@ import {
 import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
 import { ServiceKey, type ActorRef, type Behavior } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ResolvedExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -269,14 +269,14 @@ describe("ActorHost", () => {
     // at the right boundary.
     const ns = namespacePersistenceKey("@gent/memory", "todos")
     expect(parseNamespacedPersistenceKey(ns)).toEqual({
-      extensionId: "@gent/memory",
+      extensionId: ExtensionId.make("@gent/memory"),
       behaviorKey: "todos",
     })
     // Behavior keys with `/` survive too — the separator is the unit
     // separator, not `/`.
     const nested = namespacePersistenceKey("@gent/memory", "todo/lists")
     expect(parseNamespacedPersistenceKey(nested)).toEqual({
-      extensionId: "@gent/memory",
+      extensionId: ExtensionId.make("@gent/memory"),
       behaviorKey: "todo/lists",
     })
     // Malformed input (no separator) returns undefined.
@@ -541,7 +541,7 @@ describe("ActorHost — engine integration", () => {
                 }
               }) as Effect.Effect<{ n: number }, never, never>,
           }
-          const resolved = makeResolved([makeLoaded("@test/tick", [behavior])])
+          const resolved = makeResolved([makeLoaded("@test/tick", [behavior as never])])
           const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
           return yield* Effect.scoped(
             Effect.gen(function* () {

@@ -4,7 +4,7 @@ import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema, Stream } fr
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { AuthStore, AuthStoreError } from "../../src/domain/auth-store.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
-import { Model, ModelId } from "../../src/domain/model.js"
+import { Model, ModelId, ProviderId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
 import { ModelRegistry } from "../../src/runtime/model-registry.js"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
@@ -62,7 +62,7 @@ const passThroughDrivers = DriverRegistry.fromResolved({
   externalDrivers: new Map(),
 })
 
-const unusedLanguageModel: LanguageModel.Service = {
+const unusedLanguageModel = {
   generateText: () =>
     Effect.fail(
       AiError.make({
@@ -70,7 +70,7 @@ const unusedLanguageModel: LanguageModel.Service = {
         method: "generateText",
         reason: new AiError.UnknownError({ description: "unused" }),
       }),
-    ),
+    ) as never,
   generateObject: () =>
     Effect.fail(
       AiError.make({
@@ -78,7 +78,7 @@ const unusedLanguageModel: LanguageModel.Service = {
         method: "generateObject",
         reason: new AiError.UnknownError({ description: "unused" }),
       }),
-    ),
+    ) as never,
   streamText: () =>
     Stream.fail(
       AiError.make({
@@ -86,8 +86,8 @@ const unusedLanguageModel: LanguageModel.Service = {
         method: "streamText",
         reason: new AiError.UnknownError({ description: "unused" }),
       }),
-    ),
-}
+    ) as never,
+} as unknown as LanguageModel.Service
 
 const unusedResolution = (): ProviderResolution => ({
   layer: Layer.succeed(LanguageModel.LanguageModel, unusedLanguageModel),
@@ -219,7 +219,7 @@ describe("ModelRegistry", () => {
             Model.make({
               id: ModelId.make("openai/gpt-5.4"),
               name: "GPT-5.4",
-              provider: "openai",
+              provider: ProviderId.make("openai"),
               contextLength: 400_000,
             }),
           ]),
@@ -229,7 +229,7 @@ describe("ModelRegistry", () => {
         const models = yield* registry.list()
 
         expect(models).toHaveLength(1)
-        expect(models[0]?.id).toBe("openai/gpt-5.4")
+        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
         expect(models[0]?.name).toBe("GPT-5.4")
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -251,10 +251,10 @@ describe("ModelRegistry", () => {
         const decoded = Schema.decodeUnknownSync(CachedModelsJson)(rewritten)
 
         expect(models).toHaveLength(1)
-        expect(models[0]?.id).toBe("openai/gpt-4.1")
+        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
         expect(Array.isArray(decoded)).toBe(true)
         expect(decoded).toHaveLength(1)
-        expect(decoded[0]?.id).toBe("openai/gpt-4.1")
+        expect(decoded[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
         expect(rewritten.includes('"openai":{"models"')).toBe(false)
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -276,8 +276,8 @@ describe("ModelRegistry", () => {
 
         expect(Array.isArray(decoded)).toBe(true)
         expect(decoded).toHaveLength(1)
-        expect(decoded[0]?.id).toBe("openai/gpt-5.4")
-        expect(decoded[0]?.provider).toBe("openai")
+        expect(decoded[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
+        expect(decoded[0]?.provider).toBe(ProviderId.make("openai"))
         expect(cached.includes('"openai":{"models"')).toBe(false)
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -293,7 +293,7 @@ describe("ModelRegistry", () => {
         const models = yield* registry.list()
 
         expect(models).toHaveLength(1)
-        expect(models[0]?.id).toBe("openai/gpt-5.4")
+        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
@@ -324,7 +324,7 @@ describe("ModelRegistry", () => {
         yield* registry.refresh()
         const models = yield* registry.list()
 
-        expect(models[0]?.id).toBe("openai/gpt-5.4")
+        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
         expect(models[0]?.name).toBe("GPT-5.4 filtered")
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -337,7 +337,7 @@ describe("ModelRegistry", () => {
         const malformed = Model.make({
           id: ModelId.make("openai/broken"),
           name: "Broken",
-          provider: "openai",
+          provider: ProviderId.make("openai"),
         })
         Reflect.set(malformed, "name", 42)
         const registry = yield* Effect.gen(function* () {
@@ -439,7 +439,7 @@ describe("ModelRegistry", () => {
 
         const cachedModels = yield* registry.list()
         expect(cachedModels).toHaveLength(1)
-        expect(cachedModels[0]?.id).toBe("openai/gpt-4.1")
+        expect(cachedModels[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
 
         yield* Deferred.succeed(response, JSON.stringify(remoteCatalog))
         const refreshedModels = yield* waitFor(
@@ -450,7 +450,7 @@ describe("ModelRegistry", () => {
         )
 
         expect(refreshedModels).toHaveLength(1)
-        expect(refreshedModels[0]?.id).toBe("openai/gpt-5.4")
+        expect(refreshedModels[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )

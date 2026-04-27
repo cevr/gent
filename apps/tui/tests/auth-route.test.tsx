@@ -11,6 +11,7 @@ import { SessionId } from "@gent/core/domain/ids"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
 import { onMount } from "solid-js"
+import type { GentRuntime } from "../src/client"
 
 function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
   const client = useClient()
@@ -18,26 +19,21 @@ function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => voi
   return <box />
 }
 
-const runtimeWithLinkOpener = (open: (url: string) => Effect.Effect<void, LinkOpenerError>) => {
+const runtimeWithLinkOpener = (
+  open: (url: string) => Effect.Effect<void, LinkOpenerError>,
+): GentRuntime => {
   const base = createMockRuntime()
-  const provideLinkOpener = <A, E>(effect: Effect.Effect<A, E, LinkOpener>) =>
-    effect.pipe(
-      Effect.provide(
-        LinkOpener.Test({
-          open,
-        }),
-      ),
-    )
+  const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: any R the caller supplies is satisfied by LinkOpener.Test
+    effect.pipe(Effect.provide(LinkOpener.Test({ open }))) as Effect.Effect<A, E, never>
 
   return {
     ...base,
-    cast: (effect: Effect.Effect<unknown, unknown, never>) => {
-      Effect.runFork(provideLinkOpener(effect))
+    cast: (effect) => {
+      Effect.runFork(provide(effect))
     },
-    fork: (effect: Effect.Effect<unknown, unknown, never>) =>
-      Effect.runFork(provideLinkOpener(effect)),
-    run: (effect: Effect.Effect<unknown, unknown, never>) =>
-      Effect.runPromise(provideLinkOpener(effect)),
+    fork: (effect) => Effect.runFork(provide(effect)),
+    run: (effect) => Effect.runPromise(provide(effect)),
   }
 }
 
@@ -419,7 +415,7 @@ describe("Auth route", () => {
   test("ignores stale oauth opener failures after the selected agent changes", async () => {
     let ctx: ClientContextValue | undefined
     let rejectOpen: ((error: LinkOpenerError) => void) | undefined
-    const calls: Array<{ agentName?: string }> = []
+    const calls: Array<{ agentName?: string; sessionId?: string }> = []
     const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
 
     const client = createMockClient({
@@ -465,12 +461,9 @@ describe("Auth route", () => {
       },
     })
     const runtime = runtimeWithLinkOpener(() =>
-      Effect.promise<void, LinkOpenerError>(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectOpen = (error) => reject(error)
-          }),
-      ),
+      Effect.callback<void, LinkOpenerError>((resume) => {
+        rejectOpen = (error) => resume(Effect.fail(error))
+      }),
     )
 
     const setup = await renderWithProviders(
@@ -547,12 +540,9 @@ describe("Auth route", () => {
       },
     })
     const runtime = runtimeWithLinkOpener(() =>
-      Effect.promise<void, LinkOpenerError>(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectOpen = (error) => reject(error)
-          }),
-      ),
+      Effect.callback<void, LinkOpenerError>((resume) => {
+        rejectOpen = (error) => resume(Effect.fail(error))
+      }),
     )
 
     const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
@@ -573,7 +563,10 @@ describe("Auth route", () => {
     await setup.renderOnce()
     await waitForRenderedFrame(
       setup,
-      (frame) => frame.includes("anthropic") && !frame.includes("open failed"),
+      (frame) =>
+        frame.includes("anthropic") &&
+        !frame.includes("Open the URL below") &&
+        !frame.includes("open failed"),
     )
 
     rejectOpen?.(new LinkOpenerError({ message: "open failed" }))

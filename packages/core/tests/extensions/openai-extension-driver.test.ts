@@ -30,6 +30,7 @@ import {
   type CapturedRequest,
   type FakeFetchState,
 } from "@gent/core/test-utils/fake-fetch"
+import { SessionId } from "@gent/core/domain/ids"
 
 // Far-future expiry so cache hits the warm branch and `getFresh` skips
 // the refresh round-trip (avoids hitting auth.openai.com from tests).
@@ -92,7 +93,7 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
     const exit = await Effect.runPromise(
       Effect.exit(
         callback({
-          sessionId: "s1",
+          sessionId: SessionId.make("s1"),
           methodIndex: 0,
           authorizationId: "missing-authorization",
           code: "code",
@@ -102,7 +103,9 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
     )
 
     expect(exit._tag).toBe("Failure")
-    expect(exit.cause.toString()).toContain("missing or expired")
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("missing or expired")
+    }
   })
 })
 

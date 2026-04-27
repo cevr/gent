@@ -3,17 +3,21 @@ import { Effect, Layer } from "effect"
 import { HandoffTool } from "@gent/extensions/handoff-tool"
 import { HandoffExtension, CooldownMsg, CooldownService } from "@gent/extensions/handoff"
 import { HANDOFF_EXTENSION_ID } from "@gent/extensions/handoff-protocol"
-import { type AgentRunResult } from "@gent/core/domain/agent"
+import { AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { ActorRef } from "@gent/core/domain/actor"
-import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
+import { ActorEngine, type ActorEngineService } from "@gent/core/runtime/extensions/actor-engine"
 import { ActorHost } from "@gent/core/runtime/extensions/actor-host"
 import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
-import type { LoadedExtension } from "@gent/core/runtime/extensions/loader"
-import type { ResolvedExtensions } from "@gent/core/runtime/extensions/registry"
+import type { LoadedExtension } from "../../src/domain/extension.js"
+import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { testSetupCtx } from "@gent/core/test-utils"
+import { SessionId } from "@gent/core/domain/ids"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -33,12 +37,13 @@ const makeCtx = (overrides: {
       run:
         overrides.agentRun ??
         ((params) =>
-          Effect.succeed({
-            _tag: "success" as const,
-            text: `response from ${params.agent.name}`,
-            sessionId: "child-session",
-            agentName: params.agent.name,
-          })),
+          Effect.succeed(
+            AgentRunResult.Success.make({
+              text: `response from ${params.agent.name}`,
+              sessionId: SessionId.make("child-session"),
+              agentName: params.agent.name,
+            }),
+          )),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
     interaction: {
@@ -55,18 +60,20 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: true }),
     })
 
-    return HandoffTool.effect(
-      {
-        context: "Current task: implement auth. Key files: src/auth.ts",
-        reason: "context window filling up",
-      },
-      ctx,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.handoff).toBe(true)
-        expect(result.summary).toContain("implement auth")
-        expect(result.parentSessionId).toBe("test-session")
-      }),
+    return narrowR(
+      HandoffTool.effect(
+        {
+          context: "Current task: implement auth. Key files: src/auth.ts",
+          reason: "context window filling up",
+        },
+        ctx,
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.handoff).toBe(true)
+          expect(result.summary).toContain("implement auth")
+          expect(result.parentSessionId).toBe(SessionId.make("test-session"))
+        }),
+      ),
     )
   })
 
@@ -75,16 +82,18 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: false }),
     })
 
-    return HandoffTool.effect(
-      {
-        context: "Current task: implement auth",
-      },
-      ctx,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.handoff).toBe(false)
-        expect(result.reason).toBe("User rejected handoff")
-      }),
+    return narrowR(
+      HandoffTool.effect(
+        {
+          context: "Current task: implement auth",
+        },
+        ctx,
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.handoff).toBe(false)
+          expect(result.reason).toBe("User rejected handoff")
+        }),
+      ),
     )
   })
 })
@@ -120,13 +129,11 @@ describe("Handoff cooldown actor", () => {
       const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
       const askCooldown = (
-        engine: ActorEngine,
+        engine: ActorEngineService,
         ref: ActorRef<CooldownMsg>,
       ): Effect.Effect<number, never> =>
         engine
-          .ask<CooldownMsg, number>(ref, CooldownMsg.GetCooldown.make({}), () =>
-            CooldownMsg.GetCooldown.make({}),
-          )
+          .ask(ref, CooldownMsg.GetCooldown.make({}))
           .pipe(Effect.catchEager(() => Effect.succeed(0)))
 
       return yield* Effect.scoped(

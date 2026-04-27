@@ -146,7 +146,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
 
 export const createMockRuntime = (): GentRuntime => ({
   cast: (effect) => {
-    Effect.runFork(effect)
+    Effect.runFork(effect as Effect.Effect<unknown, unknown, never>)
   },
   fork: Effect.runFork as never,
   run: Effect.runPromise as never,
@@ -177,7 +177,11 @@ const getServices = async () => {
   if (sharedServices !== undefined) return sharedServices
   sharedScope = await Effect.runPromise(Scope.make())
   const context = await Effect.runPromise(Layer.buildWithScope(BunServices.layer, sharedScope))
-  sharedServices = Context.add(context, Scope.Scope, sharedScope)
+  sharedServices = Context.add(
+    context,
+    Scope.Scope,
+    sharedScope,
+  ) as unknown as Context.Context<unknown>
   return sharedServices
 }
 
@@ -203,7 +207,7 @@ export const renderWithProviders = async (
       <RegistryProvider services={services}>
         <KeyboardScopeProvider>
           <ThemeProvider mode="dark">
-            <EnvProvider env={{ visual: undefined, editor: undefined }}>
+            <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
               <CommandProvider>
                 <RouterProvider
                   initialRoute={

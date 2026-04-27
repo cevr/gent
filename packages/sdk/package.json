@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.lint.json",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/"
   },
   "dependencies": {

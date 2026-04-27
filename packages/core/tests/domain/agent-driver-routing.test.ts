@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test"
 import {
   AgentDefinition,
-  type AgentName,
+  AgentName,
   ExternalDriverRef,
   ModelDriverRef,
   resolveAgentDriver,
@@ -24,7 +24,7 @@ describe("resolveAgentDriver", () => {
       driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
     })
     const overrides: Record<AgentName, DriverRef> = {
-      special: ExternalDriverRef.make({ id: "acp-opencode" }),
+      [AgentName.make("special")]: ExternalDriverRef.make({ id: "acp-opencode" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("external")
@@ -37,7 +37,7 @@ describe("resolveAgentDriver", () => {
   test("config override applies when the agent has no hardcoded driver", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<AgentName, DriverRef> = {
-      cowork: ExternalDriverRef.make({ id: "acp-claude-code" }),
+      [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("external")
@@ -64,7 +64,7 @@ describe("resolveAgentDriver", () => {
   test("override for a different agent does not match", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<AgentName, DriverRef> = {
-      deepwork: ExternalDriverRef.make({ id: "acp-claude-code" }),
+      [AgentName.make("deepwork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver).toBeUndefined()
@@ -74,7 +74,7 @@ describe("resolveAgentDriver", () => {
   test("model-driver override is honoured the same way as external", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<AgentName, DriverRef> = {
-      cowork: ModelDriverRef.make({ id: "anthropic" }),
+      [AgentName.make("cowork")]: ModelDriverRef.make({ id: "anthropic" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("model")

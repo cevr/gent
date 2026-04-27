@@ -5,9 +5,18 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+
+// PlanTool/AuditTool/ReviewTool .effect signatures inherit R=any from
+// the AnyCapabilityContribution cast in the tool() factory. Tests run
+// with no real services beyond ctx, so we narrow R to never at the
+// call site for it.live compatibility.
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
+import type { AgentName } from "@gent/core/domain/agent"
 import { ArtifactId, SessionId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { ARTIFACTS_EXTENSION_ID } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
@@ -41,11 +50,11 @@ const createAskSpy = () => {
   const ask = (message: { extensionId: string; _tag: string } & Record<string, unknown>) => {
     calls.push({
       extensionId: message.extensionId,
-      tag: message._tag,
+      tag: message["_tag"],
       message,
-      branchId: message.branchId as string | undefined,
+      branchId: message["branchId"] as string | undefined,
     })
-    return Effect.succeed(fakeArtifact(message.sourceTool as string))
+    return Effect.succeed(fakeArtifact(message["sourceTool"] as string))
   }
   return { calls, ask }
 }
@@ -64,13 +73,16 @@ const stubAgentRun =
     )
 
 const agentLookup = {
-  get: (name: string) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
-  require: (name: string) => {
+  get: (name: AgentName) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+  require: (name: AgentName) => {
     const agent = Object.values(Agents).find((a) => a.name === name)
     return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
   },
   resolveDualModelPair: () =>
-    Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+    Effect.succeed([
+      ModelId.make("anthropic/claude-opus-4-6"),
+      ModelId.make("openai/gpt-5.4"),
+    ] as const),
 }
 
 const runtimePlatformLayer = RuntimePlatform.Test({
@@ -88,8 +100,7 @@ describe("PlanTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -103,16 +114,18 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(1)
-        expect(saves[0]!.message.sourceTool).toBe("plan")
-        expect(saves[0]!.message.label).toContain("Plan:")
-        expect(saves[0]!.branchId).toBe("test-branch")
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(1)
+          expect(saves[0]!.message["sourceTool"]).toBe("plan")
+          expect(saves[0]!.message["label"]).toContain("Plan:")
+          expect(saves[0]!.branchId).toBe("test-branch")
+        }),
+      ),
     )
   })
 
@@ -122,8 +135,7 @@ describe("PlanTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -142,14 +154,16 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(1)
-        expect(saves[0]!.message.content).toBe("edited plan content")
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(1)
+          expect(saves[0]!.message["content"]).toBe("edited plan content")
+        }),
+      ),
     )
   })
 
@@ -159,8 +173,7 @@ describe("PlanTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -174,13 +187,15 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(0)
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(0)
+        }),
+      ),
     )
   })
 
@@ -190,8 +205,7 @@ describe("PlanTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -199,14 +213,16 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(1)
-        expect(saves[0]!.message.sourceTool).toBe("plan")
-      }),
+    return narrowR(
+      PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(1)
+          expect(saves[0]!.message["sourceTool"]).toBe("plan")
+        }),
+      ),
     )
   })
 })
@@ -218,8 +234,7 @@ describe("AuditTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -237,16 +252,18 @@ describe("AuditTool artifact persistence", () => {
       },
     })
 
-    return AuditTool.effect({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(1)
-        expect(saves[0]!.message.sourceTool).toBe("audit")
-        expect(saves[0]!.message.label).toContain("Audit:")
-        expect(saves[0]!.message.metadata).toBeDefined()
-      }),
+    return narrowR(
+      AuditTool.effect({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(1)
+          expect(saves[0]!.message["sourceTool"]).toBe("audit")
+          expect(saves[0]!.message["label"]).toContain("Audit:")
+          expect(saves[0]!.message["metadata"]).toBeDefined()
+        }),
+      ),
     )
   })
 })
@@ -268,8 +285,7 @@ describe("ReviewTool artifact persistence", () => {
       extension: {
         send: () => Effect.die("send not wired"),
         ask: spy.ask as never,
-        getUiSnapshots: () => Effect.die("getUiSnapshots not wired"),
-        getUiSnapshot: () => Effect.die("getUiSnapshot not wired"),
+        request: () => Effect.die("request not wired"),
       },
       agent: {
         ...agentLookup,
@@ -277,17 +293,19 @@ describe("ReviewTool artifact persistence", () => {
       },
     })
 
-    return ReviewTool.effect({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
-      Effect.map(() => {
-        const saves = spy.calls.filter(
-          (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
-        )
-        expect(saves.length).toBe(1)
-        expect(saves[0]!.message.sourceTool).toBe("review")
-        expect(saves[0]!.message.label).toContain("Review:")
-        expect(saves[0]!.message.metadata).toBeDefined()
-      }),
-      Effect.provide(runtimePlatformLayer),
+    return narrowR(
+      ReviewTool.effect({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
+        Effect.map(() => {
+          const saves = spy.calls.filter(
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+          )
+          expect(saves.length).toBe(1)
+          expect(saves[0]!.message["sourceTool"]).toBe("review")
+          expect(saves[0]!.message["label"]).toContain("Review:")
+          expect(saves[0]!.message["metadata"]).toBeDefined()
+        }),
+        Effect.provide(runtimePlatformLayer),
+      ),
     )
   })
 })

@@ -9,7 +9,7 @@ import {
   toPrompt,
   toPromptMessages,
 } from "@gent/core/providers/ai-transcript"
-import { ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   ImagePart,
   Message,
@@ -41,18 +41,18 @@ describe("AI transcript bridge", () => {
     const prompt = toPrompt(
       [
         baseMessage({
-          id: "system-msg",
-          sessionId: "session",
-          branchId: "branch",
+          id: MessageId.make("system-msg"),
+          sessionId: SessionId.make("session"),
+          branchId: BranchId.make("branch"),
           role: "system",
           parts: [new TextPart({ type: "text", text: "Be precise." })],
         }),
         baseInterjectionMessage({
-          id: "user-msg",
-          sessionId: "session",
-          branchId: "branch",
+          id: MessageId.make("user-msg"),
+          sessionId: SessionId.make("session"),
+          branchId: BranchId.make("branch"),
           role: "user",
-          metadata: { hidden: false, extensionId: "inline-image" },
+          metadata: { hidden: false, extensionId: ExtensionId.make("inline-image") },
           parts: [
             new TextPart({ type: "text", text: "What is this?" }),
             new ImagePart({
@@ -63,9 +63,9 @@ describe("AI transcript bridge", () => {
           ],
         }),
         baseMessage({
-          id: "assistant-msg",
-          sessionId: "session",
-          branchId: "branch",
+          id: MessageId.make("assistant-msg"),
+          sessionId: SessionId.make("session"),
+          branchId: BranchId.make("branch"),
           role: "assistant",
           turnDurationMs: 12,
           parts: [
@@ -85,9 +85,9 @@ describe("AI transcript bridge", () => {
           ],
         }),
         baseMessage({
-          id: "tool-msg",
-          sessionId: "session",
-          branchId: "branch",
+          id: MessageId.make("tool-msg"),
+          sessionId: SessionId.make("session"),
+          branchId: BranchId.make("branch"),
           role: "tool",
           parts: [
             new ToolResultPart({
@@ -156,16 +156,16 @@ describe("AI transcript bridge", () => {
 
   test("hidden metadata excludes messages from model context unless explicitly included", () => {
     const visible = baseMessage({
-      id: "visible",
-      sessionId: "session",
-      branchId: "branch",
+      id: MessageId.make("visible"),
+      sessionId: SessionId.make("session"),
+      branchId: BranchId.make("branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "send this" })],
     })
     const hidden = baseMessage({
-      id: "hidden",
-      sessionId: "session",
-      branchId: "branch",
+      id: MessageId.make("hidden"),
+      sessionId: SessionId.make("session"),
+      branchId: BranchId.make("branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "hide this" })],
       metadata: { hidden: true },
@@ -180,7 +180,7 @@ describe("AI transcript bridge", () => {
       Response.makePart("text", { text: "Done." }),
       Response.makePart("reasoning", { text: "Need a tool." }),
       Response.makePart("tool-call", {
-        id: "tc-2",
+        id: MessageId.make("tc-2"),
         name: "read",
         params: { path: "README.md" },
         providerExecuted: false,
@@ -190,7 +190,7 @@ describe("AI transcript bridge", () => {
         data: new Uint8Array([104, 105]),
       }),
       Response.makePart("tool-result", {
-        id: "tc-2",
+        id: MessageId.make("tc-2"),
         name: "read",
         isFailure: false,
         result: { ok: true },
@@ -217,7 +217,7 @@ describe("AI transcript bridge", () => {
     expect(parts.tool[0]).toEqual(
       expect.objectContaining({
         type: "tool-result",
-        toolCallId: "tc-2",
+        toolCallId: ToolCallId.make("tc-2"),
         toolName: "read",
         output: { type: "json", value: { ok: true } },
       }),
@@ -228,14 +228,14 @@ describe("AI transcript bridge", () => {
     const responseParts = normalizeResponseParts([
       Response.makePart("text", { text: "Need confirmation." }),
       Response.makePart("tool-call", {
-        id: "tc-approval",
+        id: MessageId.make("tc-approval"),
         name: "write_file",
         params: { path: "PLAN.md" },
         providerExecuted: false,
       }),
       Response.makePart("tool-approval-request", {
         approvalId: "approval-1",
-        toolCallId: "tc-approval",
+        toolCallId: ToolCallId.make("tc-approval"),
       }),
       Response.makePart("finish", {
         reason: "tool-calls",
@@ -281,26 +281,26 @@ describe("AI transcript bridge", () => {
 
   test("normalizes streaming deltas and round-trips assistant/tool replay with images", () => {
     const responseParts = normalizeResponseParts([
-      Response.makePart("text-delta", { id: "text-1", delta: "hel" }),
-      Response.makePart("text-delta", { id: "text-2", delta: "lo" }),
-      Response.makePart("reasoning-delta", { id: "reason-1", delta: "thin" }),
-      Response.makePart("reasoning-delta", { id: "reason-2", delta: "king" }),
+      Response.makePart("text-delta", { id: MessageId.make("text-1"), delta: "hel" }),
+      Response.makePart("text-delta", { id: MessageId.make("text-2"), delta: "lo" }),
+      Response.makePart("reasoning-delta", { id: MessageId.make("reason-1"), delta: "thin" }),
+      Response.makePart("reasoning-delta", { id: MessageId.make("reason-2"), delta: "king" }),
       Response.makePart("tool-call", {
-        id: "tc-3",
+        id: MessageId.make("tc-3"),
         name: "inspect",
         params: { deep: true },
         providerExecuted: false,
       }),
       Response.makePart("tool-approval-request", {
         approvalId: "approval-1",
-        toolCallId: "tc-3",
+        toolCallId: ToolCallId.make("tc-3"),
       }),
       Response.makePart("file", {
         mediaType: "image/png",
         data: new Uint8Array([104, 105]),
       }),
       Response.makePart("tool-result", {
-        id: "tc-3",
+        id: MessageId.make("tc-3"),
         name: "inspect",
         isFailure: false,
         result: { ok: true },
@@ -335,16 +335,16 @@ describe("AI transcript bridge", () => {
 
     const replayMessages = [
       baseMessage({
-        id: "assistant-replay",
-        sessionId: "session",
-        branchId: "branch",
+        id: MessageId.make("assistant-replay"),
+        sessionId: SessionId.make("session"),
+        branchId: BranchId.make("branch"),
         role: "assistant",
         parts: projectResponsePartsToMessageParts(responseParts).assistant,
       }),
       baseMessage({
-        id: "tool-replay",
-        sessionId: "session",
-        branchId: "branch",
+        id: MessageId.make("tool-replay"),
+        sessionId: SessionId.make("session"),
+        branchId: BranchId.make("branch"),
         role: "tool",
         parts: projectResponsePartsToMessageParts(responseParts).tool,
       }),
@@ -362,9 +362,9 @@ describe("AI transcript bridge", () => {
   test("response replay rejects URL-backed images instead of silently dropping them", () => {
     const replayMessages = [
       baseMessage({
-        id: "assistant-url-image",
-        sessionId: "session",
-        branchId: "branch",
+        id: MessageId.make("assistant-url-image"),
+        sessionId: SessionId.make("session"),
+        branchId: BranchId.make("branch"),
         role: "assistant",
         parts: [
           new ImagePart({

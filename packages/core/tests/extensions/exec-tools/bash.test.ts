@@ -1,12 +1,15 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import {
   splitCdCommand,
   injectGitTrailers,
   stripBackground,
   BashTool,
 } from "@gent/extensions/exec-tools/bash"
-import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 
 describe("splitCdCommand", () => {
@@ -32,19 +35,19 @@ describe("splitCdCommand", () => {
 
 describe("injectGitTrailers", () => {
   test('git commit -m "msg" → injects --trailer', () => {
-    const result = injectGitTrailers('git commit -m "fix bug"', "sess-123")
+    const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
     expect(result).toContain('--trailer "Session-Id: sess-123"')
     expect(result).toContain("git commit")
   })
 
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
-    expect(injectGitTrailers(cmd, "sess-123")).toBe(cmd)
+    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
   })
 
   test("already has --trailer → unchanged", () => {
     const cmd = 'git commit --trailer "Foo: bar" -m "msg"'
-    expect(injectGitTrailers(cmd, "sess-123")).toBe(cmd)
+    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
   })
 })
 
@@ -79,6 +82,12 @@ const stubCtx: ToolContext = {
     ask: dieStub("ask"),
     request: dieStub("request"),
   },
+  actors: {
+    find: dieStub("actors.find"),
+    findOne: dieStub("actors.findOne"),
+    tell: dieStub("actors.tell"),
+    ask: dieStub("actors.ask"),
+  } as never,
   agent: {
     get: dieStub("get"),
     require: dieStub("require"),
@@ -114,19 +123,21 @@ const stubCtx: ToolContext = {
 
 describe("BashTool execution", () => {
   test("runs a command and returns stdout", async () => {
-    const result = await Effect.runPromise(BashTool.effect({ command: "echo hello" }, stubCtx))
+    const result = await Effect.runPromise(
+      narrowR(BashTool.effect({ command: "echo hello" }, stubCtx)),
+    )
     expect(result.stdout.trim()).toBe("hello")
     expect(result.exitCode).toBe(0)
   })
 
   test("captures nonzero exit code", async () => {
-    const result = await Effect.runPromise(BashTool.effect({ command: "exit 2" }, stubCtx))
+    const result = await Effect.runPromise(narrowR(BashTool.effect({ command: "exit 2" }, stubCtx)))
     expect(result.exitCode).toBe(2)
   })
 
   test("respects cwd parameter", async () => {
     const result = await Effect.runPromise(
-      BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx),
+      narrowR(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx)),
     )
     // /tmp may resolve to /private/tmp on macOS
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -134,7 +145,9 @@ describe("BashTool execution", () => {
   })
 
   test("splits cd + command into cwd and executes", async () => {
-    const result = await Effect.runPromise(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
+    const result = await Effect.runPromise(
+      narrowR(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx)),
+    )
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
     expect(result.exitCode).toBe(0)
   })
@@ -158,7 +171,9 @@ describe("BashTool execution", () => {
       },
     }
     const result = await Effect.runPromise(
-      BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
+      narrowR(
+        BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
+      ),
     )
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("Command started in background")

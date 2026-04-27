@@ -139,7 +139,9 @@ describe("AuthStore", () => {
       const auth = yield* AuthStore
       const exit = yield* Effect.exit(auth.get("openai"))
       expect(exit._tag).toBe("Failure")
-      expect(exit.cause.toString()).toContain("read failed")
+      if (exit._tag === "Failure") {
+        expect(exit.cause.toString()).toContain("read failed")
+      }
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
   })
 
@@ -155,11 +157,15 @@ describe("AuthStore", () => {
       const auth = yield* AuthStore
       const listExit = yield* Effect.exit(auth.list())
       expect(listExit._tag).toBe("Failure")
-      expect(listExit.cause.toString()).toContain("list failed")
+      if (listExit._tag === "Failure") {
+        expect(listExit.cause.toString()).toContain("list failed")
+      }
 
       const listInfoExit = yield* Effect.exit(auth.listInfo())
       expect(listInfoExit._tag).toBe("Failure")
-      expect(listInfoExit.cause.toString()).toContain("list failed")
+      if (listInfoExit._tag === "Failure") {
+        expect(listInfoExit.cause.toString()).toContain("list failed")
+      }
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
   })
 
@@ -176,7 +182,9 @@ describe("AuthStore", () => {
       const auth = yield* AuthStore
       const exit = yield* Effect.exit(auth.remove("openai"))
       expect(exit._tag).toBe("Failure")
-      expect(exit.cause.toString()).toContain("Keychain command failed")
+      if (exit._tag === "Failure") {
+        expect(exit.cause.toString()).toContain("Keychain command failed")
+      }
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, keychainLikeStorage)))
   })
 

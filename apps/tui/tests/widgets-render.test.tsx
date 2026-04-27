@@ -15,7 +15,7 @@ import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
 import { useClient, type GentRuntime } from "../src/client"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 
 const syntaxStyle = () => SyntaxStyle.create()
 
@@ -55,7 +55,7 @@ const HealthControlsProbe = (props: {
     switchSession: () =>
       client.switchSession(
         nextSession.id,
-        BranchId.make(nextSession.branchId),
+        nextSession.branchId ?? BranchId.make("branch-next"),
         nextSession.name ?? "Next Session",
       ),
     switchBranchSameSession: () =>
@@ -82,7 +82,7 @@ const createMutableRuntime = (initialState: ConnectionState) => {
   const listeners = new Set<(state: ConnectionState) => void>()
   const runtime: GentRuntime = {
     cast: (effect) => {
-      Effect.runFork(effect)
+      Effect.runFork(effect as Effect.Effect<unknown, unknown, never>)
     },
     fork: Effect.runFork as never,
     run: Effect.runPromise as never,
@@ -155,7 +155,7 @@ describe("TUI renderer surfaces", () => {
     const steerMessages: QueueEntryInfo[] = [
       {
         _tag: "steering",
-        id: "m1",
+        id: MessageId.make("m1"),
         content: "switch to deepwork",
         createdAt: Date.now(),
       },
@@ -163,7 +163,7 @@ describe("TUI renderer surfaces", () => {
     const queuedMessages: QueueEntryInfo[] = [
       {
         _tag: "follow-up",
-        id: "m2",
+        id: MessageId.make("m2"),
         content: "line one\nline two\nline three",
         createdAt: Date.now(),
       },

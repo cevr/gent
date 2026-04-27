@@ -1,10 +1,10 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
-import { AgentDefinition } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -26,13 +26,16 @@ const makeTool = (name: string): AnyCapabilityContribution => ({
   effect: () => Effect.void,
 })
 
-const makeAgent = (name: string, options?: ConstructorParameters<typeof AgentDefinition>[0]) =>
-  AgentDefinition.make({ name: name as never, ...options })
+const makeAgent = (
+  name: string,
+  options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
+) => AgentDefinition.make({ name: AgentName.make(name), ...options })
 
 const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
   name: name ?? providerId,
-  resolveModel: (modelName) => ({ modelId: `${providerId}/${modelName}` }),
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: empty layer
+  resolveModel: (_modelName) => ({ layer: Layer.empty as never }),
 })
 
 // C7: static prompt sections live on `Capability.prompt`. Build a synthetic
@@ -91,7 +94,7 @@ const makeExt = (
   ]
   const { tools, commands, rpc } = routeByAudience(all)
   return {
-    manifest: { id },
+    manifest: { id: ExtensionId.make(id) },
     scope,
     sourcePath: `/test/${id}`,
     contributions: {
@@ -189,12 +192,17 @@ describe("resolveExtensions", () => {
     const resolved = resolveExtensions(
       [makeExt("@gent/memory", "builtin")],
       [],
-      new Map([["@gent/memory", [{ jobId: "reflect", error: "launchd registration failed" }]]]),
+      new Map([
+        [
+          ExtensionId.make("@gent/memory"),
+          [{ jobId: "reflect", error: "launchd registration failed" }],
+        ],
+      ]),
     )
 
     expect(resolved.extensionStatuses).toEqual([
       {
-        manifest: { id: "@gent/memory" },
+        manifest: { id: ExtensionId.make("@gent/memory") },
         scope: "builtin",
         sourcePath: "/test/@gent/memory",
         status: "active",
@@ -208,7 +216,7 @@ describe("resolveExtensions", () => {
       [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
       [
         {
-          manifest: { id: "broken" },
+          manifest: { id: ExtensionId.make("broken") },
           scope: "builtin",
           sourcePath: "builtin",
           phase: "validation",
@@ -217,10 +225,10 @@ describe("resolveExtensions", () => {
       ],
     )
 
-    expect(resolved.extensions.map((ext) => ext.manifest.id)).toEqual(["healthy"])
+    expect(resolved.extensions.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy")])
     expect(resolved.failedExtensions).toEqual([
       {
-        manifest: { id: "broken" },
+        manifest: { id: ExtensionId.make("broken") },
         scope: "builtin",
         sourcePath: "builtin",
         phase: "validation",
@@ -229,13 +237,13 @@ describe("resolveExtensions", () => {
     ])
     expect(resolved.extensionStatuses).toEqual([
       {
-        manifest: { id: "healthy" },
+        manifest: { id: ExtensionId.make("healthy") },
         scope: "builtin",
         sourcePath: "/test/healthy",
         status: "active",
       },
       {
-        manifest: { id: "broken" },
+        manifest: { id: ExtensionId.make("broken") },
         scope: "builtin",
         sourcePath: "builtin",
         phase: "validation",
@@ -364,7 +372,7 @@ describe("ExtensionRegistry", () => {
       [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
       [
         {
-          manifest: { id: "broken" },
+          manifest: { id: ExtensionId.make("broken") },
           scope: "builtin",
           sourcePath: "builtin",
           phase: "startup",
@@ -380,7 +388,7 @@ describe("ExtensionRegistry", () => {
     expect(tools.map((tool) => tool.id)).toEqual(["read"])
     expect(failed).toEqual([
       {
-        manifest: { id: "broken" },
+        manifest: { id: ExtensionId.make("broken") },
         scope: "builtin",
         sourcePath: "builtin",
         phase: "startup",
@@ -389,13 +397,13 @@ describe("ExtensionRegistry", () => {
     ])
     expect(statuses).toEqual([
       {
-        manifest: { id: "healthy" },
+        manifest: { id: ExtensionId.make("healthy") },
         scope: "builtin",
         sourcePath: "/test/healthy",
         status: "active",
       },
       {
-        manifest: { id: "broken" },
+        manifest: { id: ExtensionId.make("broken") },
         scope: "builtin",
         sourcePath: "builtin",
         status: "failed",
@@ -409,8 +417,8 @@ describe("ExtensionRegistry", () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", { agents: [makeAgent("explore")] }),
     ])
-    const agent = await Effect.runPromise(registry.getAgent("explore"))
-    expect(agent?.name).toBe("explore")
+    const agent = await Effect.runPromise(registry.getAgent(AgentName.make("explore")))
+    expect(agent?.name).toBe(AgentName.make("explore"))
   })
 
   test("lists all agents including override winners", async () => {
@@ -430,9 +438,9 @@ describe("ExtensionRegistry", () => {
 
     const agents = await Effect.runPromise(registry.listAgents())
     expect(agents.length).toBe(3)
-    expect(agents.map((a) => a.name)).toContain("cowork")
-    expect(agents.map((a) => a.name)).toContain("explore")
-    expect(agents.map((a) => a.name)).toContain("deepwork")
+    expect(agents.map((a) => a.name)).toContain(AgentName.make("cowork"))
+    expect(agents.map((a) => a.name)).toContain(AgentName.make("explore"))
+    expect(agents.map((a) => a.name)).toContain(AgentName.make("deepwork"))
   })
 
   test("allowedTools narrows the resolved tool set", async () => {

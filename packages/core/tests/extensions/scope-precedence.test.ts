@@ -13,16 +13,21 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import type { AgentDefinition } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubCtx = {
-  sessionId: "test-session",
-  branchId: "test-branch",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
@@ -35,9 +40,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents.cowork,
+    agent: Agents["cowork"]!,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 
@@ -53,7 +58,12 @@ const ext = (
   id: string,
   scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
-): LoadedExtension => ({ manifest: { id }, scope, sourcePath: `/test/${id}`, contributions })
+): LoadedExtension => ({
+  manifest: { id: ExtensionId.make(id) },
+  scope,
+  sourcePath: `/test/${id}`,
+  contributions,
+})
 
 describe("scope precedence", () => {
   describe("keyed contributions — later scope wins", () => {
@@ -69,14 +79,16 @@ describe("scope precedence", () => {
       ])
 
       const resolvedTool = resolved.modelCapabilities.get("greet")!
-      return resolvedTool
-        .effect({}, {} as never)
-        .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))))
+      return narrowR(
+        resolvedTool
+          .effect({}, {} as never)
+          .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project")))),
+      )
     })
 
     it.live("agent with same name: project shadows builtin", () => {
-      const builtinAgent = Agents.cowork
-      const projectAgent = { ...Agents.cowork, description: "shadowed" }
+      const builtinAgent = Agents["cowork"]!
+      const projectAgent = { ...Agents["cowork"]!, description: "shadowed" } as AgentDefinition
 
       const resolved = resolveExtensions([
         ext("a", "builtin", { agents: [builtinAgent] }),
@@ -175,9 +187,11 @@ describe("scope precedence", () => {
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
       const resolvedTool = resolved.modelCapabilities.get("greet")!
-      return resolvedTool
-        .effect({}, {} as never)
-        .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))))
+      return narrowR(
+        resolvedTool
+          .effect({}, {} as never)
+          .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z")))),
+      )
     })
   })
 
@@ -203,7 +217,7 @@ describe("scope precedence", () => {
 
       return compiled
         .resolveSystemPrompt(
-          { basePrompt: "x", agent: Agents.cowork },
+          { basePrompt: "x", agent: Agents["cowork"]! },
           { projection: stubProjectionCtx, host: stubCtx },
         )
         .pipe(

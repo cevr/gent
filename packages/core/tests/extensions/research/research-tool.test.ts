@@ -4,8 +4,12 @@ import { Effect, Layer, Path } from "effect"
 import { ResearchTool } from "@gent/extensions/research/research-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import type { AgentRunResult } from "@gent/core/domain/agent"
+import { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import { BunFileSystem } from "@effect/platform-bun"
 import { mkdirSync } from "node:fs"
 import { GitReader } from "@gent/extensions/librarian/git-reader"
@@ -31,7 +35,10 @@ const makeCtx = (overrides: {
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
       resolveDualModelPair: () =>
-        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+        Effect.succeed([
+          ModelId.make("anthropic/claude-opus-4-6"),
+          ModelId.make("openai/gpt-5.4"),
+        ] as const),
     },
   })
 
@@ -41,24 +48,27 @@ describe("ResearchTool", () => {
   it.live("single repo returns direct response", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
-        Effect.succeed({
-          _tag: "success" as const,
-          text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
-          sessionId: SessionId.make("research-1"),
-          agentName: params.agent.name,
-          persistence: "ephemeral" as const,
-        }),
+        Effect.succeed(
+          AgentRunResult.Success.make({
+            text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
+            sessionId: SessionId.make("research-1"),
+            agentName: params.agent.name,
+            persistence: "ephemeral" as const,
+          }),
+        ),
     })
 
-    return ResearchTool.effect(
-      { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
-      ctx,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.response).toContain("Effect uses fibers")
-        expect(result.repos).toEqual(["effect-ts/effect"])
-      }),
-      Effect.provide(platformLayer),
+    return narrowR(
+      ResearchTool.effect(
+        { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
+        ctx,
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.response).toContain("Effect uses fibers")
+          expect(result.repos).toEqual(["effect-ts/effect"])
+        }),
+        Effect.provide(platformLayer),
+      ),
     )
   })
 
@@ -72,38 +82,42 @@ describe("ResearchTool", () => {
           synthesisModelId = params.runSpec.overrides.modelId
         }
         if (params.prompt.includes("Synthesize")) {
-          return Effect.succeed({
-            _tag: "success" as const,
-            text: "Comparative analysis: both use fiber-based concurrency.",
-            sessionId: SessionId.make("synthesis"),
+          return Effect.succeed(
+            AgentRunResult.Success.make({
+              text: "Comparative analysis: both use fiber-based concurrency.",
+              sessionId: SessionId.make("synthesis"),
+              agentName: params.agent.name,
+              persistence: "ephemeral" as const,
+            }),
+          )
+        }
+        return Effect.succeed(
+          AgentRunResult.Success.make({
+            text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
+            sessionId: SessionId.make("worker"),
             agentName: params.agent.name,
             persistence: "ephemeral" as const,
-          })
-        }
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
-          sessionId: SessionId.make("worker"),
-          agentName: params.agent.name,
-          persistence: "ephemeral" as const,
-        })
+          }),
+        )
       },
     })
 
-    return ResearchTool.effect(
-      {
-        question: "Compare concurrency models",
-        repos: ["effect-ts/effect", "zio/zio"],
-      },
-      ctx,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.response).toContain("Comparative analysis")
-        expect(result.repoCount).toBe(2)
-        expect(synthesisModelId).toBe("openai/gpt-5.4")
-        expect(prompts.some((p) => p.includes("Synthesize"))).toBe(true)
-      }),
-      Effect.provide(platformLayer),
+    return narrowR(
+      ResearchTool.effect(
+        {
+          question: "Compare concurrency models",
+          repos: ["effect-ts/effect", "zio/zio"],
+        },
+        ctx,
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.response).toContain("Comparative analysis")
+          expect(result.repoCount).toBe(2)
+          expect(synthesisModelId).toBe("openai/gpt-5.4")
+          expect(prompts.some((p) => p.includes("Synthesize"))).toBe(true)
+        }),
+        Effect.provide(platformLayer),
+      ),
     )
   })
 
@@ -112,53 +126,60 @@ describe("ResearchTool", () => {
     const ctx = makeCtx({
       agentRun: (params) => {
         capturedPrompt = params.prompt
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "Found scheduler patterns.",
-          sessionId: SessionId.make("focus"),
-          agentName: params.agent.name,
-          persistence: "ephemeral" as const,
-        })
+        return Effect.succeed(
+          AgentRunResult.Success.make({
+            text: "Found scheduler patterns.",
+            sessionId: SessionId.make("focus"),
+            agentName: params.agent.name,
+            persistence: "ephemeral" as const,
+          }),
+        )
       },
     })
 
-    return ResearchTool.effect(
-      {
-        question: "How does the scheduler work?",
-        repos: ["effect-ts/effect"],
-        focus: "src/internal/scheduler",
-      },
-      ctx,
-    ).pipe(
-      Effect.map(() => {
-        expect(capturedPrompt).toContain("src/internal/scheduler")
-        expect(capturedPrompt).toContain("How does the scheduler work?")
-      }),
-      Effect.provide(platformLayer),
+    return narrowR(
+      ResearchTool.effect(
+        {
+          question: "How does the scheduler work?",
+          repos: ["effect-ts/effect"],
+          focus: "src/internal/scheduler",
+        },
+        ctx,
+      ).pipe(
+        Effect.map(() => {
+          expect(capturedPrompt).toContain("src/internal/scheduler")
+          expect(capturedPrompt).toContain("How does the scheduler work?")
+        }),
+        Effect.provide(platformLayer),
+      ),
     )
   })
 
   it.live("rejects empty repos", () =>
-    ResearchTool.effect(
-      { question: "test", repos: [] },
-      makeCtx({ agentRun: () => Effect.die("unreachable") }),
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.error).toBe("At least one repository spec required")
-      }),
-      Effect.provide(platformLayer),
+    narrowR(
+      ResearchTool.effect(
+        { question: "test", repos: [] },
+        makeCtx({ agentRun: () => Effect.die("unreachable") }),
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.error).toBe("At least one repository spec required")
+        }),
+        Effect.provide(platformLayer),
+      ),
     ),
   )
 
   it.live("rejects too many repos", () =>
-    ResearchTool.effect(
-      { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
-      makeCtx({ agentRun: () => Effect.die("unreachable") }),
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.error).toBe("Too many repos (max 5)")
-      }),
-      Effect.provide(platformLayer),
+    narrowR(
+      ResearchTool.effect(
+        { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
+        makeCtx({ agentRun: () => Effect.die("unreachable") }),
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.error).toBe("Too many repos (max 5)")
+        }),
+        Effect.provide(platformLayer),
+      ),
     ),
   )
 })

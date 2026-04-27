@@ -37,10 +37,10 @@ describe("resolveTuiExtensions", () => {
       component: widget("typed"),
     })
 
-    // @ts-expect-error — widgets receive no props; overlays own open/onClose props
     widgetContribution({
       id: "bad-widget",
       slot: "below-input",
+      // @ts-expect-error — widgets receive no props; overlays own open/onClose props
       component: (_props: OverlayProps) => "bad",
     })
     // @ts-expect-error — composer surfaces receive ComposerSurfaceProps, not overlay props

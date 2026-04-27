@@ -15,7 +15,7 @@ import { Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
-import { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { TaskProjection } from "@gent/extensions/task-tools/projection"
 
@@ -54,12 +54,14 @@ const makeTask = (id: string, branch: BranchId, status: Task["status"] = "pendin
   })
 }
 
-const ctx = (branch?: BranchId) => ({
-  sessionId,
-  branchId: branch,
-  cwd: "/tmp",
-  home: "/tmp",
-})
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: TaskProjection.query reads only sessionId/branchId
+const ctx = (branch?: BranchId) =>
+  ({
+    sessionId,
+    branchId: branch,
+    cwd: "/tmp",
+    home: "/tmp",
+  }) as never
 
 describe("TaskProjection", () => {
   test("query returns empty tasks when storage is empty", () =>
@@ -77,9 +79,9 @@ describe("TaskProjection", () => {
       yield* taskStorage.createTask(makeTask("t3", branchId, "in_progress"))
       const result = yield* TaskProjection.query(ctx(branchId))
       expect(result.tasks).toEqual([
-        { id: "t1", subject: "Task t1", status: "pending" },
-        { id: "t2", subject: "Task t2", status: "pending" },
-        { id: "t3", subject: "Task t3", status: "in_progress" },
+        { id: TaskId.make("t1"), subject: "Task t1", status: "pending" },
+        { id: TaskId.make("t2"), subject: "Task t2", status: "pending" },
+        { id: TaskId.make("t3"), subject: "Task t3", status: "in_progress" },
       ])
     }))
 
@@ -89,9 +91,9 @@ describe("TaskProjection", () => {
       yield* taskStorage.createTask(makeTask("on-b1", branchId))
       yield* taskStorage.createTask(makeTask("on-b2", otherBranchId))
       const onB1 = yield* TaskProjection.query(ctx(branchId))
-      expect(onB1.tasks.map((t) => t.id)).toEqual(["on-b1"])
+      expect(onB1.tasks.map((t) => t.id)).toEqual([TaskId.make("on-b1")])
       const onB2 = yield* TaskProjection.query(ctx(otherBranchId))
-      expect(onB2.tasks.map((t) => t.id)).toEqual(["on-b2"])
+      expect(onB2.tasks.map((t) => t.id)).toEqual([TaskId.make("on-b2")])
     }))
 
   test("query without branchId returns all session tasks across branches", () =>
@@ -100,7 +102,10 @@ describe("TaskProjection", () => {
       yield* taskStorage.createTask(makeTask("on-b1", branchId))
       yield* taskStorage.createTask(makeTask("on-b2", otherBranchId))
       const all = yield* TaskProjection.query(ctx())
-      expect(all.tasks.map((t) => t.id).sort()).toEqual(["on-b1", "on-b2"])
+      expect(all.tasks.map((t) => t.id).sort()).toEqual([
+        TaskId.make("on-b1"),
+        TaskId.make("on-b2"),
+      ])
     }))
 
   test("projection id is stable for collision detection", () =>

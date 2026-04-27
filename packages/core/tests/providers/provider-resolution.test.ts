@@ -28,6 +28,7 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
+import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 const emptyAuthInfo: Record<string, AuthInfo> = {}
 const missingAuthInfo: AuthInfo | undefined = undefined
@@ -40,31 +41,32 @@ const testAuthStorage = {
   listInfo: () => Effect.succeed(emptyAuthInfo),
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub against opaque LanguageModel.Service generic shape
 const failingLanguageModel: LanguageModel.Service = {
-  generateText: () =>
+  generateText: (() =>
     Effect.fail(
       AiError.make({
         module: "Test",
         method: "generateText",
         reason: new AiError.UnknownError({ description: "stub" }),
       }),
-    ),
-  generateObject: () =>
+    )) as never,
+  generateObject: (() =>
     Effect.fail(
       AiError.make({
         module: "Test",
         method: "generateObject",
         reason: new AiError.UnknownError({ description: "stub" }),
       }),
-    ),
-  streamText: () =>
+    )) as never,
+  streamText: (() =>
     Stream.fail(
       AiError.make({
         module: "Test",
         method: "streamText",
         reason: new AiError.UnknownError({ description: "stub" }),
       }),
-    ),
+    )) as never,
 }
 
 /** Create a fake ProviderResolution with a stub LanguageModel layer */
@@ -90,7 +92,7 @@ const echoCapability: AnyCapabilityContribution = {
 }
 
 const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({
-  manifest: { id: extId },
+  manifest: { id: ExtensionId.make(extId) },
   scope: "builtin",
   sourcePath: "test",
   contributions: { modelDrivers },
@@ -407,20 +409,20 @@ describe("Provider model resolution", () => {
                 reason: new AiError.UnknownError({ description: "unused" }),
               }),
             ),
-          streamText: (options) => {
+          streamText: (options: any) => {
             captured = {
               disableToolCallResolution: options.disableToolCallResolution,
               toolkit: options.toolkit,
             }
             return Stream.fromIterable([
-              toolCallPart("echo", { text: "hi" }, { toolCallId: "tc-1" }),
+              toolCallPart("echo", { text: "hi" }, { toolCallId: ToolCallId.make("tc-1") }),
               finishPart({
                 finishReason: "tool-calls",
                 usage: { inputTokens: 10, outputTokens: 20 },
               }),
             ])
           },
-        } satisfies LanguageModel.Service),
+        } as unknown as LanguageModel.Service),
       }),
     }
 
@@ -505,17 +507,21 @@ describe("Provider model resolution", () => {
                 reason: new AiError.UnknownError({ description: "unused" }),
               }),
             ),
-          streamText: (options) => {
+          streamText: (options: any) => {
             capturedToolkit = options.toolkit
             return Stream.fromIterable([
-              toolCallPart("typedEcho", { text: "hi" }, { toolCallId: "typed-tc-1" }),
+              toolCallPart(
+                "typedEcho",
+                { text: "hi" },
+                { toolCallId: ToolCallId.make("typed-tc-1") },
+              ),
               finishPart({
                 finishReason: "tool-calls",
                 usage: { inputTokens: 1, outputTokens: 1 },
               }),
             ])
           },
-        } satisfies LanguageModel.Service),
+        } as unknown as LanguageModel.Service),
       }),
     }
 
@@ -588,17 +594,21 @@ describe("Provider model resolution", () => {
                 reason: new AiError.UnknownError({ description: "unused" }),
               }),
             ),
-          streamText: (options) => {
+          streamText: (options: any) => {
             capturedToolkit = options.toolkit
             return Stream.fromIterable([
-              toolCallPart("typedEcho", { text: "from-message" }, { toolCallId: "typed-tc-2" }),
+              toolCallPart(
+                "typedEcho",
+                { text: "from-message" },
+                { toolCallId: ToolCallId.make("typed-tc-2") },
+              ),
               finishPart({
                 finishReason: "tool-calls",
                 usage: { inputTokens: 1, outputTokens: 1 },
               }),
             ])
           },
-        } satisfies LanguageModel.Service),
+        } as unknown as LanguageModel.Service),
       }),
     }
 
@@ -614,8 +624,13 @@ describe("Provider model resolution", () => {
           messages: [],
           toolkit: typedToolkit,
         })
-        const stream = yield* provider.stream(request)
-        const typedStream: Stream.Stream<Response.StreamPart<TypedTools>, ProviderError> = stream
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- typed toolkit narrows the generic
+        const stream = yield* provider.stream(request as never)
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- typed toolkit narrows the generic
+        const typedStream: Stream.Stream<
+          Response.StreamPart<TypedTools>,
+          ProviderError
+        > = stream as never
         return yield* Stream.runCollect(typedStream)
       }).pipe(Effect.provide(layer)),
     )
@@ -654,7 +669,7 @@ describe("Provider model resolution", () => {
                 reason: new AiError.UnknownError({ description: "unused" }),
               }),
             ),
-          streamText: (options) => {
+          streamText: (options: any) => {
             capturedPrompt = options.prompt
             return Stream.fromIterable([
               finishPart({
@@ -663,7 +678,7 @@ describe("Provider model resolution", () => {
               }),
             ])
           },
-        } satisfies LanguageModel.Service),
+        } as unknown as LanguageModel.Service),
       }),
     }
 
@@ -678,8 +693,8 @@ describe("Provider model resolution", () => {
             [
               Message.Regular.make({
                 id: "user-image",
-                sessionId: "prompt-session",
-                branchId: "prompt-branch",
+                sessionId: SessionId.make("prompt-session"),
+                branchId: BranchId.make("prompt-branch"),
                 role: "user",
                 parts: [
                   new TextPart({ type: "text", text: "inspect" }),
@@ -693,16 +708,16 @@ describe("Provider model resolution", () => {
               }),
               Message.Regular.make({
                 id: "assistant-reasoning",
-                sessionId: "prompt-session",
-                branchId: "prompt-branch",
+                sessionId: SessionId.make("prompt-session"),
+                branchId: BranchId.make("prompt-branch"),
                 role: "assistant",
                 parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
                 createdAt: new Date(0),
               }),
               Message.Regular.make({
                 id: "hidden",
-                sessionId: "prompt-session",
-                branchId: "prompt-branch",
+                sessionId: SessionId.make("prompt-session"),
+                branchId: BranchId.make("prompt-branch"),
                 role: "user",
                 parts: [new TextPart({ type: "text", text: "should not reach model" })],
                 createdAt: new Date(0),

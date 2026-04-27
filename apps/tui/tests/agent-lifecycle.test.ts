@@ -9,12 +9,14 @@ import {
 } from "@gent/core/domain/event"
 import { Message } from "@gent/core/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { AgentName } from "@gent/core/domain/agent"
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.Regular.make({
     id: "m1",
-    sessionId: "s1",
-    branchId: "b1",
+    sessionId: SessionId.make("s1"),
+    branchId: BranchId.make("b1"),
     role,
     parts: [],
     createdAt: new Date(0),
@@ -22,7 +24,10 @@ const makeMessage = (role: "user" | "assistant") =>
 
 describe("reduceAgentLifecycle", () => {
   test("marks a turn as streaming when the stream starts", () => {
-    const event = StreamStarted.make({ sessionId: "s1", branchId: "b1" })
+    const event = StreamStarted.make({
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+    })
 
     expect(reduceAgentLifecycle(event)).toEqual({
       status: { _tag: "streaming" },
@@ -30,13 +35,16 @@ describe("reduceAgentLifecycle", () => {
   })
 
   test("keeps streaming until TurnCompleted", () => {
-    const streamEnded = StreamEnded.make({ sessionId: "s1", branchId: "b1" })
+    const streamEnded = StreamEnded.make({
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+    })
     const assistantMessage = MessageReceived.make({
       message: makeMessage("assistant"),
     })
     const turnCompleted = TurnCompleted.make({
-      sessionId: "s1",
-      branchId: "b1",
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
       durationMs: 42,
     })
 
@@ -59,19 +67,19 @@ describe("reduceAgentLifecycle", () => {
 
   test("surfaces agent switches and errors", () => {
     const switched = AgentSwitched.make({
-      sessionId: "s1",
-      branchId: "b1",
-      fromAgent: "cowork",
-      toAgent: "deepwork",
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+      fromAgent: AgentName.make("cowork"),
+      toAgent: AgentName.make("deepwork"),
     })
     const errored = ErrorOccurred.make({
-      sessionId: "s1",
-      branchId: "b1",
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
       error: "boom",
     })
 
     expect(reduceAgentLifecycle(switched)).toEqual({
-      preferredAgent: "deepwork",
+      preferredAgent: AgentName.make("deepwork"),
     })
     expect(reduceAgentLifecycle(errored)).toEqual({
       status: { _tag: "error", error: "boom" },

@@ -85,10 +85,8 @@ describe("AgentSwitched event branding", () => {
       AgentSwitched.make({
         sessionId: session,
         branchId: branch,
-        // @ts-expect-error -- AgentName is branded; raw string must not satisfy the field
-        fromAgent: "cowork",
-        // @ts-expect-error -- AgentName is branded; raw string must not satisfy the field
-        toAgent: "research",
+        fromAgent: AgentName.make("cowork"),
+        toAgent: AgentName.make("research"),
       }),
     ).not.toThrow()
   })

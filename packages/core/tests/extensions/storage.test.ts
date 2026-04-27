@@ -8,6 +8,7 @@ import {
   createExtensionStorage,
   type ExtensionStorage,
 } from "../../src/runtime/extensions/extension-storage"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 const baseDir = join(tmpdir(), `gent-storage-test-${Date.now()}`)
 
@@ -23,7 +24,7 @@ const { testFs, testPath, runWithPlatform } = await Effect.runPromise(
 )
 
 const makeStorage = (id: string, dir = baseDir): ExtensionStorage =>
-  createExtensionStorage(id, dir, testFs, testPath)
+  createExtensionStorage(ExtensionId.make(id), dir, testFs, testPath)
 
 beforeEach(() => {
   mkdirSync(baseDir, { recursive: true })

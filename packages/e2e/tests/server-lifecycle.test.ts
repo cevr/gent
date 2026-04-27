@@ -204,7 +204,7 @@ describe("server lifecycle", () => {
             .status()
             .pipe(Effect.mapError((e) => new Error(String(e))))
 
-          expect(status.pid).toBe(supervisor.pid())
+          expect(status.pid).toBe(supervisor.pid() as never)
           expect(status.uptime).toBeGreaterThan(0)
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
           expect(status.buildFingerprint).toBeTruthy()

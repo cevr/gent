@@ -6,11 +6,12 @@ import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { FallbackFileIndexLive } from "../../../src/runtime/file-index/index"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 const ctx: ToolContext = testToolContext({
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
+  toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
   home: "/tmp",
 })
@@ -36,7 +37,7 @@ describe("GlobTool", () => {
 
       const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
-      expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
+      expect(result.files.every((f: string) => f.endsWith(".ts"))).toBe(true)
     }).pipe(Effect.provide(PlatformLayer)),
   )
 

@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 
@@ -177,9 +177,9 @@ describe("ConfigService", () => {
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         const driver = ExternalDriverRef.make({ id: "acp-claude-code" })
-        yield* cfg.setDriverOverride("cowork", driver)
+        yield* cfg.setDriverOverride(AgentName.make("cowork"), driver)
         const result = yield* cfg.get()
-        const cowork = result.driverOverrides?.["cowork"]
+        const cowork = result.driverOverrides?.[AgentName.make("cowork")]
         if (cowork === undefined) throw new Error("expected cowork override")
         expect(cowork._tag).toBe("external")
         expect((cowork as ExternalDriverRef).id).toBe("acp-claude-code")
@@ -189,18 +189,30 @@ describe("ConfigService", () => {
     it.live("re-setting an agent's driver replaces the prior override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("cowork", ModelDriverRef.make({ id: "anthropic" }))
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ModelDriverRef.make({ id: "anthropic" }),
+        )
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.["cowork"]?._tag).toBe("model")
+        expect(result.driverOverrides?.[AgentName.make("cowork")]?._tag).toBe("model")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
     it.live("setting one agent's driver leaves other agents' overrides intact", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("deepwork", ExternalDriverRef.make({ id: "acp-opencode" }))
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
+        yield* cfg.setDriverOverride(
+          AgentName.make("deepwork"),
+          ExternalDriverRef.make({ id: "acp-opencode" }),
+        )
         const result = yield* cfg.get()
         expect(Object.keys(result.driverOverrides ?? {})).toHaveLength(2)
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -209,20 +221,29 @@ describe("ConfigService", () => {
     it.live("clearing one agent's driver removes only that entry", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("deepwork", ExternalDriverRef.make({ id: "acp-opencode" }))
-        yield* cfg.clearDriverOverride("cowork")
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
+        yield* cfg.setDriverOverride(
+          AgentName.make("deepwork"),
+          ExternalDriverRef.make({ id: "acp-opencode" }),
+        )
+        yield* cfg.clearDriverOverride(AgentName.make("cowork"))
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.["cowork"]).toBeUndefined()
-        expect(result.driverOverrides?.["deepwork"]).toBeDefined()
+        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
+        expect(result.driverOverrides?.[AgentName.make("deepwork")]).toBeDefined()
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
     it.live("clearing the last driver override drops the record entirely", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
-        yield* cfg.clearDriverOverride("cowork")
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
+        yield* cfg.clearDriverOverride(AgentName.make("cowork"))
         const result = yield* cfg.get()
         expect(result.driverOverrides).toBeUndefined()
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -231,7 +252,7 @@ describe("ConfigService", () => {
     it.live("clearing an unknown agent's driver is a no-op", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.clearDriverOverride("does-not-exist")
+        yield* cfg.clearDriverOverride(AgentName.make("does-not-exist"))
         const result = yield* cfg.get()
         expect(result.driverOverrides).toBeUndefined()
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -240,21 +261,27 @@ describe("ConfigService", () => {
     it.live("appending a permission rule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.["cowork"]).toBeDefined()
+        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
     it.live("removing a permission rule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
         yield* cfg.removePermissionRule("Bash", undefined)
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.["cowork"]).toBeDefined()
+        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
       }).pipe(Effect.provide(ConfigService.Test())),
     )
   })
@@ -297,7 +324,7 @@ describe("ConfigService", () => {
     )
 
     const expectExternalOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
-      const override = cfg.driverOverrides?.[agent]
+      const override = cfg.driverOverrides?.[AgentName.make(agent)]
       if (override === undefined) throw new Error(`expected ${agent} override`)
       if (override._tag !== "external") throw new Error("expected external driver")
       expect(override.id).toBe(expectedId)
@@ -334,7 +361,7 @@ describe("ConfigService", () => {
         const cfg = yield* ConfigService
         const empty = mkdtempSync(join(tmpdir(), "gent-config-empty-"))
         const result = yield* cfg.get(empty)
-        expect(result.driverOverrides?.["cowork"]).toBeUndefined()
+        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
         rmSync(empty, { recursive: true, force: true })
         cleanup()
       }).pipe(Effect.provide(live)),

@@ -5,8 +5,11 @@ import {
   extractImages,
   extractToolCalls,
   buildToolResultMap,
+  MessageInfo,
   type MessageInfoReadonly,
 } from "../src/index"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { ToolResultPart } from "@gent/core/domain/message"
 
 describe("sdk client helpers", () => {
   test("sdk entrypoint exports the public constructors", () => {
@@ -33,7 +36,12 @@ describe("sdk client helpers", () => {
 
   test("extractToolCalls extracts tool calls", () => {
     const parts = [
-      { type: "tool-call" as const, toolCallId: "tc1", toolName: "read", input: { path: "/foo" } },
+      {
+        type: "tool-call" as const,
+        toolCallId: ToolCallId.make("tc1"),
+        toolName: "read",
+        input: { path: "/foo" },
+      },
     ]
     const calls = extractToolCalls(parts)
     expect(calls.length).toBe(1)
@@ -43,21 +51,21 @@ describe("sdk client helpers", () => {
 
   test("buildToolResultMap indexes tool outputs by call id", () => {
     const messages: MessageInfoReadonly[] = [
-      {
-        id: "m1",
-        sessionId: "s1",
-        branchId: "b1",
+      MessageInfo.Regular.make({
+        id: MessageId.make("m1"),
+        sessionId: SessionId.make("s1"),
+        branchId: BranchId.make("b1"),
         role: "tool",
         parts: [
-          {
+          ToolResultPart.make({
             type: "tool-result",
-            toolCallId: "tc1",
+            toolCallId: ToolCallId.make("tc1"),
             toolName: "read",
             output: { type: "json", value: "file contents" },
-          },
+          }),
         ],
         createdAt: Date.now(),
-      },
+      }),
     ]
     const map = buildToolResultMap(messages)
     expect(map.size).toBe(1)

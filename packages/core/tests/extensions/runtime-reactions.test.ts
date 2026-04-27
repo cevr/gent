@@ -7,12 +7,13 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubCtx = {
-  sessionId: "test-session",
-  branchId: "test-branch",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
@@ -21,7 +22,7 @@ const stubEvent: TurnAfterInput = {
   sessionId: SessionId.make("019da5c0-0000-7000-0000-000000000001"),
   branchId: BranchId.make("019da5c0-0000-7001-0000-000000000001"),
   durationMs: 100,
-  agentName: "cowork",
+  agentName: AgentName.make("cowork"),
   interrupted: false,
 }
 
@@ -29,7 +30,12 @@ const ext = (
   id: string,
   scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
-): LoadedExtension => ({ manifest: { id }, scope, sourcePath: `/test/${id}`, contributions })
+): LoadedExtension => ({
+  manifest: { id: ExtensionId.make(id) },
+  scope,
+  sourcePath: `/test/${id}`,
+  contributions,
+})
 
 class BoomError extends Data.TaggedError("@gent/core/tests/runtime-reactions/BoomError")<{
   readonly reason: string
@@ -38,8 +44,8 @@ class BoomError extends Data.TaggedError("@gent/core/tests/runtime-reactions/Boo
 const turnAfterReactions = (
   failureMode: "continue" | "isolate" | "halt",
   handler: () => Effect.Effect<void, BoomError>,
-): ExtensionReactions => ({
-  turnAfter: { failureMode, handler },
+): ExtensionReactions<BoomError> => ({
+  turnAfter: { failureMode, handler: (_input: TurnAfterInput, _ctx) => handler() },
 })
 
 describe("runtime reactions", () => {

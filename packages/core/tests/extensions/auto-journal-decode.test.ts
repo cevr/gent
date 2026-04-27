@@ -26,7 +26,7 @@ describe("AutoJournal row decoding", () => {
   it("skips malformed JSONL lines and returns only well-typed rows", async () => {
     const cwd = await mkTempCwd()
     try {
-      const layer = AutoJournal.Live({ cwd }).pipe(Effect.provide)
+      const journalLayer = AutoJournal.Live({ cwd })
       const autoDir = path.join(cwd, ".gent", "auto")
       await fs.mkdir(autoDir, { recursive: true })
 
@@ -36,7 +36,7 @@ describe("AutoJournal row decoding", () => {
           const svc = yield* AutoJournal
           return yield* svc.start({ goal: "decode-test", maxIterations: 3 })
         })
-          .pipe(layer)
+          .pipe(Effect.provide(journalLayer))
           .pipe(Effect.provide(BunFileSystem.layer))
           .pipe(Effect.provide(BunPath.layer)),
       )
@@ -64,7 +64,7 @@ describe("AutoJournal row decoding", () => {
           const svc = yield* AutoJournal
           return yield* svc.readActive()
         })
-          .pipe(layer)
+          .pipe(Effect.provide(journalLayer))
           .pipe(Effect.provide(BunFileSystem.layer))
           .pipe(Effect.provide(BunPath.layer)),
       )

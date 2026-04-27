@@ -232,7 +232,7 @@ describe("transformStreamEvent", () => {
       message: { id: "msg-1", type: "message", role: "assistant", content: [] },
     }
     const result = transformStreamEvent(event as never)
-    expect(result).toBe(event)
+    expect(result).toBe(event as never)
   })
 
   test("passes through content_block_delta events", () => {
@@ -242,7 +242,7 @@ describe("transformStreamEvent", () => {
       delta: { type: "input_json_delta", partial_json: '{"text":' },
     }
     const result = transformStreamEvent(event as never)
-    expect(result).toBe(event)
+    expect(result).toBe(event as never)
   })
 })
 

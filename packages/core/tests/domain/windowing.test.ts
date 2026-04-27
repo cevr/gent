@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { windowItems, headTailExcerpts, type Excerpt } from "@gent/core/domain/windowing"
 
-const elision = (n: number) => `[${n} skipped]`
+const elision = (n: number): number | string => `[${n} skipped]`
 
 describe("windowItems", () => {
   test("empty excerpts — returns all items", () => {

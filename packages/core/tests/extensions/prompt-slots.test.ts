@@ -2,13 +2,14 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { AgentName } from "@gent/core/domain/agent"
 
 const stubHostCtx = {
-  sessionId: "test-session",
-  branchId: "test-branch",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
@@ -21,9 +22,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents.cowork,
+    agent: Agents["cowork"]!,
     allTools: [],
-    agentName: "cowork",
+    agentName: AgentName.make("cowork"),
   },
 }
 
@@ -32,7 +33,7 @@ const ext = (
   scope: "builtin" | "user" | "project",
   suffix: string,
 ): LoadedExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   scope,
   sourcePath: `/test/${id}`,
   contributions: {
@@ -56,7 +57,7 @@ describe("prompt slots", () => {
 
     return compiled
       .resolveSystemPrompt(
-        { basePrompt: "x", agent: Agents.cowork },
+        { basePrompt: "x", agent: Agents["cowork"]! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
@@ -67,7 +68,7 @@ describe("prompt slots", () => {
   it.live("empty projection registry is a no-op", () =>
     compileExtensionReactions([])
       .resolveSystemPrompt(
-        { basePrompt: "x", agent: Agents.cowork },
+        { basePrompt: "x", agent: Agents["cowork"]! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("x")))),

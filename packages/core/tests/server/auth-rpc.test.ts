@@ -20,7 +20,7 @@ import { Provider } from "@gent/core/providers/provider"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
-import { ExternalDriverRef } from "@gent/core/domain/agent"
+import { AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ConfigService } from "../../src/runtime/config-service.js"
@@ -28,6 +28,7 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
+import { ExtensionId, SessionId } from "@gent/core/domain/ids"
 
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
@@ -55,7 +56,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const oauthProvider: ModelDriverContribution = {
     id: "persisting-oauth",
     name: "Persisting OAuth",
-    resolveModel: () => ({}),
+    resolveModel: () => ({ layer: Layer.empty as never }),
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
       authorize: (ctx) =>
@@ -76,7 +77,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const authorizePersistProvider: ModelDriverContribution = {
     id: "persisting-authorize",
     name: "Persisting Authorize",
-    resolveModel: () => ({}),
+    resolveModel: () => ({ layer: Layer.empty as never }),
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
       authorize: (ctx) =>
@@ -91,7 +92,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   }
   return [
     {
-      manifest: { id: "test-auth-providers" },
+      manifest: { id: ExtensionId.make("test-auth-providers") },
       scope: "builtin",
       sourcePath: "test",
       contributions: { modelDrivers: [oauthProvider, authorizePersistProvider] },
@@ -159,7 +160,7 @@ describe("auth.listProviders", () => {
             // requires anthropic. Proves the override is NOT in user config.
             const launchSession = yield* client.session.create({ cwd: launch })
             const launchList = yield* client.auth.listProviders({
-              agentName: "cowork",
+              agentName: AgentName.make("cowork"),
               sessionId: launchSession.sessionId,
             })
             expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
@@ -168,7 +169,7 @@ describe("auth.listProviders", () => {
             // required because the agent is externally routed.
             const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
             const overriddenList = yield* client.auth.listProviders({
-              agentName: "cowork",
+              agentName: AgentName.make("cowork"),
               sessionId: overriddenSession.sessionId,
             })
             expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
@@ -192,13 +193,13 @@ describe("auth.listProviders", () => {
           const externalDriver = drivers.find((d) => d._tag === "external")
           if (externalDriver === undefined) return
           yield* client.driver.set({
-            agentName: "cowork",
+            agentName: AgentName.make("cowork"),
             driver: ExternalDriverRef.make({ id: externalDriver.id }),
           })
           // No sessionId → launch cwd path. Under ConfigService.Test this
           // still works because driver.set writes to the in-memory user
           // ref that `get(undefined)` also reads.
-          const list = yield* client.auth.listProviders({ agentName: "cowork" })
+          const list = yield* client.auth.listProviders({ agentName: AgentName.make("cowork") })
           expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
         }).pipe(Effect.timeout("4 seconds")),
       ),
@@ -215,12 +216,14 @@ describe("auth.listProviders", () => {
 
         const exit = yield* Effect.exit(
           client.auth.listProviders({
-            agentName: "cowork",
+            agentName: AgentName.make("cowork"),
             sessionId: session.sessionId,
           }),
         )
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("Session not found")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Session not found")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -241,7 +244,9 @@ describe("auth persistence RPC failures", () => {
 
         const exit = yield* Effect.exit(client.auth.listProviders({}))
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("read failed")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("read failed")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -260,7 +265,9 @@ describe("auth persistence RPC failures", () => {
 
         const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("Failed to set auth")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to set auth")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -279,7 +286,9 @@ describe("auth persistence RPC failures", () => {
 
         const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("Failed to delete auth")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to delete auth")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -299,13 +308,15 @@ describe("auth persistence RPC failures", () => {
 
         const exit = yield* Effect.exit(
           client.auth.authorize({
-            sessionId: "auth-rpc-session",
+            sessionId: SessionId.make("auth-rpc-session"),
             provider: "persisting-authorize",
             method: 0,
           }),
         )
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("Failed to persist auth")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to persist auth")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -324,15 +335,15 @@ describe("auth persistence RPC failures", () => {
         )
 
         const authorization = yield* client.auth.authorize({
-          sessionId: "auth-rpc-session",
+          sessionId: SessionId.make("auth-rpc-session"),
           provider: "persisting-oauth",
           method: 0,
         })
-        if (authorization === null) return yield* Effect.dieMessage("auth setup failed")
+        if (authorization === null) return yield* Effect.die("auth setup failed")
 
         const exit = yield* Effect.exit(
           client.auth.callback({
-            sessionId: "auth-rpc-session",
+            sessionId: SessionId.make("auth-rpc-session"),
             provider: "persisting-oauth",
             method: 0,
             authorizationId: authorization.authorizationId,
@@ -340,7 +351,9 @@ describe("auth persistence RPC failures", () => {
           }),
         )
         expect(exit._tag).toBe("Failure")
-        expect(exit.cause.toString()).toContain("Failed to persist auth")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to persist auth")
+        }
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

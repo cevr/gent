@@ -7,7 +7,7 @@ import { modelCapabilities } from "@gent/core/domain/contribution"
 describe("Plan extension", () => {
   test("has correct extension ID", () => {
     expect(PlanExtension.manifest.id).toBe(PLAN_EXTENSION_ID)
-    expect(PLAN_EXTENSION_ID).toBe("@gent/plan")
+    expect(PLAN_EXTENSION_ID as string).toBe("@gent/plan")
   })
 
   test("registers plan tool", () =>
@@ -21,7 +21,6 @@ describe("Plan extension", () => {
   test("has no actor (tool-only extension)", () =>
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
-      const machine = (contributions.resources ?? []).find((r) => r.machine !== undefined)?.machine
-      expect(machine).toBeUndefined()
+      expect(contributions.actors ?? []).toEqual([])
     }).pipe(Effect.runPromise))
 })

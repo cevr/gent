@@ -20,7 +20,8 @@ import {
 } from "@gent/core/domain/message"
 
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { AgentName } from "@gent/core/domain/agent"
 import { messageToInfo } from "../../src/server/session-utils"
 
 describe("Storage", () => {
@@ -29,17 +30,17 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const session = new Session({
-          id: "test-session",
+          id: SessionId.make("test-session"),
           name: "Test Session",
           createdAt: new Date(),
           updatedAt: new Date(),
         })
 
         yield* storage.createSession(session)
-        const retrieved = yield* storage.getSession("test-session")
+        const retrieved = yield* storage.getSession(SessionId.make("test-session"))
 
         expect(retrieved).toBeDefined()
-        expect(retrieved?.id).toBe("test-session")
+        expect(retrieved?.id).toBe(SessionId.make("test-session"))
         expect(retrieved?.name).toBe("Test Session")
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -50,7 +51,7 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "s1",
+            id: SessionId.make("s1"),
             name: "Session 1",
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -58,7 +59,7 @@ describe("Storage", () => {
         )
         yield* storage.createSession(
           new Session({
-            id: "s2",
+            id: SessionId.make("s2"),
             name: "Session 2",
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -77,14 +78,14 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "s1",
+            id: SessionId.make("s1"),
             createdAt: new Date(now),
             updatedAt: new Date(now),
           }),
         )
         yield* storage.createSession(
           new Session({
-            id: "s2",
+            id: SessionId.make("s2"),
             createdAt: new Date(now + 1),
             updatedAt: new Date(now + 1),
           }),
@@ -92,22 +93,22 @@ describe("Storage", () => {
 
         yield* storage.createBranch(
           new Branch({
-            id: "s1-b1",
-            sessionId: "s1",
+            id: BranchId.make("s1-b1"),
+            sessionId: SessionId.make("s1"),
             createdAt: new Date(now + 10),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "s1-b0",
-            sessionId: "s1",
+            id: BranchId.make("s1-b0"),
+            sessionId: SessionId.make("s1"),
             createdAt: new Date(now),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "s2-b1",
-            sessionId: "s2",
+            id: BranchId.make("s2-b1"),
+            sessionId: SessionId.make("s2"),
             createdAt: new Date(now + 5),
           }),
         )
@@ -115,8 +116,8 @@ describe("Storage", () => {
         const firstBranches = yield* storage.listFirstBranches()
         const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
 
-        expect(map.get("s1")).toBe("s1-b0")
-        expect(map.get("s2")).toBe("s2-b1")
+        expect(map.get(SessionId.make("s1"))).toBe(BranchId.make("s1-b0"))
+        expect(map.get(SessionId.make("s2"))).toBe(BranchId.make("s2-b1"))
       }).pipe(Effect.provide(Storage.Test())),
     )
 
@@ -124,7 +125,7 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const session = new Session({
-          id: "update-test",
+          id: SessionId.make("update-test"),
           name: "Original",
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -133,7 +134,7 @@ describe("Storage", () => {
         yield* storage.createSession(session)
         yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
 
-        const retrieved = yield* storage.getSession("update-test")
+        const retrieved = yield* storage.getSession(SessionId.make("update-test"))
         expect(retrieved?.name).toBe("Updated")
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -143,14 +144,14 @@ describe("Storage", () => {
         const storage = yield* Storage
         yield* storage.createSession(
           new Session({
-            id: "delete-test",
+            id: SessionId.make("delete-test"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
 
-        yield* storage.deleteSession("delete-test")
-        const retrieved = yield* storage.getSession("delete-test")
+        yield* storage.deleteSession(SessionId.make("delete-test"))
+        const retrieved = yield* storage.getSession(SessionId.make("delete-test"))
 
         expect(retrieved).toBeUndefined()
       }).pipe(Effect.provide(Storage.Test())),
@@ -178,7 +179,7 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "fk-session",
+            id: SessionId.make("fk-session"),
             createdAt: new Date(now),
             updatedAt: new Date(now),
           }),
@@ -203,16 +204,24 @@ describe("Storage", () => {
         const now = new Date()
 
         yield* storage.createSession(
-          new Session({ id: "parent-a", createdAt: now, updatedAt: now }),
+          new Session({ id: SessionId.make("parent-a"), createdAt: now, updatedAt: now }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "parent-a-branch", sessionId: "parent-a", createdAt: now }),
+          new Branch({
+            id: BranchId.make("parent-a-branch"),
+            sessionId: SessionId.make("parent-a"),
+            createdAt: now,
+          }),
         )
         yield* storage.createSession(
-          new Session({ id: "parent-b", createdAt: now, updatedAt: now }),
+          new Session({ id: SessionId.make("parent-b"), createdAt: now, updatedAt: now }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "parent-b-branch", sessionId: "parent-b", createdAt: now }),
+          new Branch({
+            id: BranchId.make("parent-b-branch"),
+            sessionId: SessionId.make("parent-b"),
+            createdAt: now,
+          }),
         )
 
         const orphanParentExit = yield* Effect.exit(
@@ -250,8 +259,8 @@ describe("Storage", () => {
         const exit = yield* Effect.exit(
           storage.createSession(
             new Session({
-              id: "storage-dangling-parent-branch",
-              parentBranchId: "missing-parent-branch",
+              id: SessionId.make("storage-dangling-parent-branch"),
+              parentBranchId: BranchId.make("missing-parent-branch"),
               createdAt: now,
               updatedAt: now,
             }),
@@ -259,7 +268,9 @@ describe("Storage", () => {
         )
 
         expect(exit._tag).toBe("Failure")
-        expect(yield* storage.getSession("storage-dangling-parent-branch")).toBeUndefined()
+        expect(
+          yield* storage.getSession(SessionId.make("storage-dangling-parent-branch")),
+        ).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
@@ -270,28 +281,32 @@ describe("Storage", () => {
         const now = new Date()
 
         yield* storage.createSession(
-          new Session({ id: "branch-parent-a", createdAt: now, updatedAt: now }),
+          new Session({ id: SessionId.make("branch-parent-a"), createdAt: now, updatedAt: now }),
         )
         yield* storage.createSession(
-          new Session({ id: "branch-parent-b", createdAt: now, updatedAt: now }),
+          new Session({ id: SessionId.make("branch-parent-b"), createdAt: now, updatedAt: now }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "branch-parent-a-root", sessionId: "branch-parent-a", createdAt: now }),
+          new Branch({
+            id: BranchId.make("branch-parent-a-root"),
+            sessionId: SessionId.make("branch-parent-a"),
+            createdAt: now,
+          }),
         )
 
         const exit = yield* Effect.exit(
           storage.createBranch(
             new Branch({
-              id: "branch-parent-b-child",
-              sessionId: "branch-parent-b",
-              parentBranchId: "branch-parent-a-root",
+              id: BranchId.make("branch-parent-b-child"),
+              sessionId: SessionId.make("branch-parent-b"),
+              parentBranchId: BranchId.make("branch-parent-a-root"),
               createdAt: now,
             }),
           ),
         )
 
         expect(exit._tag).toBe("Failure")
-        expect(yield* storage.getBranch("branch-parent-b-child")).toBeUndefined()
+        expect(yield* storage.getBranch(BranchId.make("branch-parent-b-child"))).toBeUndefined()
 
         const directInsertExit = yield* Effect.exit(
           sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
@@ -307,62 +322,70 @@ describe("Storage", () => {
         const now = new Date()
 
         yield* storage.createSession(
-          new Session({ id: "delete-parent-session", createdAt: now, updatedAt: now }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: "delete-parent-root",
-            sessionId: "delete-parent-session",
-            createdAt: now,
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: "delete-parent-child",
-            sessionId: "delete-parent-session",
-            parentBranchId: "delete-parent-root",
-            createdAt: now,
-          }),
-        )
-
-        const childBranchExit = yield* Effect.exit(storage.deleteBranch("delete-parent-root"))
-        expect(childBranchExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch("delete-parent-root")).toBeDefined()
-
-        const directChildBranchExit = yield* Effect.exit(
-          sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
-        )
-        expect(directChildBranchExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch("delete-parent-root")).toBeDefined()
-
-        yield* storage.createSession(
           new Session({
-            id: "delete-child-session",
-            parentSessionId: "delete-parent-session",
-            parentBranchId: "delete-parent-child",
+            id: SessionId.make("delete-parent-session"),
             createdAt: now,
             updatedAt: now,
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "delete-child-session-branch",
-            sessionId: "delete-child-session",
+            id: BranchId.make("delete-parent-root"),
+            sessionId: SessionId.make("delete-parent-session"),
+            createdAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: BranchId.make("delete-parent-child"),
+            sessionId: SessionId.make("delete-parent-session"),
+            parentBranchId: BranchId.make("delete-parent-root"),
             createdAt: now,
           }),
         )
 
-        const childSessionExit = yield* Effect.exit(storage.deleteBranch("delete-parent-child"))
+        const childBranchExit = yield* Effect.exit(
+          storage.deleteBranch(BranchId.make("delete-parent-root")),
+        )
+        expect(childBranchExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
+
+        const directChildBranchExit = yield* Effect.exit(
+          sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
+        )
+        expect(directChildBranchExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
+
+        yield* storage.createSession(
+          new Session({
+            id: SessionId.make("delete-child-session"),
+            parentSessionId: SessionId.make("delete-parent-session"),
+            parentBranchId: BranchId.make("delete-parent-child"),
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: BranchId.make("delete-child-session-branch"),
+            sessionId: SessionId.make("delete-child-session"),
+            createdAt: now,
+          }),
+        )
+
+        const childSessionExit = yield* Effect.exit(
+          storage.deleteBranch(BranchId.make("delete-parent-child")),
+        )
         expect(childSessionExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch("delete-parent-child")).toBeDefined()
-        expect(yield* storage.getSession("delete-child-session")).toBeDefined()
+        expect(yield* storage.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
+        expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
 
         const directChildSessionExit = yield* Effect.exit(
           sql`DELETE FROM branches WHERE id = ${"delete-parent-child"}`,
         )
         expect(directChildSessionExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch("delete-parent-child")).toBeDefined()
-        expect(yield* storage.getSession("delete-child-session")).toBeDefined()
+        expect(yield* storage.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
+        expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
@@ -965,7 +988,7 @@ describe("Storage", () => {
             )
 
             const validSession = yield* storage.getSession(SessionId.make("new-valid-session"))
-            expect(validSession?.activeBranchId).toBe("new-valid-branch")
+            expect(validSession?.activeBranchId).toBe(BranchId.make("new-valid-branch"))
           }).pipe(Effect.provide(layer)),
         )
       } finally {
@@ -996,13 +1019,13 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const session = new Session({
-          id: "event-session",
+          id: SessionId.make("event-session"),
           createdAt: new Date(),
           updatedAt: new Date(),
         })
         const branch = new Branch({
-          id: "event-branch",
-          sessionId: "event-session",
+          id: BranchId.make("event-branch"),
+          sessionId: SessionId.make("event-session"),
           createdAt: new Date(),
         })
 
@@ -1035,7 +1058,7 @@ describe("Storage", () => {
 
         expect(latest?._tag).toBe("AgentSwitched")
         if (latest && latest._tag === "AgentSwitched") {
-          expect(latest.toAgent).toBe("cowork")
+          expect(latest.toAgent).toBe(AgentName.make("cowork"))
         }
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1048,23 +1071,23 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "branch-session",
+            id: SessionId.make("branch-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
 
         const branch = new Branch({
-          id: "test-branch",
-          sessionId: "branch-session",
+          id: BranchId.make("test-branch"),
+          sessionId: SessionId.make("branch-session"),
           createdAt: new Date(),
         })
 
         yield* storage.createBranch(branch)
-        const retrieved = yield* storage.getBranch("test-branch")
+        const retrieved = yield* storage.getBranch(BranchId.make("test-branch"))
 
         expect(retrieved).toBeDefined()
-        expect(retrieved?.sessionId).toBe("branch-session")
+        expect(retrieved?.sessionId).toBe(SessionId.make("branch-session"))
       }).pipe(Effect.provide(Storage.Test())),
     )
 
@@ -1074,7 +1097,7 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "multi-branch",
+            id: SessionId.make("multi-branch"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
@@ -1082,21 +1105,21 @@ describe("Storage", () => {
 
         yield* storage.createBranch(
           new Branch({
-            id: "b1",
-            sessionId: "multi-branch",
+            id: BranchId.make("b1"),
+            sessionId: SessionId.make("multi-branch"),
             createdAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "b2",
-            sessionId: "multi-branch",
-            parentBranchId: "b1",
+            id: BranchId.make("b2"),
+            sessionId: SessionId.make("multi-branch"),
+            parentBranchId: BranchId.make("b1"),
             createdAt: new Date(),
           }),
         )
 
-        const branches = yield* storage.listBranches("multi-branch")
+        const branches = yield* storage.listBranches(SessionId.make("multi-branch"))
         expect(branches.length).toBe(2)
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1107,7 +1130,7 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "summary-session",
+            id: SessionId.make("summary-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
@@ -1115,15 +1138,15 @@ describe("Storage", () => {
 
         yield* storage.createBranch(
           new Branch({
-            id: "summary-branch",
-            sessionId: "summary-session",
+            id: BranchId.make("summary-branch"),
+            sessionId: SessionId.make("summary-session"),
             createdAt: new Date(),
           }),
         )
 
-        yield* storage.updateBranchSummary("summary-branch", "Short summary")
+        yield* storage.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
 
-        const retrieved = yield* storage.getBranch("summary-branch")
+        const retrieved = yield* storage.getBranch(BranchId.make("summary-branch"))
         expect(retrieved?.summary).toBe("Short summary")
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1136,30 +1159,30 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "msg-session",
+            id: SessionId.make("msg-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "msg-branch",
-            sessionId: "msg-session",
+            id: BranchId.make("msg-branch"),
+            sessionId: SessionId.make("msg-session"),
             createdAt: new Date(),
           }),
         )
 
         const message = Message.Regular.make({
           id: "msg-1",
-          sessionId: "msg-session",
-          branchId: "msg-branch",
+          sessionId: SessionId.make("msg-session"),
+          branchId: BranchId.make("msg-branch"),
           role: "user",
           parts: [new TextPart({ type: "text", text: "Hello" })],
           createdAt: new Date(),
         })
 
         yield* storage.createMessage(message)
-        const retrieved = yield* storage.getMessage("msg-1")
+        const retrieved = yield* storage.getMessage(MessageId.make("msg-1"))
 
         expect(retrieved).toBeDefined()
         expect(retrieved?.role).toBe("user")
@@ -1174,15 +1197,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "all-parts-session",
+            id: SessionId.make("all-parts-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "all-parts-branch",
-            sessionId: "all-parts-session",
+            id: BranchId.make("all-parts-branch"),
+            sessionId: SessionId.make("all-parts-session"),
             createdAt: new Date(),
           }),
         )
@@ -1190,8 +1213,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "all-parts-msg",
-            sessionId: "all-parts-session",
-            branchId: "all-parts-branch",
+            sessionId: SessionId.make("all-parts-session"),
+            branchId: BranchId.make("all-parts-branch"),
             role: "assistant",
             parts: [
               new TextPart({ type: "text", text: "hello" }),
@@ -1218,7 +1241,7 @@ describe("Storage", () => {
           }),
         )
 
-        const retrieved = yield* storage.getMessage("all-parts-msg")
+        const retrieved = yield* storage.getMessage(MessageId.make("all-parts-msg"))
         expect(retrieved?.parts.map((part) => part.type)).toEqual([
           "text",
           "reasoning",
@@ -1259,16 +1282,24 @@ describe("Storage", () => {
         const sharedPart = new TextPart({ type: "text", text: "dedupe me" })
 
         yield* storage.createSession(
-          new Session({ id: "chunk-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("chunk-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "chunk-b", sessionId: "chunk-s", createdAt: new Date() }),
+          new Branch({
+            id: BranchId.make("chunk-b"),
+            sessionId: SessionId.make("chunk-s"),
+            createdAt: new Date(),
+          }),
         )
         yield* storage.createMessage(
           Message.Regular.make({
             id: "chunk-a",
-            sessionId: "chunk-s",
-            branchId: "chunk-b",
+            sessionId: SessionId.make("chunk-s"),
+            branchId: BranchId.make("chunk-b"),
             role: "user",
             parts: [sharedPart],
             createdAt: new Date(1000),
@@ -1277,8 +1308,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "chunk-b-msg",
-            sessionId: "chunk-s",
-            branchId: "chunk-b",
+            sessionId: SessionId.make("chunk-s"),
+            branchId: BranchId.make("chunk-b"),
             role: "assistant",
             parts: [sharedPart],
             createdAt: new Date(2000),
@@ -1292,7 +1323,7 @@ describe("Storage", () => {
         const legacyRows = yield* sql<{
           parts: string
         }>`SELECT parts FROM messages WHERE id = ${"chunk-a"}`
-        const messages = yield* storage.listMessages("chunk-b")
+        const messages = yield* storage.listMessages(BranchId.make("chunk-b"))
 
         expect(chunkRows[0]?.count).toBe(1)
         expect(refRows[0]?.count).toBe(2)
@@ -1506,9 +1537,9 @@ describe("Storage", () => {
             "MessageReceived",
             JSON.stringify({
               _tag: "MessageReceived",
-              sessionId: "legacy-event-s",
-              branchId: "legacy-event-b",
-              messageId: "legacy-event-m",
+              sessionId: SessionId.make("legacy-event-s"),
+              branchId: BranchId.make("legacy-event-b"),
+              messageId: MessageId.make("legacy-event-m"),
               role: "user",
             }),
             1001,
@@ -1534,7 +1565,7 @@ describe("Storage", () => {
             expect(event?._tag).toBe("MessageReceived")
             if (event?._tag !== "MessageReceived") return
             expect(event.message._tag).toBe("interjection")
-            expect(event.message.id).toBe("legacy-event-m")
+            expect(event.message.id).toBe(MessageId.make("legacy-event-m"))
           }).pipe(Effect.provide(layer)),
         )
       } finally {
@@ -1548,15 +1579,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "count-session",
+            id: SessionId.make("count-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "count-branch",
-            sessionId: "count-session",
+            id: BranchId.make("count-branch"),
+            sessionId: SessionId.make("count-session"),
             createdAt: new Date(),
           }),
         )
@@ -1564,8 +1595,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "count-msg-1",
-            sessionId: "count-session",
-            branchId: "count-branch",
+            sessionId: SessionId.make("count-session"),
+            branchId: BranchId.make("count-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "one" })],
             createdAt: new Date(),
@@ -1574,15 +1605,15 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "count-msg-2",
-            sessionId: "count-session",
-            branchId: "count-branch",
+            sessionId: SessionId.make("count-session"),
+            branchId: BranchId.make("count-branch"),
             role: "assistant",
             parts: [new TextPart({ type: "text", text: "two" })],
             createdAt: new Date(),
           }),
         )
 
-        const count = yield* storage.countMessages("count-branch")
+        const count = yield* storage.countMessages(BranchId.make("count-branch"))
         expect(count).toBe(2)
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1593,15 +1624,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "list-msg-session",
+            id: SessionId.make("list-msg-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "list-msg-branch",
-            sessionId: "list-msg-session",
+            id: BranchId.make("list-msg-branch"),
+            sessionId: SessionId.make("list-msg-session"),
             createdAt: new Date(),
           }),
         )
@@ -1609,8 +1640,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "lm1",
-            sessionId: "list-msg-session",
-            branchId: "list-msg-branch",
+            sessionId: SessionId.make("list-msg-session"),
+            branchId: BranchId.make("list-msg-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "First" })],
             createdAt: new Date(),
@@ -1619,15 +1650,15 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "lm2",
-            sessionId: "list-msg-session",
-            branchId: "list-msg-branch",
+            sessionId: SessionId.make("list-msg-session"),
+            branchId: BranchId.make("list-msg-branch"),
             role: "assistant",
             parts: [new TextPart({ type: "text", text: "Response" })],
             createdAt: new Date(),
           }),
         )
 
-        const messages = yield* storage.listMessages("list-msg-branch")
+        const messages = yield* storage.listMessages(BranchId.make("list-msg-branch"))
         expect(messages.length).toBe(2)
         expect(messages[0]?.role).toBe("user")
         expect(messages[1]?.role).toBe("assistant")
@@ -1641,23 +1672,23 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "delete-projection-session",
+            id: SessionId.make("delete-projection-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "delete-projection-branch",
-            sessionId: "delete-projection-session",
+            id: BranchId.make("delete-projection-branch"),
+            sessionId: SessionId.make("delete-projection-session"),
             createdAt: new Date(),
           }),
         )
         yield* storage.createMessage(
           Message.Regular.make({
             id: "delete-projection-a",
-            sessionId: "delete-projection-session",
-            branchId: "delete-projection-branch",
+            sessionId: SessionId.make("delete-projection-session"),
+            branchId: BranchId.make("delete-projection-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "delete projection alpha" })],
             createdAt: new Date(1000),
@@ -1666,15 +1697,15 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "delete-projection-b",
-            sessionId: "delete-projection-session",
-            branchId: "delete-projection-branch",
+            sessionId: SessionId.make("delete-projection-session"),
+            branchId: BranchId.make("delete-projection-branch"),
             role: "assistant",
             parts: [new TextPart({ type: "text", text: "delete projection beta" })],
             createdAt: new Date(2000),
           }),
         )
 
-        yield* storage.deleteMessages("delete-projection-branch")
+        yield* storage.deleteMessages(BranchId.make("delete-projection-branch"))
 
         const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
         const refs = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
@@ -1695,15 +1726,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "session-updated-at",
+            id: SessionId.make("session-updated-at"),
             createdAt: start,
             updatedAt: start,
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "branch-updated-at",
-            sessionId: "session-updated-at",
+            id: BranchId.make("branch-updated-at"),
+            sessionId: SessionId.make("session-updated-at"),
             createdAt: start,
           }),
         )
@@ -1711,15 +1742,15 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "msg-updated-at",
-            sessionId: "session-updated-at",
-            branchId: "branch-updated-at",
+            sessionId: SessionId.make("session-updated-at"),
+            branchId: BranchId.make("branch-updated-at"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "Ping" })],
             createdAt: messageTime,
           }),
         )
 
-        const session = yield* storage.getSession("session-updated-at")
+        const session = yield* storage.getSession(SessionId.make("session-updated-at"))
         expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1733,15 +1764,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "tx-message-session",
+            id: SessionId.make("tx-message-session"),
             createdAt: start,
             updatedAt: start,
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "tx-message-branch",
-            sessionId: "tx-message-session",
+            id: BranchId.make("tx-message-branch"),
+            sessionId: SessionId.make("tx-message-session"),
             createdAt: start,
           }),
         )
@@ -1758,8 +1789,8 @@ describe("Storage", () => {
           storage.createMessage(
             Message.Regular.make({
               id: "tx-message",
-              sessionId: "tx-message-session",
-              branchId: "tx-message-branch",
+              sessionId: SessionId.make("tx-message-session"),
+              branchId: BranchId.make("tx-message-branch"),
               role: "user",
               parts: [new TextPart({ type: "text", text: "rollback" })],
               createdAt: messageTime,
@@ -1768,8 +1799,8 @@ describe("Storage", () => {
         )
 
         expect(error._tag).toBe("StorageError")
-        expect(yield* storage.getMessage("tx-message")).toBeUndefined()
-        const session = yield* storage.getSession("tx-message-session")
+        expect(yield* storage.getMessage(MessageId.make("tx-message"))).toBeUndefined()
+        const session = yield* storage.getSession(SessionId.make("tx-message-session"))
         expect(session?.updatedAt.getTime()).toBe(start.getTime())
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
@@ -1783,15 +1814,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "if-absent-session",
+            id: SessionId.make("if-absent-session"),
             createdAt: start,
             updatedAt: start,
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "if-absent-branch",
-            sessionId: "if-absent-session",
+            id: BranchId.make("if-absent-branch"),
+            sessionId: SessionId.make("if-absent-session"),
             createdAt: start,
           }),
         )
@@ -1799,8 +1830,8 @@ describe("Storage", () => {
         yield* storage.createMessageIfAbsent(
           Message.Regular.make({
             id: "if-absent-message",
-            sessionId: "if-absent-session",
-            branchId: "if-absent-branch",
+            sessionId: SessionId.make("if-absent-session"),
+            branchId: BranchId.make("if-absent-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "first" })],
             createdAt: firstTime,
@@ -1809,17 +1840,17 @@ describe("Storage", () => {
         yield* storage.createMessageIfAbsent(
           Message.Regular.make({
             id: "if-absent-message",
-            sessionId: "if-absent-session",
-            branchId: "if-absent-branch",
+            sessionId: SessionId.make("if-absent-session"),
+            branchId: BranchId.make("if-absent-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "duplicate" })],
             createdAt: duplicateTime,
           }),
         )
 
-        const session = yield* storage.getSession("if-absent-session")
+        const session = yield* storage.getSession(SessionId.make("if-absent-session"))
         expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
-        const message = yield* storage.getMessage("if-absent-message")
+        const message = yield* storage.getMessage(MessageId.make("if-absent-message"))
         expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1831,15 +1862,15 @@ describe("Storage", () => {
 
         yield* storage.createSession(
           new Session({
-            id: "order-session",
+            id: SessionId.make("order-session"),
             createdAt: timestamp,
             updatedAt: timestamp,
           }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "order-branch",
-            sessionId: "order-session",
+            id: BranchId.make("order-branch"),
+            sessionId: SessionId.make("order-session"),
             createdAt: timestamp,
           }),
         )
@@ -1847,8 +1878,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "b",
-            sessionId: "order-session",
-            branchId: "order-branch",
+            sessionId: SessionId.make("order-session"),
+            branchId: BranchId.make("order-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "Second" })],
             createdAt: timestamp,
@@ -1857,17 +1888,17 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Regular.make({
             id: "a",
-            sessionId: "order-session",
-            branchId: "order-branch",
+            sessionId: SessionId.make("order-session"),
+            branchId: BranchId.make("order-branch"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "First" })],
             createdAt: timestamp,
           }),
         )
 
-        const messages = yield* storage.listMessages("order-branch")
-        expect(messages[0]?.id).toBe("a")
-        expect(messages[1]?.id).toBe("b")
+        const messages = yield* storage.listMessages(BranchId.make("order-branch"))
+        expect(messages[0]?.id).toBe(MessageId.make("a"))
+        expect(messages[1]?.id).toBe(MessageId.make("b"))
       }).pipe(Effect.provide(Storage.Test())),
     )
   })
@@ -1877,29 +1908,37 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* storage.createSession(
-          new Session({ id: "meta-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("meta-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "meta-b", sessionId: "meta-s", createdAt: new Date() }),
+          new Branch({
+            id: BranchId.make("meta-b"),
+            sessionId: SessionId.make("meta-s"),
+            createdAt: new Date(),
+          }),
         )
 
         const message = Message.Regular.make({
           id: "meta-msg-1",
-          sessionId: "meta-s",
-          branchId: "meta-b",
+          sessionId: SessionId.make("meta-s"),
+          branchId: BranchId.make("meta-b"),
           role: "user",
           parts: [new TextPart({ type: "text", text: "hello" })],
           createdAt: new Date(),
           metadata: {
             customType: "review-status",
-            extensionId: "review-loop",
+            extensionId: ExtensionId.make("review-loop"),
             hidden: true,
             details: { iteration: 3 },
           },
         })
         yield* storage.createMessage(message)
 
-        const messages = yield* storage.listMessages("meta-b")
+        const messages = yield* storage.listMessages(BranchId.make("meta-b"))
         expect(messages.length).toBe(1)
         const m = messages[0]!
         expect(m.metadata).toBeDefined()
@@ -1914,24 +1953,32 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* storage.createSession(
-          new Session({ id: "upsert-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("upsert-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "upsert-b", sessionId: "upsert-s", createdAt: new Date() }),
+          new Branch({
+            id: BranchId.make("upsert-b"),
+            sessionId: SessionId.make("upsert-s"),
+            createdAt: new Date(),
+          }),
         )
 
         const message = Message.Regular.make({
           id: "upsert-msg",
-          sessionId: "upsert-s",
-          branchId: "upsert-b",
+          sessionId: SessionId.make("upsert-s"),
+          branchId: BranchId.make("upsert-b"),
           role: "user",
           parts: [new TextPart({ type: "text", text: "follow-up" })],
           createdAt: new Date(),
-          metadata: { hidden: true, extensionId: "review-loop" },
+          metadata: { hidden: true, extensionId: ExtensionId.make("review-loop") },
         })
         yield* storage.createMessageIfAbsent(message)
 
-        const messages = yield* storage.listMessages("upsert-b")
+        const messages = yield* storage.listMessages(BranchId.make("upsert-b"))
         expect(messages.length).toBe(1)
         expect(messages[0]!.metadata).toBeDefined()
         expect(messages[0]!.metadata!.hidden).toBe(true)
@@ -1943,24 +1990,32 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* storage.createSession(
-          new Session({ id: "no-meta-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("no-meta-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "no-meta-b", sessionId: "no-meta-s", createdAt: new Date() }),
+          new Branch({
+            id: BranchId.make("no-meta-b"),
+            sessionId: SessionId.make("no-meta-s"),
+            createdAt: new Date(),
+          }),
         )
 
         yield* storage.createMessage(
           Message.Regular.make({
             id: "no-meta-msg",
-            sessionId: "no-meta-s",
-            branchId: "no-meta-b",
+            sessionId: SessionId.make("no-meta-s"),
+            branchId: BranchId.make("no-meta-b"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "plain" })],
             createdAt: new Date(),
           }),
         )
 
-        const messages = yield* storage.listMessages("no-meta-b")
+        const messages = yield* storage.listMessages(BranchId.make("no-meta-b"))
         expect(messages[0]!.metadata).toBeUndefined()
       }).pipe(Effect.provide(Storage.Test())),
     )
@@ -1971,15 +2026,23 @@ describe("Storage", () => {
         const sql = yield* SqlClient.SqlClient
 
         yield* storage.createSession(
-          new Session({ id: "bad-meta-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("bad-meta-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
-          new Branch({ id: "bad-meta-b", sessionId: "bad-meta-s", createdAt: new Date() }),
+          new Branch({
+            id: BranchId.make("bad-meta-b"),
+            sessionId: SessionId.make("bad-meta-s"),
+            createdAt: new Date(),
+          }),
         )
 
         yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${JSON.stringify([{ type: "text", text: "hello" }])}, ${Date.now()}, ${null}, ${'{"customType":1}'})`
 
-        const messages = yield* storage.listMessages("bad-meta-b")
+        const messages = yield* storage.listMessages(BranchId.make("bad-meta-b"))
         expect(messages).toHaveLength(1)
         expect(messages[0]!.metadata).toBeUndefined()
 
@@ -1996,8 +2059,8 @@ describe("Storage", () => {
     test("messageToInfo preserves metadata for transport", () => {
       const message = Message.Regular.make({
         id: "info-msg",
-        sessionId: "info-s",
-        branchId: "info-b",
+        sessionId: SessionId.make("info-s"),
+        branchId: BranchId.make("info-b"),
         role: "assistant",
         parts: [new TextPart({ type: "text", text: "response" })],
         createdAt: new Date(),
@@ -2014,12 +2077,16 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* storage.createSession(
-          new Session({ id: "interjection-s", createdAt: new Date(), updatedAt: new Date() }),
+          new Session({
+            id: SessionId.make("interjection-s"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
         )
         yield* storage.createBranch(
           new Branch({
-            id: "interjection-b",
-            sessionId: "interjection-s",
+            id: BranchId.make("interjection-b"),
+            sessionId: SessionId.make("interjection-s"),
             createdAt: new Date(),
           }),
         )
@@ -2027,8 +2094,8 @@ describe("Storage", () => {
         yield* storage.createMessage(
           Message.Interjection.make({
             id: "interjection-msg",
-            sessionId: "interjection-s",
-            branchId: "interjection-b",
+            sessionId: SessionId.make("interjection-s"),
+            branchId: BranchId.make("interjection-b"),
             role: "user",
             parts: [new TextPart({ type: "text", text: "steer now" })],
             createdAt: new Date(),
@@ -2048,8 +2115,8 @@ describe("Storage", () => {
     test("messageToInfo omits metadata when absent", () => {
       const message = Message.Regular.make({
         id: "plain-msg",
-        sessionId: "plain-s",
-        branchId: "plain-b",
+        sessionId: SessionId.make("plain-s"),
+        branchId: BranchId.make("plain-b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "hi" })],
         createdAt: new Date(),
@@ -2083,7 +2150,7 @@ describe("Storage", () => {
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
 
         // Simulate old DB row with a deleted event type
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'ToolCallCompleted', ${JSON.stringify({ _tag: "ToolCallCompleted", sessionId, branchId, toolCallId: "tc-1", toolName: "bash" })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'ToolCallCompleted', ${JSON.stringify({ _tag: "ToolCallCompleted", sessionId, branchId, toolCallId: ToolCallId.make("tc-1"), toolName: "bash" })}, ${Date.now()})`
 
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
 
@@ -2139,7 +2206,7 @@ describe("Storage", () => {
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSpawned', ${JSON.stringify({ _tag: "SubagentSpawned", parentSessionId: sessionId, childSessionId, agentName: "reviewer", prompt: "inspect", branchId })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSpawned', ${JSON.stringify({ _tag: "SubagentSpawned", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer"), prompt: "inspect", branchId })}, ${Date.now()})`
 
         const events = yield* storage.listEvents({ sessionId, branchId })
         expect(events).toHaveLength(1)
@@ -2165,7 +2232,7 @@ describe("Storage", () => {
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: "reviewer", branchId })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer"), branchId })}, ${Date.now()})`
 
         const latest = yield* storage.getLatestEvent({
           sessionId,
@@ -2193,7 +2260,7 @@ describe("Storage", () => {
           }),
         )
 
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: "reviewer" })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer") })}, ${Date.now()})`
 
         const latestTag = yield* storage.getLatestEventTag({
           sessionId,
@@ -2221,7 +2288,7 @@ describe("Storage", () => {
           }),
         )
 
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentFailed', ${JSON.stringify({ _tag: "SubagentFailed", parentSessionId: sessionId, childSessionId, agentName: "reviewer" })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentFailed', ${JSON.stringify({ _tag: "SubagentFailed", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer") })}, ${Date.now()})`
 
         const latest = yield* storage.getLatestEvent({
           sessionId,
@@ -2269,7 +2336,7 @@ describe("Storage", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const N = 16
-        const ids = Array.from({ length: N }, (_, i) => `cs-${i}`)
+        const ids = Array.from({ length: N }, (_, i) => SessionId.make(`cs-${i}`))
         const active = yield* Ref.make(0)
         const peak = yield* Ref.make(0)
         yield* Effect.forEach(

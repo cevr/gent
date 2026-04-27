@@ -29,13 +29,14 @@ import {
   type Audience,
 } from "@gent/core/domain/capability"
 import { compileCapabilities } from "../../src/runtime/extensions/capability-host"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
 // CapabilityContext extends ExtensionHostContext (large RPC surface). Tests
 // for the skeleton don't exercise extension RPC; cast a minimal shape.
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
 const ctx = {
-  sessionId: "s",
-  branchId: "b",
+  sessionId: SessionId.make("s"),
+  branchId: BranchId.make("b"),
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as CapabilityContext
@@ -48,11 +49,15 @@ const ctx = {
 const extWith = (
   id: string,
   scope: "builtin" | "user" | "project",
-  caps: ReadonlyArray<CapabilityContribution<unknown, unknown, never>>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture: capability typed-bucket bypass
+  caps: ReadonlyArray<CapabilityContribution<any, any, never>>,
 ): LoadedExtension => {
-  const tools: Array<CapabilityContribution<unknown, unknown, never>> = []
-  const commands: Array<CapabilityContribution<unknown, unknown, never>> = []
-  const rpc: Array<CapabilityContribution<unknown, unknown, never>> = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
+  const tools: Array<CapabilityContribution<any, any, never>> = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
+  const commands: Array<CapabilityContribution<any, any, never>> = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
+  const rpc: Array<CapabilityContribution<any, any, never>> = []
   for (const cap of caps) {
     const audiences = cap.audiences ?? []
     if (audiences.includes("model")) tools.push(cap)
@@ -61,16 +66,16 @@ const extWith = (
     else rpc.push(cap)
   }
   return {
-    manifest: { id },
+    manifest: { id: ExtensionId.make(id) },
     scope,
     sourcePath: `/test/${id}`,
     contributions: {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(tools.length > 0 ? { tools: tools as ReadonlyArray<never> } : {}),
+      ...(tools.length > 0 ? { tools: tools as unknown as ReadonlyArray<never> } : {}),
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(commands.length > 0 ? { commands: commands as ReadonlyArray<never> } : {}),
+      ...(commands.length > 0 ? { commands: commands as unknown as ReadonlyArray<never> } : {}),
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(rpc.length > 0 ? { rpc: rpc as ReadonlyArray<never> } : {}),
+      ...(rpc.length > 0 ? { rpc: rpc as unknown as ReadonlyArray<never> } : {}),
     },
   }
 }
@@ -93,7 +98,13 @@ describe("capability-host", () => {
       const compiled = compileCapabilities([
         extWith("@test/c", "builtin", [echoCap("echo", ["model"])]),
       ])
-      const result = yield* compiled.run("@test/c", "echo", "model", { value: "hi" }, ctx)
+      const result = yield* compiled.run(
+        ExtensionId.make("@test/c"),
+        "echo",
+        "model",
+        { value: "hi" },
+        ctx,
+      )
       expect(result).toEqual({ value: "hi" })
     }),
   )
@@ -128,12 +139,12 @@ describe("capability-host", () => {
         // Model invocation must miss: the project entry shadows by identity but
         // its audience set excludes "model".
         const modelMiss = yield* compiled
-          .run("@test/c", "doThing", "model", { value: "x" }, ctx)
+          .run(ExtensionId.make("@test/c"), "doThing", "model", { value: "x" }, ctx)
           .pipe(Effect.flip)
         expect(modelMiss).toBeInstanceOf(CapabilityNotFoundError)
         // Slash invocation hits the project entry.
         const slashHit = yield* compiled.run(
-          "@test/c",
+          ExtensionId.make("@test/c"),
           "doThing",
           "human-slash",
           { value: "x" },
@@ -184,7 +195,7 @@ describe("capability-host", () => {
         extWith("@test/c", "builtin", [echoCap("echo", ["model"])]),
       ])
       const result = yield* compiled
-        .run("@test/c", "echo", "model", { value: 42 }, ctx)
+        .run(ExtensionId.make("@test/c"), "echo", "model", { value: 42 }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
@@ -205,7 +216,7 @@ describe("capability-host", () => {
       }
       const compiled = compileCapabilities([extWith("@test/c", "builtin", [badOutputCap])])
       const result = yield* compiled
-        .run("@test/c", "bad", "model", { value: "x" }, ctx)
+        .run(ExtensionId.make("@test/c"), "bad", "model", { value: "x" }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
@@ -225,7 +236,7 @@ describe("capability-host", () => {
       }
       const compiled = compileCapabilities([extWith("@test/c", "builtin", [defectCap])])
       const result = yield* compiled
-        .run("@test/c", "boom", "model", { value: "x" }, ctx)
+        .run(ExtensionId.make("@test/c"), "boom", "model", { value: "x" }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
@@ -261,13 +272,20 @@ describe("capability-host", () => {
         extWith("@test/c", "project", [readCap]),
       ])
       // Read dispatch finds the project capability.
-      const readResult = yield* compiled.run("@test/c", "thing", "agent-protocol", null, ctx, {
-        intent: "read",
-      })
+      const readResult = yield* compiled.run(
+        ExtensionId.make("@test/c"),
+        "thing",
+        "agent-protocol",
+        null,
+        ctx,
+        {
+          intent: "read",
+        },
+      )
       expect(readResult).toBe("project-read")
       // Write dispatch must NOT silently fall back to the shadowed builtin.
       const writeResult = yield* compiled
-        .run("@test/c", "thing", "agent-protocol", null, ctx, { intent: "write" })
+        .run(ExtensionId.make("@test/c"), "thing", "agent-protocol", null, ctx, { intent: "write" })
         .pipe(Effect.flip)
       expect(writeResult).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -293,13 +311,15 @@ describe("capability-host", () => {
       const compiled = compileCapabilities([extWith("@test/c", "builtin", [widePeekCap])])
       // Narrow ctx — no `extension` field.
       const narrowCtx = {
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         cwd: "/tmp",
         home: "/tmp",
       } as const
       const result = yield* compiled
-        .run("@test/c", "wide-peek", "agent-protocol", null, narrowCtx, { intent: "read" })
+        .run(ExtensionId.make("@test/c"), "wide-peek", "agent-protocol", null, narrowCtx, {
+          intent: "read",
+        })
         .pipe(Effect.flip)
       // The defect propagates as a CapabilityError via `catchDefect`.
       expect(result).toBeInstanceOf(CapabilityError)

@@ -30,29 +30,31 @@ describe("session RPC boundary", () => {
       `${transport.name} closes session event streams when a session is deleted`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session.create({ cwd: process.cwd() })
-            const events = yield* collectRuntime(
-              client.session.events({
-                sessionId: created.sessionId,
-              }),
-            )
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session.create({ cwd: process.cwd() })
+              const events = yield* collectRuntime(
+                client.session.events({
+                  sessionId: created.sessionId,
+                }),
+              )
 
-            yield* client.session
-              .delete({ sessionId: created.sessionId })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            yield* Deferred.await(events.closed).pipe(Effect.timeout("15 seconds"))
+              yield* client.session
+                .delete({ sessionId: created.sessionId })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              yield* Deferred.await(events.closed).pipe(Effect.timeout("15 seconds"))
 
-            const sessions = yield* client.session
-              .list()
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            const deleted = yield* client.session
-              .get({ sessionId: created.sessionId })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              const sessions = yield* client.session
+                .list()
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const deleted = yield* client.session
+                .get({ sessionId: created.sessionId })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
-            expect(deleted).toBeNull()
-          }),
+              expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
+              expect(deleted).toBeNull()
+            }),
+          ),
         )
       },
       timeoutMs,

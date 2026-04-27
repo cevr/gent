@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
+import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { onMount } from "solid-js"
 import { Effect, Stream } from "effect"
@@ -88,7 +89,12 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B", "deepwork")
+    ctx.switchSession(
+      SessionId.make("session-b"),
+      BranchId.make("branch-b"),
+      "B",
+      AgentName.make("deepwork"),
+    )
     const state = await waitForState(
       setup,
       () => ctx!.sessionState(),
@@ -98,13 +104,13 @@ describe("ClientProvider session lifecycle", () => {
     expect(state).toEqual({
       status: "active",
       session: {
-        sessionId: "session-b",
-        branchId: "branch-b",
+        sessionId: SessionId.make("session-b"),
+        branchId: BranchId.make("branch-b"),
         name: "B",
         reasoningLevel: undefined,
       },
     })
-    expect(ctx.agent()).toBe("deepwork")
+    expect(ctx.agent()).toBe(AgentName.make("deepwork"))
   })
 
   test("stale snapshot failures do not repopulate connection issues after switch", async () => {
@@ -115,7 +121,7 @@ describe("ClientProvider session lifecycle", () => {
       session: {
         getSnapshot: ({ sessionId }: { sessionId: SessionId; branchId: BranchId }) => {
           if (sessionId === SessionId.make("session-a")) {
-            return Effect.async<never, Error>((resume) => {
+            return Effect.callback<never, Error>((resume) => {
               failOldSnapshot = (error) => resume(Effect.fail(error))
               return Effect.void
             })
@@ -170,8 +176,8 @@ describe("ClientProvider session lifecycle", () => {
     expect(ctx.sessionState()).toEqual({
       status: "active",
       session: {
-        sessionId: "session-b",
-        branchId: "branch-b",
+        sessionId: SessionId.make("session-b"),
+        branchId: BranchId.make("branch-b"),
         name: "B",
         reasoningLevel: undefined,
       },
@@ -180,32 +186,14 @@ describe("ClientProvider session lifecycle", () => {
 
   test("stale snapshot completion does not open an old event stream", async () => {
     let ctx: ClientContextValue | undefined
-    let resumeOldSnapshot:
-      | ((
-          effect: Effect.Effect<
-            {
-              sessionId: SessionId
-              branchId: BranchId
-              messages: []
-              lastEventId: null
-              reasoningLevel: undefined
-              runtime: {
-                _tag: "Idle"
-                agent: "cowork"
-                queue: { steering: []; followUp: [] }
-              }
-            },
-            never
-          >,
-        ) => void)
-      | undefined
+    let resumeOldSnapshot: ((effect: Effect.Effect<unknown, never>) => void) | undefined
     const eventCalls: string[] = []
 
     const client = createMockClient({
       session: {
         getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) => {
           if (sessionId === SessionId.make("session-a")) {
-            return Effect.async((resume) => {
+            return Effect.callback((resume) => {
               resumeOldSnapshot = resume
               return Effect.void
             })
@@ -232,11 +220,10 @@ describe("ClientProvider session lifecycle", () => {
             },
           })
         },
-        events: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) =>
-          Effect.sync(() => {
-            eventCalls.push(`${sessionId}:${branchId}`)
-            return Stream.empty
-          }).pipe(Effect.flatten),
+        events: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) => {
+          eventCalls.push(`${sessionId}:${branchId}`)
+          return Stream.empty
+        },
       },
     })
 
@@ -403,7 +390,12 @@ describe("ClientProvider session lifecycle", () => {
         state.status === "active" && ctx!.model() === "anthropic/claude-haiku-4-5-20251001",
     )
 
-    ctx.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N", "deepwork")
+    ctx.switchSession(
+      SessionId.make("session-next"),
+      BranchId.make("branch-next"),
+      "N",
+      AgentName.make("deepwork"),
+    )
     // The next-session snapshot never resolves in this fixture, so the only
     // way `model()` could still echo the prior session's lastModelId is if
     // switchSession failed to clear it. With clearing in place we get the

@@ -94,7 +94,8 @@ describe("ActorEngine — runtime", () => {
     )
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
-      const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ActorAskTimeout)
+      const fails = exit.cause.reasons.filter(Cause.isFailReason)
+      const found = fails.find((r) => r.error instanceof ActorAskTimeout)
       expect(found).toBeDefined()
     }
   })
@@ -119,7 +120,8 @@ describe("ActorEngine — runtime", () => {
     )
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
-      const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ActorAskTimeout)
+      const fails = exit.cause.reasons.filter(Cause.isFailReason)
+      const found = fails.find((r) => r.error instanceof ActorAskTimeout)
       expect(found).toBeDefined()
     }
   })
@@ -239,7 +241,8 @@ describe("ActorEngine — runtime", () => {
     )
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
-      const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ActorAskTimeout)
+      const fails = exit.cause.reasons.filter(Cause.isFailReason)
+      const found = fails.find((r) => r.error instanceof ActorAskTimeout)
       expect(found).toBeDefined()
     }
   })

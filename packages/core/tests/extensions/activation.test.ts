@@ -18,6 +18,7 @@ import {
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 import { tool } from "@gent/core/extensions/api"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -29,16 +30,19 @@ const makeBuiltin = (
   id: string,
   setup: () => Effect.Effect<ExtensionContributions, ExtensionLoadError>,
 ): GentExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   setup: () => setup(),
 })
 
 const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedExtension => ({
-  manifest: { id },
+  manifest: { id: ExtensionId.make(id) },
   scope: "builtin",
   sourcePath: "builtin",
   contributions,
 })
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 
 describe("extension activation isolation", () => {
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
@@ -68,9 +72,9 @@ describe("extension activation isolation", () => {
         disabled: new Set(),
       })
 
-      expect(result.active.map((ext) => ext.manifest.id)).toEqual(["good-ext"])
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("good-ext")])
       expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]!.manifest.id).toBe("bad-ext")
+      expect(result.failed[0]!.manifest.id).toBe(ExtensionId.make("bad-ext"))
       expect(result.failed[0]!.phase).toBe("setup")
       expect(result.failed[0]!.error).toContain("setup boom")
     }).pipe(Effect.provide(fsLayer)),
@@ -100,10 +104,10 @@ describe("extension activation isolation", () => {
         disabled: new Set(),
       })
 
-      expect(result.active.map((ext) => ext.manifest.id)).toEqual(["good-ext"])
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("good-ext")])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]).toMatchObject({
-        manifest: { id: "bad-ext" },
+        manifest: { id: ExtensionId.make("bad-ext") },
         scope: "project",
         sourcePath: "/tmp/bad.ts",
         phase: "setup",
@@ -149,11 +153,13 @@ describe("extension activation isolation", () => {
           }),
         ])
 
-        expect(result.active.map((ext) => ext.manifest.id)).toEqual(["healthy-ext"])
+        expect(result.active.map((ext) => ext.manifest.id)).toEqual([
+          ExtensionId.make("healthy-ext"),
+        ])
         expect(result.failed).toHaveLength(2)
         expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
-          "collider-a",
-          "collider-b",
+          ExtensionId.make("collider-a"),
+          ExtensionId.make("collider-b"),
         ])
         expect(result.failed.every((ext) => ext.phase === "validation")).toBe(true)
         expect(result.failed.every((ext) => ext.error.includes("shared_tool"))).toBe(true)
@@ -202,8 +208,8 @@ describe("extension activation isolation", () => {
 
       expect(result.active).toEqual([])
       expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
-        "collider-a",
-        "collider-b",
+        ExtensionId.make("collider-a"),
+        ExtensionId.make("collider-b"),
       ])
       expect(result.failed.every((ext) => ext.error.includes("shared_cap"))).toBe(true)
     }),
@@ -230,8 +236,8 @@ describe("extension activation isolation", () => {
       ])
 
       expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
-        "legacy-tool",
-        "rpc-only",
+        ExtensionId.make("legacy-tool"),
+        ExtensionId.make("rpc-only"),
       ])
       expect(result.failed).toEqual([])
     }),
@@ -245,7 +251,7 @@ describe("extension activation isolation", () => {
 
       expect(result.active).toEqual([])
       expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe("missing-desc")
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("missing-desc"))
       expect(result.failed[0]?.error).toContain("describeless")
       expect(result.failed[0]?.error).toContain("description")
     }),
@@ -259,7 +265,7 @@ describe("extension activation isolation", () => {
 
       expect(result.active).toEqual([])
       expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe("blank-desc")
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("blank-desc"))
     }),
   )
 
@@ -271,99 +277,104 @@ describe("extension activation isolation", () => {
         makeLoaded("rpc-no-desc", { rpc: [rawRpcLeaf("internal")] }),
       ])
 
-      expect(result.active.map((ext) => ext.manifest.id)).toEqual(["rpc-no-desc"])
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("rpc-no-desc")])
       expect(result.failed).toEqual([])
     }),
   )
 
   it.live("reconciler owns startup and scheduler degradation in one result", () =>
-    Effect.gen(function* () {
-      const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-reconcile-"))
+    narrowR(
+      Effect.gen(function* () {
+        const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-reconcile-"))
 
-      const result = yield* reconcileLoadedExtensions({
-        extensions: [
-          makeLoaded("healthy-ext", {
-            tools: [
-              tool({
-                id: "healthy_tool",
-                description: "healthy",
-                params: {} as never,
-                execute: () => Effect.void,
-              }),
-            ],
-            resources: [
-              defineResource({
-                scope: "process",
-                layer: Layer.empty,
-                schedule: [
-                  {
-                    id: "reflect",
-                    cron: "0 21 * * 1-5",
-                    target: {
-                      agent: "memory:reflect" as never,
-                      prompt: "Reflect.",
+        const result = yield* reconcileLoadedExtensions({
+          extensions: [
+            makeLoaded("healthy-ext", {
+              tools: [
+                tool({
+                  id: "healthy_tool",
+                  description: "healthy",
+                  params: {} as never,
+                  execute: () => Effect.void,
+                }),
+              ],
+              resources: [
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only narrow to AnyResourceContribution
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  schedule: [
+                    {
+                      id: "reflect",
+                      cron: "0 21 * * 1-5",
+                      target: {
+                        agent: "memory:reflect" as never,
+                        prompt: "Reflect.",
+                      },
                     },
-                  },
-                ],
-              }),
-            ],
-          }),
-        ],
-        failedExtensions: [
+                  ],
+                }) as never,
+              ],
+            }),
+          ],
+          failedExtensions: [
+            {
+              manifest: { id: ExtensionId.make("broken-setup") },
+              scope: "user",
+              sourcePath: "/tmp/broken.ts",
+              phase: "setup",
+              error: "setup boom",
+            },
+          ],
+          home,
+          command: ["/usr/local/bin/gent"],
+          env: { HOME: home },
+          schedulerRuntime: {
+            install: (_entryPath, _schedule, name) =>
+              name.includes("reflect")
+                ? Effect.fail(new Error("cron install boom") as never)
+                : Effect.void,
+            remove: () => Effect.void,
+          },
+        })
+
+        expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
+          ExtensionId.make("healthy-ext"),
+        ])
+        expect(result.resolved.modelCapabilities.size).toBe(1)
+        expect(result.resolved.failedExtensions).toEqual([
           {
-            manifest: { id: "broken-setup" },
+            manifest: { id: ExtensionId.make("broken-setup") },
             scope: "user",
             sourcePath: "/tmp/broken.ts",
             phase: "setup",
             error: "setup boom",
           },
-        ],
-        home,
-        command: ["/usr/local/bin/gent"],
-        env: { HOME: home },
-        schedulerRuntime: {
-          install: (_entryPath, _schedule, name) =>
-            name.includes("reflect")
-              ? Effect.fail(new Error("cron install boom") as never)
-              : Effect.void,
-          remove: () => Effect.void,
-        },
-      })
-
-      expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual(["healthy-ext"])
-      expect(result.resolved.modelCapabilities.size).toBe(1)
-      expect(result.resolved.failedExtensions).toEqual([
-        {
-          manifest: { id: "broken-setup" },
-          scope: "user",
-          sourcePath: "/tmp/broken.ts",
-          phase: "setup",
-          error: "setup boom",
-        },
-      ])
-      expect(result.scheduledJobFailures).toHaveLength(1)
-      expect(result.scheduledJobFailures[0]).toMatchObject({
-        extensionId: "healthy-ext",
-        jobId: "reflect",
-      })
-      expect(result.scheduledJobFailures[0]?.error).toContain("cron install boom")
-      expect(result.resolved.extensionStatuses).toEqual([
-        {
-          manifest: { id: "healthy-ext" },
-          scope: "builtin",
-          sourcePath: "builtin",
-          status: "active",
-          scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
-        },
-        {
-          manifest: { id: "broken-setup" },
-          scope: "user",
-          sourcePath: "/tmp/broken.ts",
-          phase: "setup",
-          error: "setup boom",
-          status: "failed",
-        },
-      ])
-    }).pipe(Effect.provide(fsLayer)),
+        ])
+        expect(result.scheduledJobFailures).toHaveLength(1)
+        expect(result.scheduledJobFailures[0]).toMatchObject({
+          extensionId: ExtensionId.make("healthy-ext"),
+          jobId: "reflect",
+        })
+        expect(result.scheduledJobFailures[0]?.error).toContain("cron install boom")
+        expect(result.resolved.extensionStatuses).toEqual([
+          {
+            manifest: { id: ExtensionId.make("healthy-ext") },
+            scope: "builtin",
+            sourcePath: "builtin",
+            status: "active",
+            scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
+          },
+          {
+            manifest: { id: ExtensionId.make("broken-setup") },
+            scope: "user",
+            sourcePath: "/tmp/broken.ts",
+            phase: "setup",
+            error: "setup boom",
+            status: "failed",
+          },
+        ])
+      }).pipe(Effect.provide(fsLayer)),
+    ),
   )
 })

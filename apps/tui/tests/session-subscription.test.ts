@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
+import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { runSessionSubscriptionAttempt } from "../src/client/session-subscription"
@@ -28,7 +29,7 @@ describe("runSessionSubscriptionAttempt", () => {
           reasoningLevel: undefined,
           runtime: {
             _tag: "Idle" as const,
-            agent: "cowork" as const,
+            agent: AgentName.make("cowork"),
             queue: emptyQueueSnapshot(),
           },
           metrics: {

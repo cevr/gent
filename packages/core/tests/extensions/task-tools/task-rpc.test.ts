@@ -120,7 +120,7 @@ describe("TaskExtension via RPC", () => {
           expect(afterDelete).toHaveLength(0)
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -151,7 +151,7 @@ describe("TaskExtension via RPC", () => {
           expect(result._tag).toBe("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -180,7 +180,7 @@ describe("TaskExtension via RPC", () => {
           expect(result._tag).toBe("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -210,6 +210,6 @@ describe("TaskExtension via RPC", () => {
           expect(result._tag).toBe("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 })

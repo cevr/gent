@@ -6,21 +6,26 @@ import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { AuthGuard, ListAuthProvidersPayload } from "@gent/core/domain/auth-guard"
 import { AuthGuardLive } from "@gent/core/runtime/auth-guard-live"
-import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
+import { AuthApi, AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Effect, Layer, Schema } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
+import { ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { ProviderId } from "@gent/core/domain/model"
+
+const stubLayer = Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>
 
 const testProviders: ModelDriverContribution[] = [
-  { id: "anthropic", name: "Anthropic", resolveModel: () => ({}) },
-  { id: "openai", name: "OpenAI", resolveModel: () => ({}) },
-  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => ({}) },
-  { id: "google", name: "Google", resolveModel: () => ({}) },
-  { id: "mistral", name: "Mistral", resolveModel: () => ({}) },
+  { id: "anthropic", name: "Anthropic", resolveModel: () => ({ layer: stubLayer }) },
+  { id: "openai", name: "OpenAI", resolveModel: () => ({ layer: stubLayer }) },
+  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => ({ layer: stubLayer }) },
+  { id: "google", name: "Google", resolveModel: () => ({ layer: stubLayer }) },
+  { id: "mistral", name: "Mistral", resolveModel: () => ({ layer: stubLayer }) },
 ]
 
 const testAgents = [
@@ -36,7 +41,7 @@ const testAgents = [
 
 const testResolved = resolveExtensions([
   {
-    manifest: { id: "test-providers" },
+    manifest: { id: ExtensionId.make("test-providers") },
     scope: "builtin",
     sourcePath: "test",
     contributions: {
@@ -55,7 +60,7 @@ const testRegistryLayer = Layer.merge(
 
 const helperResolved = resolveExtensions([
   {
-    manifest: { id: "test-providers" },
+    manifest: { id: ExtensionId.make("test-providers") },
     scope: "builtin",
     sourcePath: "test",
     contributions: {
@@ -88,8 +93,8 @@ describe("AuthGuard", () => {
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.requiredProviders()
-      expect(result).toContain("anthropic")
-      expect(result).toContain("openai")
+      expect(result).toContain(ProviderId.make("anthropic"))
+      expect(result).toContain(ProviderId.make("openai"))
     }).pipe(Effect.provide(layer))
   })
 
@@ -102,8 +107,8 @@ describe("AuthGuard", () => {
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.missingRequiredProviders()
-      expect(result).toContain("anthropic")
-      expect(result).toContain("openai")
+      expect(result).toContain(ProviderId.make("anthropic"))
+      expect(result).toContain(ProviderId.make("openai"))
     }).pipe(Effect.provide(layer))
   })
 
@@ -130,8 +135,8 @@ describe("AuthGuard", () => {
               : Effect.succeed(undefined),
           set: () => Effect.void,
           remove: () => Effect.void,
-          list: () => Effect.fail(new Error("list failed")),
-          listInfo: () => Effect.fail(new Error("listInfo failed")),
+          list: () => Effect.fail(new AuthStoreError({ message: "list failed" })),
+          listInfo: () => Effect.fail(new AuthStoreError({ message: "listInfo failed" })),
         }),
       ),
       Layer.provide(testRegistryLayer),
@@ -158,9 +163,9 @@ describe("AuthGuard", () => {
       return Effect.gen(function* () {
         const guard = yield* AuthGuard
         const result = yield* guard.requiredProviders()
-        expect(result).toContain("anthropic")
-        expect(result).toContain("openai")
-        expect(result).not.toContain("google")
+        expect(result).toContain(ProviderId.make("anthropic"))
+        expect(result).toContain(ProviderId.make("openai"))
+        expect(result).not.toContain(ProviderId.make("google"))
       }).pipe(Effect.provide(layer))
     },
   )
@@ -173,10 +178,10 @@ describe("AuthGuard", () => {
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.requiredProviders({ agentName: "helper:google" })
-      expect(result).toContain("anthropic")
-      expect(result).toContain("openai")
-      expect(result).toContain("google")
+      const result = yield* guard.requiredProviders({ agentName: AgentName.make("helper:google") })
+      expect(result).toContain(ProviderId.make("anthropic"))
+      expect(result).toContain(ProviderId.make("openai"))
+      expect(result).toContain(ProviderId.make("google"))
     }).pipe(Effect.provide(layer))
   })
 
@@ -192,9 +197,9 @@ describe("AuthGuard", () => {
       // an external driver (e.g. Claude Code SDK). The external driver
       // owns its own auth, so model providers should not be required.
       const result = yield* guard.requiredProviders({
-        agentName: "cowork",
+        agentName: AgentName.make("cowork"),
         driverOverrides: {
-          cowork: ExternalDriverRef.make({ id: "acp-claude-code" }),
+          [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
         },
       })
       expect(result).toEqual([])
@@ -217,14 +222,17 @@ describe("ListAuthProvidersPayload schema", () => {
   const decode = Schema.decodeUnknownSync(ListAuthProvidersPayload)
 
   bunTest("accepts a sessionId field", () => {
-    const query = decode({ sessionId: "019d-test-session-id" })
-    expect(query.sessionId).toBe("019d-test-session-id")
+    const query = decode({ sessionId: SessionId.make("019d-test-session-id") })
+    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
   })
 
   bunTest("accepts agentName + sessionId together", () => {
-    const query = decode({ agentName: "cowork", sessionId: "019d-test-session-id" })
-    expect(query.agentName).toBe("cowork")
-    expect(query.sessionId).toBe("019d-test-session-id")
+    const query = decode({
+      agentName: AgentName.make("cowork"),
+      sessionId: SessionId.make("019d-test-session-id"),
+    })
+    expect(query.agentName).toBe(AgentName.make("cowork"))
+    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
   })
 
   bunTest("accepts neither (back-compat with launch-cwd default)", () => {
@@ -239,11 +247,11 @@ describe("ListAuthProvidersPayload schema", () => {
     // driverOverrides; runtime decode of an unknown field is a no-op.
     // This test documents intent: callers shouldn't include driverOverrides.
     const query = decode({
-      sessionId: "019d-test-session-id",
-      driverOverrides: { cowork: { _tag: "external", id: "evil" } },
+      sessionId: SessionId.make("019d-test-session-id"),
+      driverOverrides: { [AgentName.make("cowork")]: { _tag: "external", id: "evil" } },
     } as Record<string, unknown>)
-    expect(query.sessionId).toBe("019d-test-session-id")
+    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
     // The decoded type intentionally has no `driverOverrides` field.
-    expect((query as Record<string, unknown>).driverOverrides).toBeUndefined()
+    expect((query as Record<string, unknown>)["driverOverrides"]).toBeUndefined()
   })
 })

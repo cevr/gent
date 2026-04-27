@@ -9,7 +9,8 @@ import { Effect, Stream } from "effect"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import type { TurnError, TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
+import { ExtensionId } from "@gent/core/domain/ids"
+import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
@@ -17,7 +18,7 @@ const noopExecutor: TurnExecutor = {
 
 const echoExecutor: TurnExecutor = {
   executeTurn: (ctx: TurnContext) =>
-    Stream.fromIterable<TurnEvent, TurnError>([
+    Stream.fromIterable<TurnEvent>([
       { _tag: "text-delta", text: `echo: ${ctx.systemPrompt}` },
       { _tag: "finished", stopReason: "stop" },
     ]),
@@ -29,7 +30,7 @@ const makeExt = (
 ): LoadedExtension => {
   const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: () => Effect.void }))
   return {
-    manifest: { id },
+    manifest: { id: ExtensionId.make(id) },
     scope: "builtin" as const,
     sourcePath: `/test/${id}`,
     contributions: (drivers !== undefined && drivers.length > 0

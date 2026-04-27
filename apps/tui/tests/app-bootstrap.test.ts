@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { ProviderId } from "@gent/core/domain/model"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
 import { createMockClient } from "./render-harness"
@@ -69,13 +70,15 @@ describe("resolveStartupAuthState", () => {
       resolveStartupAuthState({
         client,
         state,
-        requestedAgent: "cowork",
+        requestedAgent: AgentName.make("cowork"),
       }),
     )
 
-    expect(auth.initialAgent).toBe("deepwork")
-    expect(auth.missingProviders).toEqual(["openai"])
-    expect(calls).toEqual([{ agentName: "deepwork", sessionId: "session-a" }])
+    expect(auth.initialAgent).toBe(AgentName.make("deepwork"))
+    expect(auth.missingProviders).toEqual([ProviderId.make("openai")])
+    expect(calls).toEqual([
+      { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
+    ])
   })
 
   test("uses the requested agent for headless auth checks", async () => {
@@ -133,12 +136,14 @@ describe("resolveStartupAuthState", () => {
       resolveStartupAuthState({
         client,
         state,
-        requestedAgent: "deepwork",
+        requestedAgent: AgentName.make("deepwork"),
       }),
     )
 
     expect(auth.initialAgent).toBeUndefined()
-    expect(calls).toEqual([{ agentName: "deepwork", sessionId: "session-a" }])
+    expect(calls).toEqual([
+      { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
+    ])
   })
 
   test("falls back to the default agent when a fresh session has no runtime agent yet", async () => {
@@ -198,8 +203,10 @@ describe("resolveStartupAuthState", () => {
       }),
     )
 
-    expect(auth.initialAgent).toBe("cowork")
-    expect(calls).toEqual([{ agentName: "cowork", sessionId: "session-a" }])
+    expect(auth.initialAgent).toBe(AgentName.make("cowork"))
+    expect(calls).toEqual([
+      { agentName: AgentName.make("cowork"), sessionId: SessionId.make("session-a") },
+    ])
   })
 
   test("skips pre-auth gating while the user is choosing a branch", async () => {

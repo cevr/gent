@@ -5,11 +5,12 @@ import { ReadTool } from "@gent/extensions/fs-tools/read"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 const ctx: ToolContext = testToolContext({
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
+  toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
   home: "/tmp",
 })

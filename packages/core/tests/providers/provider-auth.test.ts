@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { SessionId, ExtensionId } from "@gent/core/domain/ids"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import type { AuthApi } from "@gent/core/domain/auth-store"
@@ -15,7 +16,7 @@ const pendingCallbacks = new Map<string, (code?: string) => string>()
 const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
-  resolveModel: () => ({}),
+  resolveModel: () => ({ layer: Layer.empty as never }),
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
@@ -43,7 +44,7 @@ const oauthProvider: ModelDriverContribution = {
 const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
-  resolveModel: () => ({}),
+  resolveModel: () => ({ layer: Layer.empty as never }),
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
@@ -52,7 +53,7 @@ const noopProvider: ModelDriverContribution = {
 const persistDuringAuthorizeProvider: ModelDriverContribution = {
   id: "persisting",
   name: "Persisting",
-  resolveModel: () => ({}),
+  resolveModel: () => ({ layer: Layer.empty as never }),
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
     authorize: (ctx) =>
@@ -68,7 +69,7 @@ const persistDuringAuthorizeProvider: ModelDriverContribution = {
 
 const testResolved = resolveExtensions([
   {
-    manifest: { id: "test" },
+    manifest: { id: ExtensionId.make("test") },
     scope: "builtin",
     sourcePath: "test",
     contributions: { modelDrivers: [oauthProvider, noopProvider, persistDuringAuthorizeProvider] },
@@ -105,10 +106,16 @@ describe("ProviderAuth", () => {
         const auth = yield* ProviderAuth
         const store = yield* AuthStore
 
-        const authResult = yield* auth.authorize("s1", "openai", 0)
+        const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
         if (authResult === undefined) return { ok: false as const }
 
-        yield* auth.callback("s1", "openai", 0, authResult.authorizationId, "sk-test-key")
+        yield* auth.callback(
+          SessionId.make("s1"),
+          "openai",
+          0,
+          authResult.authorizationId,
+          "sk-test-key",
+        )
         const stored = yield* store.get("openai")
 
         return { ok: true as const, stored }
@@ -149,12 +156,14 @@ describe("ProviderAuth", () => {
     const exit = await Effect.runPromise(
       Effect.gen(function* () {
         const auth = yield* ProviderAuth
-        return yield* Effect.exit(auth.authorize("s1", "persisting", 0))
+        return yield* Effect.exit(auth.authorize(SessionId.make("s1"), "persisting", 0))
       }).pipe(Effect.provide(layer)),
     )
 
     expect(exit._tag).toBe("Failure")
-    expect(exit.cause.toString()).toContain("Failed to persist auth")
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("Failed to persist auth")
+    }
   })
 
   it("callback surfaces credential persistence failures", async () => {
@@ -167,15 +176,23 @@ describe("ProviderAuth", () => {
     const exit = await Effect.runPromise(
       Effect.gen(function* () {
         const auth = yield* ProviderAuth
-        const authResult = yield* auth.authorize("s1", "openai", 0)
-        if (authResult === undefined) return yield* Effect.dieMessage("auth setup failed")
+        const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
+        if (authResult === undefined) return yield* Effect.die("auth setup failed")
         return yield* Effect.exit(
-          auth.callback("s1", "openai", 0, authResult.authorizationId, "sk-test-key"),
+          auth.callback(
+            SessionId.make("s1"),
+            "openai",
+            0,
+            authResult.authorizationId,
+            "sk-test-key",
+          ),
         )
       }).pipe(Effect.provide(layer)),
     )
 
     expect(exit._tag).toBe("Failure")
-    expect(exit.cause.toString()).toContain("Failed to persist auth")
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("Failed to persist auth")
+    }
   })
 })

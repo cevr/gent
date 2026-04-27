@@ -10,7 +10,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { DriverListResult } from "@gent/core/server/transport-contract"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -43,11 +43,11 @@ describe("DriverRpcs", () => {
         const someModel = drivers.find((d) => d._tag === "model")
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
           driver: ModelDriverRef.make({ id: someModel.id }),
         })
         const after = yield* client.driver.list()
-        expect(after.overrides["cowork"]?._tag).toBe("model")
+        expect(after.overrides[AgentName.make("cowork")]?._tag).toBe("model")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -59,7 +59,7 @@ describe("DriverRpcs", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const result = yield* client.driver
           .set({
-            agentName: "cowork",
+            agentName: AgentName.make("cowork"),
             driver: ExternalDriverRef.make({ id: "definitely-not-registered" }),
           })
           .pipe(Effect.flip)
@@ -77,10 +77,10 @@ describe("DriverRpcs", () => {
         const someModel = drivers.find((d) => d._tag === "model")
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
           driver: ModelDriverRef.make({ id: someModel.id }),
         })
-        yield* client.driver.clear({ agentName: "cowork" })
+        yield* client.driver.clear({ agentName: AgentName.make("cowork") })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
@@ -92,7 +92,7 @@ describe("DriverRpcs", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
-        yield* client.driver.clear({ agentName: "does-not-exist" })
+        yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),

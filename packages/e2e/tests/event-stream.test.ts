@@ -3,22 +3,19 @@ import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { transportCases, waitFor } from "./transport-harness"
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural helpers only need the methods they call
+type AnyEventsClient = any
+
 const startCollecting = (
-  client: {
-    session: {
-      events: (input: {
-        sessionId: string
-        branchId?: string
-        after?: number
-      }) => Stream.Stream<EventEnvelope, unknown>
-    }
-  },
+  client: AnyEventsClient,
   input: { sessionId: string; branchId?: string; after?: number },
 ) =>
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
     const ready = yield* Deferred.make<void>()
-    const fiber = yield* client.session.events(input).pipe(
+    const fiber = yield* (
+      client.session.events(input) as Stream.Stream<EventEnvelope, unknown>
+    ).pipe(
       Stream.runForEach((envelope) =>
         Effect.gen(function* () {
           yield* Ref.update(events, (current) => [...current, envelope])
@@ -31,30 +28,22 @@ const startCollecting = (
     return { events, fiber }
   })
 
-const waitForAssistantTurn = (
-  client: {
-    message: {
-      list: (input: { branchId: string }) => Effect.Effect<readonly { role: string }[], unknown>
-    }
-  },
-  branchId: string,
-) =>
+const waitForAssistantTurn = (client: AnyEventsClient, branchId: string) =>
   waitFor(
-    client.message.list({ branchId }).pipe(Effect.mapError((error) => new Error(String(error)))),
-    (messages) => messages.some((message) => message.role === "assistant"),
+    client.message
+      .list({ branchId })
+      .pipe(Effect.mapError((error: unknown) => new Error(String(error)))),
+    (messages: ReadonlyArray<{ role: string }>) =>
+      messages.some((message) => message.role === "assistant"),
   )
 
-const waitForUserMessage = (
-  client: {
-    message: {
-      list: (input: { branchId: string }) => Effect.Effect<readonly { role: string }[], unknown>
-    }
-  },
-  branchId: string,
-) =>
+const waitForUserMessage = (client: AnyEventsClient, branchId: string) =>
   waitFor(
-    client.message.list({ branchId }).pipe(Effect.mapError((error) => new Error(String(error)))),
-    (messages) => messages.some((message) => message.role === "user"),
+    client.message
+      .list({ branchId })
+      .pipe(Effect.mapError((error: unknown) => new Error(String(error)))),
+    (messages: ReadonlyArray<{ role: string }>) =>
+      messages.some((message) => message.role === "user"),
   )
 
 const waitForCompletedTurn = (events: Ref.Ref<EventEnvelope[]>) =>
@@ -81,32 +70,38 @@ describe("event stream contracts", () => {
       `${transport.name} replays buffered events for a completed turn`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session
+                .create({ cwd: process.cwd() })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client.message
-              .send({
+              yield* client.message
+                .send({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                  content: "ad",
+                })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+
+              yield* waitForAssistantTurn(client, created.branchId)
+
+              const buffered = yield* startCollecting(client, {
                 sessionId: created.sessionId,
-                branchId: created.branchId,
-                content: "ad",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              const replayed = yield* waitForCompletedTurn(buffered.events)
 
-            yield* waitForAssistantTurn(client, created.branchId)
-
-            const buffered = yield* startCollecting(client, {
-              sessionId: created.sessionId,
-            })
-            const replayed = yield* waitForCompletedTurn(buffered.events)
-
-            expect(replayed.some((envelope) => envelope.event._tag === "StreamStarted")).toBe(true)
-            expect(replayed.some((envelope) => envelope.event._tag === "MessageReceived")).toBe(
-              true,
-            )
-            expect(replayed.some((envelope) => envelope.event._tag === "TurnCompleted")).toBe(true)
-          }),
+              expect(replayed.some((envelope) => envelope.event._tag === "StreamStarted")).toBe(
+                true,
+              )
+              expect(replayed.some((envelope) => envelope.event._tag === "MessageReceived")).toBe(
+                true,
+              )
+              expect(replayed.some((envelope) => envelope.event._tag === "TurnCompleted")).toBe(
+                true,
+              )
+            }),
+          ),
         )
       },
       timeoutMs,
@@ -116,59 +111,61 @@ describe("event stream contracts", () => {
       `${transport.name} live stream continues after turn completion`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session
+                .create({ cwd: process.cwd() })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const live = yield* startCollecting(client, {
-              sessionId: created.sessionId,
-            })
-
-            yield* client.branch
-              .create({ sessionId: created.sessionId, name: "stream-ready-branch" })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            const ready = yield* waitForTaggedEvent(live.events, "BranchCreated")
-            const readyId = ready[ready.length - 1]?.id
-
-            yield* client.message
-              .send({
+              const live = yield* startCollecting(client, {
                 sessionId: created.sessionId,
-                branchId: created.branchId,
-                content: "be",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const firstTurn = yield* waitForTaggedEvent(live.events, "TurnCompleted", readyId)
-            const firstTurnMaxId = firstTurn[firstTurn.length - 1]?.id
+              yield* client.branch
+                .create({ sessionId: created.sessionId, name: "stream-ready-branch" })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const ready = yield* waitForTaggedEvent(live.events, "BranchCreated")
+              const readyId = ready[ready.length - 1]?.id
 
-            expect(firstTurnMaxId).toBeDefined()
+              yield* client.message
+                .send({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                  content: "be",
+                })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            // This batch asserts stream liveness, not actor command timing.
-            // Use a session event outside the turn loop to prove the stream stays alive.
-            yield* client.branch
-              .create({ sessionId: created.sessionId, name: "stream-live-branch" })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              const firstTurn = yield* waitForTaggedEvent(live.events, "TurnCompleted", readyId)
+              const firstTurnMaxId = firstTurn[firstTurn.length - 1]?.id
 
-            const combined = yield* waitFor(
-              Ref.get(live.events),
-              (current) =>
-                firstTurnMaxId !== undefined &&
-                current.some(
-                  (envelope) =>
-                    envelope.id > firstTurnMaxId && envelope.event._tag === "BranchCreated",
-                ),
-            )
+              expect(firstTurnMaxId).toBeDefined()
 
-            expect(
-              combined.some(
-                (envelope) =>
+              // This batch asserts stream liveness, not actor command timing.
+              // Use a session event outside the turn loop to prove the stream stays alive.
+              yield* client.branch
+                .create({ sessionId: created.sessionId, name: "stream-live-branch" })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+
+              const combined = yield* waitFor(
+                Ref.get(live.events),
+                (current) =>
                   firstTurnMaxId !== undefined &&
-                  envelope.id > firstTurnMaxId &&
-                  envelope.event._tag === "BranchCreated",
-              ),
-            ).toBe(true)
-          }),
+                  current.some(
+                    (envelope) =>
+                      envelope.id > firstTurnMaxId && envelope.event._tag === "BranchCreated",
+                  ),
+              )
+
+              expect(
+                combined.some(
+                  (envelope) =>
+                    firstTurnMaxId !== undefined &&
+                    envelope.id > firstTurnMaxId &&
+                    envelope.event._tag === "BranchCreated",
+                ),
+              ).toBe(true)
+            }),
+          ),
         )
       },
       timeoutMs,
@@ -178,42 +175,44 @@ describe("event stream contracts", () => {
       `${transport.name} branch-scoped live stream excludes sibling branch messages`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            const sibling = yield* client.branch
-              .create({ sessionId: created.sessionId, name: "stream-sibling-branch" })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            const snapshot = yield* client.session
-              .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session
+                .create({ cwd: process.cwd() })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const sibling = yield* client.branch
+                .create({ sessionId: created.sessionId, name: "stream-sibling-branch" })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const snapshot = yield* client.session
+                .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const live = yield* startCollecting(client, {
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
-            })
-
-            yield* client.message
-              .send({
+              const live = yield* startCollecting(client, {
                 sessionId: created.sessionId,
-                branchId: sibling.branchId,
-                content: "sibling-only",
+                branchId: created.branchId,
+                ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* waitForUserMessage(client, sibling.branchId)
+              yield* client.message
+                .send({
+                  sessionId: created.sessionId,
+                  branchId: sibling.branchId,
+                  content: "sibling-only",
+                })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const seen = yield* Ref.get(live.events)
-            expect(
-              seen.some(
-                (envelope) =>
-                  envelope.event._tag === "MessageReceived" &&
-                  envelope.event.message.branchId === sibling.branchId,
-              ),
-            ).toBe(false)
-          }),
+              yield* waitForUserMessage(client, sibling.branchId)
+
+              const seen = yield* Ref.get(live.events)
+              expect(
+                seen.some(
+                  (envelope) =>
+                    envelope.event._tag === "MessageReceived" &&
+                    envelope.event.message.branchId === sibling.branchId,
+                ),
+              ).toBe(false)
+            }),
+          ),
         )
       },
       timeoutMs,
@@ -223,60 +222,68 @@ describe("event stream contracts", () => {
       `${transport.name} honors the after cursor`,
       async () => {
         await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          Effect.scoped(
+            Effect.gen(function* () {
+              const created = yield* client.session
+                .create({ cwd: process.cwd() })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const firstLive = yield* startCollecting(client, {
-              sessionId: created.sessionId,
-            })
-
-            yield* client.branch
-              .create({ sessionId: created.sessionId, name: "stream-after-ready" })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
-            const ready = yield* waitForTaggedEvent(firstLive.events, "BranchCreated")
-            const readyId = ready[ready.length - 1]?.id
-
-            yield* client.message
-              .send({
+              const firstLive = yield* startCollecting(client, {
                 sessionId: created.sessionId,
-                branchId: created.branchId,
-                content: "dg",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const firstTurn = yield* waitForTaggedEvent(firstLive.events, "TurnCompleted", readyId)
-            const afterId = firstTurn[firstTurn.length - 1]?.id
+              yield* client.branch
+                .create({ sessionId: created.sessionId, name: "stream-after-ready" })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const ready = yield* waitForTaggedEvent(firstLive.events, "BranchCreated")
+              const readyId = ready[ready.length - 1]?.id
 
-            expect(afterId).toBeDefined()
+              yield* client.message
+                .send({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                  content: "dg",
+                })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const afterEvents = yield* startCollecting(client, {
-              sessionId: created.sessionId,
-              ...(afterId !== undefined ? { after: afterId } : {}),
-            })
+              const firstTurn = yield* waitForTaggedEvent(
+                firstLive.events,
+                "TurnCompleted",
+                readyId,
+              )
+              const afterId = firstTurn[firstTurn.length - 1]?.id
 
-            const initialAfterEvents = yield* Ref.get(afterEvents.events)
-            expect(
-              initialAfterEvents.every(
-                (envelope) => afterId !== undefined && envelope.id > afterId,
-              ),
-            ).toBe(true)
+              expect(afterId).toBeDefined()
 
-            yield* client.branch
-              .create({ sessionId: created.sessionId, name: "stream-after-branch" })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              const afterEvents = yield* startCollecting(client, {
+                sessionId: created.sessionId,
+                ...(afterId !== undefined ? { after: afterId } : {}),
+              })
 
-            const liveOnly = yield* waitFor(Ref.get(afterEvents.events), (current) =>
-              current.some((envelope) => envelope.event._tag === "BranchCreated"),
-            )
+              const initialAfterEvents = yield* Ref.get(afterEvents.events)
+              expect(
+                initialAfterEvents.every(
+                  (envelope) => afterId !== undefined && envelope.id > afterId,
+                ),
+              ).toBe(true)
 
-            expect(liveOnly.length).toBeGreaterThan(0)
-            expect(
-              liveOnly.every((envelope) => afterId !== undefined && envelope.id > afterId),
-            ).toBe(true)
-            expect(liveOnly.some((envelope) => envelope.event._tag === "BranchCreated")).toBe(true)
-          }),
+              yield* client.branch
+                .create({ sessionId: created.sessionId, name: "stream-after-branch" })
+                .pipe(Effect.mapError((error) => new Error(String(error))))
+
+              const liveOnly = yield* waitFor(Ref.get(afterEvents.events), (current) =>
+                current.some((envelope) => envelope.event._tag === "BranchCreated"),
+              )
+
+              expect(liveOnly.length).toBeGreaterThan(0)
+              expect(
+                liveOnly.every((envelope) => afterId !== undefined && envelope.id > afterId),
+              ).toBe(true)
+              expect(liveOnly.some((envelope) => envelope.event._tag === "BranchCreated")).toBe(
+                true,
+              )
+            }),
+          ),
         )
       },
       timeoutMs,

@@ -11,12 +11,16 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   type AutocompleteContribution,
   autocompleteContribution,
+  type ClientRuntime,
   type ExtensionClientModule,
 } from "../src/extensions/client-facets.js"
 import type { ClientEffect } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 
-const runtime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
+const runtime = ManagedRuntime.make(
+  Layer.merge(BunFileSystem.layer, BunServices.layer),
+) as unknown as ClientRuntime
 
 describe("loadTuiExtensions Effect setup", () => {
   test("Effect setup is run through the runtime; FileSystem is provided", async () => {

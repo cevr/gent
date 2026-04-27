@@ -8,13 +8,16 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
+
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 import * as Fs from "node:fs"
 import * as Path from "node:path"
 import * as Os from "node:os"
 import { MemoryRememberTool, MemoryForgetTool } from "@gent/extensions/memory/tools"
 import { Test as MemoryVaultTest, projectKey as projectKeyOf } from "@gent/extensions/memory/vault"
 import type { ToolContext } from "@gent/core/domain/tool"
-import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 let tmpDir: string
@@ -64,6 +67,7 @@ const makeCtx = (cwd: string): ToolContext =>
       deleteSession: dieStub("deleteSession"),
       deleteBranch: dieStub("deleteBranch"),
       deleteMessages: dieStub("deleteMessages"),
+      queueFollowUp: dieStub("queueFollowUp"),
     },
     interaction: {
       approve: dieStub("approve"),
@@ -78,14 +82,16 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     const cwd = "/some/active/repo"
     const expectedKey = projectKeyOf(cwd)
     await Effect.runPromise(
-      MemoryRememberTool.effect(
-        {
-          title: "Auto Key",
-          content: "should land in project dir",
-          scope: "project",
-        },
-        makeCtx(cwd),
-      ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      narrowR(
+        MemoryRememberTool.effect(
+          {
+            title: "Auto Key",
+            content: "should land in project dir",
+            scope: "project",
+          },
+          makeCtx(cwd),
+        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      ),
     )
     const expectedPath = Path.join(tmpDir, "project", expectedKey, "auto-key.md")
     expect(Fs.existsSync(expectedPath)).toBe(true)
@@ -96,15 +102,17 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
 
   test("project scope with explicit project_key honors the param", async () => {
     await Effect.runPromise(
-      MemoryRememberTool.effect(
-        {
-          title: "Explicit Key",
-          content: "uses provided key",
-          scope: "project",
-          project_key: "explicit-1234ab",
-        },
-        makeCtx("/any/cwd"),
-      ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      narrowR(
+        MemoryRememberTool.effect(
+          {
+            title: "Explicit Key",
+            content: "uses provided key",
+            scope: "project",
+            project_key: "explicit-1234ab",
+          },
+          makeCtx("/any/cwd"),
+        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      ),
     )
     expect(Fs.existsSync(Path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md"))).toBe(
       true,
@@ -113,14 +121,16 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
 
   test("global scope ignores cwd and writes to global/", async () => {
     await Effect.runPromise(
-      MemoryRememberTool.effect(
-        {
-          title: "Global Note",
-          content: "no project key needed",
-          scope: "global",
-        },
-        makeCtx("/any/repo"),
-      ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      narrowR(
+        MemoryRememberTool.effect(
+          {
+            title: "Global Note",
+            content: "no project key needed",
+            scope: "global",
+          },
+          makeCtx("/any/repo"),
+        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+      ),
     )
     expect(Fs.existsSync(Path.join(tmpDir, "global", "global-note.md"))).toBe(true)
   })
@@ -141,8 +151,10 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
     expect(Fs.existsSync(file)).toBe(true)
 
     await Effect.runPromise(
-      MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
-        Effect.provide(MemoryVaultTest(tmpDir)),
+      narrowR(
+        MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
+          Effect.provide(MemoryVaultTest(tmpDir)),
+        ),
       ),
     )
     expect(Fs.existsSync(file)).toBe(false)

@@ -11,14 +11,15 @@ import {
   estimateContextPercent,
   getContextWindow,
 } from "../../src/runtime/context-estimation"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "Hello world" })], // 11 chars
         createdAt: new Date(),
@@ -40,8 +41,8 @@ describe("estimateContextPercent", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(800) })],
         createdAt: new Date(),
@@ -56,8 +57,8 @@ describe("estimateContextPercent", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
         createdAt: new Date(),
@@ -72,8 +73,8 @@ describe("estimateContextPercent", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
         createdAt: new Date(),
@@ -87,22 +88,22 @@ describe("estimateContextPercent", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(4_000) })],
         createdAt: new Date(),
       }),
       Message.Regular.make({
         id: "m2",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "assistant",
         parts: [
           new TextPart({ type: "text", text: "y".repeat(4_000) }),
           new ToolCallPart({
             type: "tool-call",
-            toolCallId: "tc1",
+            toolCallId: ToolCallId.make("tc1"),
             toolName: "test",
             input: { key: "v".repeat(2_000) },
           }),
@@ -111,13 +112,13 @@ describe("estimateContextPercent", () => {
       }),
       Message.Regular.make({
         id: "m3",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "tool",
         parts: [
           new ToolResultPart({
             type: "tool-result",
-            toolCallId: "tc1",
+            toolCallId: ToolCallId.make("tc1"),
             toolName: "test",
             output: { type: "json", value: { result: "z".repeat(2_000) } },
           }),
@@ -156,8 +157,8 @@ describe("estimateTokens", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
         createdAt: new Date(),
@@ -170,13 +171,13 @@ describe("estimateTokens", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "assistant",
         parts: [
           new ToolCallPart({
             type: "tool-call",
-            toolCallId: "tc1",
+            toolCallId: ToolCallId.make("tc1"),
             toolName: "test",
             input: { key: "value" },
           }),
@@ -193,13 +194,13 @@ describe("estimateTokens", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "tool",
         parts: [
           new ToolResultPart({
             type: "tool-result",
-            toolCallId: "tc1",
+            toolCallId: ToolCallId.make("tc1"),
             toolName: "test",
             output: { type: "json", value: { data: "hello" } },
           }),
@@ -215,8 +216,8 @@ describe("estimateTokens", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new ImagePart({ type: "image", image: "data:image/png;base64,abc" })],
         createdAt: new Date(),
@@ -229,16 +230,16 @@ describe("estimateTokens", () => {
     const messages = [
       Message.Regular.make({
         id: "m1",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
         createdAt: new Date(),
       }),
       Message.Regular.make({
         id: "m2",
-        sessionId: "s",
-        branchId: "b",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
         role: "assistant",
         parts: [new TextPart({ type: "text", text: "y".repeat(200) })],
         createdAt: new Date(),
