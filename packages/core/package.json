@@ -102,6 +102,8 @@
     "./providers/provider-auth.js": "./src/providers/provider-auth.ts",
     "./runtime/extensions/actor-engine": "./src/runtime/extensions/actor-engine.ts",
     "./runtime/extensions/actor-engine.js": "./src/runtime/extensions/actor-engine.ts",
+    "./runtime/extensions/actor-host": "./src/runtime/extensions/actor-host.ts",
+    "./runtime/extensions/actor-host.js": "./src/runtime/extensions/actor-host.ts",
     "./runtime/extensions/receptionist": "./src/runtime/extensions/receptionist.ts",
     "./runtime/extensions/receptionist.js": "./src/runtime/extensions/receptionist.ts",
     "./runtime/extensions/disabled": "./src/runtime/extensions/disabled.ts",

@@ -43,6 +43,8 @@ import {
   collectSubscriptions,
   SubscriptionEngine,
 } from "./extensions/resource-host/index.js"
+import { ActorEngine } from "./extensions/actor-engine.js"
+import { ActorHost } from "./extensions/actor-host.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -318,6 +320,16 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   // brand so projections can't accidentally yield write-capable Tags.
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
+  // Actor engine + host: ActorEngine.Live is self-contained (it
+  // composes its own Receptionist). ActorHost.fromResolved is a
+  // Layer.effectDiscard that walks every extension's `actors` bucket
+  // at build time and spawns each Behavior into the engine; spawn
+  // lifetime is bound to the host scope so runtime teardown
+  // interrupts every actor fiber.
+  const actorRuntimeLive = ActorHost.fromResolved(resolved).pipe(
+    Layer.provideMerge(ActorEngine.Live),
+  )
+
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
     DriverRegistry.fromResolved({
@@ -326,6 +338,7 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
     }),
     extensionRuntimeLive,
     machineExecuteLive,
+    actorRuntimeLive,
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 

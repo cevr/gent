@@ -147,12 +147,13 @@ export interface ActorEngineService {
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
   "@gent/core/src/runtime/extensions/actor-engine/ActorEngine",
 ) {
-  // Self-contained: provides its own Receptionist so callers do not have
-  // to remember to compose two layers. If a runtime needs to share a
-  // single Receptionist across engines, build the engine layer manually
-  // with `Layer.effect(ActorEngine, …)` and provide an external
-  // Receptionist instance.
-  static Live: Layer.Layer<ActorEngine> = Layer.effect(
+  // Self-contained: composes `Receptionist.Live` and re-exposes it so
+  // downstream layers (e.g. `ActorHost`) and external callers share
+  // the same registry instance the engine writes into. If a runtime
+  // needs to share a single Receptionist across engines, build the
+  // engine layer manually with `Layer.effect(ActorEngine, …)` and
+  // provide an external Receptionist instance.
+  static Live: Layer.Layer<ActorEngine | Receptionist> = Layer.effect(
     ActorEngine,
     Effect.acquireRelease(
       Effect.gen(function* () {
@@ -379,5 +380,5 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
       }),
       ({ runtimeScope }) => Scope.close(runtimeScope, Exit.void),
     ).pipe(Effect.map(({ service }) => service)),
-  ).pipe(Layer.provide(Receptionist.Live))
+  ).pipe(Layer.provideMerge(Receptionist.Live))
 }

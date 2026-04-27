@@ -21,12 +21,25 @@
  *
  * @module
  */
+import type { Behavior } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
+
+/**
+ * Bucket leaf for the `actors` field. The `Behavior` shape is
+ * existentially quantified across the message and state type
+ * parameters so a bucket can hold heterogeneously-typed behaviors.
+ * The requirements parameter is fixed to `never` at the bucket
+ * boundary — the host has no extra services to provide, so
+ * behaviors that need additional dependencies must close them at the
+ * declaration site (e.g. `pipe(Effect.provide(Layer))`).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential quantification at bucket boundary; M and S are erased
+export type AnyBehavior = Behavior<any, any, never>
 
 // ── Typed buckets ──
 
@@ -45,6 +58,7 @@ export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
+  readonly actors?: ReadonlyArray<AnyBehavior>
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>

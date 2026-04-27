@@ -50,7 +50,7 @@ import type {
   ExtensionSetupContext,
   ExtensionManifest,
 } from "../domain/extension.js"
-import type { ExtensionContributions } from "../domain/contribution.js"
+import type { AnyBehavior, ExtensionContributions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
@@ -291,6 +291,7 @@ export interface DefineExtensionInput {
   readonly resources?: FieldSpec<AnyResourceContribution>
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
+  readonly actors?: FieldSpec<AnyBehavior>
   readonly projections?: FieldSpec<AnyProjectionContribution>
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
@@ -479,6 +480,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
         const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
+        const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
         const projections = yield* resolveField(manifest, "projections", params.projections, ctx)
         const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
         const externalDrivers = yield* resolveField(
@@ -491,6 +493,7 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(resources.length > 0 ? { resources } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
+          ...(actors.length > 0 ? { actors } : {}),
           ...(projections.length > 0 ? { projections } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
