@@ -6,12 +6,12 @@ import * as Response from "effect/unstable/ai/Response"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { AgentLoop } from "../../src/runtime/agent/agent-loop"
+import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -25,6 +25,7 @@ import {
   reasoningDeltaPart,
   textDeltaPart,
   toolCallPart,
+  type ProviderRequest,
   type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
@@ -54,7 +55,14 @@ import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import {
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/domain/ids"
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
@@ -86,7 +94,7 @@ const makeExtRegistry = (
 ) => {
   const resolved = resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
@@ -116,18 +124,18 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
   })
 
 const runAgentLoop = (
-  agentLoop: AgentLoop,
+  agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoop["run"]>[1],
+  options?: Parameters<AgentLoopService["run"]>[1],
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
     Effect.flatMap(() => agentLoop.run(message, options)),
   )
 
 const submitAgentLoop = (
-  agentLoop: AgentLoop,
+  agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoop["submit"]>[1],
+  options?: Parameters<AgentLoopService["submit"]>[1],
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
     Effect.flatMap(() => agentLoop.submit(message, options)),
@@ -142,7 +150,7 @@ const makeLayer = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools, resources),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -167,7 +175,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -230,7 +238,7 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
     checkpointStorageLayer(options),
     providerLayer,
     makeExtRegistry(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -280,7 +288,7 @@ const makeLiveToolLayer = (
     Storage.TestWithSql(),
     providerLayer,
     extRegistry,
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     turnControlLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -325,7 +333,7 @@ const makeLayerWithEvents = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -351,7 +359,7 @@ const makeLayerWithEventPublisher = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -421,7 +429,7 @@ const makeExternalLayerWithEvents = (
 ) => {
   const resolved = resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
@@ -429,7 +437,7 @@ const makeExternalLayerWithEvents = (
       },
     },
     {
-      manifest: { id: "external-parity" },
+      manifest: { id: ExtensionId.make("external-parity") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
@@ -438,7 +446,8 @@ const makeExternalLayerWithEvents = (
           {
             id: "test-parity-driver",
             executor: {
-              executeTurn: () => Stream.fromIterable<TurnEvent, TurnError>(events),
+              executeTurn: () =>
+                Stream.fromIterable<TurnEvent>(events) as Stream.Stream<TurnEvent, TurnError>,
             },
             invalidate: () => Effect.void,
           },
@@ -461,7 +470,7 @@ const makeExternalLayerWithEvents = (
     Storage.TestWithSql(),
     providerLayer,
     registryLayer,
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -481,8 +490,8 @@ const makeExternalLayerWithEvents = (
 
 /** Poll `getState` until the phase matches, with a short sleep between attempts. */
 const waitForPhase = (
-  agentLoop: AgentLoop,
-  params: { sessionId: string; branchId: string },
+  agentLoop: AgentLoopService,
+  params: { sessionId: SessionId; branchId: BranchId },
   runtimeTag: string,
   attempts = 50,
 ) =>
@@ -613,7 +622,7 @@ describe("streaming", () => {
       slowStorage,
       providerLayer,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -696,7 +705,11 @@ describe("streaming", () => {
 
           yield* Deferred.await(startedA)
           yield* Deferred.await(startedB)
-          yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
+          yield* agentLoop.steer({
+            _tag: "Interrupt",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
+          })
 
           const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
           expect(finishedA._tag).toBe("Some")
@@ -756,7 +769,7 @@ describe("streaming", () => {
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber)
 
-          const messages = yield* storage.listMessages("b1")
+          const messages = yield* storage.listMessages(BranchId.make("b1"))
           const userTexts = messages
             .filter((message) => message.role === "user")
             .map((message) =>
@@ -946,7 +959,7 @@ describe("streaming", () => {
     let streamCount = 0
 
     const providerLayer = Layer.succeed(Provider, {
-      stream: (request) => {
+      stream: (request: ProviderRequest) => {
         const latestUserText = [...Prompt.make(request.prompt).content]
           .reverse()
           .find((message) => message.role === "user")
@@ -992,10 +1005,10 @@ describe("streaming", () => {
           yield* runAgentLoop(agentLoop, queued)
           yield* agentLoop.steer({
             _tag: "Interject",
-            sessionId: "s1",
-            branchId: "b1",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
             message: "steer now",
-            agent: "deepwork",
+            agent: AgentName.make("deepwork"),
           })
 
           yield* Deferred.succeed(gate, undefined)
@@ -1053,12 +1066,15 @@ describe("streaming", () => {
           yield* runAgentLoop(agentLoop, queuedB)
           yield* agentLoop.steer({
             _tag: "Interject",
-            sessionId: "s1",
-            branchId: "b1",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
             message: "steer now",
           })
 
-          const snapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
+          const snapshot = yield* agentLoop.getQueue({
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
+          })
           expect(snapshot.steering).toEqual([
             expect.objectContaining({ _tag: "steering", content: "steer now" }),
           ])
@@ -1066,7 +1082,10 @@ describe("streaming", () => {
             expect.objectContaining({ _tag: "follow-up", content: "queued a\nqueued b" }),
           ])
 
-          const secondSnapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
+          const secondSnapshot = yield* agentLoop.getQueue({
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
+          })
           expect(secondSnapshot).toEqual(snapshot)
 
           yield* Deferred.succeed(gate, undefined)
@@ -1083,13 +1102,18 @@ describe("streaming", () => {
     let streamCalls = 0
 
     const providerLayer = Layer.succeed(Provider, {
-      stream: (request) => {
+      stream: (request: ProviderRequest) => {
         const latestUserText =
           Prompt.make(request.prompt)
             .content.slice()
             .reverse()
-            .flatMap((message) => message.content)
-            .find((part): part is Prompt.TextPart => part.type === "text")?.text ?? ""
+            .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+            .find(
+              (part: unknown): part is Prompt.TextPart =>
+                typeof part === "object" &&
+                part !== null &&
+                (part as { type?: unknown }).type === "text",
+            )?.text ?? ""
 
         providerCalls.push(latestUserText)
         streamCalls += 1
@@ -1130,8 +1154,8 @@ describe("streaming", () => {
           yield* runAgentLoop(agentLoop, queued)
 
           const snapshotWhileRunning = yield* agentLoop.getQueue({
-            sessionId: "s1",
-            branchId: "b1",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
           })
           expect(snapshotWhileRunning.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "queued after failure" }),
@@ -1143,8 +1167,8 @@ describe("streaming", () => {
           expect(providerCalls).toEqual(["first", "queued after failure"])
 
           const snapshotAfterFailure = yield* agentLoop.getQueue({
-            sessionId: "s1",
-            branchId: "b1",
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
           })
           expect(snapshotAfterFailure).toEqual(emptyQueueSnapshot())
         }).pipe(Effect.provide(layer)),
@@ -1408,8 +1432,8 @@ describe("concurrency", () => {
     const layer = makeLiveToolLayer(
       scriptedProvider([
         [
-          toolCallPart("serial-a", {}, { toolCallId: "tc-1" }),
-          toolCallPart("serial-b", {}, { toolCallId: "tc-2" }),
+          toolCallPart("serial-a", {}, { toolCallId: ToolCallId.make("tc-1") }),
+          toolCallPart("serial-b", {}, { toolCallId: ToolCallId.make("tc-2") }),
           finishPart({ finishReason: "tool-calls" }),
         ],
         [finishPart({ finishReason: "stop" })],
@@ -1424,13 +1448,13 @@ describe("concurrency", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "serial-session",
+          id: SessionId.make("serial-session"),
           name: "Serial Test",
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "serial-branch",
+          id: BranchId.make("serial-branch"),
           sessionId: session.id,
           createdAt: now,
         })
@@ -1441,7 +1465,7 @@ describe("concurrency", () => {
         yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
-          agentName: "cowork",
+          agentName: AgentName.make("cowork"),
           prompt: "run serial tools",
         })
       }).pipe(Effect.provide(layer)),
@@ -1726,7 +1750,7 @@ describe("turn stream parity", () => {
         "StreamEnded",
         "MessageReceived",
         "TurnCompleted",
-      ]
+      ] as const
 
       const modelEventsRef = yield* Ref.make<AgentEvent[]>([])
       const externalEventsRef = yield* Ref.make<AgentEvent[]>([])
@@ -1787,8 +1811,12 @@ describe("turn stream parity", () => {
       )
 
       expect(modelDraft).toEqual(externalDraft)
-      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag)).toEqual(expectedTags)
-      expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag)).toEqual(expectedTags)
+      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag as string)).toEqual([
+        ...expectedTags,
+      ])
+      expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag as string)).toEqual([
+        ...expectedTags,
+      ])
     }).pipe(Effect.runPromise))
 })
 
@@ -1821,7 +1849,7 @@ describe("interaction", () => {
           const count = yield* Ref.getAndUpdate(callCount, (n) => n + 1)
           if (count === 0) {
             return yield* new InteractionPendingError({
-              requestId: "req-test-1",
+              requestId: InteractionRequestId.make("req-test-1"),
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
             })
@@ -1874,7 +1902,7 @@ describe("interaction", () => {
       Storage.TestWithSql(),
       providerLayer ?? makeInteractionProviderLayer(),
       makeExtRegistry(tools),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -1993,7 +2021,7 @@ describe("interaction", () => {
         generate: () => Effect.succeed("test"),
       }),
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2162,7 +2190,7 @@ describe("checkpoint persistence", () => {
       checkpointStorageLayer({ failUpsertOn: 1 }),
       providerLayer,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2217,7 +2245,7 @@ describe("checkpoint persistence", () => {
       checkpointStorageLayer({ failUpsertOn: 2 }),
       providerLayer,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2248,8 +2276,8 @@ describe("checkpoint persistence", () => {
           expect(queued._tag).toBe("Failure")
 
           const snapshot = yield* agentLoop.getQueue({
-            sessionId: "checkpoint-queue-session",
-            branchId: "b1",
+            sessionId: SessionId.make("checkpoint-queue-session"),
+            branchId: BranchId.make("b1"),
           })
           expect(snapshot).toEqual(emptyQueueSnapshot())
 
@@ -2282,7 +2310,7 @@ describe("checkpoint persistence", () => {
       checkpointStorageLayer({ failUpsertOn: 2 }),
       providerLayer,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       turnControlLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2324,8 +2352,8 @@ describe("checkpoint persistence", () => {
           }
 
           const snapshot = yield* agentLoop.getQueue({
-            sessionId: "turn-control-checkpoint-session",
-            branchId: "b1",
+            sessionId: SessionId.make("turn-control-checkpoint-session"),
+            branchId: BranchId.make("b1"),
           })
           expect(snapshot).toEqual(emptyQueueSnapshot())
 
@@ -2357,7 +2385,7 @@ describe("checkpoint persistence", () => {
       checkpointStorageLayer({ failUpsertOn: 3 }),
       providerLayer,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2385,15 +2413,15 @@ describe("checkpoint persistence", () => {
 
           const drained = yield* Effect.exit(
             agentLoop.drainQueue({
-              sessionId: "checkpoint-drain-session",
-              branchId: "b1",
+              sessionId: SessionId.make("checkpoint-drain-session"),
+              branchId: BranchId.make("b1"),
             }),
           )
           expect(drained._tag).toBe("Failure")
 
           const snapshot = yield* agentLoop.getQueue({
-            sessionId: "checkpoint-drain-session",
-            branchId: "b1",
+            sessionId: SessionId.make("checkpoint-drain-session"),
+            branchId: BranchId.make("b1"),
           })
           expect(snapshot.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "queued" }),
@@ -2463,12 +2491,12 @@ describe("recovery", () => {
     const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
     const recoveryResolved = resolveExtensions([
       {
-        manifest: { id: "test-recovery" },
+        manifest: { id: ExtensionId.make("test-recovery") },
         scope: "builtin",
         sourcePath: "test",
         contributions: {
           agents: Object.values(Agents),
-          tools: [tool(idempotentTestTool)],
+          tools: [idempotentTestTool],
         },
       },
     ])
@@ -2508,7 +2536,7 @@ describe("recovery", () => {
       storageLayer,
       eventStoreLayer,
       extensionLayer,
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2533,11 +2561,11 @@ describe("recovery", () => {
     )
   }
 
-  const waitFor = <A>(
-    effect: Effect.Effect<A>,
+  const waitFor = <A, E>(
+    effect: Effect.Effect<A, E>,
     predicate: (value: A) => boolean,
     attempts = 50,
-  ): Effect.Effect<A> =>
+  ): Effect.Effect<A, E> =>
     Effect.gen(function* () {
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         const value = yield* effect
@@ -2582,11 +2610,11 @@ describe("recovery", () => {
       Object.entries(record).map(([key, entry]) => [key, toLegacyCheckpointJson(entry)]),
     )
     if (
-      (entries._tag === "regular" || entries._tag === "interjection") &&
-      typeof entries.id === "string" &&
-      typeof entries.sessionId === "string" &&
-      typeof entries.branchId === "string" &&
-      Array.isArray(entries.parts)
+      (entries["_tag"] === "regular" || entries["_tag"] === "interjection") &&
+      typeof entries["id"] === "string" &&
+      typeof entries["sessionId"] === "string" &&
+      typeof entries["branchId"] === "string" &&
+      Array.isArray(entries["parts"])
     ) {
       const { _tag, ...legacy } = entries
       return { ...legacy, kind: _tag }
@@ -2625,7 +2653,7 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const running = buildRunningState({ currentAgent: "cowork" }, { message })
+      const running = buildRunningState({ currentAgent: AgentName.make("cowork") }, { message })
 
       const providerCalls = Ref.makeUnsafe(0)
       const layer = makeRecoveryLayer({ dbPath, providerCalls })
@@ -2709,7 +2737,7 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const running = buildRunningState({ currentAgent: "cowork" }, { message })
+      const running = buildRunningState({ currentAgent: AgentName.make("cowork") }, { message })
 
       const record = await Effect.runPromise(
         buildLoopCheckpointRecord({
@@ -2837,7 +2865,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
           const count = yield* Ref.getAndUpdate(params.callCountRef, (n) => n + 1)
           if (count === 0) {
             return yield* new InteractionPendingError({
-              requestId: "req-suspend-1",
+              requestId: InteractionRequestId.make("req-suspend-1"),
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
             })
@@ -2861,7 +2889,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
       eventStoreLayer,
       providerLayer,
       extRegistry,
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Live,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -2946,7 +2974,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
             yield* agentLoop.respondInteraction({
               sessionId: suspendSessionId,
               branchId: suspendBranchId,
-              requestId: "req-suspend-1",
+              requestId: InteractionRequestId.make("req-suspend-1"),
             })
 
             yield* Deferred.await(scope2Resolution).pipe(Effect.timeout("5 seconds"))
@@ -3022,7 +3050,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
       Storage.TestWithSql(),
       gatedProvider,
       makeExtRegistry(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

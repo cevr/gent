@@ -19,7 +19,7 @@ import { Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
-import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -65,7 +65,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
-  const extensionRuntimeLive = MachineEngine.Test().pipe(
+  const extensionRuntimeLive = ActorRouter.Test().pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
   // Mirror profile.ts / e2e-layer.ts so projections under `extraLayers`

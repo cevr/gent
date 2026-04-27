@@ -1,13 +1,16 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
-import { EventStore, SessionStarted } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import {
+  ActorRouter,
+  type ActorRouterService,
+} from "../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
@@ -43,33 +46,29 @@ const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = [])
   const storage = Storage.Test()
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActorHost only walks `extensions`
   const resolved = { extensions: [autoExtension] } as unknown as ResolvedExtensions
-  const machine = MachineEngine.Live([autoExtension]).pipe(
+  const machine = ActorRouter.Live([autoExtension]).pipe(
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),
   )
   const seededMachine = Layer.effect(
-    MachineEngine,
+    ActorRouter,
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
+      const runtime = yield* ActorRouter
+      const storageSvc = yield* Storage
       return {
-        publish: (event, ctx) =>
-          ensureStorageParents({ sessionId: ctx.sessionId, branchId: ctx.branchId }).pipe(
-            Effect.flatMap(() => runtime.publish(event, ctx)),
-          ),
         send: (targetSessionId, message, targetBranchId) =>
           ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.provideService(Storage, storageSvc),
+            Effect.orDie,
             Effect.flatMap(() => runtime.send(targetSessionId, message, targetBranchId)),
           ),
         execute: (targetSessionId, message, targetBranchId) =>
           ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.provideService(Storage, storageSvc),
+            Effect.orDie,
             Effect.flatMap(() => runtime.execute(targetSessionId, message, targetBranchId)),
           ),
-        getActorStatuses: (targetSessionId) =>
-          ensureStorageParents({ sessionId: targetSessionId }).pipe(
-            Effect.flatMap(() => runtime.getActorStatuses(targetSessionId)),
-          ),
-        terminateAll: runtime.terminateAll,
       } satisfies typeof runtime
     }),
     // Use `provideMerge` so `ActorEngine` and `Receptionist` (composed
@@ -83,7 +82,7 @@ const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = [])
 
 const makeLayer = () => seededMachineLayer()
 
-const getSnapshot = (runtime: MachineEngine) =>
+const getSnapshot = (runtime: ActorRouterService) =>
   Effect.gen(function* () {
     const model = (yield* runtime.execute(
       sessionId,
@@ -93,7 +92,7 @@ const getSnapshot = (runtime: MachineEngine) =>
     return { model } as { readonly model: AutoSnapshotReply }
   })
 
-const sendAuto = (runtime: MachineEngine, intent: AutoIntent) => {
+const sendAuto = (runtime: ActorRouterService, intent: AutoIntent) => {
   switch (intent._tag) {
     case "StartAuto":
       return runtime.send(
@@ -140,12 +139,7 @@ const tellAuto = (msg: AutoMsg) =>
 describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       // Start auto
       yield* sendAuto(
         runtime,
@@ -194,12 +188,7 @@ describe("Auto runtime integration", () => {
 
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // TurnCompleted should not change UI iteration
@@ -213,12 +202,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
 
@@ -229,12 +213,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // Move to AwaitingReview
@@ -248,12 +227,7 @@ describe("Auto runtime integration", () => {
 
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // 5 turns without checkpoint
@@ -276,12 +250,7 @@ describe("Auto runtime integration", () => {
 
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       // Auto starts Inactive — drive a checkpoint, review, and turn
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "x" }))
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
@@ -295,12 +264,7 @@ describe("Auto runtime integration", () => {
 
   it.live("unrelated tool does not advance the loop", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // An unrelated tool call has no actor message — `tellAutoFromTool`
@@ -318,12 +282,7 @@ describe("Auto runtime integration", () => {
 
   it.live("review while Working is ignored (must checkpoint first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // Review fired without a preceding checkpoint — must not advance
@@ -338,12 +297,7 @@ describe("Auto runtime integration", () => {
 
   it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
@@ -361,12 +315,7 @@ describe("Auto runtime integration", () => {
 
   it.live("complete checkpoint while AwaitingReview is ignored (review gate)", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
@@ -387,12 +336,7 @@ describe("Auto runtime integration", () => {
 
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 1 }))
 
       // Checkpoint continue at iteration 1/1
@@ -411,14 +355,13 @@ describe("Auto runtime integration", () => {
   // Auto state hydration on cold actor spawn is covered end-to-end by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state
   // across host scopes`. The legacy `storage.saveExtensionState` /
-  // `MachineEngine.publish(SessionStarted)` hydration path no longer
+  // `ActorRouter.publish(SessionStarted)` hydration path no longer
   // exists — the actor primitive persists through `ActorPersistenceStorage`
   // keyed on `(profileId, persistenceKey)`, not `(sessionId, extensionId)`.
 
   it.live("auto behavior.view injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
+      const runtime = yield* ActorRouter
       yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "research caching strategies" }))
       yield* tellAuto(
         AutoMsg.AutoSignal.make({

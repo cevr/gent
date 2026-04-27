@@ -1,7 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, type Layer, Ref, Stream } from "effect"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
-import { Provider, type SequenceStep } from "@gent/core/providers/provider"
+import {
+  Provider,
+  type SequenceStep,
+  type SequenceProviderControls,
+} from "@gent/core/providers/provider"
 import {
   createE2ELayer,
   withTinyContextWindow,
@@ -11,10 +15,13 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
-import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
+import {
+  ActorRouter,
+  type ActorRouterService,
+} from "../../src/runtime/extensions/resource-host/actor-router"
+import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { AgentName } from "@gent/core/domain/agent"
+import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AutoProtocol } from "@gent/extensions/auto-protocol"
 
@@ -34,25 +41,24 @@ const makeMessage = (text: string) =>
 /** Mock subagent runner that returns valid review JSON for review tool compatibility */
 const reviewCompatibleRunner = {
   run: (params: { prompt: string }) =>
-    Effect.succeed({
-      _tag: "success" as const,
-      text: params.prompt.includes("Synthesize")
-        ? JSON.stringify([
-            { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
-          ])
-        : "No issues found.",
-      sessionId: SessionId.make("test-subagent-session"),
-      agentName: AgentName.make("cowork"),
-    }),
+    Effect.succeed(
+      AgentRunResult.Success.make({
+        text: params.prompt.includes("Synthesize")
+          ? JSON.stringify([
+              { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
+            ])
+          : "No issues found.",
+        sessionId: SessionId.make("test-subagent-session"),
+        agentName: AgentName.make("cowork"),
+      }),
+    ),
 }
 
 const runE2ETest = (
   steps: Parameters<typeof Provider.Sequence>[0],
   test: (
-    controls: Awaited<
-      ReturnType<typeof Effect.runPromise<ReturnType<typeof Provider.Sequence>>>["then"]
-    >["controls"],
-  ) => Effect.Effect<void, unknown, AgentLoop | MachineEngine>,
+    controls: SequenceProviderControls,
+  ) => Effect.Effect<void, unknown, AgentLoop | ActorRouter | EventStore>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
@@ -63,12 +69,8 @@ const runE2ETest = (
     })
 
     yield* Effect.gen(function* () {
-      const stateRuntime = yield* MachineEngine
+      const stateRuntime = yield* ActorRouter
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
       yield* stateRuntime.send(
         sessionId,
         AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
@@ -78,11 +80,7 @@ const runE2ETest = (
     }).pipe(Effect.provide(e2eLayer))
   })
 
-const waitForAutoActive = (
-  runtime: typeof MachineEngine.Type,
-  active: boolean,
-  timeoutMs = 3_000,
-) =>
+const waitForAutoActive = (runtime: ActorRouterService, active: boolean, timeoutMs = 3_000) =>
   waitFor(
     runtime
       .execute(sessionId, AutoProtocol.GetSnapshot.make(), branchId)
@@ -107,7 +105,7 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* MachineEngine
+          const stateRuntime = yield* ActorRouter
 
           yield* agentLoop.run(makeMessage("begin"))
 
@@ -156,7 +154,7 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* MachineEngine
+          const stateRuntime = yield* ActorRouter
 
           yield* agentLoop.run(makeMessage("begin"))
 
@@ -243,14 +241,10 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* MachineEngine
+        const stateRuntime = yield* ActorRouter
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
         yield* stateRuntime.send(
           sessionId,
           AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
@@ -267,7 +261,7 @@ describe("Auto extension E2E", () => {
         }
 
         const model = yield* waitForAutoActive(stateRuntime, false)
-        expect(model.active).toBe(false)
+        expect(model?.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
@@ -289,14 +283,10 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* MachineEngine
+        const stateRuntime = yield* ActorRouter
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
         yield* stateRuntime.send(
           sessionId,
           AutoProtocol.StartAuto.make({ goal: "Verify phases" }),
@@ -363,14 +353,10 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* MachineEngine
+        const stateRuntime = yield* ActorRouter
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
         yield* stateRuntime.send(
           sessionId,
           AutoProtocol.StartAuto.make({ goal: "Test handoff dedup" }),
@@ -391,7 +377,9 @@ describe("Auto extension E2E", () => {
           Effect.catchEager(() => Effect.void),
         )
         const envelopes = yield* Ref.get(envelopesRef)
-        const handoffEvents = envelopes.filter((e) => e.event._tag === "HandoffPresented")
+        const handoffEvents = envelopes.filter(
+          (e) => (e.event._tag as string) === "HandoffPresented",
+        )
         expect(handoffEvents.length).toBe(0)
       }).pipe(Effect.provide(e2eLayer))
     }),
@@ -418,14 +406,10 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* MachineEngine
+        const stateRuntime = yield* ActorRouter
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
         yield* stateRuntime.send(
           sessionId,
           AutoProtocol.StartAuto.make({ goal: "Verify no direct handoff" }),
@@ -465,14 +449,10 @@ describe("Auto extension E2E", () => {
 
           yield* Effect.gen(function* () {
             const agentLoop = yield* AgentLoop
-            const stateRuntime = yield* MachineEngine
+            const stateRuntime = yield* ActorRouter
 
             yield* ensureStorageParents({ sessionId, branchId })
 
-            yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
-              sessionId,
-              branchId,
-            })
             yield* stateRuntime.send(
               sessionId,
               AutoProtocol.StartAuto.make({ goal: "Threshold handoff test" }),

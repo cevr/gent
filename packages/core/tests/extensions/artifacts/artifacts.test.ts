@@ -7,24 +7,25 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset.js"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
-import { SessionStarted } from "@gent/core/domain/event"
+import {
+  ActorRouter,
+  type ActorRouterService,
+} from "../../../src/runtime/extensions/resource-host/actor-router"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
 
 const sessionId = SessionId.make("art-test-session")
 const branchId = BranchId.make("art-test-branch")
 
 const withRuntime = (
-  fn: (runtime: typeof MachineEngine.Type) => Effect.Effect<void, unknown, MachineEngine>,
+  fn: (runtime: ActorRouterService) => Effect.Effect<void, unknown, ActorRouter>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
     const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
     yield* Effect.gen(function* () {
-      const runtime = yield* MachineEngine
+      const runtime = yield* ActorRouter
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* fn(runtime)
     }).pipe(Effect.provide(e2eLayer))
   }).pipe(Effect.timeout("4 seconds"))

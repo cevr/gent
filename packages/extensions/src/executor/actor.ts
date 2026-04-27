@@ -45,7 +45,7 @@ export type ExecutorState = Schema.Schema.Type<typeof ExecutorState>
 // ── Messages ──
 //
 // `_tag` strings are shared with `ExecutorProtocol.*` ExtensionMessage
-// envelopes so the actor-route fallback in MachineEngine (W10-1b.0) can
+// envelopes so the actor-route fallback in ActorRouter (W10-1b.0) can
 // forward envelopes directly into the actor mailbox.
 
 export const ExecutorMsg = TaggedEnumClass("ExecutorMsg", {

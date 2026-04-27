@@ -3,7 +3,7 @@
  * RPC path with per-request scopes, matching production behavior.
  *
  * Unlike skills-actor.test.ts (which bypasses RPC), this test goes through
- * Gent.test → RpcServer → extension.ask → MachineEngine.
+ * Gent.test → RpcServer → extension.ask → ActorRouter.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
@@ -88,7 +88,7 @@ describe("SkillsExtension via RPC", () => {
           expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -115,7 +115,7 @@ describe("SkillsExtension via RPC", () => {
           expect(reply!.content).toBe("Use Effect.fn for tracing")
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -140,6 +140,6 @@ describe("SkillsExtension via RPC", () => {
           expect(reply).toBeNull()
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 })

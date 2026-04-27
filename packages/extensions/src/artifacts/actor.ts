@@ -2,7 +2,7 @@
  * Artifacts actor — durable artifact store hosted on a `Behavior`.
  *
  * Messages share `_tag` strings with `ArtifactProtocol.*` envelopes so
- * the actor-route fallback in MachineEngine forwards
+ * the actor-route fallback in ActorRouter forwards
  * `runtime.execute(ArtifactProtocol.X.make(...))` straight into the
  * actor mailbox and threads the reply back through the ask correlation.
  *

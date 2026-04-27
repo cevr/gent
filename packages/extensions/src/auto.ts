@@ -16,7 +16,7 @@
  * `runtime.toolResult` / `runtime.turnAfter` slots which translate them
  * to actor messages and drain pending follow-ups via
  * `ctx.session.queueFollowUp`. ExtensionMessage envelopes route through
- * the actor-route fallback in MachineEngine (W10-1b.0).
+ * the actor-route fallback in ActorRouter (W10-1b.0).
  */
 
 import { Effect, Schema } from "effect"
@@ -143,7 +143,7 @@ export type AutoState = Schema.Schema.Type<typeof AutoState>
 // ── Actor messages ──
 //
 // `_tag` strings are shared with `AutoProtocol.*` ExtensionMessage envelopes
-// so the actor-route fallback in MachineEngine (W10-1b.0) can forward
+// so the actor-route fallback in ActorRouter (W10-1b.0) can forward
 // envelopes directly into the actor mailbox without re-encoding.
 
 export const AutoMsg = TaggedEnumClass("AutoMsg", {

@@ -42,9 +42,9 @@ import { EventPublisher } from "../../src/domain/event-publisher"
 import { Provider } from "../../src/providers/provider"
 import { SessionMutations } from "../../src/domain/session-mutations"
 import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../../src/runtime/extensions/resource-host/machine-engine"
+  ActorRouter,
+  type ActorRouterService,
+} from "../../src/runtime/extensions/resource-host/actor-router"
 import {
   SessionRuntime,
   SessionRuntimeStateSchema,
@@ -87,10 +87,10 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
     restoreSession: () => Effect.void,
   } satisfies SessionRuntimeService)
 
-const machineProbeLayer: Layer.Layer<MachineEngine> = Layer.succeed(MachineEngine, {
+const machineProbeLayer: Layer.Layer<ActorRouter> = Layer.succeed(ActorRouter, {
   send: () => Effect.void,
   execute: () => Effect.die("unexpected machine request"),
-} satisfies MachineEngineService)
+} satisfies ActorRouterService)
 
 const baseDeps = ({
   withRegistration,

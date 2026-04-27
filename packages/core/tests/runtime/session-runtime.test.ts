@@ -2,7 +2,7 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { AgentDefinition } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
 import { textStep } from "@gent/core/debug/provider"
@@ -22,12 +22,20 @@ import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/co
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import {
+  ActorCommandId,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/domain/ids"
 import { Permission } from "@gent/core/domain/permission"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -51,6 +59,9 @@ import {
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import type { AgentLoopCheckpointRecord } from "../../src/runtime/agent/agent-loop.checkpoint"
 
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
+
 const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
   const cowork = AgentDefinition.make({
     name: "cowork" as never,
@@ -63,7 +74,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
 
   return resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
@@ -90,7 +101,7 @@ const makeRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -134,7 +145,7 @@ const makeRuntimeLayerWithEventPublisher = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -209,7 +220,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -281,7 +292,7 @@ const makeLiveToolRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -342,8 +353,9 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reads opaque RawInput as Prompt
 const latestUserText = (request: { readonly prompt: unknown }) =>
-  [...Prompt.make(request.prompt).content]
+  [...Prompt.make(request.prompt as Prompt.RawInput).content]
     .reverse()
     .find((message) => message.role === "user")
     ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
@@ -361,7 +373,7 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
         const count = yield* Ref.getAndUpdate(callCount, (current) => current + 1)
         if (count === 0) {
           return yield* new InteractionPendingError({
-            requestId: "req-test-1",
+            requestId: InteractionRequestId.make("req-test-1"),
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,
           })
@@ -408,27 +420,29 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const { sessionId, branchId } = yield* createCwdSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createCwdSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          applySteerCommand(
-            interruptPayloadToSteerCommand({
-              _tag: "Cancel",
+          yield* sessionRuntime.dispatch(
+            applySteerCommand(
+              interruptPayloadToSteerCommand({
+                _tag: "Cancel",
+                sessionId,
+                branchId,
+              }),
+            ),
+          )
+          yield* sessionRuntime.dispatch(
+            respondInteractionCommand({
               sessionId,
               branchId,
+              requestId: "req-not-waiting",
             }),
-          ),
-        )
-        yield* sessionRuntime.dispatch(
-          respondInteractionCommand({
-            sessionId,
-            branchId,
-            requestId: "req-not-waiting",
-          }),
-        )
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          )
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -436,34 +450,36 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayerWithCheckpointFailure({ failUpsertOn: 1 })
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const recorder = yield* SequenceRecorder
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const recorder = yield* SequenceRecorder
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        const exit = yield* Effect.exit(
-          sessionRuntime.dispatch(
-            sendUserMessageCommand({
-              sessionId,
-              branchId,
-              content: "persist this turn",
-            }),
-          ),
-        )
+          const exit = yield* Effect.exit(
+            sessionRuntime.dispatch(
+              sendUserMessageCommand({
+                sessionId,
+                branchId,
+                content: "persist this turn",
+              }),
+            ),
+          )
 
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          const error = Cause.findErrorOption(exit.cause)
-          expect(Option.isSome(error)).toBe(true)
-          if (Option.isSome(error)) {
-            expect(error.value).toBeInstanceOf(SessionRuntimeError)
-            expect(error.value.message).toBe("dispatch failed")
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            const error = Cause.findErrorOption(exit.cause)
+            expect(Option.isSome(error)).toBe(true)
+            if (Option.isSome(error)) {
+              expect(error.value).toBeInstanceOf(SessionRuntimeError)
+              expect(error.value.message).toBe("dispatch failed")
+            }
+            expect(Cause.pretty(exit.cause)).toContain("checkpoint upsert failed")
           }
-          expect(Cause.pretty(exit.cause)).toContain("checkpoint upsert failed")
-        }
 
-        expect(eventTags(yield* recorder.getCalls())).toContain("ErrorOccurred")
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(eventTags(yield* recorder.getCalls())).toContain("ErrorOccurred")
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -488,54 +504,56 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const recorder = yield* SequenceRecorder
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const recorder = yield* SequenceRecorder
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({
-            sessionId,
-            branchId,
-            content: "first",
-            agentOverride: "memory:reflect",
-          }),
-        )
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({
-            sessionId,
-            branchId,
-            content: "second",
-          }),
-        )
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({
+              sessionId,
+              branchId,
+              content: "first",
+              agentOverride: AgentName.make("memory:reflect"),
+            }),
+          )
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({
+              sessionId,
+              branchId,
+              content: "second",
+            }),
+          )
 
-        const messages = yield* waitFor(
-          storage.listMessages(branchId),
-          (current) => current.filter((message) => message.role === "assistant").length === 2,
-          5_000,
-          "two assistant replies",
-        )
+          const messages = yield* waitFor(
+            storage.listMessages(branchId),
+            (current) => current.filter((message) => message.role === "assistant").length === 2,
+            5_000,
+            "two assistant replies",
+          )
 
-        expect(messages.map((message) => message.role)).toEqual([
-          "user",
-          "assistant",
-          "user",
-          "assistant",
-        ])
+          expect(messages.map((message) => message.role)).toEqual([
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+          ])
 
-        const state = yield* waitFor(
-          sessionRuntime.getState({ sessionId, branchId }),
-          (current) => current._tag === "Idle",
-          5_000,
-          "idle runtime state",
-        )
-        expect(state.agent).toBe("cowork")
+          const state = yield* waitFor(
+            sessionRuntime.getState({ sessionId, branchId }),
+            (current) => current._tag === "Idle",
+            5_000,
+            "idle runtime state",
+          )
+          expect(state.agent).toBe(AgentName.make("cowork"))
 
-        const calls = yield* recorder.getCalls()
-        expect(eventTags(calls)).not.toContain("AgentSwitched")
-        yield* controls.assertDone()
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          const calls = yield* recorder.getCalls()
+          expect(eventTags(calls)).not.toContain("AgentSwitched")
+          yield* controls.assertDone()
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -544,37 +562,39 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const recorder = yield* SequenceRecorder
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const recorder = yield* SequenceRecorder
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          invokeToolCommand({
-            sessionId,
-            branchId,
-            toolName: "read",
-            input: {},
-          }),
-        )
+          yield* sessionRuntime.dispatch(
+            invokeToolCommand({
+              sessionId,
+              branchId,
+              toolName: "read",
+              input: {},
+            }),
+          )
 
-        const messages = yield* waitFor(
-          storage.listMessages(branchId),
-          (current) => current.length === 2,
-          5_000,
-          "invokeTool messages",
-        )
-        const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
-        const calls = yield* recorder.getCalls()
+          const messages = yield* waitFor(
+            storage.listMessages(branchId),
+            (current) => current.length === 2,
+            5_000,
+            "invokeTool messages",
+          )
+          const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
+          const calls = yield* recorder.getCalls()
 
-        expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
-        expect(messages[0]?.parts[0]?.type).toBe("tool-call")
-        expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-        expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
-        expect(eventTags(calls)).toContain("ToolCallStarted")
-        expect(eventTags(calls)).toContain("ToolCallSucceeded")
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
+          expect(messages[0]?.parts[0]?.type).toBe("tool-call")
+          expect(messages[1]?.parts[0]?.type).toBe("tool-result")
+          expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+          expect(eventTags(calls)).toContain("ToolCallStarted")
+          expect(eventTags(calls)).toContain("ToolCallSucceeded")
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -594,29 +614,31 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
-        const commandId = ActorCommandId.make("record-tool-atomicity")
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
+          const commandId = ActorCommandId.make("record-tool-atomicity")
 
-        const exit = yield* Effect.exit(
-          sessionRuntime.dispatch(
-            recordToolResultCommand({
-              commandId,
-              sessionId,
-              branchId,
-              toolCallId: ToolCallId.make("tool-call-atomicity"),
-              toolName: "read",
-              output: { ok: true },
-            }),
-          ),
-        )
-        const message = yield* storage.getMessage(MessageId.make(`${commandId}:tool-result`))
+          const exit = yield* Effect.exit(
+            sessionRuntime.dispatch(
+              recordToolResultCommand({
+                commandId,
+                sessionId,
+                branchId,
+                toolCallId: ToolCallId.make("tool-call-atomicity"),
+                toolName: "read",
+                output: { ok: true },
+              }),
+            ),
+          )
+          const message = yield* storage.getMessage(MessageId.make(`${commandId}:tool-result`))
 
-        expect(exit._tag).toBe("Failure")
-        expect(message).toBeUndefined()
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(exit._tag).toBe("Failure")
+          expect(message).toBeUndefined()
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -625,31 +647,33 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const recorder = yield* SequenceRecorder
-        const { sessionId, branchId } = yield* createSessionBranch
-        const commandId = ActorCommandId.make("record-tool-idempotent")
-        const command = recordToolResultCommand({
-          commandId,
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("tool-call-idempotent"),
-          toolName: "read",
-          output: { ok: true },
-        })
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const recorder = yield* SequenceRecorder
+          const { sessionId, branchId } = yield* createSessionBranch
+          const commandId = ActorCommandId.make("record-tool-idempotent")
+          const command = recordToolResultCommand({
+            commandId,
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-idempotent"),
+            toolName: "read",
+            output: { ok: true },
+          })
 
-        yield* sessionRuntime.dispatch(command)
-        yield* sessionRuntime.dispatch(command)
+          yield* sessionRuntime.dispatch(command)
+          yield* sessionRuntime.dispatch(command)
 
-        const messages = yield* storage.listMessages(branchId)
-        const calls = yield* recorder.getCalls()
-        const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
+          const messages = yield* storage.listMessages(branchId)
+          const calls = yield* recorder.getCalls()
+          const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
 
-        expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
-        expect(toolSucceeded).toHaveLength(1)
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+          expect(toolSucceeded).toHaveLength(1)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -663,34 +687,36 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
-        const commandId = ActorCommandId.make("record-tool-delivery-retry")
-        const command = recordToolResultCommand({
-          commandId,
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("tool-call-delivery-retry"),
-          toolName: "read",
-          output: { ok: true },
-        })
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
+          const commandId = ActorCommandId.make("record-tool-delivery-retry")
+          const command = recordToolResultCommand({
+            commandId,
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-delivery-retry"),
+            toolName: "read",
+            output: { ok: true },
+          })
 
-        const firstExit = yield* Effect.exit(sessionRuntime.dispatch(command))
-        yield* sessionRuntime.dispatch(command)
+          const firstExit = yield* Effect.exit(sessionRuntime.dispatch(command))
+          yield* sessionRuntime.dispatch(command)
 
-        const messages = yield* storage.listMessages(branchId)
-        const events = yield* storage.listEvents({ sessionId, branchId })
-        const toolSucceeded = events.filter(
-          (envelope) => envelope.event._tag === "ToolCallSucceeded",
-        )
+          const messages = yield* storage.listMessages(branchId)
+          const events = yield* storage.listEvents({ sessionId, branchId })
+          const toolSucceeded = events.filter(
+            (envelope) => envelope.event._tag === "ToolCallSucceeded",
+          )
 
-        expect(firstExit._tag).toBe("Failure")
-        expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
-        expect(toolSucceeded).toHaveLength(1)
-        expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(firstExit._tag).toBe("Failure")
+          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+          expect(toolSucceeded).toHaveLength(1)
+          expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -742,41 +768,45 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const { sessionId, branchId } = yield* createSessionBranch
-        const first = recordToolResultCommand({
-          commandId: ActorCommandId.make("record-tool-serialize-a"),
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("tool-call-serialize-a"),
-          toolName: "read",
-          output: { value: "a" },
-        })
-        const second = recordToolResultCommand({
-          commandId: ActorCommandId.make("record-tool-serialize-b"),
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("tool-call-serialize-b"),
-          toolName: "read",
-          output: { value: "b" },
-        })
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranch
+          const first = recordToolResultCommand({
+            commandId: ActorCommandId.make("record-tool-serialize-a"),
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-serialize-a"),
+            toolName: "read",
+            output: { value: "a" },
+          })
+          const second = recordToolResultCommand({
+            commandId: ActorCommandId.make("record-tool-serialize-b"),
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-serialize-b"),
+            toolName: "read",
+            output: { value: "b" },
+          })
 
-        const firstFiber = yield* Effect.forkChild(sessionRuntime.dispatch(first))
-        yield* Effect.promise(() => firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
+          const firstFiber = yield* Effect.forkChild(sessionRuntime.dispatch(first))
+          yield* Effect.promise(() => firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
 
-        const secondFiber = yield* Effect.forkChild(sessionRuntime.dispatch(second))
-        const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("200 millis"))
+          const secondFiber = yield* Effect.forkChild(sessionRuntime.dispatch(second))
+          const earlySecond = yield* Fiber.join(secondFiber).pipe(
+            Effect.timeoutOption("200 millis"),
+          )
 
-        expect(earlySecond._tag).toBe("None")
-        expect(deliveredToolResults).toBe(1)
+          expect(earlySecond._tag).toBe("None")
+          expect(deliveredToolResults).toBe(1)
 
-        releaseFirstDelivery()
-        yield* Fiber.join(firstFiber)
-        yield* Fiber.join(secondFiber)
+          releaseFirstDelivery()
+          yield* Fiber.join(firstFiber)
+          yield* Fiber.join(secondFiber)
 
-        expect(deliveredToolResults).toBe(2)
-      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+          expect(deliveredToolResults).toBe(2)
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -804,56 +834,60 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        const submitFiber = yield* Effect.forkChild(
-          sessionRuntime.dispatch(
-            sendUserMessageCommand({
-              sessionId,
-              branchId,
-              content: "hold the turn open",
-            }),
-          ),
-        )
-        yield* Effect.promise(() => streamStarted).pipe(Effect.timeout("5 seconds"))
+          const submitFiber = yield* Effect.forkChild(
+            sessionRuntime.dispatch(
+              sendUserMessageCommand({
+                sessionId,
+                branchId,
+                content: "hold the turn open",
+              }),
+            ),
+          )
+          yield* Effect.promise(() => streamStarted).pipe(Effect.timeout("5 seconds"))
 
-        const recordFiber = yield* Effect.forkChild(
-          sessionRuntime.dispatch(
-            recordToolResultCommand({
-              commandId: ActorCommandId.make("record-tool-active-owner"),
-              sessionId,
-              branchId,
-              toolCallId: ToolCallId.make("tool-call-active-owner"),
-              toolName: "read",
-              output: { value: "blocked until turn completes" },
-            }),
-          ),
-        )
-        const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("200 millis"))
-        const messagesBeforeRelease = yield* storage.listMessages(branchId)
+          const recordFiber = yield* Effect.forkChild(
+            sessionRuntime.dispatch(
+              recordToolResultCommand({
+                commandId: ActorCommandId.make("record-tool-active-owner"),
+                sessionId,
+                branchId,
+                toolCallId: ToolCallId.make("tool-call-active-owner"),
+                toolName: "read",
+                output: { value: "blocked until turn completes" },
+              }),
+            ),
+          )
+          const earlyRecord = yield* Fiber.join(recordFiber).pipe(
+            Effect.timeoutOption("200 millis"),
+          )
+          const messagesBeforeRelease = yield* storage.listMessages(branchId)
 
-        expect(earlyRecord._tag).toBe("None")
-        expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
+          expect(earlyRecord._tag).toBe("None")
+          expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
 
-        releaseStream()
-        yield* Fiber.join(submitFiber)
-        yield* Fiber.join(recordFiber)
+          releaseStream()
+          yield* Fiber.join(submitFiber)
+          yield* Fiber.join(recordFiber)
 
-        const messagesAfterRelease = yield* waitFor(
-          storage.listMessages(branchId),
-          (messages) => messages.some((message) => message.role === "tool"),
-          5_000,
-          "tool result after active turn releases ownership",
-        )
-        expect(messagesAfterRelease.map((message) => message.role)).toEqual([
-          "user",
-          "assistant",
-          "tool",
-        ])
-      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+          const messagesAfterRelease = yield* waitFor(
+            storage.listMessages(branchId),
+            (messages) => messages.some((message) => message.role === "tool"),
+            5_000,
+            "tool result after active turn releases ownership",
+          )
+          expect(messagesAfterRelease.map((message) => message.role)).toEqual([
+            "user",
+            "assistant",
+            "tool",
+          ])
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -886,49 +920,51 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
-        )
-        yield* controls.waitForCall(0)
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({ sessionId, branchId, content: "queued" }),
-        )
-        yield* sessionRuntime.dispatch(
-          applySteerCommand(
-            interruptPayloadToSteerCommand({
-              _tag: "Interject",
-              sessionId,
-              branchId,
-              message: "steer now",
-            }),
-          ),
-        )
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+          )
+          yield* controls.waitForCall(0)
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "queued" }),
+          )
+          yield* sessionRuntime.dispatch(
+            applySteerCommand(
+              interruptPayloadToSteerCommand({
+                _tag: "Interject",
+                sessionId,
+                branchId,
+                message: "steer now",
+              }),
+            ),
+          )
 
-        const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
-        expect(queue.steering).toEqual([
-          expect.objectContaining({ _tag: "steering", content: "steer now" }),
-        ])
-        expect(queue.followUp).toEqual([
-          expect.objectContaining({ _tag: "follow-up", content: "queued" }),
-        ])
+          const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
+          expect(queue.steering).toEqual([
+            expect.objectContaining({ _tag: "steering", content: "steer now" }),
+          ])
+          expect(queue.followUp).toEqual([
+            expect.objectContaining({ _tag: "follow-up", content: "queued" }),
+          ])
 
-        yield* controls.emitAll(0)
+          yield* controls.emitAll(0)
 
-        const messages = yield* waitFor(
-          storage.listMessages(branchId),
-          (current) => current.filter((message) => message.role === "assistant").length === 3,
-          5_000,
-          "interjected turn completion",
-        )
+          const messages = yield* waitFor(
+            storage.listMessages(branchId),
+            (current) => current.filter((message) => message.role === "assistant").length === 3,
+            5_000,
+            "interjected turn completion",
+          )
 
-        expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
-        yield* controls.assertDone()
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
+          yield* controls.assertDone()
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -953,36 +989,38 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
-        )
-        yield* controls.waitForCall(0)
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+          )
+          yield* controls.waitForCall(0)
 
-        const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
-        const followUpFiber = yield* Effect.forkChild(
-          sessionRuntime.dispatch(
-            sendUserMessageCommand({ sessionId, branchId, content: "second" }),
-          ),
-        )
-        yield* Fiber.join(emitFiber)
-        yield* Fiber.join(followUpFiber)
+          const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
+          const followUpFiber = yield* Effect.forkChild(
+            sessionRuntime.dispatch(
+              sendUserMessageCommand({ sessionId, branchId, content: "second" }),
+            ),
+          )
+          yield* Fiber.join(emitFiber)
+          yield* Fiber.join(followUpFiber)
 
-        const messages = yield* waitFor(
-          storage.listMessages(branchId),
-          (current) => current.filter((message) => message.role === "assistant").length === 2,
-          5_000,
-          "concurrent follow-up completion",
-        )
-        expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
-        expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
-        expect(yield* controls.callCount).toBe(2)
-        yield* controls.assertDone()
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          const messages = yield* waitFor(
+            storage.listMessages(branchId),
+            (current) => current.filter((message) => message.role === "assistant").length === 2,
+            5_000,
+            "concurrent follow-up completion",
+          )
+          expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
+          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+          expect(yield* controls.callCount).toBe(2)
+          yield* controls.assertDone()
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -1002,40 +1040,42 @@ describe("SessionRuntime", () => {
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const storage = yield* Storage
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const storage = yield* Storage
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
-        )
-        yield* controls.waitForCall(0)
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({ sessionId, branchId, content: "drain me" }),
-        )
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+          )
+          yield* controls.waitForCall(0)
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "drain me" }),
+          )
 
-        const drained = yield* sessionRuntime.drainQueuedMessages({ sessionId, branchId })
-        expect(drained.followUp).toEqual([
-          expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
-        ])
-        expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
-          steering: [],
-          followUp: [],
-        } satisfies QueueSnapshot)
+          const drained = yield* sessionRuntime.drainQueuedMessages({ sessionId, branchId })
+          expect(drained.followUp).toEqual([
+            expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
+          ])
+          expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
+            steering: [],
+            followUp: [],
+          } satisfies QueueSnapshot)
 
-        yield* controls.emitAll(0)
-        yield* waitFor(
-          sessionRuntime.getState({ sessionId, branchId }),
-          (state) => state._tag === "Idle",
-          5_000,
-          "idle after drained follow-up",
-        )
-        expect(yield* controls.callCount).toBe(1)
-        expect(
-          (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
-        ).toHaveLength(1)
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            sessionRuntime.getState({ sessionId, branchId }),
+            (state) => state._tag === "Idle",
+            5_000,
+            "idle after drained follow-up",
+          )
+          expect(yield* controls.callCount).toBe(1)
+          expect(
+            (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
+          ).toHaveLength(1)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 
@@ -1046,44 +1086,46 @@ describe("SessionRuntime", () => {
     const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
 
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        const { sessionId, branchId } = yield* createSessionBranch
+      narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranch
 
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({
-            sessionId,
-            branchId,
-            content: "trigger interaction",
-          }),
-        )
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({
+              sessionId,
+              branchId,
+              content: "trigger interaction",
+            }),
+          )
 
-        yield* waitFor(
-          sessionRuntime.getState({ sessionId, branchId }),
-          (current) => current._tag === "WaitingForInteraction",
-          5_000,
-          "waiting interaction state",
-        )
+          yield* waitFor(
+            sessionRuntime.getState({ sessionId, branchId }),
+            (current) => current._tag === "WaitingForInteraction",
+            5_000,
+            "waiting interaction state",
+          )
 
-        yield* sessionRuntime.dispatch(
-          respondInteractionCommand({
-            sessionId,
-            branchId,
-            requestId: "req-test-1",
-          }),
-        )
+          yield* sessionRuntime.dispatch(
+            respondInteractionCommand({
+              sessionId,
+              branchId,
+              requestId: "req-test-1",
+            }),
+          )
 
-        yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
-        const state = yield* waitFor(
-          sessionRuntime.getState({ sessionId, branchId }),
-          (current) => current._tag === "Idle",
-          5_000,
-          "idle after interaction response",
-        )
+          yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+          const state = yield* waitFor(
+            sessionRuntime.getState({ sessionId, branchId }),
+            (current) => current._tag === "Idle",
+            5_000,
+            "idle after interaction response",
+          )
 
-        expect(state._tag).toBe("Idle")
-        expect(Ref.getUnsafe(callCount)).toBe(2)
-      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+          expect(state._tag).toBe("Idle")
+          expect(Ref.getUnsafe(callCount)).toBe(2)
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+      ),
     )
   })
 })

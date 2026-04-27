@@ -4,7 +4,7 @@ import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context"
-import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
 
@@ -210,6 +210,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
         }
         yield* testStorage.storage.deleteMessages(branchId, afterMessageId)
       }),
+    updateReasoningLevel: ({ reasoningLevel }) => Effect.succeed({ reasoningLevel }),
   }
 
   const deps: MakeExtensionHostContextDeps = {
@@ -219,11 +220,8 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       platform: "test",
     } as MakeExtensionHostContextDeps["platform"],
     extensionStateRuntime: {
-      publish: die("MachineEngine"),
-      send: die("MachineEngine"),
-      execute: die("MachineEngine"),
-      getActorStatuses: die("MachineEngine"),
-      terminateAll: die("MachineEngine"),
+      send: die("ActorRouter"),
+      execute: die("ActorRouter"),
     } as unknown as MakeExtensionHostContextDeps["extensionStateRuntime"],
     actorEngine: {
       spawn: die("ActorEngine"),
@@ -260,6 +258,9 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       run: die("AgentRunnerService"),
     } as MakeExtensionHostContextDeps["agentRunner"],
     sessionMutations,
+    turnControl: {
+      queueFollowUp: die("ExtensionTurnControl"),
+    } as unknown as MakeExtensionHostContextDeps["turnControl"],
   }
 
   return { deps, published }
@@ -279,6 +280,7 @@ const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutatio
     deleteSession: fail,
     deleteBranch: fail,
     deleteMessages: fail,
+    updateReasoningLevel: fail,
   }
 }
 
@@ -410,7 +412,7 @@ describe("session mutation primitives", () => {
     await Effect.runPromise(ctx.session.switchBranch({ toBranchId: newBranch.id }))
 
     const updated = testStorage.sessions.get(SESSION_ID)!
-    expect(updated.activeBranchId).toBe("branch-2")
+    expect(updated.activeBranchId).toBe(BranchId.make("branch-2"))
     expect(published.some((e) => e._tag === "BranchSwitched")).toBe(true)
   })
 

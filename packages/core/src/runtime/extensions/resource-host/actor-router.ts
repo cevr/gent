@@ -1,5 +1,5 @@
 /**
- * MachineEngine — actor-router for ExtensionMessage dispatch.
+ * ActorRouter — actor-router for ExtensionMessage dispatch.
  *
  * After W10-PhaseB collapsed `Resource.machine` (FSM) into Behaviors,
  * this engine is purely a thin shim over `ActorEngine` + `Receptionist`:
@@ -40,7 +40,7 @@ import {
   type ActorBackedRoute,
 } from "./machine-protocol.js"
 
-export interface MachineEngineService {
+export interface ActorRouterService {
   readonly send: (
     sessionId: SessionId,
     message: AnyExtensionCommandMessage,
@@ -53,9 +53,9 @@ export interface MachineEngineService {
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
 }
 
-const makeMachineEngine = (
+const makeActorRouter = (
   extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<MachineEngineService, never, ActorEngine | Receptionist> =>
+): Effect.Effect<ActorRouterService, never, ActorEngine | Receptionist> =>
   Effect.gen(function* () {
     const { actorRoutes, protocols } = collectExtensionProtocol(extensions)
     const actorEngine = yield* ActorEngine
@@ -178,9 +178,9 @@ const makeMachineEngine = (
         return yield* protocols.decodeRequestReply(decoded, definition.replySchema, replyValue)
       })
 
-    const service: MachineEngineService = {
+    const service: ActorRouterService = {
       send: (sessionId, message, branchId) =>
-        Effect.withSpan("MachineEngine.send", {
+        Effect.withSpan("ActorRouter.send", {
           attributes: {
             "extension.id": message.extensionId,
             "extension.message": message._tag,
@@ -192,7 +192,7 @@ const makeMachineEngine = (
         message: M,
         branchId?: BranchId,
       ) =>
-        Effect.withSpan("MachineEngine.execute", {
+        Effect.withSpan("ActorRouter.execute", {
           attributes: {
             "extension.id": message.extensionId,
             "extension.message": message._tag,
@@ -206,30 +206,30 @@ const makeMachineEngine = (
     return service
   })
 
-export class MachineEngine extends Context.Service<MachineEngine, MachineEngineService>()(
-  "@gent/core/src/runtime/extensions/resource-host/machine-engine/MachineEngine",
+export class ActorRouter extends Context.Service<ActorRouter, ActorRouterService>()(
+  "@gent/core/src/runtime/extensions/resource-host/actor-router/ActorRouter",
 ) {
   // The router uses the same Receptionist that ActorHost registers
   // behaviors with — both surfaces MUST share one ActorEngine instance,
   // so the engine is a requirement here, not a baked-in dependency.
   // Callers wire `ActorEngine.Live` (or a Test variant) ONCE at the
-  // composition boundary so MachineEngine and ActorHost route through
+  // composition boundary so ActorRouter and ActorHost route through
   // the same mailbox map.
   static fromExtensions = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<MachineEngine, never, ActorEngine | Receptionist> =>
-    Layer.effect(MachineEngine, makeMachineEngine(extensions))
+  ): Layer.Layer<ActorRouter, never, ActorEngine | Receptionist> =>
+    Layer.effect(ActorRouter, makeActorRouter(extensions))
 
   static Live = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<MachineEngine, never, ActorEngine | Receptionist> =>
-    MachineEngine.fromExtensions(extensions)
+  ): Layer.Layer<ActorRouter, never, ActorEngine | Receptionist> =>
+    ActorRouter.fromExtensions(extensions)
 
   // Test variant — empty extension list. Bundles `ActorEngine.Live`
   // (which carries `Receptionist`) so callers don't need to think about
   // route discovery alignment; the engine and the actor host MUST share
   // one ActorEngine so the route hits the same actor map the host
   // registered into.
-  static Test = (): Layer.Layer<MachineEngine | ActorEngine | Receptionist> =>
-    MachineEngine.fromExtensions([]).pipe(Layer.provideMerge(ActorEngine.Live))
+  static Test = (): Layer.Layer<ActorRouter | ActorEngine | Receptionist> =>
+    ActorRouter.fromExtensions([]).pipe(Layer.provideMerge(ActorEngine.Live))
 }

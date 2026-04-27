@@ -35,7 +35,7 @@ import {
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
+import { ActorRouter } from "./extensions/resource-host/actor-router.js"
 import { MachineExecute } from "./extensions/machine-execute.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
@@ -350,7 +350,7 @@ export const buildExtensionLayers = (
   // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
   // before spawn and forks a periodic writer. Absent → in-memory mode.
   //
-  // Order matters: built before `extensionRuntimeLive` so MachineEngine
+  // Order matters: built before `extensionRuntimeLive` so ActorRouter
   // can pick up `ActorEngine` from the same provideMerge chain — the
   // engine's actor-route fallback (W10-1b.0) needs Receptionist + tell/ask
   // to dispatch ExtensionMessages to actor-only extensions.
@@ -362,11 +362,11 @@ export const buildExtensionLayers = (
         }).pipe(Layer.provideMerge(ActorEngine.Live))
       : ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
-  const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
+  const extensionRuntimeLive = ActorRouter.Live(resolved.extensions).pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
     Layer.provideMerge(actorRuntimeLive),
   )
-  // Project `MachineEngine` onto the read-only `MachineExecute` surface
+  // Project `ActorRouter` onto the read-only `MachineExecute` surface
   // for projection consumers. `MachineExecute` carries the `ReadOnly`
   // brand so projections can't accidentally yield write-capable Tags.
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
@@ -401,7 +401,7 @@ export const buildProfileRuntime = (params: {
     const layerContext = yield* Layer.build(combinedLayer)
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)
-    const extensionStateRuntime = Context.get(layerContext, MachineEngine)
+    const extensionStateRuntime = Context.get(layerContext, ActorRouter)
     const actorEngine = Context.get(layerContext, ActorEngine)
     const receptionist = Context.get(layerContext, Receptionist)
     const subscriptionEngineOpt = Context.getOption(layerContext, SubscriptionEngine)

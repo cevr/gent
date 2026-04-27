@@ -8,7 +8,7 @@ import { Effect, Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
-import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -21,34 +21,30 @@ export const makeActorRuntimeLayer = (config: {
 }) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  const machine = MachineEngine.Live(config.extensions).pipe(
+  const machine = ActorRouter.Live(config.extensions).pipe(
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorEngine.Live),
   )
   const machineWithSeededParents =
     config.withStorage === true
       ? Layer.effect(
-          MachineEngine,
+          ActorRouter,
           Effect.gen(function* () {
-            const runtime = yield* MachineEngine
+            const runtime = yield* ActorRouter
+            const store = yield* Storage
             return {
-              publish: (event, ctx) =>
-                ensureStorageParents({ sessionId: ctx.sessionId, branchId: ctx.branchId }).pipe(
-                  Effect.flatMap(() => runtime.publish(event, ctx)),
-                ),
               send: (sessionId, message, branchId) =>
                 ensureStorageParents({ sessionId, branchId }).pipe(
+                  Effect.orDie,
                   Effect.flatMap(() => runtime.send(sessionId, message, branchId)),
+                  Effect.provideService(Storage, store),
                 ),
               execute: (sessionId, message, branchId) =>
                 ensureStorageParents({ sessionId, branchId }).pipe(
+                  Effect.orDie,
                   Effect.flatMap(() => runtime.execute(sessionId, message, branchId)),
+                  Effect.provideService(Storage, store),
                 ),
-              getActorStatuses: (sessionId) =>
-                ensureStorageParents({ sessionId }).pipe(
-                  Effect.flatMap(() => runtime.getActorStatuses(sessionId)),
-                ),
-              terminateAll: runtime.terminateAll,
             } satisfies typeof runtime
           }),
         ).pipe(Layer.provide(Layer.merge(machine, storage)))

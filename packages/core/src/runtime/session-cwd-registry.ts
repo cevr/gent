@@ -3,7 +3,7 @@
  * EventPublisher router.
  *
  * The router needs to know which `SessionProfile` (= which cwd) an event
- * belongs to so it can dispatch through THAT profile's `MachineEngine` and
+ * belongs to so it can dispatch through THAT profile's `ActorRouter` and
  * pulseTags index, not the server's primary cwd. This service caches
  * `(sessionId → cwd)` writes from session-creation paths and falls back to
  * `Storage.getSession` for cold-cache lookups (recovery / out-of-band publish).

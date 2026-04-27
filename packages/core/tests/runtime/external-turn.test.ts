@@ -7,17 +7,17 @@
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Ref, Stream } from "effect"
-import { AgentLoop } from "../../src/runtime/agent/agent-loop"
+import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider, finishPart } from "@gent/core/providers/provider"
 import { ImagePart, Message, TextPart } from "@gent/core/domain/message"
-import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import {
   Finished,
@@ -33,7 +33,7 @@ import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -42,12 +42,12 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 
 // ── Helpers ──
 
-const sessionId = "test-session"
-const branchId = "test-branch"
+const sessionId = SessionId.make("test-session")
+const branchId = BranchId.make("test-branch")
 
 const makeMessage = (text: string) =>
   Message.Regular.make({
-    id: `${sessionId}-${branchId}-msg`,
+    id: MessageId.make(`${sessionId}-${branchId}-msg`),
     sessionId,
     branchId,
     role: "user",
@@ -57,7 +57,7 @@ const makeMessage = (text: string) =>
 
 const makeMessageWithParts = (parts: Message["parts"]) =>
   Message.Regular.make({
-    id: `${sessionId}-${branchId}-multipart-msg`,
+    id: MessageId.make(`${sessionId}-${branchId}-multipart-msg`),
     sessionId,
     branchId,
     role: "user",
@@ -66,22 +66,25 @@ const makeMessageWithParts = (parts: Message["parts"]) =>
   })
 
 const runAgentLoop = (
-  agentLoop: AgentLoop,
+  agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoop["run"]>[1],
+  options?: Parameters<AgentLoopService["run"]>[1],
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
     Effect.flatMap(() => agentLoop.run(message, options)),
   )
 
-const runAgentLoopOnce = (agentLoop: AgentLoop, input: Parameters<AgentLoop["runOnce"]>[0]) =>
+const runAgentLoopOnce = (
+  agentLoop: AgentLoopService,
+  input: Parameters<AgentLoopService["runOnce"]>[0],
+) =>
   ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
     Effect.flatMap(() => agentLoop.runOnce(input)),
   )
 
 /** Create a TurnExecutor that emits a sequence of TurnEvents. */
 const makeMockExecutor = (events: TurnEvent[]): TurnExecutor => ({
-  executeTurn: () => Stream.fromIterable<TurnEvent, TurnError>(events),
+  executeTurn: () => Stream.fromIterable(events) as Stream.Stream<TurnEvent, TurnError>,
 })
 
 /** Create a TurnExecutor that captures the TurnContext for assertions. */
@@ -91,7 +94,7 @@ const makeCapturingExecutor = (
 ): TurnExecutor => ({
   executeTurn: (ctx) => {
     capture(ctx)
-    return Stream.fromIterable<TurnEvent, TurnError>(events)
+    return Stream.fromIterable(events) as Stream.Stream<TurnEvent, TurnError>
   },
 })
 
@@ -108,7 +111,7 @@ const externalAgent = AgentDefinition.make({
 const makeResolved = (executor: TurnExecutor) =>
   resolveExtensions([
     {
-      manifest: { id: "test-ext" },
+      manifest: { id: ExtensionId.make("test-ext") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
@@ -156,7 +159,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     providerLayer,
     makeExtRegistry(executor),
     makeDriverRegistry(executor),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
@@ -192,7 +195,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("test"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -209,8 +212,8 @@ describe("external turn execution", () => {
   test("publishes tool observability events for external tool calls", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      ToolStarted.make({ toolCallId: "tc-1", toolName: "read_file" }),
-      ToolCompleted.make({ toolCallId: "tc-1" }),
+      ToolStarted.make({ toolCallId: ToolCallId.make("tc-1"), toolName: "read_file" }),
+      ToolCompleted.make({ toolCallId: ToolCallId.make("tc-1") }),
       TextDelta.make({ text: "File contents here" }),
       Finished.make({ stopReason: "stop" }),
     ])
@@ -222,7 +225,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("read a file"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -238,8 +241,8 @@ describe("external turn execution", () => {
   test("publishes ToolCallFailed for failed external tool calls", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      ToolStarted.make({ toolCallId: "tc-fail", toolName: "bash" }),
-      ToolFailed.make({ toolCallId: "tc-fail", error: "permission denied" }),
+      ToolStarted.make({ toolCallId: ToolCallId.make("tc-fail"), toolName: "bash" }),
+      ToolFailed.make({ toolCallId: ToolCallId.make("tc-fail"), error: "permission denied" }),
       Finished.make({ stopReason: "stop" }),
     ])
 
@@ -250,7 +253,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("run something"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -272,7 +275,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("test error"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -287,8 +290,8 @@ describe("external turn execution", () => {
   test("external turn does not re-execute tools (toolCalls empty in draft)", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      ToolStarted.make({ toolCallId: "tc-1", toolName: "bash" }),
-      ToolCompleted.make({ toolCallId: "tc-1" }),
+      ToolStarted.make({ toolCallId: ToolCallId.make("tc-1"), toolName: "bash" }),
+      ToolCompleted.make({ toolCallId: ToolCallId.make("tc-1") }),
       TextDelta.make({ text: "done" }),
       Finished.make({ stopReason: "stop" }),
     ])
@@ -300,7 +303,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("test no tool re-exec"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -328,7 +331,7 @@ describe("external turn execution", () => {
 
     const agentsResolved = resolveExtensions([
       {
-        manifest: { id: "agents" },
+        manifest: { id: ExtensionId.make("agents") },
         scope: "builtin" as const,
         sourcePath: "test",
         contributions: { agents: Object.values(Agents) },
@@ -342,7 +345,7 @@ describe("external turn execution", () => {
         modelDrivers: agentsResolved.modelDrivers,
         externalDrivers: agentsResolved.externalDrivers,
       }),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
@@ -390,14 +393,14 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("context check"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
 
     expect(capturedCtx).toBeDefined()
-    expect(capturedCtx!.agent.name).toBe("test-external")
+    expect(capturedCtx!.agent.name).toBe(AgentName.make("test-external"))
     expect(capturedCtx!.cwd).toBe("/tmp")
     expect(capturedCtx!.abortSignal).toBeDefined()
   })
@@ -426,7 +429,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, message, {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
@@ -454,7 +457,7 @@ describe("external turn execution", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeMessage("reason test"), {
-            agentOverride: "test-external",
+            agentOverride: AgentName.make("test-external"),
           })
 
           const events = yield* Ref.get(eventsRef)
@@ -484,10 +487,10 @@ describe("ExternalDriverContribution end-to-end", () => {
     const expectedText = "hello from my-test-driver"
     const e2eExecutor: TurnExecutor = {
       executeTurn: () =>
-        Stream.fromIterable<TurnEvent, TurnError>([
+        Stream.fromIterable([
           TextDelta.make({ text: expectedText }),
           Finished.make({ stopReason: "stop" }),
-        ]),
+        ]) as Stream.Stream<TurnEvent, TurnError>,
     }
 
     // Agent referencing the external driver by id.
@@ -499,7 +502,7 @@ describe("ExternalDriverContribution end-to-end", () => {
     // Register the contribution through resolveExtensions — the real path.
     const e2eResolved = resolveExtensions([
       {
-        manifest: { id: "e2e-ext" },
+        manifest: { id: ExtensionId.make("e2e-ext") },
         scope: "builtin" as const,
         sourcePath: "test",
         contributions: {
@@ -525,7 +528,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         modelDrivers: e2eResolved.modelDrivers,
         externalDrivers: e2eResolved.externalDrivers,
       }),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       // Messages go through Storage directly — EventStore path is orthogonal.
@@ -550,7 +553,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
-            agentName: "my-test-agent",
+            agentName: AgentName.make("my-test-agent"),
             prompt: "trigger the external driver",
           })
 
@@ -586,12 +589,16 @@ describe("ExternalDriverContribution end-to-end", () => {
     const toolOutput = { contents: "hello" }
     const e2eExecutor: TurnExecutor = {
       executeTurn: () =>
-        Stream.fromIterable<TurnEvent, TurnError>([
-          ToolStarted.make({ toolCallId: "tc-A", toolName: "read_file", input: toolInput }),
-          ToolCompleted.make({ toolCallId: "tc-A", output: toolOutput }),
+        Stream.fromIterable([
+          ToolStarted.make({
+            toolCallId: ToolCallId.make("tc-A"),
+            toolName: "read_file",
+            input: toolInput,
+          }),
+          ToolCompleted.make({ toolCallId: ToolCallId.make("tc-A"), output: toolOutput }),
           TextDelta.make({ text: "done" }),
           Finished.make({ stopReason: "stop" }),
-        ]),
+        ]) as Stream.Stream<TurnEvent, TurnError>,
     }
 
     const e2eAgent = AgentDefinition.make({
@@ -601,7 +608,7 @@ describe("ExternalDriverContribution end-to-end", () => {
 
     const e2eResolved = resolveExtensions([
       {
-        manifest: { id: "e2e-tool-ext" },
+        manifest: { id: ExtensionId.make("e2e-tool-ext") },
         scope: "builtin" as const,
         sourcePath: "test",
         contributions: {
@@ -627,7 +634,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         modelDrivers: e2eResolved.modelDrivers,
         externalDrivers: e2eResolved.externalDrivers,
       }),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
@@ -651,7 +658,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
-            agentName: "tool-test-agent",
+            agentName: AgentName.make("tool-test-agent"),
             prompt: "do the tool",
           })
 
@@ -690,12 +697,12 @@ describe("ExternalDriverContribution end-to-end", () => {
 
     const e2eExecutor: TurnExecutor = {
       executeTurn: () =>
-        Stream.fromIterable<TurnEvent, TurnError>([
-          ToolStarted.make({ toolCallId: "tc-F", toolName: "bash" }),
-          ToolFailed.make({ toolCallId: "tc-F", error: "permission denied" }),
+        Stream.fromIterable([
+          ToolStarted.make({ toolCallId: ToolCallId.make("tc-F"), toolName: "bash" }),
+          ToolFailed.make({ toolCallId: ToolCallId.make("tc-F"), error: "permission denied" }),
           TextDelta.make({ text: "ok" }),
           Finished.make({ stopReason: "stop" }),
-        ]),
+        ]) as Stream.Stream<TurnEvent, TurnError>,
     }
 
     const e2eAgent = AgentDefinition.make({
@@ -705,7 +712,7 @@ describe("ExternalDriverContribution end-to-end", () => {
 
     const e2eResolved = resolveExtensions([
       {
-        manifest: { id: "e2e-tool-fail-ext" },
+        manifest: { id: ExtensionId.make("e2e-tool-fail-ext") },
         scope: "builtin" as const,
         sourcePath: "test",
         contributions: {
@@ -731,7 +738,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         modelDrivers: e2eResolved.modelDrivers,
         externalDrivers: e2eResolved.externalDrivers,
       }),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
@@ -755,7 +762,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
-            agentName: "tool-fail-agent",
+            agentName: AgentName.make("tool-fail-agent"),
             prompt: "trigger a failure",
           })
 
@@ -794,12 +801,16 @@ describe("ExternalDriverContribution end-to-end", () => {
 
     const e2eExecutor: TurnExecutor = {
       executeTurn: () =>
-        Stream.fromIterable<TurnEvent, TurnError>([
-          ToolCall.make({ toolCallId: "tc-dup", toolName: "write_file", input: {} }),
-          ToolStarted.make({ toolCallId: "tc-dup", toolName: "write_file" }),
-          ToolCompleted.make({ toolCallId: "tc-dup", output: {} }),
+        Stream.fromIterable([
+          ToolCall.make({
+            toolCallId: ToolCallId.make("tc-dup"),
+            toolName: "write_file",
+            input: {},
+          }),
+          ToolStarted.make({ toolCallId: ToolCallId.make("tc-dup"), toolName: "write_file" }),
+          ToolCompleted.make({ toolCallId: ToolCallId.make("tc-dup"), output: {} }),
           Finished.make({ stopReason: "stop" }),
-        ]),
+        ]) as Stream.Stream<TurnEvent, TurnError>,
     }
 
     const e2eAgent = AgentDefinition.make({
@@ -809,7 +820,7 @@ describe("ExternalDriverContribution end-to-end", () => {
 
     const e2eResolved = resolveExtensions([
       {
-        manifest: { id: "e2e-tool-dup-ext" },
+        manifest: { id: ExtensionId.make("e2e-tool-dup-ext") },
         scope: "builtin" as const,
         sourcePath: "test",
         contributions: {
@@ -835,7 +846,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         modelDrivers: e2eResolved.modelDrivers,
         externalDrivers: e2eResolved.externalDrivers,
       }),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
@@ -859,7 +870,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
-            agentName: "tool-dup-agent",
+            agentName: AgentName.make("tool-dup-agent"),
             prompt: "write a file",
           })
 

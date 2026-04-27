@@ -1,7 +1,9 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
-import { AgentDefinition } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
+import { ExtensionId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import type { CallRecord } from "@gent/core/test-utils"
 import { Provider } from "@gent/core/providers/provider"
 import { textStep } from "@gent/core/debug/provider"
@@ -13,11 +15,13 @@ import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
-import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
+import { SessionProfileCache } from "../../../src/runtime/session-profile"
+import { Permission } from "@gent/core/domain/permission"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -26,17 +30,17 @@ import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
 const makeTestExtensions = () => {
   const cowork = AgentDefinition.make({
-    name: "cowork" as never,
-    model: "test/default" as never,
+    name: AgentName.make("cowork"),
+    model: ModelId.make("test/default"),
   })
   const reflect = AgentDefinition.make({
-    name: "memory:reflect" as never,
-    model: "test/override" as never,
+    name: AgentName.make("memory:reflect"),
+    model: ModelId.make("test/override"),
   })
 
   return resolveExtensions([
     {
-      manifest: { id: "agents" },
+      manifest: { id: ExtensionId.make("agents") },
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: { agents: [cowork, reflect] } satisfies ExtensionContributions,
@@ -58,7 +62,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     ToolRunner.Test(),
@@ -69,6 +73,8 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
     ModelRegistry.Test(),
+    Permission.Test(),
+    SessionProfileCache.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionMutationsLayer = Layer.provide(
@@ -120,7 +126,7 @@ describe("agent override behavior", () => {
           sessionId: session.sessionId,
           branchId: session.branchId,
           content: "with override",
-          agentOverride: "memory:reflect",
+          agentOverride: AgentName.make("memory:reflect"),
         })
         yield* commands.sendMessage({
           sessionId: session.sessionId,
@@ -169,7 +175,7 @@ describe("agent override behavior", () => {
         const session = yield* commands.createSession({
           name: "Initial Prompt Override",
           initialPrompt: "seed the session",
-          agentOverride: "memory:reflect",
+          agentOverride: AgentName.make("memory:reflect"),
         })
 
         const messages = yield* waitFor(

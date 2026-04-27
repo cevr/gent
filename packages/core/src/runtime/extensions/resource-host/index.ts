@@ -5,7 +5,7 @@
  * - Resource service/lifecycle layer assembly.
  * - Subscription collection + pub/sub engine.
  * - Schedule collection + reconciliation.
- * - MachineEngine lives in `machine-engine.ts` to keep actor protocol separate.
+ * - ActorRouter lives in `actor-router.ts` to keep actor protocol separate.
  *
  * @module
  */

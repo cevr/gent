@@ -85,10 +85,7 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { ActorEngine } from "../extensions/actor-engine.js"
 import { Receptionist } from "../extensions/receptionist.js"
-import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../extensions/resource-host/machine-engine.js"
+import { ActorRouter, type ActorRouterService } from "../extensions/resource-host/actor-router.js"
 import {
   ExtensionTurnControl,
   TurnControlError,
@@ -485,7 +482,7 @@ const resolveTurnContext = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: MachineEngineService
+  extensionStateRuntime: ActorRouterService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
@@ -1125,7 +1122,7 @@ const resolveTurnPhase = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: MachineEngineService
+  extensionStateRuntime: ActorRouterService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
@@ -1866,7 +1863,7 @@ type LoopHandle = {
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
-    turnExtensionStateRuntime: MachineEngineService
+    turnExtensionStateRuntime: ActorRouterService
     turnPermission: PermissionService
     turnBaseSections: ReadonlyArray<PromptSection>
     turnHostCtx: ExtensionHostContext
@@ -2151,7 +2148,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | Provider
     | ExtensionRegistry
     | DriverRegistry
-    | MachineEngine
+    | ActorRouter
     | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
@@ -2169,7 +2166,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
-        const extensionStateRuntime = yield* MachineEngine
+        const extensionStateRuntime = yield* ActorRouter
         const actorEngine = yield* ActorEngine
         const receptionist = yield* Receptionist
         const extensionTurnControl = yield* ExtensionTurnControl

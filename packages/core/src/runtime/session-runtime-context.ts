@@ -10,7 +10,7 @@ import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
+import type { ActorRouterService } from "./extensions/resource-host/actor-router.js"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
@@ -26,7 +26,7 @@ export interface SessionEnvironmentDefaults {
 export interface SessionEnvironment {
   readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
-  readonly extensionStateRuntime: MachineEngineService
+  readonly extensionStateRuntime: ActorRouterService
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -49,7 +49,7 @@ export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
-  readonly extensionStateRuntime: MachineEngineService
+  readonly extensionStateRuntime: ActorRouterService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>

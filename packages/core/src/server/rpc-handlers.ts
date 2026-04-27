@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { SessionId } from "../domain/ids.js"
 import { GentRpcs } from "./rpcs"
-import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { Receptionist } from "../runtime/extensions/receptionist.js"
 import { AuthGuard } from "../domain/auth-guard.js"
@@ -45,7 +45,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
-    const extensionStateRuntime = yield* MachineEngine
+    const extensionStateRuntime = yield* ActorRouter
     const actorEngine = yield* ActorEngine
     const receptionist = yield* Receptionist
     const extensionRegistry = yield* ExtensionRegistry

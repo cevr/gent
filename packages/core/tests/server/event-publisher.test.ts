@@ -93,7 +93,7 @@ const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
 // EventPublisher delivery is now observable through two surfaces only:
 //   • EventStore.append — events become durable
 //   • SubscriptionEngine.emit — extensions react via the `agent:<tag>` bus
-// Tests probe these surfaces; the legacy MachineEngine.publish hook is gone.
+// Tests probe these surfaces; the legacy ActorRouter.publish hook is gone.
 
 const collectingBusLayer = (
   channels: string[],
@@ -216,7 +216,7 @@ describe("EventPublisher", () => {
     // `pulseTags` declared at extension-load time. `event-publisher.ts`
     // looks up subscribers for each event's tag and emits one
     // `ExtensionStateChanged` per declared subscriber, regardless of what
-    // the MachineEngine returns.
+    // the ActorRouter returns.
     const persisted: string[] = []
     const pulseTagsRegistryLayer = ExtensionRegistry.fromResolved(
       resolveExtensions([
@@ -321,7 +321,7 @@ describe("EventPublisher per-cwd router", () => {
 
     const baseLayer = makeEventStoreLayer()
 
-    // SessionProfile still types `extensionStateRuntime: MachineEngineService`,
+    // SessionProfile still types `extensionStateRuntime: ActorRouterService`,
     // but EventPublisher's router no longer reads it. Stub it for shape only.
     const stubEngine = {
       send: () => Effect.void,

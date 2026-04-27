@@ -2,13 +2,13 @@
  * Executor integration tests — tool execution with mocked services,
  * and actor lifecycle through the actor primitive (W10-1c).
  *
- * The executor migrated from `Resource.machine` (effect-machine FSM) to a
- * `Behavior` actor + Layer-scoped `ExecutorConnectionRunner` (Option G).
- * Connection state is volatile per process — the actor has no
- * persistence — so the old "state persists via durability" test is gone;
- * cross-extension Receptionist discovery is exercised end-to-end here
- * via `MachineEngine.execute(ExecutorProtocol.GetSnapshot)`, which the
- * actor-route fallback (W10-1b.0) auto-routes to the actor mailbox.
+ * The executor uses a `Behavior` actor + Layer-scoped
+ * `ExecutorConnectionRunner` (Option G). Connection state is volatile
+ * per process — the actor has no persistence — so the old "state
+ * persists via durability" test is gone; cross-extension Receptionist
+ * discovery is exercised end-to-end here via the snapshot reply through
+ * `ActorRouter.execute(ExecutorProtocol.GetSnapshot)`, which routes to
+ * the actor mailbox.
  */
 
 import { describe, test, expect } from "bun:test"
@@ -34,15 +34,23 @@ import {
   ExecutorConnectionRunner,
   ExecutorConnectionRunnerLayer,
 } from "@gent/extensions/executor/connection-runner"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import {
+  ActorRouter,
+  type ActorRouterService,
+} from "../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
-import { EventStore, SessionStarted } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
+
+// Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
+// Tests provide all needed services; narrow R so runPromise/it.live accept it.
+const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 
 // ── Tool test helpers ──
 
@@ -60,8 +68,7 @@ const makeToolCtx = (snapshot: ExecutorSnapshotReply | undefined) =>
     extension: {
       send: () => Effect.void,
       ask: () => Effect.succeed(snapshot as never),
-      query: () => Effect.die("not wired"),
-      mutate: () => Effect.die("not wired"),
+      request: () => Effect.die("not wired"),
     },
   })
 
@@ -151,11 +158,11 @@ const makeExecutorExtension = (overrides?: {
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: sidecar+bridge are mocked, so layer R is closed at construction
           layer: runnerLayer as Layer.Layer<ExecutorConnectionRunner>,
         }),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: bare sidecar+bridge for the tools, A widened to unknown for bucket fit
         defineResource({
           scope: "process",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: bare sidecar+bridge for the tools
-          layer: sidecarBridgeLayer as Layer.Layer<never>,
-        }),
+          layer: sidecarBridgeLayer as Layer.Layer<unknown>,
+        }) as never,
       ],
     },
   }
@@ -174,7 +181,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // both stay in the output set so the runner layer can pull them. The
   // resource-layer chain below is provideMerged onto this stack so it
   // shares the same engine instance that the host registers actors with.
-  const machine = MachineEngine.Live([extension]).pipe(
+  const machine = ActorRouter.Live([extension]).pipe(
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),
@@ -199,33 +206,30 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // and forces the resource layer to activate (otherwise an unused
   // output is dead-stripped, and the connection runner never starts).
   const baseStack = Layer.mergeAll(machine, storage)
-  const machineWithResources = extLayers.reduce(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture: extLayers carry open A; provideMerge widens, narrowed at consumption
+  const machineWithResources = extLayers.reduce<Layer.Layer<any, never, any>>(
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,
   )
 
   const seededMachine = Layer.effect(
-    MachineEngine,
+    ActorRouter,
     Effect.gen(function* () {
-      const runtime = yield* MachineEngine
+      const runtime = yield* ActorRouter
+      const storageSvc = yield* Storage
       return {
-        publish: (event, ctx) =>
-          ensureStorageParents({ sessionId: ctx.sessionId, branchId: ctx.branchId }).pipe(
-            Effect.flatMap(() => runtime.publish(event, ctx)),
-          ),
         send: (targetSessionId, message, targetBranchId) =>
           ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.provideService(Storage, storageSvc),
+            Effect.orDie,
             Effect.flatMap(() => runtime.send(targetSessionId, message, targetBranchId)),
           ),
         execute: (targetSessionId, message, targetBranchId) =>
           ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.provideService(Storage, storageSvc),
+            Effect.orDie,
             Effect.flatMap(() => runtime.execute(targetSessionId, message, targetBranchId)),
           ),
-        getActorStatuses: (targetSessionId) =>
-          ensureStorageParents({ sessionId: targetSessionId }).pipe(
-            Effect.flatMap(() => runtime.getActorStatuses(targetSessionId)),
-          ),
-        terminateAll: runtime.terminateAll,
       } satisfies typeof runtime
     }),
   ).pipe(Layer.provideMerge(machineWithResources))
@@ -234,7 +238,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
 }
 
 const waitForExecutorStatus = (
-  runtime: typeof MachineEngine.Type,
+  runtime: ActorRouterService,
   status: ExecutorSnapshotReply["status"],
 ) =>
   waitFor(
@@ -258,8 +262,10 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const result = await Effect.runPromise(
-      ExecuteTool.effect({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
-        Effect.provide(bridgeLayer),
+      narrowR(
+        ExecuteTool.effect({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
+          Effect.provide(bridgeLayer),
+        ),
       ),
     )
 
@@ -274,7 +280,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      narrowR(ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer))),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -287,7 +293,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(notReadySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      narrowR(ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -300,7 +306,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const result = await Effect.runPromise(
-      ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      narrowR(ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer))),
     )
 
     expect(result.executionId).toBe("exec-abc-123")
@@ -319,14 +325,16 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     await Effect.runPromise(
-      ResumeTool.effect(
-        {
-          executionId: "exec-1",
-          action: "accept" as "accept" | "decline" | "cancel",
-          content: '{"approved": true}',
-        },
-        ctx,
-      ).pipe(Effect.provide(bridgeLayer)),
+      narrowR(
+        ResumeTool.effect(
+          {
+            executionId: "exec-1",
+            action: "accept" as "accept" | "decline" | "cancel",
+            content: '{"approved": true}',
+          },
+          ctx,
+        ).pipe(Effect.provide(bridgeLayer)),
+      ),
     )
 
     expect(captured).toHaveLength(1)
@@ -342,14 +350,16 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ResumeTool.effect(
-        {
-          executionId: "exec-1",
-          action: "accept" as "accept" | "decline" | "cancel",
-          content: "not valid json{{{",
-        },
-        ctx,
-      ).pipe(Effect.provide(bridgeLayer)),
+      narrowR(
+        ResumeTool.effect(
+          {
+            executionId: "exec-1",
+            action: "accept" as "accept" | "decline" | "cancel",
+            content: "not valid json{{{",
+          },
+          ctx,
+        ).pipe(Effect.provide(bridgeLayer)),
+      ),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -362,13 +372,15 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(notReadySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ResumeTool.effect(
-        {
-          executionId: "exec-1",
-          action: "decline" as "accept" | "decline" | "cancel",
-        },
-        ctx,
-      ).pipe(Effect.provide(bridgeLayer)),
+      narrowR(
+        ResumeTool.effect(
+          {
+            executionId: "exec-1",
+            action: "decline" as "accept" | "decline" | "cancel",
+          },
+          ctx,
+        ).pipe(Effect.provide(bridgeLayer)),
+      ),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -379,7 +391,7 @@ describe("Executor tools", () => {
 //
 // The runner observes the actor's state via `engine.subscribeState` and
 // drives the sidecar connection on entry to `Connecting`. Snapshot reads
-// route through `MachineEngine.execute(ExecutorProtocol.GetSnapshot)` —
+// route through `ActorRouter.execute(ExecutorProtocol.GetSnapshot)` —
 // the actor-route fallback (W10-1b.0) maps the envelope's `_tag` to the
 // `ExecutorMsg.GetSnapshot` mailbox via the registered `ExecutorService`
 // key, exercising end-to-end cross-extension Receptionist discovery.
@@ -389,57 +401,51 @@ describe("Executor actor lifecycle", () => {
     "autoStart=true → Idle → Connecting → Ready",
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          yield* waitForExecutorStatus(runtime, "ready")
+
+          const reply = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(reply.status).toBe("ready")
+          expect(reply.baseUrl).toBe("http://127.0.0.1:4788")
         })
-
-        yield* waitForExecutorStatus(runtime, "ready")
-
-        const reply = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(reply.status).toBe("ready")
-        expect(reply.baseUrl).toBe("http://127.0.0.1:4788")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
     "autoStart=false → stays Idle",
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          // autoStart=false means the runner does not tell `Connect` —
+          // actor stays Idle.
+          yield* waitForExecutorStatus(runtime, "idle")
+
+          const reply = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(reply.status).toBe("idle")
         })
-
-        // autoStart=false means the runner does not tell `Connect` —
-        // actor stays Idle.
-        yield* waitForExecutorStatus(runtime, "idle")
-
-        const reply = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(reply.status).toBe("idle")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -451,104 +457,95 @@ describe("Executor actor lifecycle", () => {
           resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
         },
       })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          yield* waitForExecutorStatus(runtime, "error")
+
+          const reply = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(reply.status).toBe("error")
+          expect(reply.errorMessage).toBeDefined()
         })
-
-        yield* waitForExecutorStatus(runtime, "error")
-
-        const reply = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(reply.status).toBe("error")
-        expect(reply.errorMessage).toBeDefined()
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
     "/executor-start command → Connecting → Ready",
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          yield* waitForExecutorStatus(runtime, "idle")
+
+          const before = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(before.status).toBe("idle")
+
+          yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
+
+          yield* waitForExecutorStatus(runtime, "ready")
+
+          const after = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(after.status).toBe("ready")
         })
-
-        yield* waitForExecutorStatus(runtime, "idle")
-
-        const before = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(before.status).toBe("idle")
-
-        yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
-
-        yield* waitForExecutorStatus(runtime, "ready")
-
-        const after = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(after.status).toBe("ready")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
     "/executor-stop from Ready → Idle",
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          yield* waitForExecutorStatus(runtime, "ready")
+
+          const before = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(before.status).toBe("ready")
+
+          yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
+
+          yield* waitForExecutorStatus(runtime, "idle")
+
+          const after = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(after.status).toBe("idle")
         })
-
-        yield* waitForExecutorStatus(runtime, "ready")
-
-        const before = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(before.status).toBe("ready")
-
-        yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
-
-        yield* waitForExecutorStatus(runtime, "idle")
-
-        const after = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(after.status).toBe("idle")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -566,40 +563,37 @@ describe("Executor actor lifecycle", () => {
           resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
         },
       })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
 
-        // First boot → autoStart Connect → resolveEndpoint fails → Error
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+          // First boot → autoStart Connect → resolveEndpoint fails → Error
+          yield* waitForExecutorStatus(runtime, "error")
+
+          const mid = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(mid.status).toBe("error")
+
+          // Retry via command — second resolveEndpoint succeeds.
+          yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
+
+          yield* waitForExecutorStatus(runtime, "ready")
+
+          const after = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(after.status).toBe("ready")
         })
-
-        yield* waitForExecutorStatus(runtime, "error")
-
-        const mid = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(mid.status).toBe("error")
-
-        // Retry via command — second resolveEndpoint succeeds.
-        yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
-
-        yield* waitForExecutorStatus(runtime, "ready")
-
-        const after = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(after.status).toBe("ready")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   // No persistence test: connection state is volatile per process. A
@@ -626,33 +620,31 @@ describe("Executor actor lifecycle", () => {
           resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
         },
       })
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
+          // Wait until the actor enters Connecting (autoStart fired).
+          yield* waitForExecutorStatus(runtime, "connecting")
+          // Disconnect mid-handshake.
+          yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
+          // Actor should land on Idle promptly (Connecting → Idle).
+          yield* waitForExecutorStatus(runtime, "idle")
+          // Now release the (cancelled) in-flight handshake. If it races
+          // back to Ready, the regression has reappeared.
+          yield* Deferred.succeed(sidecarGate, undefined)
+          yield* Effect.sleep("100 millis")
+          const final = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(final.status).toBe("idle")
         })
-        // Wait until the actor enters Connecting (autoStart fired).
-        yield* waitForExecutorStatus(runtime, "connecting")
-        // Disconnect mid-handshake.
-        yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
-        // Actor should land on Idle promptly (Connecting → Idle).
-        yield* waitForExecutorStatus(runtime, "idle")
-        // Now release the (cancelled) in-flight handshake. If it races
-        // back to Ready, the regression has reappeared.
-        yield* Deferred.succeed(sidecarGate, undefined)
-        yield* Effect.sleep("100 millis")
-        const final = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(final.status).toBe("idle")
-      })
-        .pipe(Effect.provide(makeRuntimeLayer(extension)))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(makeRuntimeLayer(extension)))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 
   // Regression for W10-1c B1: production composer must cross-wire
@@ -671,23 +663,21 @@ describe("Executor actor lifecycle", () => {
         Layer.provideMerge(Storage.Test()),
         Layer.provideMerge(EventStore.Memory),
       )
-      return Effect.gen(function* () {
-        const runtime = yield* MachineEngine
-        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
-          sessionId,
-          branchId,
+      return narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* ActorRouter
+          yield* waitForExecutorStatus(runtime, "ready")
+          const reply = (yield* runtime.execute(
+            sessionId,
+            ExecutorProtocol.GetSnapshot.make(),
+            branchId,
+          )) as ExecutorSnapshotReply
+          expect(reply.status).toBe("ready")
         })
-        yield* waitForExecutorStatus(runtime, "ready")
-        const reply = (yield* runtime.execute(
-          sessionId,
-          ExecutorProtocol.GetSnapshot.make(),
-          branchId,
-        )) as ExecutorSnapshotReply
-        expect(reply.status).toBe("ready")
-      })
-        .pipe(Effect.provide(layer))
-        .pipe(Effect.timeout("8 seconds"))
+          .pipe(Effect.provide(layer))
+          .pipe(Effect.timeout("8 seconds")),
+      )
     },
-    { timeout: 10_000 },
+    10_000,
   )
 })

@@ -1,21 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { defineResource } from "@gent/core/domain/resource"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
 import type { CapabilityRef } from "@gent/core/domain/capability"
 import { request } from "@gent/core/extensions/api"
-import type { ExtensionId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
 import {
@@ -34,6 +33,8 @@ import {
 } from "../../src/runtime/session-profile"
 import { Storage, StorageError, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { buildExtensionLayers } from "../../src/runtime/profile"
+import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/domain/read-only"
+import type { ExternalDriverContribution } from "@gent/core/domain/driver"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
@@ -43,8 +44,10 @@ const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
 
 class ProfileToken extends Context.Service<
   ProfileToken,
-  { readonly read: () => Effect.Effect<string> }
->()("@test/ProfileToken") {}
+  ReadOnly<{ readonly read: () => Effect.Effect<string> }>
+>()("@test/ProfileToken") {
+  declare readonly [ReadOnlyBrand]: true
+}
 
 describe("resolveSessionEnvironment", () => {
   test("uses the stored session cwd to resolve profile-scoped permission and host context", async () => {
@@ -81,7 +84,7 @@ describe("resolveSessionEnvironment", () => {
     const testLayer = Layer.mergeAll(
       BunServices.layer,
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
@@ -94,7 +97,7 @@ describe("resolveSessionEnvironment", () => {
         Effect.gen(function* () {
           const storage = yield* Storage
           const extensionRegistry = yield* ExtensionRegistry
-          const extensionStateRuntime = yield* MachineEngine
+          const extensionStateRuntime = yield* ActorRouter
           const platform = yield* RuntimePlatform
           const profileCache = yield* SessionProfileCache
           const now = new Date()
@@ -134,7 +137,7 @@ describe("resolveSessionEnvironment", () => {
           expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
             "allowed",
           )
-        }).pipe(Effect.provide(testLayer)),
+        }).pipe(Effect.provide(testLayer), Effect.scoped),
       )
     } finally {
       rmSync(launch, { recursive: true, force: true })
@@ -148,21 +151,21 @@ describe("resolveSessionEnvironment", () => {
     const secondary = mkdtempSync(join(tmpdir(), "gent-session-request-context-secondary-"))
     const seenCwd: string[] = []
     const ref: CapabilityRef<string, string> = {
-      extensionId: "@test/session-request-context",
+      extensionId: ExtensionId.make("@test/session-request-context"),
       capabilityId: "echo-cwd",
       intent: "read",
       input: Schema.String,
       output: Schema.String,
     }
     const extension: LoadedExtension = {
-      manifest: { id: "@test/session-request-context" },
+      manifest: { id: ExtensionId.make("@test/session-request-context") },
       scope: "builtin",
       sourcePath: "test",
       contributions: {
         rpc: [
           request({
             id: "echo-cwd",
-            extensionId: "@test/session-request-context" as ExtensionId,
+            extensionId: ExtensionId.make("@test/session-request-context") as ExtensionId,
             intent: "read",
             input: Schema.String,
             output: Schema.String,
@@ -188,7 +191,7 @@ describe("resolveSessionEnvironment", () => {
     })
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       extensionRegistryLayer,
       driverRegistryLayer,
@@ -200,7 +203,7 @@ describe("resolveSessionEnvironment", () => {
         Effect.gen(function* () {
           const storage = yield* Storage
           const extensionRegistry = yield* ExtensionRegistry
-          const extensionStateRuntime = yield* MachineEngine
+          const extensionStateRuntime = yield* ActorRouter
           const platform = yield* RuntimePlatform
           const now = new Date()
 
@@ -248,14 +251,14 @@ describe("resolveSessionEnvironment", () => {
     const launch = mkdtempSync(join(tmpdir(), "gent-session-resource-context-launch-"))
     const profileCwd = mkdtempSync(join(tmpdir(), "gent-session-resource-context-profile-"))
     const ref: CapabilityRef<string, string> = {
-      extensionId: "@test/profile-resource-context",
+      extensionId: ExtensionId.make("@test/profile-resource-context"),
       capabilityId: "read-profile-token",
       intent: "read",
       input: Schema.String,
       output: Schema.String,
     }
     const extension: LoadedExtension = {
-      manifest: { id: "@test/profile-resource-context" },
+      manifest: { id: ExtensionId.make("@test/profile-resource-context") },
       scope: "builtin",
       sourcePath: "test",
       contributions: {
@@ -263,15 +266,18 @@ describe("resolveSessionEnvironment", () => {
           defineResource({
             tag: ProfileToken,
             scope: "process",
-            layer: Layer.succeed(ProfileToken, {
-              read: () => Effect.succeed("profile-token"),
-            }),
+            layer: Layer.succeed(
+              ProfileToken,
+              withReadOnly({
+                read: () => Effect.succeed("profile-token"),
+              }),
+            ),
           }),
         ],
         rpc: [
           request({
             id: "read-profile-token",
-            extensionId: "@test/profile-resource-context" as ExtensionId,
+            extensionId: ExtensionId.make("@test/profile-resource-context") as ExtensionId,
             intent: "read",
             input: Schema.String,
             output: Schema.String,
@@ -297,7 +303,7 @@ describe("resolveSessionEnvironment", () => {
     })
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       extensionRegistryLayer,
       driverRegistryLayer,
@@ -310,7 +316,7 @@ describe("resolveSessionEnvironment", () => {
           Effect.gen(function* () {
             const storage = yield* Storage
             const extensionRegistry = yield* ExtensionRegistry
-            const extensionStateRuntime = yield* MachineEngine
+            const extensionStateRuntime = yield* ActorRouter
             const platform = yield* RuntimePlatform
             const now = new Date()
             const layerContext = yield* Layer.build(buildExtensionLayers(resolvedExtensions))
@@ -322,7 +328,9 @@ describe("resolveSessionEnvironment", () => {
               permissionService: AllowAllPermission,
               registryService: Context.get(layerContext, ExtensionRegistry),
               driverRegistryService: Context.get(layerContext, DriverRegistry),
-              extensionStateRuntime: Context.get(layerContext, MachineEngine),
+              extensionStateRuntime: Context.get(layerContext, ActorRouter),
+              actorEngine: Context.get(layerContext, ActorEngine),
+              receptionist: Context.get(layerContext, Receptionist),
               subscriptionEngine: undefined,
               baseSections: [],
               instructions: "",
@@ -409,7 +417,7 @@ describe("resolveSessionEnvironment", () => {
     }
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       emptyRegistryLayer,
       runtimePlatformLayer,
@@ -419,7 +427,7 @@ describe("resolveSessionEnvironment", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* MachineEngine
+        const extensionStateRuntime = yield* ActorRouter
         const platform = yield* RuntimePlatform
 
         const resolved = yield* resolveSessionEnvironment({
@@ -458,7 +466,7 @@ describe("resolveSessionEnvironment", () => {
     })
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
@@ -469,7 +477,7 @@ describe("resolveSessionEnvironment", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* MachineEngine
+        const extensionStateRuntime = yield* ActorRouter
         const platform = yield* RuntimePlatform
         const failingStorage: StorageService = {
           ...storage,
@@ -544,15 +552,15 @@ describe("resolveSessionEnvironment", () => {
     })
     const profileDriverRegistryLayer = DriverRegistry.fromResolved({
       modelDrivers: new Map(),
-      externalDrivers: new Map([
+      externalDrivers: new Map<string, ExternalDriverContribution>([
         [
           "profile-driver",
           {
             id: "profile-driver",
-            name: "Profile Driver",
             executor: {
-              executeTurn: () => Effect.die("unused in test"),
+              executeTurn: () => Stream.die("unused in test"),
             },
+            invalidate: () => Effect.void,
           },
         ],
       ]),
@@ -564,7 +572,7 @@ describe("resolveSessionEnvironment", () => {
     })
     const testLayer = Layer.mergeAll(
       Storage.MemoryWithSql(),
-      MachineEngine.Test(),
+      ActorRouter.Test(),
       ActorEngine.Live,
       emptyRegistryLayer,
       defaultDriverRegistryLayer,
@@ -575,7 +583,9 @@ describe("resolveSessionEnvironment", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* MachineEngine
+        const extensionStateRuntime = yield* ActorRouter
+        const actorEngine = yield* ActorEngine
+        const receptionist = yield* Receptionist
         const platform = yield* RuntimePlatform
         const defaultDriverRegistry = yield* DriverRegistry
         const profileDriverRegistry = yield* Layer.build(profileDriverRegistryLayer).pipe(
@@ -607,6 +617,8 @@ describe("resolveSessionEnvironment", () => {
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,
           extensionStateRuntime,
+          actorEngine,
+          receptionist,
           subscriptionEngine: undefined,
           baseSections: [],
           instructions: "",

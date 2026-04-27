@@ -1,14 +1,14 @@
 /**
- * Actor-route fallback in MachineEngine.
+ * Actor-route in ActorRouter.
  *
- * When an extension contributes a Behavior with a `serviceKey` instead of
- * a `Resource.machine`, MachineEngine routes ExtensionMessages through
- * the live ActorRef discovered via the Receptionist. This test pins the
- * end-to-end path: defineExtension → ActorHost spawn → Receptionist
- * registration → MachineEngine.send/execute → actor receives + replies.
+ * ActorRouter routes ExtensionMessages through the live ActorRef
+ * discovered via the Receptionist using the extension Behavior's
+ * `serviceKey`. This test pins the end-to-end path: defineExtension →
+ * ActorHost spawn → Receptionist registration → ActorRouter.send/execute
+ * → actor receives + replies.
  *
  * Empirical regression: temporarily comment out the `actorRoutes.get`
- * branch in machine-engine.ts (sendImmediate / executeImmediate) and
+ * branch in actor-router.ts (sendImmediate / executeImmediate) and
  * both assertions must fail with `is not loaded`.
  */
 
@@ -22,7 +22,7 @@ import type { LoadedExtension } from "../../src/domain/extension"
 import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 
 const sessionId = SessionId.make("actor-route-session")
@@ -75,20 +75,20 @@ const makeLoaded = (bumped: Deferred.Deferred<number>): LoadedExtension =>
     },
     scope: "builtin",
     sourcePath: "test",
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only fields read by MachineEngine + ActorHost matter
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only fields read by ActorRouter + ActorHost matter
   }) as unknown as LoadedExtension
 
 const makeResolved = (extensions: ReadonlyArray<LoadedExtension>): ResolvedExtensions =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: ActorHost only walks `extensions`
   ({ extensions }) as unknown as ResolvedExtensions
 
-describe("MachineEngine — actor-route fallback", () => {
+describe("ActorRouter — actor-route fallback", () => {
   test("send dispatches an ExtensionMessage to the live actor via Receptionist", async () => {
     const bumped = await Effect.runPromise(Deferred.make<number>())
     const ext = makeLoaded(bumped)
     const resolved = makeResolved([ext])
 
-    const layer = MachineEngine.fromExtensions([ext]).pipe(
+    const layer = ActorRouter.fromExtensions([ext]).pipe(
       Layer.provideMerge(ExtensionTurnControl.Live),
       Layer.provideMerge(ActorHost.fromResolved(resolved)),
       Layer.provideMerge(ActorEngine.Live),
@@ -97,8 +97,8 @@ describe("MachineEngine — actor-route fallback", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* MachineEngine
-          yield* engine.send(sessionId, Inc.make({}), branchId)
+          const engine = yield* ActorRouter
+          yield* engine.send(sessionId, Inc.make(), branchId)
           const observed = yield* Deferred.await(bumped)
           expect(observed).toBe(1)
         }).pipe(Effect.provide(layer)),
@@ -111,7 +111,7 @@ describe("MachineEngine — actor-route fallback", () => {
     const ext = makeLoaded(bumped)
     const resolved = makeResolved([ext])
 
-    const layer = MachineEngine.fromExtensions([ext]).pipe(
+    const layer = ActorRouter.fromExtensions([ext]).pipe(
       Layer.provideMerge(ExtensionTurnControl.Live),
       Layer.provideMerge(ActorHost.fromResolved(resolved)),
       Layer.provideMerge(ActorEngine.Live),
@@ -120,10 +120,10 @@ describe("MachineEngine — actor-route fallback", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* MachineEngine
-          yield* engine.send(sessionId, Inc.make({}), branchId)
+          const engine = yield* ActorRouter
+          yield* engine.send(sessionId, Inc.make(), branchId)
           yield* Deferred.await(bumped)
-          const count = yield* engine.execute(sessionId, Get.make({}), branchId)
+          const count = yield* engine.execute(sessionId, Get.make(), branchId)
           expect(count).toBe(1)
         }).pipe(Effect.provide(layer)),
       ),
@@ -134,7 +134,7 @@ describe("MachineEngine — actor-route fallback", () => {
     // No extension matching the message — neither FSM nor actor route.
     const Ping = ExtensionMessage.reply("actor-route/missing", "Ping", {}, Schema.Number)
 
-    const layer = MachineEngine.fromExtensions([]).pipe(
+    const layer = ActorRouter.fromExtensions([]).pipe(
       Layer.provideMerge(ExtensionTurnControl.Live),
       Layer.provideMerge(ActorEngine.Live),
     )
@@ -142,15 +142,16 @@ describe("MachineEngine — actor-route fallback", () => {
     const exit = await Effect.runPromiseExit(
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* MachineEngine
-          return yield* engine.execute(sessionId, Ping.make({}), branchId)
+          const engine = yield* ActorRouter
+          return yield* engine.execute(sessionId, Ping.make(), branchId)
         }).pipe(Effect.provide(layer)),
       ),
     )
 
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
-      const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ExtensionProtocolError)
+      const fails = exit.cause.reasons.filter(Cause.isFailReason)
+      const found = fails.find((r) => r.error instanceof ExtensionProtocolError)
       expect(found).toBeDefined()
     }
   })

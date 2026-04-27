@@ -18,13 +18,13 @@ import type { DriverRegistryService } from "../../runtime/extensions/driver-regi
 import type { ActorEngineService } from "../../runtime/extensions/actor-engine.js"
 import type { ReceptionistService } from "../../runtime/extensions/receptionist.js"
 import type { ExtensionRegistryService } from "../../runtime/extensions/registry.js"
-import type { MachineEngineService } from "../../runtime/extensions/resource-host/machine-engine.js"
+import type { ActorRouterService } from "../../runtime/extensions/resource-host/actor-router.js"
 import type { SubscriptionEngineService } from "../../runtime/extensions/resource-host/subscription-engine.js"
 import type { ModelRegistryService } from "../../runtime/model-registry.js"
 
 export interface ResolvedSessionServices {
   readonly registry: ExtensionRegistryService
-  readonly stateRuntime: MachineEngineService
+  readonly stateRuntime: ActorRouterService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>
@@ -42,7 +42,7 @@ export interface RpcHandlerDeps {
   readonly authStore: AuthStoreService
   readonly authGuard: AuthGuardService
   readonly providerAuth: ProviderAuthService
-  readonly extensionStateRuntime: MachineEngineService
+  readonly extensionStateRuntime: ActorRouterService
   readonly extensionRegistry: ExtensionRegistryService
   readonly platform: RuntimePlatformShape
   readonly bus: SubscriptionEngineService | undefined

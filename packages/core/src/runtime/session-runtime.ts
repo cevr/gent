@@ -22,7 +22,7 @@ import type { ModelRegistry } from "./model-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
 import { Receptionist } from "./extensions/receptionist.js"
-import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
+import { ActorRouter } from "./extensions/resource-host/actor-router.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { AllowAllPermission, resolveSessionEnvironmentOrFail } from "./session-runtime-context.js"
@@ -327,7 +327,7 @@ const makeLiveSessionRuntime: Effect.Effect<
   | EventPublisher
   | ExtensionRegistry
   | DriverRegistry
-  | MachineEngine
+  | ActorRouter
   | ActorEngine
   | Receptionist
   | ModelRegistry
@@ -341,7 +341,7 @@ const makeLiveSessionRuntime: Effect.Effect<
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
   const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
-  const extensionStateRuntime = yield* MachineEngine
+  const extensionStateRuntime = yield* ActorRouter
   const actorEngine = yield* ActorEngine
   const receptionist = yield* Receptionist
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({

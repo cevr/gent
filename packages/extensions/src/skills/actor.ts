@@ -11,7 +11,7 @@
  * reply is derived by calling the captured `skills.list()` / `get()`.
  *
  * `_tag` strings on `SkillsMsg.*` match `SkillsProtocol.*` so the
- * actor-route fallback in MachineEngine forwards extension RPC calls
+ * actor-route fallback in ActorRouter forwards extension RPC calls
  * straight into the actor mailbox.
  */
 

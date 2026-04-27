@@ -42,7 +42,7 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -278,7 +278,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ...(config.extraLayers ?? []),
       )
-      const stateRuntimeLayer = MachineEngine.fromExtensions(activeExtensions).pipe(
+      const stateRuntimeLayer = ActorRouter.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),
         Layer.provideMerge(ActorEngine.Live),
       )

@@ -1,9 +1,9 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Context, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
+import { Cause, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
@@ -16,18 +16,15 @@ import {
   SessionRuntimeStateSchema,
 } from "../../src/runtime/session-runtime"
 import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../../src/runtime/extensions/resource-host/machine-engine"
+  ActorRouter,
+  type ActorRouterService,
+} from "../../src/runtime/extensions/resource-host/actor-router"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
+import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
 import { Storage, StorageError, subTagLayers } from "@gent/core/storage/sqlite-storage"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -74,7 +71,7 @@ const failingSessionCommandsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -112,7 +109,7 @@ const postCommitFailingSessionCommandsLayer = () => {
     eventStoreLayer,
     postCommitFailingPublisherLayer,
     Provider.Debug(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -123,8 +120,8 @@ const postCommitFailingSessionCommandsLayer = () => {
 }
 
 const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(function* (input: {
-  readonly sessions: SessionStorage
-  readonly branches: BranchStorage
+  readonly sessions: SessionStorageService
+  readonly branches: BranchStorageService
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly now: Date
@@ -158,7 +155,15 @@ const sendFailingSessionCommandsLayer = () => {
         }),
       ),
     getMetrics: () =>
-      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+      Effect.succeed({
+        turns: 0,
+        tokens: 0,
+        toolCalls: 0,
+        retries: 0,
+        durationMs: 0,
+        costUsd: 0,
+        lastInputTokens: 0,
+      }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: () => Effect.void,
     restoreSession: () => Effect.void,
@@ -171,7 +176,7 @@ const sendFailingSessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -191,7 +196,7 @@ const sessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    MachineEngine.Test(),
+    ActorRouter.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -215,7 +220,15 @@ const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array
         }),
       ),
     getMetrics: () =>
-      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+      Effect.succeed({
+        turns: 0,
+        tokens: 0,
+        toolCalls: 0,
+        retries: 0,
+        durationMs: 0,
+        costUsd: 0,
+        lastInputTokens: 0,
+      }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: (sessionId) =>
       Effect.sync(() => {
@@ -228,21 +241,14 @@ const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array
   })
 
 const sessionCommandsLayerWithMachineProbe = (
-  terminated: Array<SessionId>,
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
-  const machineProbeLayer = Layer.succeed(MachineEngine, {
-    publish: () => Effect.succeed([]),
+  const machineProbeLayer = Layer.succeed(ActorRouter, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-    getActorStatuses: () => Effect.succeed([]),
-    terminateAll: (sessionId) =>
-      Effect.sync(() => {
-        terminated.push(sessionId)
-      }),
-  } satisfies MachineEngineService)
+  } satisfies ActorRouterService)
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
@@ -262,22 +268,13 @@ const sessionCommandsLayerWithMachineProbe = (
   )
 }
 
-const sessionMutationsLayerWithMachineProbe = (
-  terminated: Array<SessionId>,
-  runtimeTerminated: Array<SessionId>,
-) => {
+const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
   const storageLayer = Storage.MemoryWithSql()
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  const machineProbeLayer = Layer.succeed(MachineEngine, {
-    publish: () => Effect.succeed([]),
+  const machineProbeLayer = Layer.succeed(ActorRouter, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-    getActorStatuses: () => Effect.succeed([]),
-    terminateAll: (sessionId) =>
-      Effect.sync(() => {
-        terminated.push(sessionId)
-      }),
-  } satisfies MachineEngineService)
+  } satisfies ActorRouterService)
   const terminatorRegistrationLayer = Layer.provide(
     SessionCommands.RegisterSessionRuntimeTerminatorLive,
     Layer.mergeAll(runtimeLayer, SessionCommands.SessionRuntimeTerminatorLive),
@@ -297,47 +294,7 @@ const sessionMutationsLayerWithMachineProbe = (
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
 }
 
-const failingCwdRegistryLayer = Layer.succeed(SessionCwdRegistry, {
-  record: () => Effect.void,
-  lookup: () => Effect.fail(new StorageError({ message: "registry lookup failed" })),
-  forget: () => Effect.void,
-})
-
-const sessionCommandsLayerWithFailingCwdRegistry = (
-  terminated: Array<SessionId>,
-  runtimeTerminated: Array<SessionId>,
-  runtimeRestored: Array<SessionId>,
-) => {
-  const storageLayer = Storage.MemoryWithSql()
-  const machineProbeLayer = Layer.succeed(MachineEngine, {
-    publish: () => Effect.succeed([]),
-    send: () => Effect.void,
-    execute: () => Effect.die("unexpected machine request"),
-    getActorStatuses: () => Effect.succeed([]),
-    terminateAll: (sessionId) =>
-      Effect.sync(() => {
-        terminated.push(sessionId)
-      }),
-  } satisfies MachineEngineService)
-  const deps = Layer.mergeAll(
-    storageLayer,
-    subTagLayers(storageLayer),
-    sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
-    SessionCommands.SessionRuntimeTerminatorLive,
-    EventStore.Memory,
-    EventPublisher.Test(),
-    Provider.Debug(),
-    machineProbeLayer,
-    failingCwdRegistryLayer,
-  )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
-}
-
 const failingDeleteSessionCommandsLayerWithMachineProbe = (
-  terminated: Array<SessionId>,
   runtimeTerminated: Array<SessionId>,
   runtimeRestored: Array<SessionId>,
 ) => {
@@ -353,16 +310,10 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
       }
     }),
   ).pipe(Layer.provide(baseSessionStorage))
-  const machineProbeLayer = Layer.succeed(MachineEngine, {
-    publish: () => Effect.succeed([]),
+  const machineProbeLayer = Layer.succeed(ActorRouter, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-    getActorStatuses: () => Effect.succeed([]),
-    terminateAll: (sessionId) =>
-      Effect.sync(() => {
-        terminated.push(sessionId)
-      }),
-  } satisfies MachineEngineService)
+  } satisfies ActorRouterService)
   const deps = Layer.mergeAll(
     storageLayer,
     baseSessionStorage,
@@ -381,179 +332,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
   )
 }
 
-const makeMachineProbe = (terminated: Array<SessionId>): MachineEngineService => ({
-  publish: () => Effect.succeed([]),
-  send: () => Effect.void,
-  execute: () => Effect.die("unexpected machine request"),
-  getActorStatuses: () => Effect.succeed([]),
-  terminateAll: (sessionId) =>
-    Effect.sync(() => {
-      terminated.push(sessionId)
-    }),
-})
-
-const makeProfile = (cwd: string, machine: MachineEngineService): SessionProfile => {
-  const resolved = resolveExtensions([])
-  const layerContext = Effect.runSync(
-    Layer.build(
-      Layer.mergeAll(
-        ExtensionRegistry.fromResolved(resolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: resolved.modelDrivers,
-          externalDrivers: resolved.externalDrivers,
-        }),
-        Layer.succeed(MachineEngine, machine),
-      ),
-    ).pipe(Effect.scoped),
-  )
-
-  return {
-    cwd,
-    extensions: [],
-    resolved,
-    layerContext,
-    permissionService: {
-      check: () => Effect.succeed("allowed"),
-      addRule: () => Effect.void,
-      removeRule: () => Effect.void,
-      getRules: () => Effect.succeed([]),
-    },
-    registryService: Context.get(layerContext, ExtensionRegistry),
-    driverRegistryService: Context.get(layerContext, DriverRegistry),
-    extensionStateRuntime: Context.get(layerContext, MachineEngine),
-    subscriptionEngine: undefined,
-    baseSections: [],
-    instructions: "",
-  }
-}
-
-const sessionCommandsLayerWithProfileMachineProbes = (params: {
-  readonly primaryTerminated: Array<SessionId>
-  readonly profileTerminated: Map<string, Array<SessionId>>
-}) => {
-  const storageLayer = Storage.MemoryWithSql()
-  const primaryMachineLayer = Layer.succeed(
-    MachineEngine,
-    makeMachineProbe(params.primaryTerminated),
-  )
-  const profileCacheLayer = SessionProfileCache.Test(
-    new Map(
-      [...params.profileTerminated].map(([cwd, terminated]) => [
-        cwd,
-        makeProfile(cwd, makeMachineProbe(terminated)),
-      ]),
-    ),
-  )
-  const deps = Layer.mergeAll(
-    storageLayer,
-    subTagLayers(storageLayer),
-    SessionRuntime.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
-    EventStore.Memory,
-    EventPublisher.Test(),
-    Provider.Debug(),
-    primaryMachineLayer,
-    profileCacheLayer,
-    SessionCwdRegistry.Test(),
-  )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
-}
-
-/**
- * Variant of the racy layer with a profile cache. Simulates the W6-11
- * race: late descendant created AFTER pre-collect (so it's only in
- * `postDeleteOnly`), and after the cascade tx the child's row is gone
- * before runtime termination runs. The fix routes termination through
- * `SessionCwdRegistry.lookup` — which still holds the cwd recorded at
- * create time — instead of `sessionStorage.getSession()`.
- */
-const racySessionCommandsLayerWithProfileCache = (params: {
-  readonly primaryTerminated: Array<SessionId>
-  readonly profileTerminated: Map<string, Array<SessionId>>
-  readonly lateChild: {
-    sessionId: SessionId
-    branchId: BranchId
-    cwd: string
-  }
-}) => {
-  const storageLayer = Storage.MemoryWithSql()
-  const baseSubTags = subTagLayers(storageLayer)
-  const cwdRegistryLayer = SessionCwdRegistry.Test()
-  const racingSessionStorageLayer = Layer.effect(
-    SessionStorage,
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const cwdRegistry = yield* SessionCwdRegistry
-      let fired = false
-      return {
-        ...sessions,
-        deleteSession: (rootId: SessionId) =>
-          Effect.gen(function* () {
-            if (!fired) {
-              fired = true
-              const now = new Date("2026-01-01T00:00:00.000Z")
-              yield* sessions.createSession(
-                new Session({
-                  id: params.lateChild.sessionId,
-                  cwd: params.lateChild.cwd,
-                  parentSessionId: rootId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              )
-              yield* branches.createBranch(
-                new Branch({
-                  id: params.lateChild.branchId,
-                  sessionId: params.lateChild.sessionId,
-                  createdAt: now,
-                }),
-              )
-              // The production createChildSession path records cwd in the
-              // registry; mirror that here so the termination fallback has
-              // something to find after the cascade removes the row.
-              yield* cwdRegistry.record(params.lateChild.sessionId, params.lateChild.cwd)
-            }
-            return yield* sessions.deleteSession(rootId)
-          }),
-      }
-    }),
-  ).pipe(Layer.provide(Layer.mergeAll(baseSubTags, cwdRegistryLayer)))
-
-  const primaryMachineLayer = Layer.succeed(
-    MachineEngine,
-    makeMachineProbe(params.primaryTerminated),
-  )
-  const profileCacheLayer = SessionProfileCache.Test(
-    new Map(
-      [...params.profileTerminated].map(([cwd, terminated]) => [
-        cwd,
-        makeProfile(cwd, makeMachineProbe(terminated)),
-      ]),
-    ),
-  )
-  const deps = Layer.mergeAll(
-    storageLayer,
-    baseSubTags,
-    racingSessionStorageLayer,
-    SessionRuntime.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
-    EventStore.Memory,
-    EventPublisher.Test(),
-    Provider.Debug(),
-    primaryMachineLayer,
-    profileCacheLayer,
-    cwdRegistryLayer,
-  )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
-}
-
 /**
  * SessionCommands layer that injects a child-session create into the DB
  * between the pre-collect and the durable `deleteSession` tx. Simulates the
@@ -562,7 +340,6 @@ const racySessionCommandsLayerWithProfileCache = (params: {
  * for any deleteSession call, inserting a child pointed at the deleted root.
  */
 const racySessionCommandsLayer = (params: {
-  readonly terminated: Array<SessionId>
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
@@ -604,16 +381,10 @@ const racySessionCommandsLayer = (params: {
     }),
   ).pipe(Layer.provide(baseSubTags))
 
-  const machineProbeLayer = Layer.succeed(MachineEngine, {
-    publish: () => Effect.succeed([]),
+  const machineProbeLayer = Layer.succeed(ActorRouter, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-    getActorStatuses: () => Effect.succeed([]),
-    terminateAll: (sessionId) =>
-      Effect.sync(() => {
-        params.terminated.push(sessionId)
-      }),
-  } satisfies MachineEngineService)
+  } satisfies ActorRouterService)
   const deps = Layer.mergeAll(
     storageLayer,
     baseSubTags,
@@ -648,7 +419,7 @@ const parentToolCallProbeProjection: ProjectionContribution<string | undefined> 
 }
 
 const parentToolCallProbeExtension: LoadedExtension = {
-  manifest: { id: "parent-tool-call-probe" },
+  manifest: { id: ExtensionId.make("parent-tool-call-probe") },
   scope: "builtin",
   sourcePath: "test",
   contributions: { projections: [parentToolCallProbeProjection] },
@@ -1339,7 +1110,6 @@ describe("session.delete", () => {
   )
 
   it.live("cleans runtime state for descendant sessions before durable cascade", () => {
-    const terminated: Array<SessionId> = []
     const runtimeTerminated: Array<SessionId> = []
     return Effect.scoped(
       Effect.gen(function* () {
@@ -1389,16 +1159,14 @@ describe("session.delete", () => {
         expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
         expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
-        expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(
-        Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated)),
+        Effect.provide(sessionCommandsLayerWithMachineProbe(runtimeTerminated)),
         Effect.timeout("4 seconds"),
       ),
     )
   })
 
   it.live("cleans runtime state for a child created mid-cascade", () => {
-    const terminated: Array<SessionId> = []
     const runtimeTerminated: Array<SessionId> = []
     const lateChildSessionId = SessionId.make("race-late-child")
     const lateChildBranchId = BranchId.make("race-late-child-branch")
@@ -1414,11 +1182,9 @@ describe("session.delete", () => {
         expect(yield* sessions.getSession(parent.sessionId)).toBeUndefined()
         expect(yield* sessions.getSession(lateChildSessionId)).toBeUndefined()
         expect(runtimeTerminated.sort()).toEqual([parent.sessionId, lateChildSessionId].sort())
-        expect(terminated.sort()).toEqual([parent.sessionId, lateChildSessionId].sort())
       }).pipe(
         Effect.provide(
           racySessionCommandsLayer({
-            terminated,
             runtimeTerminated,
             lateChild: {
               sessionId: lateChildSessionId,
@@ -1431,47 +1197,7 @@ describe("session.delete", () => {
     )
   })
 
-  it.live("post-cascade cleanup routes through cwd profile via SessionCwdRegistry (W6-11)", () => {
-    const primaryTerminated: Array<SessionId> = []
-    const profileTerminated = new Map<string, Array<SessionId>>([
-      ["/tmp/race-parent", []],
-      ["/tmp/racing-late-child", []],
-    ])
-    const lateChildSessionId = SessionId.make("late-child-cwd-fallback")
-    const lateChildBranchId = BranchId.make("late-child-cwd-fallback-branch")
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const parent = yield* commands.createSession({ cwd: "/tmp/race-parent" })
-
-        yield* commands.deleteSession(parent.sessionId)
-
-        // Late child injected mid-cascade: row removed by tx, but the
-        // racy layer recorded its cwd in SessionCwdRegistry, so the
-        // post-delete-only termination path resolves the cwd profile
-        // through the registry rather than the (now-empty) session row.
-        expect(profileTerminated.get("/tmp/racing-late-child")).toContain(lateChildSessionId)
-        expect(profileTerminated.get("/tmp/race-parent")).toContain(parent.sessionId)
-        expect(primaryTerminated).not.toContain(lateChildSessionId)
-      }).pipe(
-        Effect.provide(
-          racySessionCommandsLayerWithProfileCache({
-            primaryTerminated,
-            profileTerminated,
-            lateChild: {
-              sessionId: lateChildSessionId,
-              branchId: lateChildBranchId,
-              cwd: "/tmp/racing-late-child",
-            },
-          }),
-        ),
-        Effect.timeout("4 seconds"),
-      ),
-    )
-  })
-
   it.live("cleans runtime state for mutation deletes used by extension hosts", () => {
-    const terminated: Array<SessionId> = []
     const runtimeTerminated: Array<SessionId> = []
     return Effect.scoped(
       Effect.gen(function* () {
@@ -1494,16 +1220,14 @@ describe("session.delete", () => {
         yield* mutations.deleteSession(parent.sessionId)
 
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
-        expect(terminated).toEqual([parent.sessionId, child.sessionId])
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(terminated, runtimeTerminated)),
+        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
         Effect.timeout("4 seconds"),
       ),
     )
   })
 
   it.live("restores runtime tombstones when durable delete fails", () => {
-    const terminated: Array<SessionId> = []
     const runtimeTerminated: Array<SessionId> = []
     const runtimeRestored: Array<SessionId> = []
     return Effect.scoped(
@@ -1527,129 +1251,10 @@ describe("session.delete", () => {
         expect(exit._tag).toBe("Failure")
         expect(runtimeTerminated).toEqual([sessionId])
         expect(runtimeRestored).toEqual([sessionId])
-        expect(terminated).toEqual([sessionId])
         expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
       }).pipe(
         Effect.provide(
-          failingDeleteSessionCommandsLayerWithMachineProbe(
-            terminated,
-            runtimeTerminated,
-            runtimeRestored,
-          ),
-        ),
-        Effect.timeout("4 seconds"),
-      ),
-    )
-  })
-
-  it.live(
-    "fails closed when sessionCwdRegistry.lookup fails — does not terminate ambient runtime or durably delete",
-    () => {
-      const terminated: Array<SessionId> = []
-      const runtimeTerminated: Array<SessionId> = []
-      const runtimeRestored: Array<SessionId> = []
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const commands = yield* SessionCommands
-          const sessions = yield* SessionStorage
-          const branches = yield* BranchStorage
-          const sessionId = SessionId.make("registry-failure-session")
-          const branchId = BranchId.make("registry-failure-branch")
-
-          yield* createActiveSessionFixture({
-            sessions,
-            branches,
-            sessionId,
-            branchId,
-            now: new Date("2026-01-01T00:00:00.000Z"),
-          })
-
-          const exit = yield* Effect.exit(commands.deleteSession(sessionId))
-
-          // Fail-closed: registry lookup error propagates, deleteSession aborts.
-          expect(exit._tag).toBe("Failure")
-          // The StorageError survives in the cause — locks the contract against
-          // a refactor that swaps the typed error for a defect or different tag.
-          if (exit._tag === "Failure") {
-            const error = Cause.findErrorOption(exit.cause)
-            expect(Option.isSome(error)).toBe(true)
-            if (Option.isSome(error)) {
-              expect(error.value).toBeInstanceOf(StorageError)
-              expect((error.value as StorageError).message).toBe("registry lookup failed")
-            }
-          }
-          // The MachineEngine probe MUST NOT be called: routing through the
-          // ambient runtime when we can't resolve the owning cwd is exactly
-          // the wrong-runtime delivery the contract forbids.
-          expect(terminated).toEqual([])
-          // Pre-collect runs `sessionRuntimeTerminator.terminateSession` BEFORE
-          // `terminateSessionMachineRuntime`, so the runtime probe records the
-          // tombstone attempt before the registry lookup fails.
-          expect(runtimeTerminated).toEqual([sessionId])
-          // No restore — the cleanup aborts BEFORE `sessionStorage.deleteSession`
-          // so deleteSessionCascade's onError (which only fires for the durable
-          // delete) never runs. This distinguishes the registry-fail mode from
-          // the durable-delete-fail mode, where runtimeRestored = [sessionId].
-          expect(runtimeRestored).toEqual([])
-          // Cleanup aborts before the durable cascade — the row stays.
-          expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
-        }).pipe(
-          Effect.provide(
-            sessionCommandsLayerWithFailingCwdRegistry(
-              terminated,
-              runtimeTerminated,
-              runtimeRestored,
-            ),
-          ),
-          Effect.timeout("4 seconds"),
-        ),
-      )
-    },
-  )
-
-  it.live("terminates descendant sessions through their owning cwd profile runtime", () => {
-    const primaryTerminated: Array<SessionId> = []
-    const profileTerminated = new Map<string, Array<SessionId>>([
-      ["/tmp/delete-profile-parent", []],
-      ["/tmp/delete-profile-child", []],
-      ["/tmp/delete-profile-grandchild", []],
-    ])
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const mutations = yield* SessionMutations
-        const cwdRegistry = yield* SessionCwdRegistry
-
-        const parent = yield* commands.createSession({ cwd: "/tmp/delete-profile-parent" })
-        const child = yield* mutations.createChildSession({
-          parentSessionId: parent.sessionId,
-          parentBranchId: parent.branchId,
-          cwd: "/tmp/delete-profile-child",
-        })
-        const grandchild = yield* mutations.createChildSession({
-          parentSessionId: child.sessionId,
-          parentBranchId: child.branchId,
-          cwd: "/tmp/delete-profile-grandchild",
-        })
-
-        yield* commands.deleteSession(parent.sessionId)
-
-        expect(primaryTerminated).toEqual([])
-        expect(profileTerminated.get("/tmp/delete-profile-parent")).toEqual([parent.sessionId])
-        expect(profileTerminated.get("/tmp/delete-profile-child")).toEqual([child.sessionId])
-        expect(profileTerminated.get("/tmp/delete-profile-grandchild")).toEqual([
-          grandchild.sessionId,
-        ])
-        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBeUndefined()
-        expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
-        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
-      }).pipe(
-        Effect.provide(
-          sessionCommandsLayerWithProfileMachineProbes({
-            primaryTerminated,
-            profileTerminated,
-          }),
+          failingDeleteSessionCommandsLayerWithMachineProbe(runtimeTerminated, runtimeRestored),
         ),
         Effect.timeout("4 seconds"),
       ),
@@ -2004,7 +1609,15 @@ describe("requestId idempotency", () => {
             }),
           ),
         getMetrics: () =>
-          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+          Effect.succeed({
+            turns: 0,
+            tokens: 0,
+            toolCalls: 0,
+            retries: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          }),
         watchState: () => Effect.succeed(Stream.empty),
         terminateSession: () => Effect.void,
         restoreSession: () => Effect.void,
@@ -2018,7 +1631,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        MachineEngine.Test(),
+        ActorRouter.Test(),
         ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
@@ -2073,7 +1686,15 @@ describe("requestId idempotency", () => {
             }),
           ),
         getMetrics: () =>
-          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+          Effect.succeed({
+            turns: 0,
+            tokens: 0,
+            toolCalls: 0,
+            retries: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          }),
         watchState: () => Effect.succeed(Stream.empty),
         terminateSession: () => Effect.void,
         restoreSession: () => Effect.void,
@@ -2087,7 +1708,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        MachineEngine.Test(),
+        ActorRouter.Test(),
         ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )

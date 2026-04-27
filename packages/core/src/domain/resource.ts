@@ -14,7 +14,6 @@
  *   - C3.3 (here): schedule engine + `defineResource.schedule`; legacy
  *     scheduler.ts and JobContribution deleted.
  *   - C3.4: migrate `lifecycle` callers → defineResource.start/stop.
- *   - C3.5: add `Resource.machine` + machine engine; migrate `workflow.machine`.
  *   - C3.6: delete `bus-subscription` (no production users).
  *
  * The `scope` discriminator is the load-bearing addition over the legacy

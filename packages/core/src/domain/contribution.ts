@@ -141,7 +141,7 @@ export interface ExtensionContributions {
    *
    * Used by query-backed / projection-only extensions whose state is event-
    * driven but not held in a workflow actor (the workflow path emits pulses
-   * on actor transitions directly — see `MachineEngine.publish`).
+   * on actor transitions directly — see `ActorRouter.publish`).
    *
    * Keep minimal — every tag translates to one pulse per matching event for
    * this extension. Honest set: "events whose occurrence invalidates the

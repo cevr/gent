@@ -148,7 +148,7 @@ const makePublisherContext = (publisher: EventPublisherService) =>
 /**
  * EventPublisher for single-profile contexts (ephemeral children, tests).
  *
- * Yields MachineEngine + ExtensionRegistry + optional SubscriptionEngine
+ * Yields ActorRouter + ExtensionRegistry + optional SubscriptionEngine
  * once at construction and dispatches all events through them.
  */
 export const EventPublisherLive: Layer.Layer<
@@ -198,7 +198,7 @@ export interface EventPublisherRouterHandle {
  * Create a per-cwd EventPublisher router + a handle for late-binding
  * the SessionProfileCache.
  *
- * Dispatches events through the correct cwd's MachineEngine, pulseTags
+ * Dispatches events through the correct cwd's ActorRouter, pulseTags
  * index, and SubscriptionEngine. Falls back to the primary cwd when the
  * session's cwd is unknown or matches the primary.
  *
@@ -269,7 +269,7 @@ export const makeEventPublisherRouter = (): {
           // Different cwd — resolve per-cwd profile. If profile cache
           // is unavailable or resolution fails, persist the event but
           // skip runtime dispatch (fail closed). Falling back to the
-          // primary cwd's MachineEngine would be silent wrong-runtime
+          // primary cwd's ActorRouter would be silent wrong-runtime
           // delivery.
           if (handle.profileCache === undefined) {
             yield* baseEventStore.broadcast(envelope)

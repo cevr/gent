@@ -1,6 +1,6 @@
 /**
  * Actor runtime test: exercises SkillsExtension through direct
- * MachineEngine.execute (bypasses RPC per-request scopes).
+ * ActorRouter.execute (bypasses RPC per-request scopes).
  * For RPC acceptance coverage, see skills-rpc.test.ts.
  */
 import { describe, it, expect } from "effect-bun-test"
@@ -8,7 +8,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
-import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
+import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
@@ -68,14 +68,14 @@ const setupSkillsExtension = Effect.provide(
   BunServices.layer,
 )
 
-describe("SkillsExtension actor via MachineEngine", () => {
+describe("SkillsExtension actor via ActorRouter", () => {
   it.live("ListSkills returns skills from the Skills service", () =>
     Effect.gen(function* () {
       const ext = yield* setupSkillsExtension
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+        const runtime = yield* ActorRouter
         const reply = yield* runtime.execute(sessionId, SkillsProtocol.ListSkills.make(), branchId)
 
         expect(Array.isArray(reply)).toBe(true)
@@ -93,7 +93,7 @@ describe("SkillsExtension actor via MachineEngine", () => {
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+        const runtime = yield* ActorRouter
         const reply = yield* runtime.execute(
           sessionId,
           SkillsProtocol.GetSkillContent.make({ name: "react" }),
@@ -113,7 +113,7 @@ describe("SkillsExtension actor via MachineEngine", () => {
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* MachineEngine
+        const runtime = yield* ActorRouter
         const reply = yield* runtime.execute(
           sessionId,
           SkillsProtocol.GetSkillContent.make({ name: "nonexistent" }),

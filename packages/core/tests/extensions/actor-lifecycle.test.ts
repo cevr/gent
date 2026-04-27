@@ -17,6 +17,7 @@ import { Provider } from "@gent/core/providers/provider"
 import { behavior } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { Gent } from "@gent/sdk"
+import { ExtensionId } from "@gent/core/domain/ids"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "./helpers/test-preset"
 
@@ -24,7 +25,7 @@ import { e2ePreset } from "./helpers/test-preset"
 // Counter extension — stateful actor with request support + protocol
 // ============================================================================
 
-const EXTENSION_ID = "lifecycle-counter"
+const EXTENSION_ID = ExtensionId.make("lifecycle-counter")
 
 interface CounterState {
   readonly count: number
@@ -120,7 +121,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           expect(r2).toEqual({ count: 1 })
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -155,7 +156,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           expect(r).toEqual({ count: 10 })
         }).pipe(Effect.timeout("8 seconds")),
       ),
-    { timeout: 10_000 },
+    10_000,
   )
 
   it.live(
@@ -186,7 +187,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           yield* client.message.send({ sessionId, branchId, content: "hello" })
 
           // Actor must still be alive and respond after message.send's
-          // event publishing ran through MachineEngine.publish
+          // event publishing ran through ActorRouter.publish
           const r = yield* client.extension.ask({
             sessionId,
             branchId,
@@ -197,6 +198,6 @@ describe("Actor lifecycle across RPC boundaries", () => {
           expect((r as { count: number }).count).toBeGreaterThanOrEqual(1)
         }).pipe(Effect.timeout("13 seconds")),
       ),
-    { timeout: 15_000 },
+    15_000,
   )
 })
