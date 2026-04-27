@@ -71,6 +71,8 @@
     "./exec-tools/protocol.js": "./src/exec-tools/protocol.ts",
     "./executor/actor": "./src/executor/actor.ts",
     "./executor/actor.js": "./src/executor/actor.ts",
+    "./executor/connection-runner": "./src/executor/connection-runner.ts",
+    "./executor/connection-runner.js": "./src/executor/connection-runner.ts",
     "./executor/domain": "./src/executor/domain.ts",
     "./executor/domain.js": "./src/executor/domain.ts",
     "./executor/mcp-bridge": "./src/executor/mcp-bridge.ts",

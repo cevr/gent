@@ -8,6 +8,7 @@ import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 import { executorActor } from "./actor.js"
+import { ExecutorConnectionRunner, ExecutorConnectionRunnerLayer } from "./connection-runner.js"
 import { ExecuteTool, ResumeTool } from "./tools.js"
 import { ExecutorProtocol } from "./protocol.js"
 import { ExecutorProjection } from "./projection.js"
@@ -21,10 +22,6 @@ export const ExecutorExtension = defineExtension({
   capabilities: [
     ExecuteTool,
     ResumeTool,
-    // Slash commands authored through the `action()` factory.
-    // `surface: "slash"` derives `audiences: ["human-slash"]`, and
-    // `public: true` adds `"transport-public"` so non-TUI clients
-    // (SDK, future web UI) can also invoke them.
     action({
       id: "executor-start",
       name: "Executor: Start",
@@ -50,13 +47,29 @@ export const ExecutorExtension = defineExtension({
         extCtx.extension.send(ExecutorProtocol.Disconnect.make()).pipe(Effect.orDie),
     }),
   ],
-  // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
-  // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.
+  actors: [executorActor],
+  protocols: ExecutorProtocol,
+  // Resource carries the layer for ExecutorSidecar/McpBridge plus the
+  // ExecutorConnectionRunner. The runner observes the actor's state and
+  // drives the sidecar connection on entry to `Connecting` (the W10-1c
+  // "Option G" pattern: connection effect outside the actor, hosted on
+  // a Layer.scoped fiber).
+  //
+  // The runner depends on `ActorEngine | Receptionist` from the runtime
+  // and `ExecutorSidecar | ExecutorMcpBridge` from this layer; we
+  // provide the latter so only the runtime services flow through to
+  // the resource host's `R` channel.
   resources: ({ ctx }) => [
+    defineResource({
+      tag: ExecutorConnectionRunner,
+      scope: "process",
+      layer: ExecutorConnectionRunnerLayer(ctx.cwd).pipe(
+        Layer.provide(Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)),
+      ),
+    }),
     defineResource({
       scope: "process",
       layer: Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live),
-      machine: executorActor,
     }),
   ],
 })

@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test"
-import { ExecutorActorConfig } from "@gent/extensions/executor/actor"
+import {
+  ExecutorState,
+  transitionConnect,
+  transitionConnected,
+  transitionConnectionFailed,
+  transitionDisconnect,
+  executorBehavior,
+} from "@gent/extensions/executor/actor"
 import {
   resolveSettings,
   ExecutorSettingsDefaults,
@@ -8,77 +15,98 @@ import {
 import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/mcp-bridge"
 import { ExecutorProjection } from "@gent/extensions/executor/projection"
 
-// ── Helpers ──
-
-const { reduce, initial } = ExecutorActorConfig
-
-const connect = { _tag: "Connect" as const, cwd: "/test" }
-const disconnect = { _tag: "Disconnect" as const }
-const connected = (opts?: {
-  mode?: "local" | "remote"
-  baseUrl?: string
-  scopeId?: string
-  executorPrompt?: string
-}) => ({
-  _tag: "Connected" as const,
-  mode: opts?.mode ?? "local",
-  baseUrl: opts?.baseUrl ?? "http://127.0.0.1:4788",
-  scopeId: opts?.scopeId ?? "scope-1",
-  executorPrompt: opts?.executorPrompt,
-})
-const connectionFailed = (message: string) => ({
-  _tag: "ConnectionFailed" as const,
-  message,
-})
-
 // ── State machine ──
+//
+// Pure transitions are exposed as standalone functions; the Behavior
+// composes them into a `receive` switch. We test the transitions
+// directly — that's the W10-1b/c test pattern. End-to-end coverage
+// (actor mailbox + connection runner) lives in the integration test.
+
+const idle = executorBehavior.initialState
+const connectingFrom = (cwd = "/test") => transitionConnect(idle, cwd)
 
 describe("Executor state machine", () => {
   test("initial state is Idle", () => {
-    expect(initial._tag).toBe("Idle")
+    expect(idle._tag).toBe("Idle")
   })
 
   test("Connect → Connecting", () => {
-    const { state } = reduce(initial, connect)
-    expect(state._tag).toBe("Connecting")
+    const next = transitionConnect(idle, "/test")
+    expect(next._tag).toBe("Connecting")
+    if (next._tag === "Connecting") {
+      expect(next.cwd).toBe("/test")
+    }
   })
 
   test("Connected → Ready with baseUrl, scopeId, executorPrompt", () => {
-    const connecting = reduce(initial, connect).state
-    const { state } = reduce(connecting, connected({ executorPrompt: "Use tools.search" }))
-    expect(state._tag).toBe("Ready")
-    if (state._tag === "Ready") {
-      expect(state.baseUrl).toBe("http://127.0.0.1:4788")
-      expect(state.scopeId).toBe("scope-1")
-      expect(state.mode).toBe("local")
-      expect(state.executorPrompt).toBe("Use tools.search")
+    const connecting = connectingFrom()
+    const next = transitionConnected(connecting, {
+      mode: "local",
+      baseUrl: "http://127.0.0.1:4788",
+      scopeId: "scope-1",
+      executorPrompt: "Use tools.search",
+    })
+    expect(next._tag).toBe("Ready")
+    if (next._tag === "Ready") {
+      expect(next.baseUrl).toBe("http://127.0.0.1:4788")
+      expect(next.scopeId).toBe("scope-1")
+      expect(next.mode).toBe("local")
+      expect(next.executorPrompt).toBe("Use tools.search")
     }
   })
 
   test("ConnectionFailed → Error with message", () => {
-    const connecting = reduce(initial, connect).state
-    const { state } = reduce(connecting, connectionFailed("port exhausted"))
-    expect(state._tag).toBe("Error")
-    if (state._tag === "Error") {
-      expect(state.message).toBe("port exhausted")
+    const connecting = connectingFrom()
+    const next = transitionConnectionFailed(connecting, "port exhausted")
+    expect(next._tag).toBe("Error")
+    if (next._tag === "Error") {
+      expect(next.message).toBe("port exhausted")
     }
   })
 
   test("Disconnect from Ready → Idle", () => {
-    const ready = reduce(reduce(initial, connect).state, connected()).state
-    const { state } = reduce(ready, disconnect)
-    expect(state._tag).toBe("Idle")
+    const ready = transitionConnected(connectingFrom(), {
+      mode: "local",
+      baseUrl: "http://127.0.0.1:4788",
+      scopeId: "scope-1",
+    })
+    const next = transitionDisconnect(ready)
+    expect(next._tag).toBe("Idle")
   })
 
   test("Connect from Error → Connecting (retry)", () => {
-    const error = reduce(reduce(initial, connect).state, connectionFailed("timeout")).state
-    const { state } = reduce(error, connect)
-    expect(state._tag).toBe("Connecting")
+    const error = transitionConnectionFailed(connectingFrom(), "timeout")
+    const next = transitionConnect(error, "/test")
+    expect(next._tag).toBe("Connecting")
   })
 
-  test("unrecognized event → no-op", () => {
-    const { state } = reduce(initial, connected())
-    expect(state._tag).toBe("Idle")
+  test("Connected while Idle → no-op (out-of-order message dropped)", () => {
+    const next = transitionConnected(idle, {
+      mode: "local",
+      baseUrl: "http://127.0.0.1:4788",
+      scopeId: "scope-1",
+    })
+    expect(next._tag).toBe("Idle")
+  })
+
+  test("Disconnect while Connecting → no-op", () => {
+    const next = transitionDisconnect(connectingFrom())
+    expect(next._tag).toBe("Connecting")
+  })
+
+  test("Connect while Ready → no-op (Ready is a terminal Connect target)", () => {
+    const ready = transitionConnected(connectingFrom(), {
+      mode: "local",
+      baseUrl: "http://127.0.0.1:4788",
+      scopeId: "scope-1",
+    })
+    const next = transitionConnect(ready, "/test")
+    expect(next._tag).toBe("Ready")
+  })
+
+  test("ExecutorState constructors round-trip through tag discriminants", () => {
+    expect(ExecutorState.Idle.make({})._tag).toBe("Idle")
+    expect(ExecutorState.Connecting.make({ cwd: "/x" })._tag).toBe("Connecting")
   })
 })
 

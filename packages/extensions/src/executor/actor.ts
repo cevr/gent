@@ -1,34 +1,28 @@
 /**
- * Executor state machine + actor definition.
+ * Executor actor — pure FSM hosted on a `Behavior` (W10-1c).
  *
- * States: Idle → Connecting → Ready | Error
+ * States: Idle | Connecting{cwd} | Ready{...} | Error{message}
  *
- * Connection work runs via `.spawn(Connecting)` — a state-scoped effect
- * that fires on ANY entry into Connecting (onInit auto-start, /executor-start
- * command, retry from Error). Cancelled automatically on state exit.
+ * Connection work lives in `connection-runner.ts` — a `Layer.scoped`
+ * observer that subscribes to this actor's state via
+ * `ActorEngine.subscribeState` and forks the connection effect on entry
+ * to `Connecting`. The actor itself stays sync-only and free of side
+ * effects.
+ *
+ * No persistence: connection state is volatile per process. Restoring a
+ * `Ready{baseUrl}` snapshot would point at a sidecar URL that no longer
+ * exists. The next process starts from `Idle` and re-bootstraps via
+ * autoStart (handled by the connection runner).
  */
 
 import { Effect, Schema } from "effect"
-import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
+import { behavior, ServiceKey, TaggedEnumClass, type Behavior } from "@gent/core/extensions/api"
+import { ExecutorMode } from "./domain.js"
+import type { ExecutorSnapshotReply } from "./protocol.js"
 
-class ActorDefectError extends Schema.TaggedErrorClass<ActorDefectError>()("ActorDefectError", {
-  message: Schema.String,
-}) {}
-import { type ExtensionActorDefinition } from "@gent/core/extensions/api"
-import {
-  ExecutorEndpoint,
-  ExecutorMcpInspection,
-  ExecutorMode,
-  type ResolvedExecutorSettings,
-  EXECUTOR_EXTENSION_ID,
-} from "./domain.js"
-import { ExecutorSidecar } from "./sidecar.js"
-import { ExecutorMcpBridge } from "./mcp-bridge.js"
-import { ExecutorProtocol, ExecutorSnapshotReply } from "./protocol.js"
+// ── State ──
 
-// ── States ──
-
-const MachineState = MState({
+export const ExecutorState = TaggedEnumClass("ExecutorState", {
   Idle: {},
   Connecting: { cwd: Schema.String },
   Ready: {
@@ -39,14 +33,15 @@ const MachineState = MState({
   },
   Error: { message: Schema.String },
 })
-type MachineState = typeof MachineState.Type
+export type ExecutorState = Schema.Schema.Type<typeof ExecutorState>
 
-export const ExecutorState = MachineState
-export type ExecutorState = typeof MachineState.Type
+// ── Messages ──
+//
+// `_tag` strings are shared with `ExecutorProtocol.*` ExtensionMessage
+// envelopes so the actor-route fallback in MachineEngine (W10-1b.0) can
+// forward envelopes directly into the actor mailbox.
 
-// ── Events ──
-
-const MachineEvent = MEvent({
+export const ExecutorMsg = TaggedEnumClass("ExecutorMsg", {
   Connect: { cwd: Schema.String },
   Connected: {
     mode: ExecutorMode,
@@ -56,13 +51,13 @@ const MachineEvent = MEvent({
   },
   ConnectionFailed: { message: Schema.String },
   Disconnect: {},
-  /** Pure read for the projection. Reply carries enough to drive both prompt
-   *  injection (executorPrompt) and tool gating (status). */
-  GetSnapshot: MEvent.reply({}, ExecutorSnapshotReply),
+  GetSnapshot: {},
 })
-type MachineEvent = typeof MachineEvent.Type
+export type ExecutorMsg = Schema.Schema.Type<typeof ExecutorMsg>
 
-// ── UI Model ──
+export const ExecutorService = ServiceKey<ExecutorMsg>("@gent/executor/workflow")
+
+// ── UI Model (kept for tooling that consumes the projection shape) ──
 
 export const ExecutorUiModel = Schema.Struct({
   status: Schema.Literals(["idle", "connecting", "ready", "error"]),
@@ -72,186 +67,86 @@ export const ExecutorUiModel = Schema.Struct({
 })
 export type ExecutorUiModel = typeof ExecutorUiModel.Type
 
-// ── Slots ──
+// ── Snapshot projection ──
 
-const ExecutorSlots = Slot.define({
-  resolveEndpoint: Slot.fn({ cwd: Schema.String }, Schema.Unknown),
-  inspectMcp: Slot.fn({ baseUrl: Schema.String }, Schema.Unknown),
-  resolveSettings: Slot.fn({ cwd: Schema.String }, Schema.Unknown),
-})
-
-// ── Machine ──
-
-const executorMachine = Machine.make({
-  state: MachineState,
-  event: MachineEvent,
-  slots: ExecutorSlots,
-  initial: MachineState.Idle,
-})
-  // Idle + Connect → Connecting
-  .on(MachineState.Idle, MachineEvent.Connect, ({ event }) =>
-    MachineState.Connecting({ cwd: event.cwd }),
-  )
-  // Error + Connect → Connecting (retry)
-  .on(MachineState.Error, MachineEvent.Connect, ({ event }) =>
-    MachineState.Connecting({ cwd: event.cwd }),
-  )
-  // Connecting + Connected → Ready
-  .on(MachineState.Connecting, MachineEvent.Connected, ({ event }) =>
-    MachineState.Ready({
-      mode: event.mode,
-      baseUrl: event.baseUrl,
-      scopeId: event.scopeId,
-      executorPrompt: event.executorPrompt,
-    }),
-  )
-  // Connecting + ConnectionFailed → Error
-  .on(MachineState.Connecting, MachineEvent.ConnectionFailed, ({ event }) =>
-    MachineState.Error({ message: event.message }),
-  )
-  // Ready + Disconnect → Idle
-  .on(MachineState.Ready, MachineEvent.Disconnect, () => MachineState.Idle)
-  // GetSnapshot — pure read per state
-  .on(MachineState.Idle, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, { status: "idle" } satisfies ExecutorSnapshotReply),
-  )
-  .on(MachineState.Connecting, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, { status: "connecting" } satisfies ExecutorSnapshotReply),
-  )
-  .on(MachineState.Ready, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, {
-      status: "ready",
-      baseUrl: state.baseUrl,
-      executorPrompt: state.executorPrompt,
-    } satisfies ExecutorSnapshotReply),
-  )
-  .on(MachineState.Error, MachineEvent.GetSnapshot, ({ state }) =>
-    Machine.reply(state, {
-      status: "error",
-      errorMessage: state.message,
-    } satisfies ExecutorSnapshotReply),
-  )
-  // ── Spawn: connection work on Connecting entry ──
-  .spawn(MachineState.Connecting, ({ self, slots, state }) =>
-    Effect.gen(function* () {
-      const endpointRaw = yield* slots.resolveEndpoint({ cwd: state.cwd })
-      const endpoint = yield* Schema.decodeUnknownEffect(ExecutorEndpoint)(endpointRaw)
-
-      const inspection = yield* slots.inspectMcp({ baseUrl: endpoint.baseUrl }).pipe(
-        Effect.flatMap((raw) => Schema.decodeUnknownEffect(ExecutorMcpInspection)(raw)),
-        Effect.orElseSucceed(() => undefined),
-      )
-
-      yield* self.send(
-        MachineEvent.Connected({
-          mode: endpoint.mode,
-          baseUrl: endpoint.baseUrl,
-          scopeId: endpoint.scope.id,
-          executorPrompt: inspection?.instructions,
-        }),
-      )
-    }).pipe(
-      Effect.catchDefect((e) => Effect.fail(new ActorDefectError({ message: String(e) }))),
-      Effect.catchEager((e) =>
-        self.send(
-          MachineEvent.ConnectionFailed({
-            message: e instanceof Error ? e.message : String(e),
-          }),
-        ),
-      ),
-    ),
-  )
-
-// Prompt section building lives in `executor/projection.ts` — the projection
-// reads the workflow's typed snapshot and produces the executor-guidance
-// prompt section (only when `status === "ready"`).
-
-// ── Actor config (exported for pure reducer tests) ──
-
-export const ExecutorActorConfig = {
-  id: EXECUTOR_EXTENSION_ID,
-  initial: MachineState.Idle,
-  reduce: (state: MachineState, event: MachineEvent): { state: MachineState } => {
-    if (state._tag === "Idle" && event._tag === "Connect") {
-      return { state: MachineState.Connecting({ cwd: event.cwd }) }
-    }
-    if (state._tag === "Error" && event._tag === "Connect") {
-      return { state: MachineState.Connecting({ cwd: event.cwd }) }
-    }
-    if (state._tag === "Connecting" && event._tag === "Connected") {
+const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
+  switch (state._tag) {
+    case "Idle":
+      return { status: "idle" }
+    case "Connecting":
+      return { status: "connecting" }
+    case "Ready":
       return {
-        state: MachineState.Ready({
-          mode: event.mode,
-          baseUrl: event.baseUrl,
-          scopeId: event.scopeId,
-          executorPrompt: event.executorPrompt,
-        }),
+        status: "ready",
+        baseUrl: state.baseUrl,
+        executorPrompt: state.executorPrompt,
       }
-    }
-    if (state._tag === "Connecting" && event._tag === "ConnectionFailed") {
-      return { state: MachineState.Error({ message: event.message }) }
-    }
-    if (state._tag === "Ready" && event._tag === "Disconnect") {
-      return { state: MachineState.Idle }
-    }
-    return { state }
-  },
+    case "Error":
+      return { status: "error", errorMessage: state.message }
+  }
 }
 
-// ── Actor definition ──
+// ── Pure transitions ──
 
-export const executorActor: ExtensionActorDefinition<
-  MachineState,
-  MachineEvent,
-  ExecutorSidecar | ExecutorMcpBridge,
-  typeof ExecutorSlots.definitions
-> = {
-  machine: executorMachine,
-  slots: () =>
+export const transitionConnect = (state: ExecutorState, cwd: string): ExecutorState => {
+  if (state._tag === "Idle" || state._tag === "Error") {
+    return ExecutorState.Connecting.make({ cwd })
+  }
+  return state
+}
+
+export const transitionConnected = (
+  state: ExecutorState,
+  msg: {
+    readonly mode: ExecutorMode
+    readonly baseUrl: string
+    readonly scopeId: string
+    readonly executorPrompt?: string | undefined
+  },
+): ExecutorState => {
+  if (state._tag !== "Connecting") return state
+  return ExecutorState.Ready.make({
+    mode: msg.mode,
+    baseUrl: msg.baseUrl,
+    scopeId: msg.scopeId,
+    executorPrompt: msg.executorPrompt,
+  })
+}
+
+export const transitionConnectionFailed = (
+  state: ExecutorState,
+  message: string,
+): ExecutorState => {
+  if (state._tag !== "Connecting") return state
+  return ExecutorState.Error.make({ message })
+}
+
+export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
+  if (state._tag === "Ready") return ExecutorState.Idle.make({})
+  return state
+}
+
+// ── Behavior ──
+
+export const executorBehavior: Behavior<ExecutorMsg, ExecutorState, never> = {
+  initialState: ExecutorState.Idle.make({}),
+  serviceKey: ExecutorService,
+  receive: (msg, state, ctx) =>
     Effect.gen(function* () {
-      const sidecar = yield* ExecutorSidecar
-      const bridge = yield* ExecutorMcpBridge
-      return {
-        resolveEndpoint: ({ cwd }: { cwd: string }) => sidecar.resolveEndpoint(cwd),
-        inspectMcp: ({ baseUrl }: { baseUrl: string }) => bridge.inspect(baseUrl),
-        resolveSettings: ({ cwd }: { cwd: string }) => sidecar.resolveSettings(cwd),
+      switch (msg._tag) {
+        case "Connect":
+          return transitionConnect(state, msg.cwd)
+        case "Connected":
+          return transitionConnected(state, msg)
+        case "ConnectionFailed":
+          return transitionConnectionFailed(state, msg.message)
+        case "Disconnect":
+          return transitionDisconnect(state)
+        case "GetSnapshot":
+          yield* ctx.reply(projectSnapshot(state))
+          return state
       }
     }),
-  mapCommand: (message, _state) => {
-    if (message.extensionId !== EXECUTOR_EXTENSION_ID) return undefined
-    switch (message._tag) {
-      case "Connect":
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-        return MachineEvent.Connect({ cwd: (message["cwd"] as string | undefined) ?? "/" })
-      case "Disconnect":
-        return MachineEvent.Disconnect
-      default:
-        return undefined
-    }
-  },
-  mapRequest: (message) => {
-    if (message.extensionId !== EXECUTOR_EXTENSION_ID) return undefined
-    if (message._tag === "GetSnapshot") return MachineEvent.GetSnapshot
-    return undefined
-  },
-  stateSchema: MachineState.schema,
-  protocols: ExecutorProtocol,
-  onInit: (ctx) =>
-    Effect.gen(function* () {
-      if (ctx.slots === undefined) return
-      const current = yield* ctx.snapshot
-      if (current._tag !== "Idle") return
-
-      // Check autoStart setting
-      const settingsRaw = yield* ctx.slots.resolveSettings({ cwd: ctx.sessionCwd ?? "/" })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      const settings = settingsRaw as ResolvedExecutorSettings
-      if (!settings.autoStart) return
-
-      // Send Connect — .spawn(Connecting) handles the rest
-      yield* ctx.send(MachineEvent.Connect({ cwd: ctx.sessionCwd ?? "/" }))
-    }).pipe(
-      Effect.catchDefect((e) => Effect.fail(new ActorDefectError({ message: String(e) }))),
-      Effect.catchEager(() => Effect.void),
-    ),
 }
+
+export const executorActor = behavior(executorBehavior)
