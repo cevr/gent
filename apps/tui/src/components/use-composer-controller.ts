@@ -1,4 +1,5 @@
 import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
+import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -230,6 +231,8 @@ export function useComposerController(): ComposerController {
             client.setError(message)
           }),
         ),
+        // @effect-diagnostics-next-line strictEffectProvide:off
+        Effect.provide(BunServices.layer),
       ),
     )
   }

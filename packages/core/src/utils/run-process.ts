@@ -16,6 +16,7 @@ export interface ProcessResult {
 }
 
 export interface RunProcessOptions {
+  readonly cwd?: string
   readonly env?: Record<string, string | undefined>
   readonly timeout?: Duration.Duration
   readonly stdout?: "pipe" | "ignore"
@@ -37,6 +38,7 @@ export const runProcess = (
   const program = Effect.scoped(
     Effect.gen(function* () {
       const spawn = ChildProcess.make(command, [...args], {
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
         stdout: options.stdout ?? "pipe",
         stderr: options.stderr ?? "pipe",

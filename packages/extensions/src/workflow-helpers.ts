@@ -2,37 +2,22 @@
  * Shared helpers — used by plan, review, and audit tools.
  */
 
-import { Effect, Schema } from "effect"
-import { AgentRunError, type AgentRunResult } from "@gent/core/extensions/api"
+import { BunServices } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { AgentRunError, runProcess, type AgentRunResult } from "@gent/core/extensions/api"
 
 // ── Shell Command Runner ──
 
-class CommandError extends Schema.TaggedErrorClass<CommandError>()("CommandError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
 /** Run a shell command in a given cwd, returning stdout. Returns empty string on failure. */
-export const runCommand = (cmd: string[], cwd: string): Effect.Effect<string> =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(cmd, {
-        cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      if (exitCode !== 0) {
-        throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
-      }
-      return stdout
-    },
-    catch: (e) => new CommandError({ message: String(e), cause: e }),
-  }).pipe(Effect.orElseSucceed(() => ""))
+export const runCommand = (cmd: string[], cwd: string): Effect.Effect<string> => {
+  const [head, ...rest] = cmd
+  if (head === undefined) return Effect.succeed("")
+  return runProcess(head, rest, { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
+    Effect.flatMap((r) => Effect.succeed(r.exitCode === 0 ? r.stdout : "")),
+    Effect.catchTag("ProcessError", () => Effect.succeed("")),
+    Effect.provide(BunServices.layer),
+  )
+}
 
 // ── Require Text ──
 

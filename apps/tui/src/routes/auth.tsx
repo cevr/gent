@@ -1,6 +1,7 @@
 import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
+import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { LinkOpener } from "../services/link-opener"
@@ -123,6 +124,8 @@ export function Auth(props: AuthProps) {
           send(AuthEvent.ActionFailed.make({ error: formatError(ClientError(err.message)) }))
         }),
       ),
+      // @effect-diagnostics-next-line strictEffectProvide:off
+      Effect.provide(BunServices.layer),
     )
 
   // Auto-navigate to first missing required provider

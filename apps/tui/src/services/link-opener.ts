@@ -1,4 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
+import { runProcess } from "@gent/core/utils/run-process"
 import { OsService } from "./os-service"
 
 export class LinkOpenerError extends Schema.TaggedErrorClass<LinkOpenerError>()("LinkOpenerError", {
@@ -7,29 +9,32 @@ export class LinkOpenerError extends Schema.TaggedErrorClass<LinkOpenerError>()(
 }) {}
 
 export interface LinkOpenerService {
-  readonly open: (url: string) => Effect.Effect<void, LinkOpenerError>
+  readonly open: (
+    url: string,
+  ) => Effect.Effect<void, LinkOpenerError, ChildProcessSpawner.ChildProcessSpawner>
 }
 
 const makeOpener = (command: string, argsForUrl: (url: string) => string[]): LinkOpenerService => ({
   open: Effect.fn("LinkOpener.open")((url: string) =>
-    Effect.tryPromise({
-      try: async () => {
-        const proc = Bun.spawn([command, ...argsForUrl(url)], {
-          stdout: "ignore",
-          stderr: "pipe",
-        })
-        const code = await proc.exited
-        if (code !== 0) {
-          const errText = await new Response(proc.stderr).text()
-          throw new Error(errText || `Exit code ${code}`)
-        }
-      },
-      catch: (e) =>
-        new LinkOpenerError({
-          message: `Failed to open URL: ${url}`,
-          cause: e,
-        }),
-    }),
+    runProcess(command, argsForUrl(url), { stdout: "ignore", stderr: "pipe" }).pipe(
+      Effect.flatMap((result) =>
+        result.exitCode === 0
+          ? Effect.void
+          : Effect.fail(
+              new LinkOpenerError({
+                message: `Failed to open URL: ${url}: ${result.stderr || `Exit code ${result.exitCode}`}`,
+              }),
+            ),
+      ),
+      Effect.catchTag("ProcessError", (e) =>
+        Effect.fail(
+          new LinkOpenerError({
+            message: `Failed to open URL: ${url}`,
+            cause: e,
+          }),
+        ),
+      ),
+    ),
   ),
 })
 

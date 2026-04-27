@@ -11,6 +11,8 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -855,6 +857,7 @@ export const InProcessRunner = (
   | ExtensionRegistry
   | Provider
   | ServerProfileService
+  | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -1047,7 +1050,13 @@ export const SubprocessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | EventStore | EventPublisher | ExtensionRegistry | Provider | ServerProfileService
+  | Storage
+  | EventStore
+  | EventPublisher
+  | ExtensionRegistry
+  | Provider
+  | ServerProfileService
+  | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -1060,6 +1069,7 @@ export const SubprocessRunner = (
       // Server-scoped parent profile — type-level proof of origin for the
       // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
       const parentProfile = yield* ServerProfileService
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
@@ -1144,59 +1154,33 @@ export const SubprocessRunner = (
                   params.prompt,
                 ]
 
-                const killSubprocess = (proc: Bun.Subprocess) => {
-                  try {
-                    // Kill process group (negative PID) to clean up descendants
-                    process.kill(-proc.pid, "SIGTERM")
-                  } catch {
-                    try {
-                      proc.kill()
-                    } catch {
-                      // already dead
-                    }
-                  }
+                const env: Record<string, string | undefined> = {
+                  ...Bun.env,
+                  ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+                  ...(config.sharedServerUrl !== undefined
+                    ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }
+                    : {}),
+                  ...(currentSpan !== undefined
+                    ? {
+                        GENT_TRACE_ID: currentSpan.traceId,
+                        GENT_PARENT_SPAN_ID: currentSpan.spanId,
+                      }
+                    : {}),
                 }
 
-                const [exitCode, stderrText] = yield* Effect.acquireUseRelease(
-                  Effect.sync(() =>
-                    Bun.spawn(args, {
-                      cwd: params.cwd,
-                      stdout: "pipe",
-                      stderr: "pipe",
-                      env: {
-                        ...Bun.env,
-                        ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-                        ...(config.sharedServerUrl !== undefined
-                          ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }
-                          : {}),
-                        ...(currentSpan !== undefined
-                          ? {
-                              GENT_TRACE_ID: currentSpan.traceId,
-                              GENT_PARENT_SPAN_ID: currentSpan.spanId,
-                            }
-                          : {}),
-                      },
-                    }),
+                const [exitCode, stderrText] = yield* runProcess(binary, args.slice(1), {
+                  cwd: params.cwd,
+                  env,
+                  stdout: "pipe",
+                  stderr: "pipe",
+                }).pipe(
+                  Effect.map(
+                    (result) => [result.exitCode, result.stderr] as readonly [number, string],
                   ),
-                  (proc) =>
-                    Effect.tryPromise({
-                      try: async () => {
-                        const stdoutPromise =
-                          proc.stdout !== null
-                            ? new Response(proc.stdout).text().catch(() => "")
-                            : Promise.resolve("")
-                        const stderrPromise =
-                          proc.stderr !== null
-                            ? new Response(proc.stderr).text().catch(() => "")
-                            : Promise.resolve("")
-                        const code = await proc.exited
-                        await stdoutPromise
-                        const err = await stderrPromise
-                        return [code, err] as const
-                      },
-                      catch: () => [1, "Subprocess failed"] as const,
-                    }),
-                  (proc) => Effect.sync(() => killSubprocess(proc)),
+                  Effect.catchTag("ProcessError", () =>
+                    Effect.succeed([1, "Subprocess failed"] as readonly [number, string]),
+                  ),
+                  Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                 )
 
                 if (exitCode !== 0) {

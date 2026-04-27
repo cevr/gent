@@ -2,7 +2,9 @@
  * Shell execution utility with truncation and output saving
  */
 
+import { runProcess } from "@gent/core/utils/run-process"
 import { DateTime, FileSystem, Effect, Schema } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"
 import { joinPath } from "../platform/path-runtime"
 
@@ -57,23 +59,15 @@ export const executeShell = (command: string, cwd: string) =>
 const runCommand = (
   command: string,
   cwd: string,
-): Effect.Effect<{ stdout: string; stderr: string }> =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(["bash", "-c", command], {
-        cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ])
-      await proc.exited
-      return { stdout, stderr }
-    },
-    catch: (e) => new ShellCommandError({ message: e instanceof Error ? e.message : String(e) }),
-  }).pipe(Effect.orDie)
+): Effect.Effect<
+  { stdout: string; stderr: string },
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  runProcess("bash", ["-c", command], { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
+    Effect.map((r) => ({ stdout: r.stdout, stderr: r.stderr })),
+    Effect.orDie,
+  )
 
 const saveFullOutput = (output: string, command: string) =>
   Effect.gen(function* () {
