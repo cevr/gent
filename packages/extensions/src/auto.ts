@@ -722,21 +722,21 @@ export const AutoExtension = defineExtension({
   tools: [AutoCheckpointTool],
   actors: [behavior(autoBehavior)],
   protocols: AutoProtocol,
-  // Resource shell carries the AutoJournal service layer + slot handlers
-  // until W10-4 lifts subscriptions/slots to actor messages.
+  reactions: {
+    toolResult: (input, hostCtx) =>
+      journalInterceptorImpl(input, (next) => Effect.succeed(next.result), hostCtx),
+    turnAfter: {
+      failureMode: "isolate",
+      handler: autoHandoffImpl,
+    },
+  },
+  // Resource still owns the AutoJournal service layer until W10-5/C-4
+  // promotes layer ownership off Resource (deletion sweep).
   resources: ({ ctx }) => [
     defineBuiltinResource({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
-      runtime: {
-        toolResult: (input, hostCtx) =>
-          journalInterceptorImpl(input, (next) => Effect.succeed(next.result), hostCtx),
-        turnAfter: {
-          failureMode: "isolate",
-          handler: autoHandoffImpl,
-        },
-      },
     }),
   ],
 })

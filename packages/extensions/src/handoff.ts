@@ -1,8 +1,6 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   defineExtension,
-  defineResource,
-  resource,
   behavior,
   ServiceKey,
   TaggedEnumClass,
@@ -130,20 +128,10 @@ export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   tools: [HandoffTool],
   actors: [behavior(cooldownBehavior)],
-  // Resource shell carries the turnAfter slot until W10-5 lifts slots
-  // off Resource and W10-4 turns turn.after into an actor message.
-  resources: [
-    resource(
-      defineResource({
-        scope: "process",
-        layer: Layer.empty,
-        runtime: {
-          turnAfter: {
-            failureMode: "isolate",
-            handler: autoHandoffImpl,
-          },
-        },
-      }),
-    ),
-  ],
+  reactions: {
+    turnAfter: {
+      failureMode: "isolate",
+      handler: autoHandoffImpl,
+    },
+  },
 })
