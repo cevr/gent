@@ -1,31 +1,34 @@
 /**
- * ActorEngine — W9-2 + W9-4 (snapshot/restore).
+ * ActorEngine — actor host with optional persistence.
  *
- * Hosts actors declared by extensions. Each `spawn(behavior)` allocates
- * a `Mailbox<M>` (Queue.unbounded), forks a fiber that runs the
- * behavior's `receive` loop, and returns a typed `ActorRef<M>`. `tell`
- * enqueues a message; `ask` correlates a one-shot reply via
- * `Deferred<A>` plus a per-correlation `reply` shim attached to the
- * `ActorContext` for the duration of that one `receive`.
+ * Each `spawn(behavior)` allocates a `Mailbox<M>` (Queue.unbounded),
+ * forks a fiber that runs the behavior's `receive` loop, and returns
+ * a typed `ActorRef<M>`. `tell` enqueues a message; `ask` correlates a
+ * one-shot reply via `Deferred<A>` plus a per-correlation `reply` shim
+ * attached to the `ActorContext` for the duration of one `receive`.
  *
- * Supervision: the receive loop is wrapped in `Effect.catchAllCause`
- * — interrupts propagate (the actor is being torn down by scope
- * close), all other failures restart the loop with the *current*
- * `Ref<S>` (state survives a transient crash). Successful `receive`
- * returns a new S; failed receives keep the prior S. Defects
- * (`Effect.die`) escalate by interrupting the actor's fiber.
+ * Supervision policy in the receive loop:
+ *   - interrupts propagate (scope close is tearing the actor down).
+ *   - typed failures: log + continue, state survives the transient
+ *     crash because the loop re-reads `Ref<S>` on the next iteration.
+ *   - defects (`Effect.die`): log + escalate, killing the fiber so the
+ *     absence is observable to ask callers.
  *
- * Persistence (W9-4): a `Behavior` is durable iff it sets both
- * `persistenceKey` and `state`. `snapshot()` walks every live
- * durable actor and returns `{ persistenceKey: encodedState }` —
- * mailboxes are NOT captured (peers re-tell on resume). `spawn` takes
- * an optional `restoredState` (encoded form) which the engine decodes
- * via the behavior's `state` schema and uses in place of
- * `initialState`. Wiring into the agent-loop checkpoint surface and
- * loader is W9-5's responsibility.
+ * Persistence is opt-in per `Behavior.persistence`:
+ *   - `snapshot()` walks every live durable actor and returns a
+ *     `Map<key, encodedState>`. Encode failures surface as
+ *     `ActorSnapshotError`; the caller decides skip-vs-abort.
+ *   - `spawn(b, { restoredState })` decodes via `persistence.state`
+ *     and uses the decoded value in place of `initialState`. Decode
+ *     failures surface as `ActorRestoreError`.
+ *   - Two durable behaviors with the same `persistence.key` in one
+ *     engine fail with `ActorPersistenceKeyCollision` at spawn.
+ *   - Mailboxes are NOT captured (peers re-tell on resume).
+ *   - `snapshot()` is unsynchronized; cross-actor atomicity is the
+ *     caller's contract (invoke at a quiescent point).
  *
- * `find` / `subscribe` are wired through Receptionist (W9-3). For
- * W9-2, they return empty / never to keep the surface complete.
+ * `find` / `subscribe` on `ActorContext` are stubs here (empty / never).
+ * The Receptionist wires them in.
  */
 
 import {
@@ -44,9 +47,13 @@ import {
 } from "effect"
 import {
   ActorAskTimeout,
+  ActorPersistenceKeyCollision,
+  ActorRestoreError,
+  ActorSnapshotError,
   type ActorContext,
   type ActorRef,
   type Behavior,
+  type JsonValueT,
   type ServiceKey,
 } from "../../domain/actor.js"
 import { ActorId } from "../../domain/ids.js"
@@ -62,22 +69,24 @@ interface MailboxEntry {
   readonly offer: (env: EnvelopedMessage) => Effect.Effect<void>
   /**
    * Snapshot the actor's current state into the engine-erased form.
-   * Returns `undefined` for ephemeral actors (no persistenceKey or
-   * no state schema). The persistenceKey is the map slot the
-   * snapshot belongs in.
+   * Returns `undefined` for ephemeral actors (no `persistence`).
+   * Encode failures surface as `ActorSnapshotError` so the checkpoint
+   * caller decides skip-vs-abort.
    */
   readonly snapshot: () => Effect.Effect<
-    { readonly persistenceKey: string; readonly state: unknown } | undefined
+    { readonly persistenceKey: string; readonly state: JsonValueT } | undefined,
+    ActorSnapshotError
   >
 }
 
 /**
  * Encoded snapshot of all durable actors in the engine. Keys are
- * `Behavior.persistenceKey`; values are the result of encoding `S`
- * through the behavior's `state` schema. Ephemeral actors (no
- * persistenceKey / no state schema) are omitted.
+ * `Behavior.persistence.key`; values are the result of encoding `S`
+ * through `persistence.state`. Ephemeral actors (no `persistence`)
+ * are omitted. Values are JSON-typed so the snapshot map round-trips
+ * through any standard transport.
  */
-export type ActorSnapshot = ReadonlyMap<string, unknown>
+export type ActorSnapshot = ReadonlyMap<string, JsonValueT>
 
 /**
  * Engine-internal envelope. `askId`, when present, ties the message
@@ -98,18 +107,18 @@ interface PendingAsk {
 export interface SpawnOptions {
   /**
    * Previously-snapshotted encoded state for this behavior. The engine
-   * decodes via `behavior.state` and uses the decoded value in place
-   * of `behavior.initialState`. No-op when the behavior is ephemeral
-   * or `restoredState` is `undefined`.
+   * decodes via `behavior.persistence.state` and uses the decoded value
+   * in place of `behavior.initialState`. No-op when the behavior is
+   * ephemeral or `restoredState` is `undefined`.
    */
-  readonly restoredState?: unknown
+  readonly restoredState?: JsonValueT
 }
 
 export interface ActorEngineService {
   readonly spawn: <M, S>(
     behavior: Behavior<M, S, never>,
     options?: SpawnOptions,
-  ) => Effect.Effect<ActorRef<M>>
+  ) => Effect.Effect<ActorRef<M>, ActorRestoreError | ActorPersistenceKeyCollision>
   readonly tell: <M>(target: ActorRef<M>, msg: M) => Effect.Effect<void>
   readonly ask: <M, A>(
     target: ActorRef<M>,
@@ -120,8 +129,15 @@ export interface ActorEngineService {
   /**
    * Encoded snapshot of every live durable actor's current state.
    * Ephemeral actors are omitted; mailboxes are not captured.
+   * Encode failures surface as `ActorSnapshotError` — the checkpoint
+   * caller decides whether to skip the offending actor or abort.
+   *
+   * **Quiescence contract**: callers must invoke at a point where no
+   * `receive` is in flight (e.g. between agent-loop turns). The engine
+   * does not lock during snapshot — cross-actor atomicity is the
+   * caller's responsibility.
    */
-  readonly snapshot: () => Effect.Effect<ActorSnapshot>
+  readonly snapshot: () => Effect.Effect<ActorSnapshot, ActorSnapshotError>
 }
 
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
@@ -134,6 +150,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
         const runtimeScope = yield* Scope.make()
         const mailboxes = yield* Ref.make<Map<string, MailboxEntry>>(new Map())
         const pendingAsks = yield* Ref.make<Map<string, PendingAsk>>(new Map())
+        // Persistence keys claimed by live durable actors. Spawn-time
+        // collision check rejects double-claims (silent overwrite is
+        // data corruption — see ActorPersistenceKeyCollision).
+        const claimedPersistenceKeys = yield* Ref.make<Set<string>>(new Set())
 
         const lookup = (id: ActorId): Effect.Effect<MailboxEntry | undefined> =>
           Ref.get(mailboxes).pipe(Effect.map((m) => m.get(id)))
@@ -192,35 +212,43 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
         const spawn = <M, S>(
           behavior: Behavior<M, S, never>,
           options?: SpawnOptions,
-        ): Effect.Effect<ActorRef<M>> =>
+        ): Effect.Effect<ActorRef<M>, ActorRestoreError | ActorPersistenceKeyCollision> =>
           Effect.gen(function* () {
+            const persistence = behavior.persistence
+            if (persistence !== undefined) {
+              const claimed = yield* Ref.get(claimedPersistenceKeys)
+              if (claimed.has(persistence.key)) {
+                return yield* new ActorPersistenceKeyCollision({
+                  persistenceKey: persistence.key,
+                })
+              }
+              yield* Ref.update(claimedPersistenceKeys, (s) => new Set(s).add(persistence.key))
+            }
+
             const id = Schema.decodeUnknownSync(ActorId)(crypto.randomUUID())
             const ref: ActorRef<M> = { _tag: "ActorRef", id }
             const queue = yield* Queue.unbounded<EnvelopedMessage>()
 
-            // Restore from prior snapshot if both the behavior is
-            // durable and a restoredState was provided. Decode failure
-            // is fatal — the snapshot was written by a prior run of
-            // this same behavior, so a schema mismatch is a real
-            // migration problem the caller must surface.
             const initial: S =
-              options?.restoredState !== undefined && behavior.state !== undefined
-                ? yield* Schema.decodeUnknownEffect(behavior.state)(options.restoredState).pipe(
-                    Effect.orDie,
+              options?.restoredState !== undefined && persistence !== undefined
+                ? yield* Schema.decodeUnknownEffect(persistence.state)(options.restoredState).pipe(
+                    Effect.mapError(
+                      (cause) => new ActorRestoreError({ persistenceKey: persistence.key, cause }),
+                    ),
                   )
                 : behavior.initialState
             const stateRef = yield* Ref.make<S>(initial)
 
-            const persistenceKey = behavior.persistenceKey
-            const stateSchema = behavior.state
             const snapshotForActor: MailboxEntry["snapshot"] = () =>
               Effect.gen(function* () {
-                if (persistenceKey === undefined || stateSchema === undefined) return undefined
+                if (persistence === undefined) return undefined
                 const current = yield* Ref.get(stateRef)
-                const encoded = yield* Schema.encodeUnknownEffect(stateSchema)(current).pipe(
-                  Effect.orDie,
+                const encoded = yield* Schema.encodeUnknownEffect(persistence.state)(current).pipe(
+                  Effect.mapError(
+                    (cause) => new ActorSnapshotError({ persistenceKey: persistence.key, cause }),
+                  ),
                 )
-                return { persistenceKey, state: encoded }
+                return { persistenceKey: persistence.key, state: encoded }
               })
 
             const entry: MailboxEntry = {
@@ -266,12 +294,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               yield* Ref.set(stateRef, next)
             })
 
-            // Supervision policy:
-            //   - interrupts: propagate (scope close is tearing us down)
-            //   - defects (Cause.Die): escalate — programming error, kill
-            //     the actor so its absence is observable to ask callers
-            //     and persistence layers (W9-4)
-            //   - typed failures: log + continue, state survives
+            // Interrupts propagate so scope close ends the loop. Typed
+            // failures log + continue (state survives via Ref). Defects
+            // log + escalate so the fiber dies — subsequent asks observe
+            // ActorAskTimeout instead of silently hanging.
             const loop: Effect.Effect<void, never> = step.pipe(
               Effect.catchCause((cause: Cause.Cause<never>) => {
                 if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
@@ -288,14 +314,32 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               Effect.forever,
             )
 
-            yield* Effect.forkIn(loop, runtimeScope)
+            // On fiber exit (interrupt or defect): drop the mailbox entry
+            // and free the persistence-key claim so a redeploy of the
+            // same key in this engine is allowed.
+            const cleanup = Effect.gen(function* () {
+              yield* Ref.update(mailboxes, (m) => {
+                const next = new Map(m)
+                next.delete(id)
+                return next
+              })
+              if (persistence !== undefined) {
+                yield* Ref.update(claimedPersistenceKeys, (s) => {
+                  const next = new Set(s)
+                  next.delete(persistence.key)
+                  return next
+                })
+              }
+            })
+
+            yield* Effect.forkIn(loop.pipe(Effect.ensuring(cleanup)), runtimeScope)
             return ref
           })
 
-        const snapshot = (): Effect.Effect<ActorSnapshot> =>
+        const snapshot = (): Effect.Effect<ActorSnapshot, ActorSnapshotError> =>
           Effect.gen(function* () {
             const live = yield* Ref.get(mailboxes)
-            const out = new Map<string, unknown>()
+            const out = new Map<string, JsonValueT>()
             for (const entry of live.values()) {
               const dump = yield* entry.snapshot()
               if (dump !== undefined) out.set(dump.persistenceKey, dump.state)

@@ -94,35 +94,61 @@ export interface ActorView {
 }
 
 /**
+ * JSON-shaped value. The engine pins durable encoded states to this
+ * shape so that snapshot maps round-trip through any JSON-backed
+ * persistence boundary (sqlite TEXT, file write, network transport).
+ * If a behavior's `state` schema encodes to a `Date` or `Map`, that
+ * mismatch surfaces at the schema declaration site rather than as a
+ * runtime decode failure on the next restore.
+ */
+export type JsonValueT =
+  | string
+  | number
+  | boolean
+  | null
+  | ReadonlyArray<JsonValueT>
+  | { readonly [k: string]: JsonValueT }
+
+/**
+ * Persistence configuration for a durable actor. Both `key` and
+ * `state` must be present — a half-set persistence config is a
+ * make-impossible-states-unrepresentable violation, so the engine
+ * accepts a single optional `persistence` field instead of two.
+ *
+ * `key` is the stable map slot; must be unique within an engine
+ * instance (collisions are rejected at spawn).
+ *
+ * `state` encodes `S` to a `JsonValueT`. The engine does not own the
+ * persistence transport — whoever calls `snapshot()` is responsible
+ * for writing the resulting map; whoever calls `spawn(..., {
+ * restoredState })` is responsible for reading the prior encoded
+ * value. The encoded shape is JSON-typed so any standard transport
+ * works.
+ */
+export interface PersistenceConfig<S> {
+  readonly key: string
+  readonly state: Schema.Codec<S, JsonValueT>
+}
+
+/**
  * Behavior — the unit an extension declares and the engine spawns.
  *
  * `M` is the message type, `S` the actor's local state, `R` the
  * Effect requirements available to `receive` (services from the
  * extension's layer).
  *
- * Persistence is opt-in. A behavior is durable iff both
- * `persistenceKey` and `state` are set: the engine snapshots the live
- * `S` through `state` at checkpoint time, and rehydrates it back into
- * `initialState` at restore time. Behaviors without both are
- * ephemeral — they restart from `initialState` after a crash and
- * peers re-tell them on resume.
+ * Persistence is opt-in via `persistence`. When set, the engine
+ * snapshots the live `S` through `persistence.state` at checkpoint
+ * time and rehydrates it back into `initialState` at restore time.
+ * Behaviors without `persistence` are ephemeral — they restart from
+ * `initialState` after a crash and peers re-tell them on resume.
  */
 export interface Behavior<M, S, R = never> {
   readonly initialState: S
   readonly receive: (msg: M, state: S, ctx: ActorContext<M>) => Effect.Effect<S, never, R>
   readonly view?: (state: S) => ActorView
   readonly serviceKey?: ServiceKey<M>
-  /**
-   * Stable identifier under which this actor's state is checkpointed.
-   * Required for durability; must be unique within the host extension.
-   */
-  readonly persistenceKey?: string
-  /**
-   * Schema for serializing the actor's local state. Required for
-   * durability; the engine encodes via this schema at snapshot time
-   * and decodes via this schema at restore time.
-   */
-  readonly state?: Schema.Codec<S, unknown>
+  readonly persistence?: PersistenceConfig<S>
 }
 
 /**
@@ -135,3 +161,50 @@ export class ActorAskTimeout extends Schema.TaggedErrorClass<ActorAskTimeout>()(
   actorId: ActorId,
   askMs: Schema.Number,
 }) {}
+
+/**
+ * Raised by `ActorEngine.spawn` when `restoredState` cannot be
+ * decoded through the behavior's `persistence.state` schema. A
+ * typed error (rather than `Effect.die`) lets the loader degrade
+ * gracefully — log + fall back to `initialState` for one quarantined
+ * key — instead of interrupting the entire restore fiber and losing
+ * every other durable actor on a single schema bump.
+ */
+export class ActorRestoreError extends Schema.TaggedErrorClass<ActorRestoreError>()(
+  "ActorRestoreError",
+  {
+    persistenceKey: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
+
+/**
+ * Raised by `ActorEngine.snapshot` when an actor's current state
+ * cannot be encoded through its `persistence.state` schema. Typed
+ * (rather than `Effect.die`) so the checkpoint boundary — which has
+ * domain context — chooses skip-and-log vs abort-checkpoint, instead
+ * of the engine making that policy call.
+ */
+export class ActorSnapshotError extends Schema.TaggedErrorClass<ActorSnapshotError>()(
+  "ActorSnapshotError",
+  {
+    persistenceKey: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
+
+/**
+ * Raised by `ActorEngine.spawn` when two durable behaviors in the
+ * same engine declare the same `persistence.key`. Last-write-wins
+ * silent collisions corrupt durable state on snapshot/restore — the
+ * second behavior's encoded form would overwrite the first in the
+ * snapshot map, then both would decode the *same* encoded value
+ * through *different* schemas at restore. Strict failure at spawn
+ * is the only correct policy.
+ */
+export class ActorPersistenceKeyCollision extends Schema.TaggedErrorClass<ActorPersistenceKeyCollision>()(
+  "ActorPersistenceKeyCollision",
+  {
+    persistenceKey: Schema.String,
+  },
+) {}
