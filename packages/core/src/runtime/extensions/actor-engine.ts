@@ -50,7 +50,8 @@ import {
   Schema,
   Scope,
   Semaphore,
-  type Stream,
+  Stream,
+  SubscriptionRef,
 } from "effect"
 import {
   ActorAskTimeout,
@@ -90,6 +91,13 @@ interface MailboxEntry {
     { readonly persistenceKey: string; readonly state: JsonValueT } | undefined,
     ActorSnapshotError
   >
+  /**
+   * Live changes-stream of this actor's state. Emits the current
+   * state on subscribe, then on every change. Consecutive duplicates
+   * are deduped. Engine-erased to `unknown` at the mailbox seam; the
+   * concrete `S` is pinned by the caller's `Behavior<M, S>`.
+   */
+  readonly subscribeState: () => Stream.Stream<unknown>
 }
 
 /**
@@ -153,6 +161,18 @@ export interface ActorEngineService {
    * cut must invoke at a quiescent point (e.g. between agent-loop turns).
    */
   readonly snapshot: () => Effect.Effect<ActorSnapshot, ActorSnapshotError>
+  /**
+   * Live changes-stream of the target actor's state. Emits the
+   * current `S` on subscribe, then on every change. Consecutive
+   * duplicates are deduped via `Stream.changes`. Returns
+   * `Stream.empty` for unknown refs (mirrors `tell` semantics).
+   *
+   * The engine type-erases the value channel — `S` is pinned by the
+   * caller's `Behavior<M, S>` declaration, not by the ref itself.
+   * Same-extension callers (e.g. a connection runner observing its
+   * own actor) narrow with a discriminator before pattern-matching.
+   */
+  readonly subscribeState: <M>(target: ActorRef<M>) => Stream.Stream<unknown>
 }
 
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
@@ -282,6 +302,14 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // still the caller's contract; this guards each actor in
             // isolation.
             const stateSemaphore = yield* Semaphore.make(1)
+            // Live changes-channel for `subscribeState`. Updated in
+            // lockstep with `stateRef` under the same permit so
+            // subscribers can never observe a value out of order
+            // relative to a `snapshot()` row. `SubscriptionRef.changes`
+            // emits the current value on subscribe + every set; the
+            // public stream is wrapped in `Stream.changes` to dedupe
+            // consecutive equals (filter-changed semantics).
+            const stateChannel = yield* SubscriptionRef.make<S>(initial)
 
             const snapshotForActor: MailboxEntry["snapshot"] = () =>
               stateSemaphore.withPermits(1)(
@@ -303,6 +331,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               id,
               offer: (env) => Effect.asVoid(Queue.offer(queue, env)),
               snapshot: snapshotForActor,
+              subscribeState: () =>
+                SubscriptionRef.changes(stateChannel).pipe(
+                  Stream.changes,
+                ) as Stream.Stream<unknown>,
             }
             yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
 
@@ -330,6 +362,8 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                 receptionist.find(key),
               subscribe: <N>(key: ServiceKey<N>): Stream.Stream<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.subscribe(key),
+              subscribeState: <N>(target: ActorRef<N>): Stream.Stream<unknown> =>
+                subscribeState(target),
             })
 
             // The mailbox stores envelopes typed as `unknown msg`. The
@@ -356,6 +390,11 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                     ctxFor(env.askId),
                   )
                   yield* Ref.set(stateRef, next)
+                  // Mirror into the changes-channel under the same
+                  // permit so subscribers and `snapshot()` callers
+                  // both observe the same totally-ordered sequence
+                  // of post-receive states.
+                  yield* SubscriptionRef.set(stateChannel, next)
                 }),
               )
             })
@@ -428,9 +467,20 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             return out
           })
 
+        const subscribeState = <M>(target: ActorRef<M>): Stream.Stream<unknown> =>
+          // Resolve the mailbox lazily on subscribe so callers can
+          // hand the stream around before the actor is necessarily
+          // spawned. Unknown refs degrade to `Stream.empty` (matches
+          // `tell` no-op semantics).
+          Stream.unwrap(
+            lookup(target.id).pipe(
+              Effect.map((entry) => (entry === undefined ? Stream.empty : entry.subscribeState())),
+            ),
+          )
+
         return {
           runtimeScope,
-          service: { spawn, tell, ask, snapshot } satisfies ActorEngineService,
+          service: { spawn, tell, ask, snapshot, subscribeState } satisfies ActorEngineService,
         }
       }),
       ({ runtimeScope }) => Scope.close(runtimeScope, Exit.void),

@@ -416,3 +416,94 @@ describe("ActorEngine — runtime", () => {
     )
   })
 })
+
+describe("ActorEngine — subscribeState", () => {
+  test("emits initial state then post-receive state on every change", async () => {
+    const collected: number[] = []
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(counterBehavior)
+
+          // Run the consumer in the background; cancel after we have
+          // observed the expected sequence.
+          const fiber = yield* Effect.forkChild(
+            Stream.runForEach(engine.subscribeState(ref), (s) =>
+              Effect.sync(() => collected.push((s as CounterState).count)),
+            ),
+          )
+
+          // Initial value reaches the consumer.
+          yield* waitFor(() => collected.length >= 1)
+          yield* engine.tell(ref, CounterMsg.Inc.make({}))
+          yield* waitFor(() => collected.length >= 2)
+          yield* engine.tell(ref, CounterMsg.Inc.make({}))
+          yield* waitFor(() => collected.length >= 3)
+
+          yield* Fiber.interrupt(fiber)
+          expect(collected).toEqual([0, 1, 2])
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+
+  test("dedupes consecutive equal states (filter-changed semantics)", async () => {
+    // Behavior whose receive returns the SAME state structure on
+    // every Touch — set into the channel happens unconditionally,
+    // but `Stream.changes` collapses duplicates downstream.
+    const Touch = TaggedEnumClass("Touch", { Touch: {} })
+    type Touch = Schema.Schema.Type<typeof Touch>
+    const idle: Behavior<Touch, { readonly v: number }, never> = {
+      initialState: { v: 0 },
+      receive: (_, state) => Effect.succeed(state),
+    }
+    const collected: number[] = []
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(idle)
+
+          const fiber = yield* Effect.forkChild(
+            Stream.runForEach(engine.subscribeState(ref), (s) =>
+              Effect.sync(() => collected.push((s as { readonly v: number }).v)),
+            ),
+          )
+
+          yield* waitFor(() => collected.length >= 1)
+          yield* engine.tell(ref, Touch.Touch.make({}))
+          yield* engine.tell(ref, Touch.Touch.make({}))
+          yield* engine.tell(ref, Touch.Touch.make({}))
+          // Give the loop time to drain — but Stream.changes should
+          // suppress every set since v stays at 0.
+          yield* Effect.sleep("50 millis")
+          yield* Fiber.interrupt(fiber)
+          expect(collected).toEqual([0])
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+
+  test("subscribeState on unknown ref is empty (no hang, no fail)", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const phantom = { _tag: "ActorRef", id: "phantom-actor-id" } as never
+          const items = yield* Stream.runCollect(engine.subscribeState(phantom))
+          expect(items.length).toBe(0)
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+  })
+})
+
+/** Tiny polling helper — avoids `Effect.sleep` for state transitions per CLAUDE.md. */
+const waitFor = (predicate: () => boolean, attempts = 50): Effect.Effect<void, never, never> =>
+  Effect.gen(function* () {
+    for (let i = 0; i < attempts; i++) {
+      if (predicate()) return
+      yield* Effect.sleep("10 millis")
+    }
+  })

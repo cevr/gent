@@ -85,6 +85,22 @@ export interface ActorContext<M> {
    * register and unregister.
    */
   readonly subscribe: <N>(key: ServiceKey<N>) => Stream.Stream<ReadonlyArray<ActorRef<N>>>
+  /**
+   * Live stream of an actor's `S` state. Emits the current state on
+   * subscribe, then on every change. Consecutive duplicates are
+   * deduped — subscribers only observe genuine transitions.
+   *
+   * The engine type-erases the value channel: the caller's
+   * `ActorRef<N>` does not carry `S`, so the returned stream is
+   * `Stream<unknown>` at the type level and downstream consumers must
+   * narrow. In practice the only correct caller is one that owns the
+   * Behavior whose state it expects (e.g. an extension's connection
+   * runner observing its own actor) — narrow with a discriminator
+   * (`_tag`) before pattern-matching.
+   *
+   * Returns `Stream.empty` for unknown refs (mirrors `tell` semantics).
+   */
+  readonly subscribeState: <N>(target: ActorRef<N>) => Stream.Stream<unknown>
 }
 
 /**
