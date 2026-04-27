@@ -1,196 +1,22 @@
 /**
  * Artifacts extension — generic artifact store with typed protocol.
  *
- * Any tool/extension can store artifacts via ctx.extension.ask(ArtifactProtocol.Save.make(...)).
- * Artifacts are branch-aware, persist across turns, and project compact summaries
+ * Any tool/extension can store artifacts via
+ * `ctx.extension.ask(ArtifactProtocol.Save.make(...))`. Artifacts are
+ * branch-aware, persist within a session, and project compact summaries
  * into the system prompt.
  *
- * Actor state: { items: Artifact[] }
- * Upsert: by sourceTool + branchId (last-writer-wins per source per branch)
+ * The store lives on a `Behavior` actor (W10-1d). Tool envelopes route
+ * to the mailbox via the actor-route fallback — `ArtifactProtocol.X`
+ * `_tag`s match `ArtifactsMsg.X` `_tag`s.
  */
 
-import { Effect, Layer, Schema } from "effect"
-import { Machine, State as MState, Event as MEvent } from "effect-machine"
-import {
-  ArtifactId,
-  BranchId,
-  defineExtension,
-  defineResource,
-  resource,
-  tool,
-  type AnyResourceMachine,
-  type ToolContext,
-} from "@gent/core/extensions/api"
-import {
-  ARTIFACTS_EXTENSION_ID,
-  ArtifactProtocol,
-  ArtifactStatus,
-  ContentPatch,
-  ReadQuery,
-  type Artifact,
-  Artifact as ArtifactSchema,
-} from "../artifacts-protocol.js"
+import { Effect, Schema } from "effect"
+import { ArtifactId, defineExtension, tool, type ToolContext } from "@gent/core/extensions/api"
+import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "../artifacts-protocol.js"
+import { artifactsActor } from "./actor.js"
 
 export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
-
-// ── Helpers ──
-
-const generateId = () => ArtifactId.make(crypto.randomUUID())
-
-const applyPatch = (content: string, patch: ContentPatch): string =>
-  patch.replaceAll === true
-    ? content.replaceAll(patch.find, patch.replace)
-    : content.replace(patch.find, patch.replace)
-
-// ── Machine state + events ──
-
-const ArtifactsMachineState = MState({
-  Active: {
-    items: Schema.Array(ArtifactSchema),
-  },
-})
-
-const ArtifactsMachineEvent = MEvent({
-  Save: MEvent.reply(
-    {
-      label: Schema.String,
-      sourceTool: Schema.String,
-      content: Schema.String,
-      path: Schema.optional(Schema.String),
-      metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-      branchId: Schema.optional(BranchId),
-    },
-    ArtifactSchema,
-  ),
-  Read: MEvent.reply(
-    {
-      query: ReadQuery,
-    },
-    Schema.NullOr(ArtifactSchema),
-  ),
-  Update: MEvent.reply(
-    {
-      id: ArtifactId,
-      patch: Schema.optional(ContentPatch),
-      metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-      status: Schema.optional(ArtifactStatus),
-      label: Schema.optional(Schema.String),
-    },
-    Schema.NullOr(ArtifactSchema),
-  ),
-  Clear: MEvent.reply(
-    {
-      id: ArtifactId,
-    },
-    Schema.Void,
-  ),
-  List: MEvent.reply(
-    {
-      branchId: Schema.optional(BranchId),
-    },
-    Schema.Array(ArtifactSchema),
-  ),
-})
-
-// ── Machine ──
-
-const artifactsMachine = Machine.make({
-  state: ArtifactsMachineState,
-  event: ArtifactsMachineEvent,
-  initial: ArtifactsMachineState.Active({ items: [] }),
-})
-  .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Save, ({ state, event }) => {
-    const now = Date.now()
-    const existingIdx = state.items.findIndex(
-      (a) => a.sourceTool === event.sourceTool && a.branchId === event.branchId,
-    )
-    const existing = existingIdx >= 0 ? state.items[existingIdx] : undefined
-    const artifact: Artifact = {
-      id: existing?.id ?? generateId(),
-      label: event.label,
-      sourceTool: event.sourceTool,
-      content: event.content,
-      path: event.path,
-      status: "active",
-      metadata: event.metadata,
-      branchId: event.branchId,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    }
-    const items =
-      existingIdx >= 0
-        ? state.items.map((a, i) => (i === existingIdx ? artifact : a))
-        : [...state.items, artifact]
-    return Machine.reply(ArtifactsMachineState.Active({ items }), artifact)
-  })
-  .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Read, ({ state, event }) => {
-    const { query } = event
-    let found: Artifact | undefined
-    if (query._tag === "ById") {
-      found = state.items.find((a) => a.id === query.id)
-    } else {
-      const bySource = state.items.filter((a) => a.sourceTool === query.sourceTool)
-      found =
-        query.branchId !== undefined
-          ? (bySource.find((a) => a.branchId === query.branchId) ??
-            bySource.find((a) => a.branchId === undefined))
-          : bySource.find((a) => a.branchId === undefined)
-    }
-    return Machine.reply(ArtifactsMachineState.Active({ items: state.items }), found ?? null)
-  })
-  .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Update, ({ state, event }) => {
-    const idx = state.items.findIndex((a) => a.id === event.id)
-    if (idx < 0) {
-      return Machine.reply(ArtifactsMachineState.Active({ items: state.items }), null)
-    }
-    const existing = state.items[idx]
-    if (existing === undefined) {
-      return Machine.reply(ArtifactsMachineState.Active({ items: state.items }), null)
-    }
-    const updated: Artifact = {
-      ...existing,
-      content:
-        event.patch !== undefined ? applyPatch(existing.content, event.patch) : existing.content,
-      metadata: event.metadata !== undefined ? event.metadata : existing.metadata,
-      status: event.status !== undefined ? event.status : existing.status,
-      label: event.label !== undefined ? event.label : existing.label,
-      updatedAt: Date.now(),
-    }
-    const items = state.items.map((a, i) => (i === idx ? updated : a))
-    return Machine.reply(ArtifactsMachineState.Active({ items }), updated)
-  })
-  .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Clear, ({ state, event }) => {
-    const items = state.items.filter((a) => a.id !== event.id)
-    return Machine.reply(ArtifactsMachineState.Active({ items }), undefined)
-  })
-  .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.List, ({ state, event }) => {
-    const filtered =
-      event.branchId !== undefined
-        ? state.items.filter((a) => a.branchId === undefined || a.branchId === event.branchId)
-        : state.items
-    return Machine.reply(ArtifactsMachineState.Active({ items: state.items }), filtered)
-  })
-
-// ── Actor ──
-//
-// Snapshot/turn fields are gone — the artifacts widget reads via the typed
-// `ArtifactProtocol.List.make(...)` ask, and per-turn prompt would need either a
-// projection over machine state (not yet wired) or a typed workflow-state
-// reader. Per-turn prompt section temporarily dropped.
-
-const artifactsMachineDef: AnyResourceMachine = {
-  machine: artifactsMachine,
-  mapRequest: (message) => {
-    if (ArtifactProtocol.Save.is(message)) return ArtifactsMachineEvent.Save(message)
-    if (ArtifactProtocol.Read.is(message))
-      return ArtifactsMachineEvent.Read({ query: message.query })
-    if (ArtifactProtocol.Update.is(message)) return ArtifactsMachineEvent.Update(message)
-    if (ArtifactProtocol.Clear.is(message)) return ArtifactsMachineEvent.Clear(message)
-    if (ArtifactProtocol.List.is(message)) return ArtifactsMachineEvent.List(message)
-  },
-  stateSchema: ArtifactsMachineState,
-  protocols: ArtifactProtocol,
-}
 
 // ── Agent-facing tools ──
 
@@ -302,16 +128,7 @@ const ArtifactClearTool = tool({
 
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
-  // No-service Resource carrying the machine. MachineEngine supervises
-  // the machine; this extension contributes no service tag of its own.
-  resources: [
-    resource(
-      defineResource({
-        scope: "process",
-        layer: Layer.empty,
-        machine: artifactsMachineDef,
-      }),
-    ),
-  ],
+  actors: [artifactsActor],
+  protocols: ArtifactProtocol,
   capabilities: [ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool],
 })
