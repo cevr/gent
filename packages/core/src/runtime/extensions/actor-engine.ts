@@ -25,6 +25,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Layer,
   Queue,
   Ref,
@@ -84,122 +85,144 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
 ) {
   static Live: Layer.Layer<ActorEngine> = Layer.effect(
     ActorEngine,
-    Effect.gen(function* () {
-      const runtimeScope = yield* Scope.make()
-      const mailboxes = yield* Ref.make<Map<string, MailboxEntry>>(new Map())
-      const pendingAsks = yield* Ref.make<Map<string, PendingAsk>>(new Map())
+    Effect.acquireRelease(
+      Effect.gen(function* () {
+        const runtimeScope = yield* Scope.make()
+        const mailboxes = yield* Ref.make<Map<string, MailboxEntry>>(new Map())
+        const pendingAsks = yield* Ref.make<Map<string, PendingAsk>>(new Map())
 
-      const lookup = (id: ActorId): Effect.Effect<MailboxEntry | undefined> =>
-        Ref.get(mailboxes).pipe(Effect.map((m) => m.get(id)))
+        const lookup = (id: ActorId): Effect.Effect<MailboxEntry | undefined> =>
+          Ref.get(mailboxes).pipe(Effect.map((m) => m.get(id)))
 
-      const tell = <M>(target: ActorRef<M>, msg: M): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          const entry = yield* lookup(target.id)
-          if (entry === undefined) return
-          yield* entry.offer({ msg })
-        })
+        const tell = <M>(target: ActorRef<M>, msg: M): Effect.Effect<void> =>
+          Effect.gen(function* () {
+            const entry = yield* lookup(target.id)
+            if (entry === undefined) return
+            yield* entry.offer({ msg })
+          })
 
-      const ask = <M, A>(
-        target: ActorRef<M>,
-        msg: M,
-        _replyKey: (a: A) => M,
-        options?: { askMs?: number },
-      ): Effect.Effect<A, ActorAskTimeout> =>
-        Effect.gen(function* () {
-          const entry = yield* lookup(target.id)
-          if (entry === undefined) {
-            return yield* new ActorAskTimeout({
-              actorId: target.id,
-              askMs: options?.askMs ?? DEFAULT_ASK_MS,
-            })
-          }
-          const askId = crypto.randomUUID()
-          const deferred = yield* Deferred.make<A, ActorAskTimeout>()
-          const resolve = (answer: unknown): Effect.Effect<void> =>
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased ask correlation; A pinned by replyKey at the call site
-            Effect.asVoid(Deferred.succeed(deferred, answer as A))
-          yield* Ref.update(pendingAsks, (m) => new Map(m).set(askId, { resolve }))
-          yield* entry.offer({ msg, askId })
-          const askMs = options?.askMs ?? DEFAULT_ASK_MS
-          return yield* Deferred.await(deferred).pipe(
-            Effect.timeoutOrElse({
-              duration: Duration.millis(askMs),
-              orElse: () => Effect.fail(new ActorAskTimeout({ actorId: target.id, askMs })),
-            }),
-            Effect.ensuring(
-              Ref.update(pendingAsks, (m) => {
-                const next = new Map(m)
-                next.delete(askId)
-                return next
-              }),
-            ),
-          )
-        })
-
-      const spawn = <M, S>(behavior: Behavior<M, S, never>): Effect.Effect<ActorRef<M>> =>
-        Effect.gen(function* () {
-          const id = Schema.decodeUnknownSync(ActorId)(crypto.randomUUID())
-          const ref: ActorRef<M> = { _tag: "ActorRef", id }
-          const queue = yield* Queue.unbounded<EnvelopedMessage>()
-          const stateRef = yield* Ref.make<S>(behavior.initialState)
-
-          const entry: MailboxEntry = {
-            id,
-            offer: (env) => Effect.asVoid(Queue.offer(queue, env)),
-          }
-          yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
-
-          const replyFor =
-            (askId: string | undefined): ActorContext<M>["reply"] =>
-            (answer: unknown): Effect.Effect<void> =>
-              Effect.gen(function* () {
-                if (askId === undefined) return
-                const pending = yield* Ref.get(pendingAsks).pipe(Effect.map((m) => m.get(askId)))
-                if (pending === undefined) return
-                yield* pending.resolve(answer)
+        const ask = <M, A>(
+          target: ActorRef<M>,
+          msg: M,
+          _replyKey: (a: A) => M,
+          options?: { askMs?: number },
+        ): Effect.Effect<A, ActorAskTimeout> =>
+          Effect.gen(function* () {
+            const entry = yield* lookup(target.id)
+            if (entry === undefined) {
+              return yield* new ActorAskTimeout({
+                actorId: target.id,
+                askMs: options?.askMs ?? DEFAULT_ASK_MS,
               })
-
-          const ctxFor = (askId: string | undefined): ActorContext<M> => ({
-            self: ref,
-            tell: <N>(target: ActorRef<N>, msg: N) => tell(target, msg),
-            ask: <N, A>(target: ActorRef<N>, msg: N, replyKey: (a: A) => N) =>
-              ask(target, msg, replyKey),
-            reply: replyFor(askId),
-            find: <N>(_key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
-              Effect.succeed([]),
-            subscribe: <N>(_key: ServiceKey<N>): Stream.Stream<ActorRef<N>> => Stream.never,
+            }
+            const askId = crypto.randomUUID()
+            const deferred = yield* Deferred.make<A, ActorAskTimeout>()
+            const resolve = (answer: unknown): Effect.Effect<void> =>
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased ask correlation; A pinned by replyKey at the call site
+              Effect.asVoid(Deferred.succeed(deferred, answer as A))
+            const cleanup = Ref.update(pendingAsks, (m) => {
+              const next = new Map(m)
+              next.delete(askId)
+              return next
+            })
+            const askMs = options?.askMs ?? DEFAULT_ASK_MS
+            // Bracket the ask so cleanup runs even if interruption lands
+            // between registration and await — closes the leak window
+            // where pendingAsks could accumulate dead entries.
+            return yield* Effect.acquireUseRelease(
+              Effect.gen(function* () {
+                yield* Ref.update(pendingAsks, (m) => new Map(m).set(askId, { resolve }))
+                yield* entry.offer({ msg, askId })
+              }),
+              () =>
+                Deferred.await(deferred).pipe(
+                  Effect.timeoutOrElse({
+                    duration: Duration.millis(askMs),
+                    orElse: () => Effect.fail(new ActorAskTimeout({ actorId: target.id, askMs })),
+                  }),
+                ),
+              () => cleanup,
+            )
           })
 
-          // The mailbox stores envelopes typed as `unknown msg`. The
-          // behavior's M is fixed at spawn time, so the message that
-          // arrives is by construction an M. The cast widens unknown
-          // → M; type safety is preserved by the spawn-time type
-          // parameter on `Behavior<M, S>`.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased mailbox storage; M pinned at spawn time
-          const receiveMsg = (msg: unknown): M => msg as M
+        const spawn = <M, S>(behavior: Behavior<M, S, never>): Effect.Effect<ActorRef<M>> =>
+          Effect.gen(function* () {
+            const id = Schema.decodeUnknownSync(ActorId)(crypto.randomUUID())
+            const ref: ActorRef<M> = { _tag: "ActorRef", id }
+            const queue = yield* Queue.unbounded<EnvelopedMessage>()
+            const stateRef = yield* Ref.make<S>(behavior.initialState)
 
-          const step = Effect.gen(function* () {
-            const env = yield* Queue.take(queue)
-            const state = yield* Ref.get(stateRef)
-            const next = yield* behavior.receive(receiveMsg(env.msg), state, ctxFor(env.askId))
-            yield* Ref.set(stateRef, next)
+            const entry: MailboxEntry = {
+              id,
+              offer: (env) => Effect.asVoid(Queue.offer(queue, env)),
+            }
+            yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
+
+            const replyFor =
+              (askId: string | undefined): ActorContext<M>["reply"] =>
+              (answer: unknown): Effect.Effect<void> =>
+                Effect.gen(function* () {
+                  if (askId === undefined) return
+                  const pending = yield* Ref.get(pendingAsks).pipe(Effect.map((m) => m.get(askId)))
+                  if (pending === undefined) return
+                  yield* pending.resolve(answer)
+                })
+
+            const ctxFor = (askId: string | undefined): ActorContext<M> => ({
+              self: ref,
+              tell: <N>(target: ActorRef<N>, msg: N) => tell(target, msg),
+              ask: <N, A>(target: ActorRef<N>, msg: N, replyKey: (a: A) => N) =>
+                ask(target, msg, replyKey),
+              reply: replyFor(askId),
+              find: <N>(_key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
+                Effect.succeed([]),
+              subscribe: <N>(_key: ServiceKey<N>): Stream.Stream<ActorRef<N>> => Stream.never,
+            })
+
+            // The mailbox stores envelopes typed as `unknown msg`. The
+            // behavior's M is fixed at spawn time, so the message that
+            // arrives is by construction an M. The cast widens unknown
+            // → M; type safety is preserved by the spawn-time type
+            // parameter on `Behavior<M, S>`.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased mailbox storage; M pinned at spawn time
+            const receiveMsg = (msg: unknown): M => msg as M
+
+            const step = Effect.gen(function* () {
+              const env = yield* Queue.take(queue)
+              const state = yield* Ref.get(stateRef)
+              const next = yield* behavior.receive(receiveMsg(env.msg), state, ctxFor(env.askId))
+              yield* Ref.set(stateRef, next)
+            })
+
+            // Supervision policy:
+            //   - interrupts: propagate (scope close is tearing us down)
+            //   - defects (Cause.Die): escalate — programming error, kill
+            //     the actor so its absence is observable to ask callers
+            //     and persistence layers (W9-4)
+            //   - typed failures: log + continue, state survives
+            const loop: Effect.Effect<void, never> = step.pipe(
+              Effect.catchCause((cause: Cause.Cause<never>) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
+                if (Cause.hasDies(cause)) {
+                  return Effect.logError("actor.receive.defect").pipe(
+                    Effect.annotateLogs({ actorId: id, defect: String(Cause.squash(cause)) }),
+                    Effect.andThen(Effect.failCause(cause)),
+                  )
+                }
+                return Effect.logWarning("actor.receive.failed").pipe(
+                  Effect.annotateLogs({ actorId: id, error: String(Cause.squash(cause)) }),
+                )
+              }),
+              Effect.forever,
+            )
+
+            yield* Effect.forkIn(loop, runtimeScope)
+            return ref
           })
 
-          const loop: Effect.Effect<void, never> = step.pipe(
-            Effect.catchCause((cause: Cause.Cause<never>) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
-              return Effect.logWarning("actor.receive.failed").pipe(
-                Effect.annotateLogs({ actorId: id, error: String(Cause.squash(cause)) }),
-              )
-            }),
-            Effect.forever,
-          )
-
-          yield* Effect.forkIn(loop, runtimeScope)
-          return ref
-        })
-
-      return { spawn, tell, ask }
-    }),
+        return { runtimeScope, service: { spawn, tell, ask } satisfies ActorEngineService }
+      }),
+      ({ runtimeScope }) => Scope.close(runtimeScope, Exit.void),
+    ).pipe(Effect.map(({ service }) => service)),
   )
 }

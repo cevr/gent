@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Cause, Deferred, Effect, Schema } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Schema, Scope } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import { ActorAskTimeout, type Behavior } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
@@ -161,6 +161,103 @@ describe("ActorEngine — runtime", () => {
         }).pipe(Effect.provide(ActorEngine.Live)),
       ),
     )
+  })
+
+  test("layer scope teardown interrupts spawned actor fibers (B1 regression)", async () => {
+    // Regression for W9-2 review B1: runtimeScope was leaked, so spawned
+    // actors kept running after the layer scope closed. We assert that
+    // closing the outer scope around ActorEngine.Live observably stops
+    // the actor by blocking it in `receive` on an addFinalizer that
+    // sets a Ref when the fiber is interrupted.
+    const HoldMsg = TaggedEnumClass("HoldMsg", {
+      Hold: {},
+    })
+    type HoldMsg = Schema.Schema.Type<typeof HoldMsg>
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const reachedReceive = yield* Deferred.make<void>()
+        const interrupted = yield* Deferred.make<void>()
+
+        const holdBehavior: Behavior<HoldMsg, null, never> = {
+          initialState: null,
+          receive: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(reachedReceive, undefined)
+              yield* Effect.never
+              return null
+            }).pipe(
+              Effect.onInterrupt(() => Effect.asVoid(Deferred.succeed(interrupted, undefined))),
+            ) as Effect.Effect<null, never, never>,
+        }
+
+        const outerScope = yield* Scope.make()
+        const engineCtx = yield* Layer.buildWithScope(ActorEngine.Live, outerScope)
+        const engine = Context.get(engineCtx, ActorEngine)
+
+        const ref = yield* engine.spawn(holdBehavior)
+        yield* engine.tell(ref, HoldMsg.Hold.make({}))
+        yield* Deferred.await(reachedReceive)
+
+        // Close the outer scope — runtimeScope finalizer should run and
+        // interrupt the parked receive fiber.
+        yield* Scope.close(outerScope, Exit.void)
+        // Wait for the interrupt finalizer with a short timeout to keep
+        // the test deterministic if the scope teardown ever regresses.
+        const result = yield* Deferred.await(interrupted).pipe(Effect.timeoutOption("1 second"))
+        expect(result._tag).toBe("Some")
+      }),
+    )
+  })
+
+  test("defects in receive escalate and terminate the actor (B2 regression)", async () => {
+    // Regression for W9-2 review B2: defects (Cause.Die) were silently
+    // swallowed and the loop continued. They should escalate, killing
+    // the actor's fiber, so a follow-up `ask` observes ActorAskTimeout
+    // (no mailbox).
+    const PoisonMsg = TaggedEnumClass("PoisonMsg", {
+      Die: {},
+      Ping: {},
+    })
+    type PoisonMsg = Schema.Schema.Type<typeof PoisonMsg>
+
+    const poisonBehavior: Behavior<PoisonMsg, null, never> = {
+      initialState: null,
+      receive: (msg, _state, ctx) =>
+        Effect.gen(function* () {
+          if (msg._tag === "Die") {
+            return yield* Effect.die("poisoned" as const)
+          }
+          yield* ctx.reply(1)
+          return null
+        }) as Effect.Effect<null, never, never>,
+    }
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const ref = yield* engine.spawn(poisonBehavior)
+          yield* engine.tell(ref, PoisonMsg.Die.make({}))
+          // Give the defect a moment to propagate through the fiber.
+          yield* Effect.yieldNow
+          // The actor's fiber is dead; mailbox entry is still in the
+          // map but the receive fiber is no longer pulling from the
+          // queue. ask must observe a timeout.
+          return yield* engine.ask<PoisonMsg, number>(
+            ref,
+            PoisonMsg.Ping.make({}),
+            () => PoisonMsg.Ping.make({}),
+            { askMs: 50 },
+          )
+        }).pipe(Effect.provide(ActorEngine.Live)),
+      ),
+    )
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const found = Cause.findError(exit.cause, (e: unknown) => e instanceof ActorAskTimeout)
+      expect(found).toBeDefined()
+    }
   })
 
   test("messages are delivered in submission order to a single actor", async () => {
