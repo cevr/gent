@@ -77,8 +77,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
-    const refs = yield* ctx.actors.find(CooldownService)
-    const cooldownRef = refs[0]
+    const cooldownRef = yield* ctx.actors.findOne(CooldownService)
     if (cooldownRef === undefined) return
 
     // Decrement bridge: turnAfter is the natural place to drive the

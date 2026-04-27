@@ -336,6 +336,7 @@ export const makeExtensionHostContext = (
 
   actors: {
     find: (key) => deps.receptionist.find(key),
+    findOne: (key) => deps.receptionist.findOne(key),
     tell: (ref, msg) => deps.actorEngine.tell(ref, msg),
     ask: (ref, msg) => deps.actorEngine.ask(ref, msg),
   },

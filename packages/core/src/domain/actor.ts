@@ -94,6 +94,13 @@ export interface ActorContext<M> {
   readonly reply: (answer: unknown) => Effect.Effect<void>
   readonly find: <N>(key: ServiceKey<N>) => Effect.Effect<ReadonlyArray<ActorRef<N>>>
   /**
+   * Singleton-shaped lookup: the first ref registered under `key`,
+   * or `undefined` when none. Convenience for the common pattern
+   * where exactly one actor registers a key. See
+   * `Receptionist.findOne` for the order contract.
+   */
+  readonly findOne: <N>(key: ServiceKey<N>) => Effect.Effect<ActorRef<N> | undefined>
+  /**
    * Live stream of the ref set registered under `key`. Emits the
    * current set on subscribe, then a fresh snapshot on every change.
    * Snapshot semantics (not per-ref) so subscribers observe both

@@ -519,11 +519,7 @@ const autoBehavior: Behavior<AutoMsg, AutoState, never> = {
 
 // ── Slot handler helpers ──
 
-const findAutoRef = (ctx: ExtensionHostContext) =>
-  Effect.gen(function* () {
-    const refs = yield* ctx.actors.find(AutoService)
-    return refs[0]
-  })
+const findAutoRef = (ctx: ExtensionHostContext) => ctx.actors.findOne(AutoService)
 
 const drainAndQueueFollowUp = (ctx: ExtensionHostContext) =>
   Effect.gen(function* () {

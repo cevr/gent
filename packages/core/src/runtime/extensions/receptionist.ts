@@ -52,6 +52,18 @@ export interface ReceptionistService {
   /** Snapshot of refs registered under `key`. Empty array when missing. */
   readonly find: <M>(key: ServiceKey<M>) => Effect.Effect<ReadonlyArray<ActorRef<M>>>
   /**
+   * Singleton-shaped snapshot: the first ref registered under `key`,
+   * or `undefined` when none. Convenience for the common pattern
+   * where exactly one actor registers a key (most domain actors —
+   * cooldown, auto, executor — are singletons within an engine).
+   *
+   * Returns the first by registration order, which mirrors `find(key)[0]`.
+   * Order between concurrent registrations is unobservable, so callers
+   * needing deterministic selection should not rely on `findOne` —
+   * use `find` and disambiguate.
+   */
+  readonly findOne: <M>(key: ServiceKey<M>) => Effect.Effect<ActorRef<M> | undefined>
+  /**
    * Live stream of the ref set under `key`. Emits the current set on
    * subscribe, then a fresh snapshot on every register/unregister
    * touching this key.
@@ -97,6 +109,21 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
           }),
         )
 
+      const findOne = <M>(key: ServiceKey<M>): Effect.Effect<ActorRef<M> | undefined> =>
+        SubscriptionRef.get(ref).pipe(
+          Effect.map((registry) => {
+            const set = registry.get(key.name)
+            if (set === undefined) return undefined
+            // Iterate the underlying Set directly — `Array.from(...)[0]`
+            // would allocate an N-element array just to drop N-1 of them.
+            for (const r of set) {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
+              return r as ActorRef<M>
+            }
+            return undefined
+          }),
+        )
+
       const subscribe = <M>(key: ServiceKey<M>): Stream.Stream<ReadonlyArray<ActorRef<M>>> =>
         SubscriptionRef.changes(ref).pipe(
           Stream.map((registry: RegistryMap) => {
@@ -107,7 +134,7 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
           }),
         )
 
-      return { register, unregister, find, subscribe }
+      return { register, unregister, find, findOne, subscribe }
     }),
   )
 }

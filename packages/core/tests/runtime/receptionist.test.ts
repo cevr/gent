@@ -50,6 +50,50 @@ describe("Receptionist", () => {
     expect(found).toEqual([])
   })
 
+  test("findOne returns undefined when no refs are registered", async () => {
+    const key = ServiceKey<PingMsg>("absent-one")
+    const found = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reg = yield* Receptionist
+          return yield* reg.findOne(key)
+        }).pipe(Effect.provide(Receptionist.Live)),
+      ),
+    )
+    expect(found).toBeUndefined()
+  })
+
+  test("findOne returns the only registered ref", async () => {
+    const key = ServiceKey<PingMsg>("singleton")
+    const ref = makeRef("019dcc00-0000-7000-8000-000000000020")
+    const found = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reg = yield* Receptionist
+          yield* reg.register(key, ref)
+          return yield* reg.findOne(key)
+        }).pipe(Effect.provide(Receptionist.Live)),
+      ),
+    )
+    expect(found).toEqual(ref)
+  })
+
+  test("findOne returns undefined after the lone ref is unregistered", async () => {
+    const key = ServiceKey<PingMsg>("transient")
+    const ref = makeRef("019dcc00-0000-7000-8000-000000000021")
+    const found = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reg = yield* Receptionist
+          yield* reg.register(key, ref)
+          yield* reg.unregister(key, ref)
+          return yield* reg.findOne(key)
+        }).pipe(Effect.provide(Receptionist.Live)),
+      ),
+    )
+    expect(found).toBeUndefined()
+  })
+
   test("unregister removes the ref; remaining refs survive", async () => {
     const key = ServiceKey<PingMsg>("svc")
     const a = makeRef("019dcc00-0000-7000-8000-000000000010")

@@ -96,6 +96,12 @@ export declare namespace ExtensionHostContext {
    */
   interface Actors {
     readonly find: <M>(key: ServiceKey<M>) => Effect.Effect<ReadonlyArray<ActorRef<M>>>
+    /**
+     * Singleton-shaped lookup: the first ref registered under `key`,
+     * or `undefined` when none. See `Receptionist.findOne` for the
+     * order contract.
+     */
+    readonly findOne: <M>(key: ServiceKey<M>) => Effect.Effect<ActorRef<M> | undefined>
     readonly tell: <M>(ref: ActorRef<M>, msg: M) => Effect.Effect<void>
     readonly ask: <M, ReplyMsg extends M & AskBranded<unknown>>(
       ref: ActorRef<M>,

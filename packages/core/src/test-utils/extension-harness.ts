@@ -328,6 +328,7 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   },
   actors: {
     find: dieStub("actors.find"),
+    findOne: dieStub("actors.findOne"),
     tell: dieStub("actors.tell"),
     ask: dieStub("actors.ask"),
   },

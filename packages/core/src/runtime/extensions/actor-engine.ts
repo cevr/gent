@@ -414,6 +414,8 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               reply: replyFor(askId),
               find: <N>(key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.find(key),
+              findOne: <N>(key: ServiceKey<N>): Effect.Effect<ActorRef<N> | undefined> =>
+                receptionist.findOne(key),
               subscribe: <N>(key: ServiceKey<N>): Stream.Stream<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.subscribe(key),
               subscribeState: <N, U>(target: ActorRef<N, U>): Stream.Stream<U> =>

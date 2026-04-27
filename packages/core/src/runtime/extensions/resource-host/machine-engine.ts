@@ -120,8 +120,7 @@ export const makeMachineEngine = (
     // `undefined` when no live actor is registered (the spawn either
     // hasn't happened yet or failed) — caller treats it the same as
     // "extension not loaded" with a routed-via-actor protocol error.
-    const findActorRefForRoute = (route: ActorBackedRoute) =>
-      receptionist.find(route.serviceKey).pipe(Effect.map((refs) => refs[0]))
+    const findActorRefForRoute = (route: ActorBackedRoute) => receptionist.findOne(route.serviceKey)
 
     const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
