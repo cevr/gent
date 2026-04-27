@@ -5,7 +5,6 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
-import { AutoProjection } from "@gent/extensions/auto-projection"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
@@ -416,7 +415,7 @@ describe("Auto runtime integration", () => {
   // exists — the actor primitive persists through `ActorPersistenceStorage`
   // keyed on `(profileId, persistenceKey)`, not `(sessionId, extensionId)`.
 
-  it.live("AutoProjection injects learnings + nextIdea into prompt sections", () =>
+  it.live("auto behavior.view injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
       yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
@@ -431,18 +430,21 @@ describe("Auto runtime integration", () => {
       )
       // After AutoSignal{continue} the loop is in AwaitingReview. ReviewSignal
       // pushes it back to Working with the learnings + nextIdea preserved —
-      // exactly the state where the projection should inject them into the
-      // system prompt.
+      // exactly the state where the actor's `view(state)` should inject them
+      // into the system prompt. W10-2a.3: replaces `AutoProjection`.
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
-      const reply = (yield* runtime.execute(
+      // Fence: ask GetSnapshot drains the mailbox up to and including the
+      // ReviewSignal tell, so peekView observes post-Review state.
+      yield* runtime.execute(
         sessionId,
         AutoProtocol.GetSnapshot.make(),
         branchId,
-      )) as AutoSnapshotReply
-      // The projection's prompt fn is a pure function of the reply.
-      const sections = AutoProjection.prompt!(reply)
-      expect(sections.length).toBe(1)
-      const content = sections[0]!.content
+      ) as Effect.Effect<AutoSnapshotReply>
+      const engine = yield* ActorEngine
+      const ref = yield* findAutoActor
+      const view = yield* engine.peekView(ref)
+      expect(view?.prompt?.length).toBe(1)
+      const content = view!.prompt![0]!.content
       expect(content).toContain("tried memoization")
       expect(content).toContain("test LRU eviction")
     }).pipe(Effect.provide(makeLayer())),

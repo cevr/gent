@@ -35,7 +35,6 @@ import { defineBuiltinResource } from "../internal/builtin.js"
 import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
-import { AutoProjection } from "./auto-projection.js"
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -174,6 +173,12 @@ export type AutoMsg = Schema.Schema.Type<typeof AutoMsg>
 export const AutoService = ServiceKey<AutoMsg>("@gent/auto/workflow")
 
 // ── Snapshot projection ──
+//
+// `projectSnapshot` is the typed RPC reply for `AutoProtocol.GetSnapshot` —
+// other extensions read the auto loop state through this shape. The behavior's
+// `view` slot uses the same projected snapshot to derive prompt sections + tool
+// policy fragments per turn (folded into the projection registry alongside
+// `ProjectionContribution`s in W10-2a.2).
 
 const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
   if (state._tag === "Inactive") return { active: false }
@@ -198,6 +203,77 @@ const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
     learnings: state.learnings,
     lastSummary: state.lastSummary,
     nextIdea: state.nextIdea,
+  }
+}
+
+// ── Actor view ──
+//
+// Per-turn prompt + tool-policy contribution derived from the actor's
+// current state. `Behavior.view` replaces the standalone `AutoProjection`
+// (W10-2a.3) — the projection registry samples this on every turn via
+// `ActorEngine.peekView` and folds it into the same prompt/policy aggregate
+// as `ProjectionContribution`s.
+
+const buildPromptSection = (snapshot: AutoSnapshotReply) => {
+  if (!snapshot.active) return undefined
+
+  if (snapshot.phase === "awaiting-review") {
+    return {
+      id: "auto-loop-context",
+      content: [
+        `## Auto Loop — Peer Review Required`,
+        "",
+        `Iteration ${snapshot.iteration ?? 0}/${snapshot.maxIterations ?? 0} is complete.`,
+        "",
+        "You MUST call the `review` tool to run an adversarial review of this iteration before continuing.",
+        "The loop cannot proceed until the review is done.",
+      ].join("\n"),
+      priority: 91,
+    }
+  }
+
+  const parts: string[] = [
+    `## Auto Loop — Iteration ${snapshot.iteration ?? 0}/${snapshot.maxIterations ?? 0}`,
+    "",
+    `**Goal**: ${snapshot.goal ?? ""}`,
+  ]
+
+  if (snapshot.learnings !== undefined && snapshot.learnings.length > 0) {
+    parts.push("", "### Accumulated Learnings:")
+    for (const l of snapshot.learnings) {
+      parts.push(`- [Iteration ${l.iteration}] ${l.content}`)
+    }
+  }
+
+  if (snapshot.lastSummary !== undefined) {
+    parts.push("", `### Last iteration summary:`, snapshot.lastSummary)
+  }
+
+  if (snapshot.nextIdea !== undefined) {
+    parts.push("", `### Suggested next step:`, snapshot.nextIdea)
+  }
+
+  parts.push(
+    "",
+    "Maintain a findings doc at `.gent/auto/findings.md` — update it with wins, dead ends, and open questions.",
+    "",
+    "When you have completed this iteration's work, call `auto_checkpoint` with your results.",
+    `This is iteration ${snapshot.iteration ?? 0} of ${snapshot.maxIterations ?? 0}.`,
+  )
+
+  return {
+    id: "auto-loop-context",
+    content: parts.join("\n"),
+    priority: 91,
+  }
+}
+
+const viewForState = (state: AutoState) => {
+  const snapshot = projectSnapshot(state)
+  const section = buildPromptSection(snapshot)
+  return {
+    ...(section !== undefined ? { prompt: [section] } : {}),
+    toolPolicy: snapshot.active ? {} : { exclude: [AUTO_CHECKPOINT_TOOL] },
   }
 }
 
@@ -434,6 +510,7 @@ const autoBehavior: Behavior<AutoMsg, AutoState, never> = {
           return clearFollowUp(state)
       }
     }),
+  view: viewForState,
   persistence: {
     key: "@gent/auto/workflow",
     state: AutoState,
@@ -648,7 +725,6 @@ const EXTENSION_ID = AUTO_EXTENSION_ID
 
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
-  projections: [AutoProjection],
   capabilities: [AutoCheckpointTool],
   actors: [behavior(autoBehavior)],
   protocols: AutoProtocol,
