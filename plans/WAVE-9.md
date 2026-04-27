@@ -255,25 +255,36 @@ restart.
 **Cites**: `derive-dont-sync`, `bound-resources-self-evict`,
 `fail-with-typed-errors`.
 
-### Commit 4: `feat(runtime): actor persistence — snapshot/restore at checkpoint boundary`
+### Commit 4: `feat(runtime): actor persistence — snapshot/restore at the engine boundary`
 
-**Why W9-4**: durability. At checkpoint write time, every actor's
-`Ref<S>` snapshots into the existing checkpoint surface. At
-session restore, every actor rehydrates its state before the
-mailbox loop starts. No mailbox replay (mailboxes are ephemeral —
-peers re-tell on resume).
+**Why W9-4**: durability contract. The engine exposes
+`snapshot()` and a per-spawn `restoredState` hook so durable actors
+can hydrate from a prior snapshot before the mailbox loop starts.
+No mailbox replay (mailboxes are ephemeral — peers re-tell on
+resume).
+
+**Storage integration deferred to W10.** The agent-loop's
+`AgentLoopCheckpointState` (`packages/core/src/runtime/agent/agent-loop.checkpoint.ts`)
+is per-session/per-branch. `ActorEngine.Live` is per-`RuntimeProfile`
+(per-cwd, shared across sessions). Folding actor snapshots into the
+session/branch checkpoint record would force one of two wrong
+shapes: (a) duplicate the same actor state under every active
+session, or (b) write the same row from multiple sessions
+concurrently. Neither is correct. W10 lands a profile-scoped
+persistence surface for actors that's separate from the
+session/branch checkpoint, and migrates the in-memory durable
+actors that production extensions ship.
 
 **Files**:
 
 - `packages/core/src/runtime/extensions/actor-engine.ts` (extend
-  with snapshot/restore hooks); checkpoint surface integration in
-  `packages/core/src/runtime/agent/agent-loop.checkpoint.ts` —
-  actors plug into the same checkpoint record alongside `LoopState`.
+  with snapshot/restore hooks at the engine boundary).
 - `packages/core/tests/runtime/actor-persistence.test.ts` (new —
-  spawn, send, snapshot, simulate restart with new ActorEngine,
-  verify state matches; verify mailbox is _not_ replayed).
+  spawn, send, snapshot, simulate restart by building a fresh
+  engine instance and seeding it via `restoredState`, verify state
+  matches; verify mailbox is _not_ replayed).
 
-**Verification**: `bun run gate` + `bun run test:e2e`.
+**Verification**: `bun run gate`.
 
 **Cites**: `derive-dont-sync`,
 `make-impossible-states-unrepresentable`.
@@ -316,8 +327,18 @@ before any caller moves in W10).
 
 W9 closes when the actor primitive ships, the gate is green, and
 the test fixture exercises spawn + tell + ask + find + persist
-end-to-end. The new bucket coexists with the legacy
-`Resource.machine` / `MachineEngine` / slots / `subscriptions` —
-no production extension migrates in W9. **`plans/WAVE-10.md`** is
-the next wave: full migration + extension surface collapse +
-deletion sweep.
+end-to-end at the engine boundary. The new bucket coexists with
+the legacy `Resource.machine` / `MachineEngine` / slots /
+`subscriptions` — no production extension migrates in W9.
+
+**W10 inherits**: (1) profile-scoped storage integration for the
+engine's `snapshot()` / `restoredState` (the per-session/per-branch
+agent-loop checkpoint is the wrong shape — actors live longer than
+a session), (2) full migration of `Resource.machine` extensions to
+the actor bucket, (3) extension-id-namespaced persistence keys to
+prevent accidental cross-extension collisions, (4) closing the
+persistence-key claim leak window (engine spawn after a successful
+`Ref.modify` claim but before fork can leak the key on
+allocation/interrupt), (5) Receptionist `find`/`subscribe`
+death-observability test (`actor crashes → find returns []`),
+(6) extension surface collapse + deletion sweep.
