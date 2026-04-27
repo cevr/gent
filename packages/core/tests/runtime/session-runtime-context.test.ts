@@ -71,10 +71,12 @@ describe("resolveSessionEnvironment", () => {
       home,
       platform: "darwin",
       extensions: [],
-    }).pipe(Layer.provide(Layer.merge(BunServices.layer, configServiceLive)))
+    }).pipe(
+      Layer.provide(Layer.mergeAll(BunServices.layer, configServiceLive, Storage.MemoryWithSql())),
+    )
     const testLayer = Layer.mergeAll(
       BunServices.layer,
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
@@ -178,7 +180,7 @@ describe("resolveSessionEnvironment", () => {
       platform: "test",
     })
     const testLayer = Layer.mergeAll(
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       extensionRegistryLayer,
       driverRegistryLayer,
@@ -284,7 +286,7 @@ describe("resolveSessionEnvironment", () => {
       platform: "test",
     })
     const testLayer = Layer.mergeAll(
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       extensionRegistryLayer,
       driverRegistryLayer,
@@ -393,7 +395,7 @@ describe("resolveSessionEnvironment", () => {
       baseSections: [{ id: "default", content: "Default", priority: 1 }],
     }
     const testLayer = Layer.mergeAll(
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       emptyRegistryLayer,
       runtimePlatformLayer,
@@ -439,7 +441,7 @@ describe("resolveSessionEnvironment", () => {
       platform: "test",
     })
     const testLayer = Layer.mergeAll(
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       emptyRegistryLayer,
       emptyDriverRegistryLayer,
@@ -540,7 +542,7 @@ describe("resolveSessionEnvironment", () => {
       platform: "test",
     })
     const testLayer = Layer.mergeAll(
-      Storage.Test(),
+      Storage.MemoryWithSql(),
       MachineEngine.Test(),
       emptyRegistryLayer,
       defaultDriverRegistryLayer,

@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Context, Deferred, Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import {
   ActorHost,
@@ -24,6 +24,8 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ResolvedExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionId } from "@gent/core/domain/ids"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-storage"
 
 const PingMsg = TaggedEnumClass("PingMsg", {
   Bump: {},
@@ -281,6 +283,96 @@ describe("ActorHost", () => {
     })
     // Malformed input (no separator) returns undefined.
     expect(parseNamespacedPersistenceKey("flat-key")).toBeUndefined()
+  })
+
+  test("fromResolvedWithPersistence round-trips state across host scopes", async () => {
+    // First wave: spawn, drive a few tells, snapshot via the periodic
+    // writer (writeInterval of 1ms guarantees the loop runs at least
+    // once before scope close), tear down the host scope.
+    // Second wave: rebuild with the SAME storage layer + same profileId.
+    // The actor's `restoredState` must be the encoded post-state from
+    // wave 1, so a fresh `Get` ask returns the accumulated hits — proving
+    // both load AND save halves of the wire-up actually run end-to-end.
+    const profileId = "test-profile"
+    const persistedBehavior = makePingBehavior("counter")
+    const resolved = makeResolved([makeLoaded("@test/persist", [persistedBehavior])])
+    const storageLayer = Storage.MemoryWithSql()
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const ctx = yield* Layer.build(storageLayer)
+        const storage = Context.get(ctx, ActorPersistenceStorage)
+
+        const wave1Layer = ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId,
+          writeInterval: Duration.millis(1),
+        }).pipe(
+          Layer.provideMerge(ActorEngine.Live),
+          Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
+        )
+
+        // Wave 1 — drive state, force a snapshot write, close scope.
+        yield* Effect.gen(function* () {
+          const wave1Scope = yield* Scope.make()
+          const wave1Ctx = yield* Layer.buildWithScope(wave1Layer, wave1Scope)
+          const engine = Context.get(wave1Ctx, ActorEngine)
+          const reg = Context.get(wave1Ctx, Receptionist)
+          const refs = yield* reg.find(PingService)
+          const ref = refs[0] as ActorRef<PingMsg>
+          yield* engine.tell(ref, PingMsg.Bump.make({}))
+          yield* engine.tell(ref, PingMsg.Bump.make({}))
+          yield* engine.tell(ref, PingMsg.Bump.make({}))
+          // Drain via ask — guarantees the three Bump messages have been
+          // processed and the post-state is in the per-actor stateRef
+          // before we close the scope.
+          const drained = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
+            PingMsg.Get.make({}),
+          )
+          expect(drained).toBe(3)
+          // Poll the storage row until the periodic writer has emitted
+          // it. With writeInterval=1ms the first tick fires almost
+          // immediately, but we still wait deterministically rather
+          // than guessing a sleep duration.
+          // The periodic writer ticks every 1ms — wait until the row
+          // reflects the *final* drained state (`hits: 3`), not just
+          // whatever the writer captured on its first tick.
+          const namespacedKey = namespacePersistenceKey("@test/persist", "counter")
+          const waitForRow = Effect.gen(function* () {
+            while (true) {
+              const row = yield* storage.loadActorState({
+                profileId,
+                persistenceKey: namespacedKey,
+              })
+              if (row !== undefined) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode of stored JSON; shape is PingState
+                const parsed = JSON.parse(row.stateJson) as { hits: number }
+                if (parsed.hits === 3) return row
+              }
+              yield* Effect.sleep(Duration.millis(5))
+            }
+          })
+          yield* waitForRow.pipe(Effect.timeout("2 seconds"))
+          yield* Scope.close(wave1Scope, Exit.void)
+        })
+
+        // Wave 2 — fresh scope, same storage. restoredState is read from
+        // the row written by wave 1's periodic writer.
+        const observed = yield* Effect.gen(function* () {
+          const wave2Scope = yield* Scope.make()
+          const wave2Ctx = yield* Layer.buildWithScope(wave1Layer, wave2Scope)
+          const engine = Context.get(wave2Ctx, ActorEngine)
+          const reg = Context.get(wave2Ctx, Receptionist)
+          const refs = yield* reg.find(PingService)
+          const ref = refs[0] as ActorRef<PingMsg>
+          const hits = yield* engine.ask<PingMsg, number>(ref, PingMsg.Get.make({}), () =>
+            PingMsg.Get.make({}),
+          )
+          yield* Scope.close(wave2Scope, Exit.void)
+          return hits
+        })
+        expect(observed).toBe(3)
+      }).pipe(Effect.scoped),
+    )
   })
 
   test("extension with empty actors bucket is a no-op", async () => {

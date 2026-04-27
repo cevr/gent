@@ -24,8 +24,11 @@
  *   - Two durable behaviors with the same `persistence.key` in one
  *     engine fail with `ActorPersistenceKeyCollision` at spawn.
  *   - Mailboxes are NOT captured (peers re-tell on resume).
- *   - `snapshot()` is unsynchronized; cross-actor atomicity is the
- *     caller's contract (invoke at a quiescent point).
+ *   - `snapshot()` is per-actor synchronized via the same per-instance
+ *     semaphore that gates `receive`, so each row is the post-state of
+ *     a completed message. Cross-actor atomicity is still the caller's
+ *     contract: a snapshot iterating multiple actors does not freeze
+ *     the engine, so two actors can advance independently between rows.
  *
  * Discovery: spawn auto-registers behaviors that declare a
  * `serviceKey` with the Receptionist; the per-actor `ActorContext`
@@ -142,10 +145,12 @@ export interface ActorEngineService {
    * Encode failures surface as `ActorSnapshotError` — the checkpoint
    * caller decides whether to skip the offending actor or abort.
    *
-   * **Quiescence contract**: callers must invoke at a point where no
-   * `receive` is in flight (e.g. between agent-loop turns). The engine
-   * does not lock during snapshot — cross-actor atomicity is the
-   * caller's responsibility.
+   * Each row is per-actor synchronized: the engine acquires that
+   * actor's permit before reading its `Ref`, so the row is the
+   * post-state of whatever `receive` most recently completed. Cross-
+   * actor atomicity is NOT provided — two actors can advance between
+   * rows of the same snapshot. Callers needing a globally-consistent
+   * cut must invoke at a quiescent point (e.g. between agent-loop turns).
    */
   readonly snapshot: () => Effect.Effect<ActorSnapshot, ActorSnapshotError>
 }
@@ -335,11 +340,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased mailbox storage; M pinned at spawn time
             const receiveMsg = (msg: unknown): M => msg as M
 
-            // Take outside the permit so the next message's blocking
-            // dequeue does not hold the snapshot lock. Receive + state
-            // write run under the permit, so a concurrent `snapshot()`
-            // observes the post-state of whatever message most recently
-            // completed — never a torn read mid-receive.
             // Take outside the permit so the next message's blocking
             // dequeue does not hold the snapshot lock. Receive + state
             // write run under the permit, so a concurrent `snapshot()`

@@ -36,6 +36,7 @@ import {
 import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { ConfigService } from "../../src/runtime/config-service"
+import { Storage } from "../../src/storage/sqlite-storage"
 import {
   buildExtensionLayers,
   compileBaseSections,
@@ -52,7 +53,7 @@ const fsLayer = Layer.mergeAll(
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
 )
 
-const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test())
+const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), Storage.TestWithSql())
 
 // C7: static prompt sections live on `Capability.prompt`. The tool here is a
 // no-op carrier — its only purpose is to bring the prompt section into scope.

@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { Storage } from "../../src/storage/sqlite-storage"
 
 describe("SessionProfileCache", () => {
   it.live("keeps permission rules scoped to the session cwd instead of the launch cwd", () => {
@@ -37,7 +38,9 @@ describe("SessionProfileCache", () => {
       home,
       platform: "darwin",
       extensions: [],
-    }).pipe(Layer.provide(Layer.merge(BunServices.layer, configServiceLive)))
+    }).pipe(
+      Layer.provide(Layer.mergeAll(BunServices.layer, configServiceLive, Storage.MemoryWithSql())),
+    )
 
     return Effect.scoped(
       Effect.gen(function* () {

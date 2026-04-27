@@ -72,6 +72,8 @@
     "./debug/provider.js": "./src/debug/provider.ts",
     "./debug/session": "./src/debug/session.ts",
     "./debug/session.js": "./src/debug/session.ts",
+    "./storage/actor-persistence-storage": "./src/storage/actor-persistence-storage.ts",
+    "./storage/actor-persistence-storage.js": "./src/storage/actor-persistence-storage.ts",
     "./storage/branch-storage": "./src/storage/branch-storage.ts",
     "./storage/branch-storage.js": "./src/storage/branch-storage.ts",
     "./storage/checkpoint-storage": "./src/storage/checkpoint-storage.ts",

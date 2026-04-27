@@ -23,7 +23,7 @@
  * @module
  */
 
-import { Context, Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Context, Duration, Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import type { GentExtension } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
 import {
@@ -311,7 +311,22 @@ export const compileBaseSections = (
  * `ResolvedExtensions` (same cwd) instead of re-discovering, but they then
  * call this same builder so the wiring shape is identical.
  */
-export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
+export interface BuildExtensionLayersOptions {
+  /**
+   * When present, the actor host wires `ActorPersistenceStorage` for
+   * spawn-time hydrate + periodic write. Absent → in-memory mode
+   * (used by lock tests + ephemeral runs that don't persist actors).
+   */
+  readonly actorPersistence?: {
+    readonly profileId: string
+    readonly writeInterval?: Duration.Input
+  }
+}
+
+export const buildExtensionLayers = (
+  resolved: ResolvedExtensions,
+  options?: BuildExtensionLayersOptions,
+) => {
   // Process-scope Resource layer — services merged in parallel, lifecycle
   // (start/stop) threaded sequentially with reverse-order teardown. cwd /
   // session / branch Resources are routed through the per-cwd / ephemeral
@@ -333,14 +348,21 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   // Actor engine + host: ActorEngine.Live is self-contained (it
-  // composes its own Receptionist). ActorHost.fromResolved is a
-  // Layer.effectDiscard that walks every extension's `actors` bucket
-  // at build time and spawns each Behavior into the engine; spawn
-  // lifetime is bound to the host scope so runtime teardown
-  // interrupts every actor fiber.
-  const actorRuntimeLive = ActorHost.fromResolved(resolved).pipe(
-    Layer.provideMerge(ActorEngine.Live),
-  )
+  // composes its own Receptionist). ActorHost walks every extension's
+  // `actors` bucket at build time and spawns each Behavior into the
+  // engine; spawn lifetime is bound to the host scope so runtime
+  // teardown interrupts every actor fiber.
+  //
+  // When `actorPersistence` is configured the host hydrates each
+  // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
+  // before spawn and forks a periodic writer. Absent → in-memory mode.
+  const actorRuntimeLive =
+    options?.actorPersistence !== undefined
+      ? ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId: options.actorPersistence.profileId,
+          writeInterval: options.actorPersistence.writeInterval ?? Duration.seconds(30),
+        }).pipe(Layer.provideMerge(ActorEngine.Live))
+      : ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -362,9 +384,9 @@ export const buildProfileRuntime = (params: {
   readonly configService: ConfigServiceService
 }) =>
   Effect.gen(function* () {
-    const combinedLayer = buildExtensionLayers(params.profile.resolved).pipe(
-      Layer.provide(ExtensionTurnControl.Live),
-    )
+    const combinedLayer = buildExtensionLayers(params.profile.resolved, {
+      actorPersistence: { profileId: params.profile.cwd },
+    }).pipe(Layer.provide(ExtensionTurnControl.Live))
     const layerContext = yield* Layer.build(combinedLayer)
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)

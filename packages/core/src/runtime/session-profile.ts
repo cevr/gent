@@ -39,6 +39,7 @@ import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { resolveProfileRuntime } from "./profile.js"
 import { runWithBuiltLayer } from "./run-with-built-layer.js"
+import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
@@ -117,7 +118,12 @@ export class SessionProfileCache extends Context.Service<
   ): Layer.Layer<
     SessionProfileCache,
     never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | ScopeType.Scope
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner
+    | ConfigService
+    | ActorPersistenceStorage
+    | ScopeType.Scope
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -128,17 +134,22 @@ export class SessionProfileCache extends Context.Service<
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
+        const actorPersistenceStorage = yield* ActorPersistenceStorage
         // Capture server scope — extension lifecycle (onShutdown) ties to this
         const serverScope = yield* Scope.Scope
 
         // Capture platform services as a layer so initProfile can use functions
         // that require FileSystem | Path | ChildProcessSpawner | ConfigService from
         // the Effect context (profile resolution loads instructions via ConfigService).
+        // ActorPersistenceStorage is captured here so the per-cwd profile build
+        // (which now wires the durable actor surface) can resolve it without
+        // pulling Storage into every callsite of `resolveProfileRuntime`.
         const platformLayer = Layer.mergeAll(
           Layer.succeed(FileSystem.FileSystem, fs),
           Layer.succeed(Path.Path, pathSvc),
           Layer.succeed(ChildProcessSpawner, spawner),
           Layer.succeed(ConfigService, configService),
+          Layer.succeed(ActorPersistenceStorage, actorPersistenceStorage),
         )
 
         const initProfile = (cwd: string) =>
