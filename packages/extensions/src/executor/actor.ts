@@ -122,7 +122,12 @@ export const transitionConnectionFailed = (
 }
 
 export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
-  if (state._tag === "Ready") return ExecutorState.Idle.make({})
+  // `Ready → Idle` and `Connecting → Idle` both honor user disconnect
+  // intent. The connection runner observes the state stream and
+  // interrupts the in-flight `runConnection` fork when state leaves
+  // `Connecting`, so a Disconnect mid-handshake cancels the sidecar
+  // resolve before it can race the actor back to Ready.
+  if (state._tag === "Ready" || state._tag === "Connecting") return ExecutorState.Idle.make({})
   return state
 }
 

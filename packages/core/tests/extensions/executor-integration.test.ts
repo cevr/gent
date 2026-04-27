@@ -13,7 +13,7 @@
 
 import { describe, test, expect } from "bun:test"
 import { it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { ensureStorageParents } from "@gent/core/test-utils"
@@ -608,6 +608,52 @@ describe("Executor actor lifecycle", () => {
   // from `Idle` via autoStart. Cross-process persistence is covered by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state`
   // for actors that DO opt in.
+
+  // Regression for W10-1c B2: Disconnect mid-handshake must cancel
+  // the in-flight `runConnection` fork. Without the cancel, the
+  // sidecar resolve eventually `tell`s `Connected` and pushes the
+  // actor to Ready against user intent.
+  it.live(
+    "Disconnect during Connecting cancels in-flight handshake (B2 regression)",
+    () => {
+      const sidecarGate = Deferred.makeUnsafe<void>()
+      const { extension } = makeExecutorExtension({
+        settings: { autoStart: true },
+        sidecar: {
+          // resolveEndpoint blocks until the gate opens — long enough
+          // for a Disconnect to arrive while state is Connecting.
+          resolveEndpoint: () => Deferred.await(sidecarGate).pipe(Effect.as(mockEndpoint)),
+          resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
+        },
+      })
+      return Effect.gen(function* () {
+        const runtime = yield* MachineEngine
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        // Wait until the actor enters Connecting (autoStart fired).
+        yield* waitForExecutorStatus(runtime, "connecting")
+        // Disconnect mid-handshake.
+        yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
+        // Actor should land on Idle promptly (Connecting → Idle).
+        yield* waitForExecutorStatus(runtime, "idle")
+        // Now release the (cancelled) in-flight handshake. If it races
+        // back to Ready, the regression has reappeared.
+        yield* Deferred.succeed(sidecarGate, undefined)
+        yield* Effect.sleep("100 millis")
+        const final = (yield* runtime.execute(
+          sessionId,
+          ExecutorProtocol.GetSnapshot.make(),
+          branchId,
+        )) as ExecutorSnapshotReply
+        expect(final.status).toBe("idle")
+      })
+        .pipe(Effect.provide(makeRuntimeLayer(extension)))
+        .pipe(Effect.timeout("8 seconds"))
+    },
+    { timeout: 10_000 },
+  )
 
   // Regression for W10-1c B1: production composer must cross-wire
   // `ActorEngine | Receptionist` into the resource layer's R channel.

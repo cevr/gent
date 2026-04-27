@@ -22,7 +22,7 @@
  * documented on `ActorContext.subscribeState`.
  */
 
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { ActorEngine, Receptionist, type ActorRef } from "@gent/core/extensions/api"
 import { ExecutorEndpoint, ExecutorMcpInspection, type ResolvedExecutorSettings } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
@@ -118,16 +118,23 @@ const supervise = (
 ): Effect.Effect<void, never, ActorEngine | ExecutorSidecar | ExecutorMcpBridge> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
+    // Track the in-flight `runConnection` fork so we can interrupt it
+    // on state-exit-from-Connecting (Disconnect, ConnectionFailed) or
+    // before forking a fresh attempt on Connecting→Connecting reentry
+    // (rapid retry storm). Without this, an in-flight sidecar resolve
+    // can `tell(Connected)` after the user disconnected and race the
+    // actor back to Ready.
+    const inFlight = yield* Ref.make<Fiber.Fiber<void> | null>(null)
+    const interruptInFlight = Ref.getAndSet(inFlight, null).pipe(
+      Effect.flatMap((prev) => (prev === null ? Effect.void : Fiber.interrupt(prev))),
+    )
     yield* engine.subscribeState(ref).pipe(
       Stream.runForEach((state) =>
         Effect.gen(function* () {
+          yield* interruptInFlight
           if (!isConnecting(state)) return
-          // Fork the connection — runs inside the supervise fiber, so it
-          // inherits the layer scope without naming `Scope` in R.
-          // Successive Connecting entries each spawn a fresh fork; late
-          // `Connected/Failed` tells from in-flight forks become no-ops
-          // in the wrong state (`receive` ignores them).
-          yield* Effect.asVoid(Effect.forkChild(runConnection(state.cwd, ref)))
+          const fiber = yield* Effect.forkChild(runConnection(state.cwd, ref))
+          yield* Ref.set(inFlight, fiber)
         }),
       ),
     )

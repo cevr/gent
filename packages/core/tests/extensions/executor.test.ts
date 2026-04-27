@@ -89,9 +89,14 @@ describe("Executor state machine", () => {
     expect(next._tag).toBe("Idle")
   })
 
-  test("Disconnect while Connecting → no-op", () => {
+  test("Disconnect while Connecting → Idle (cancels in-flight handshake)", () => {
+    // The connection runner observes the state stream and interrupts
+    // the in-flight `runConnection` fork when state leaves Connecting,
+    // so honoring user disconnect intent is safe — late `Connected`
+    // tells from a cancelled fork would no-op against Idle anyway via
+    // `transitionConnected`'s state guard.
     const next = transitionDisconnect(connectingFrom())
-    expect(next._tag).toBe("Connecting")
+    expect(next._tag).toBe("Idle")
   })
 
   test("Connect while Ready → no-op (Ready is a terminal Connect target)", () => {
