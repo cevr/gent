@@ -104,6 +104,22 @@ describe("type-level — ActorContext threads M end-to-end", () => {
     expect(true).toBe(true)
   })
 
+  test("ctx.ask statically rejects tell-only variants (AskBranded brand is required)", () => {
+    // Compile-time pin: passing a non-ask-branded variant to ctx.ask must
+    // fail the `ReplyMsg extends N & AskBranded<unknown>` constraint. If the
+    // brand on AskBranded ever becomes optional again, the @ts-expect-error
+    // below stops firing and tsc flags it as an unused suppression.
+    // Validation: empirically confirmed — flipping the brand to optional in
+    // schema-tagged-enum-class.ts removes the error and breaks this pin.
+    const _stub = (ctx: ActorContext<PingMsg>, target: ActorRef<PingMsg>) => {
+      // @ts-expect-error — Ping is tell-only; lacks AskBranded brand
+      const reply = ctx.ask(target, PingMsg.Ping.make({}))
+      return reply
+    }
+    void _stub
+    expect(true).toBe(true)
+  })
+
   test("ActorRef carries S; subscribeState is Stream<S> for spawn-typed refs", () => {
     // Compile-time pin: a ref whose phantom S is fixed yields a typed
     // subscribeState stream — the consumer reads `.count` without a

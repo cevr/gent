@@ -40,13 +40,19 @@ export declare const AskReplyBrand: unique symbol
 
 export interface AskBranded<out Reply> {
   /**
-   * Phantom only — undefined at runtime, erased after compilation. Returns
-   * `Reply` (covariant position) so a more-specific reply type (e.g. `number`)
-   * is assignable to a less-specific one (e.g. `unknown`). A parameter
-   * position would invert this and reject specific-into-general assignment,
-   * which would break the `M extends N & AskBranded<unknown>` constraint.
+   * Phantom only — never read at runtime, erased after compilation. The
+   * property is **required** (not optional) so that tell-only variants —
+   * which lack the brand — fail the structural intersection
+   * `M & AskBranded<unknown>` at the `ctx.ask` constraint site. An optional
+   * property would let any value satisfy the brand, silently widening
+   * `Reply` to `never` and pushing the failure to runtime.
+   *
+   * Returns `Reply` in covariant position so a more-specific reply type
+   * (e.g. `number`) is assignable to a less-specific one (e.g. `unknown`).
+   * A parameter position would invert this and reject specific-into-general
+   * assignment, which would break `M extends N & AskBranded<unknown>`.
    */
-  readonly [AskReplyBrand]?: () => Reply
+  readonly [AskReplyBrand]: () => Reply
 }
 
 /**
