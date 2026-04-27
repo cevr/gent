@@ -417,9 +417,14 @@ export class MachineEngine extends Context.Service<MachineEngine, MachineEngineS
   ): Layer.Layer<MachineEngine, never, ExtensionTurnControl | ActorEngine | Receptionist> =>
     MachineEngine.fromExtensions(extensions)
 
-  static Test = (): Layer.Layer<MachineEngine> =>
+  // Re-exposes `ActorEngine` (and its inner `Receptionist`) via
+  // `provideMerge` so callers that compose `MachineEngine.Test()` get the
+  // same engine instance the route fallback uses. `Layer.provide` would
+  // close the requirement and force callers to add a second
+  // `ActorEngine.Live` — two engines, two Receptionists, route divergence.
+  static Test = (): Layer.Layer<MachineEngine | ActorEngine | Receptionist> =>
     MachineEngine.fromExtensions([]).pipe(
       Layer.provide(ExtensionTurnControl.Test()),
-      Layer.provide(ActorEngine.Live),
+      Layer.provideMerge(ActorEngine.Live),
     )
 }

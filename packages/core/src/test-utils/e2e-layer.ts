@@ -37,6 +37,7 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
+import { ActorHost } from "../runtime/extensions/actor-host.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -212,9 +213,16 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
       const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
+      // Mirror profile.ts: build ActorHost first, then feed it into
+      // MachineEngine via provideMerge so the engine's route fallback
+      // and the host both see the same ActorEngine instance, and any
+      // actor-bearing extension actually has its `actors` spawned.
+      const actorRuntimeLive = ActorHost.fromResolved(resolved).pipe(
+        Layer.provideMerge(ActorEngine.Live),
+      )
       const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
-        Layer.provideMerge(ActorEngine.Live),
+        Layer.provideMerge(actorRuntimeLive),
       )
       // Read-only call surface for projections — must mirror profile.ts so
       // that projections like `AutoProjection`/`ExecutorProjection` (which

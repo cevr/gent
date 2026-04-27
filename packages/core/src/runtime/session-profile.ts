@@ -266,9 +266,8 @@ export class SessionProfileCache extends Context.Service<
                 }),
                 MachineEngine.fromExtensions([]).pipe(
                   Layer.provide(ExtensionTurnControl.Live),
-                  Layer.provide(ActorEngine.Live),
+                  Layer.provideMerge(ActorEngine.Live),
                 ),
-                ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),
           )
