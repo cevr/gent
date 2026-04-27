@@ -203,16 +203,12 @@ describe("ActorEngine — persistence", () => {
       ),
     )
     expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const errOpt = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(errOpt)).toBe(true)
-      if (Option.isSome(errOpt)) {
-        expect(errOpt.value).toBeInstanceOf(ActorPersistenceKeyCollision)
-        if (errOpt.value instanceof ActorPersistenceKeyCollision) {
-          expect(errOpt.value.persistenceKey).toBe("counter")
-        }
-      }
+    if (exit._tag !== "Failure") return
+    const err = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+    if (!(err instanceof ActorPersistenceKeyCollision)) {
+      throw new Error(`expected ActorPersistenceKeyCollision, got ${String(err)}`)
     }
+    expect(err.persistenceKey).toBe("counter")
   })
 
   test("malformed restoredState surfaces ActorRestoreError, not a defect", async () => {
@@ -230,16 +226,12 @@ describe("ActorEngine — persistence", () => {
       ),
     )
     expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const errOpt = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(errOpt)).toBe(true)
-      if (Option.isSome(errOpt)) {
-        expect(errOpt.value).toBeInstanceOf(ActorRestoreError)
-        if (errOpt.value instanceof ActorRestoreError) {
-          expect(errOpt.value.persistenceKey).toBe("counter")
-        }
-      }
+    if (exit._tag !== "Failure") return
+    const err = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+    if (!(err instanceof ActorRestoreError)) {
+      throw new Error(`expected ActorRestoreError, got ${String(err)}`)
     }
+    expect(err.persistenceKey).toBe("counter")
   })
 
   test("snapshot is a moment-in-time view; later mutations are not in the same map", async () => {

@@ -78,7 +78,13 @@ export interface ActorContext<M> {
    */
   readonly reply: (answer: unknown) => Effect.Effect<void>
   readonly find: <N>(key: ServiceKey<N>) => Effect.Effect<ReadonlyArray<ActorRef<N>>>
-  readonly subscribe: <N>(key: ServiceKey<N>) => Stream.Stream<ActorRef<N>>
+  /**
+   * Live stream of the ref set registered under `key`. Emits the
+   * current set on subscribe, then a fresh snapshot on every change.
+   * Snapshot semantics (not per-ref) so subscribers observe both
+   * register and unregister.
+   */
+  readonly subscribe: <N>(key: ServiceKey<N>) => Stream.Stream<ReadonlyArray<ActorRef<N>>>
 }
 
 /**
@@ -94,12 +100,14 @@ export interface ActorView {
 }
 
 /**
- * JSON-shaped value. The engine pins durable encoded states to this
- * shape so that snapshot maps round-trip through any JSON-backed
- * persistence boundary (sqlite TEXT, file write, network transport).
- * If a behavior's `state` schema encodes to a `Date` or `Map`, that
- * mismatch surfaces at the schema declaration site rather than as a
- * runtime decode failure on the next restore.
+ * JSON-shaped value used as the `Encoded` parameter on durable
+ * persistence codecs. This is a *type-level* constraint only — it
+ * pins what TypeScript will accept as a behavior's encoded shape, so
+ * codecs whose static `Encoded` is a `Date` or `Map` are rejected at
+ * the declaration site. It does not validate the codec's runtime
+ * encoder; an authored transform that lies about its `Encoded` type
+ * will still smuggle non-JSON values through and surface as
+ * `ActorRestoreError` on the next restore.
  */
 export type JsonValueT =
   | string

@@ -27,8 +27,11 @@
  *   - `snapshot()` is unsynchronized; cross-actor atomicity is the
  *     caller's contract (invoke at a quiescent point).
  *
- * `find` / `subscribe` on `ActorContext` are stubs here (empty / never).
- * The Receptionist wires them in.
+ * Discovery: spawn auto-registers behaviors that declare a
+ * `serviceKey` with the Receptionist; the per-actor `ActorContext`
+ * forwards `find` / `subscribe` to the same registry. Cleanup
+ * unregisters the ref when the actor's fiber exits, so dead refs do
+ * not leak into discovery results.
  */
 
 import {
@@ -43,7 +46,7 @@ import {
   Ref,
   Schema,
   Scope,
-  Stream,
+  type Stream,
 } from "effect"
 import {
   ActorAskTimeout,
@@ -57,6 +60,7 @@ import {
   type ServiceKey,
 } from "../../domain/actor.js"
 import { ActorId } from "../../domain/ids.js"
+import { Receptionist } from "./receptionist.js"
 
 /**
  * Default ask deadline. Mirrors the FSM-era 5s default before
@@ -143,10 +147,16 @@ export interface ActorEngineService {
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
   "@gent/core/src/runtime/extensions/actor-engine/ActorEngine",
 ) {
+  // Self-contained: provides its own Receptionist so callers do not have
+  // to remember to compose two layers. If a runtime needs to share a
+  // single Receptionist across engines, build the engine layer manually
+  // with `Layer.effect(ActorEngine, …)` and provide an external
+  // Receptionist instance.
   static Live: Layer.Layer<ActorEngine> = Layer.effect(
     ActorEngine,
     Effect.acquireRelease(
       Effect.gen(function* () {
+        const receptionist = yield* Receptionist
         const runtimeScope = yield* Scope.make()
         const mailboxes = yield* Ref.make<Map<string, MailboxEntry>>(new Map())
         const pendingAsks = yield* Ref.make<Map<string, PendingAsk>>(new Map())
@@ -216,13 +226,20 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
           Effect.gen(function* () {
             const persistence = behavior.persistence
             if (persistence !== undefined) {
-              const claimed = yield* Ref.get(claimedPersistenceKeys)
-              if (claimed.has(persistence.key)) {
+              // Single-CAS claim: Ref.modify atomically reads the prior
+              // claim set and writes the new one in one step. A separate
+              // get + update pair would let two concurrent spawns both
+              // pass the membership check before either wrote, admitting
+              // a silent duplicate.
+              const collided = yield* Ref.modify(claimedPersistenceKeys, (s) => {
+                if (s.has(persistence.key)) return [true, s] as const
+                return [false, new Set(s).add(persistence.key)] as const
+              })
+              if (collided) {
                 return yield* new ActorPersistenceKeyCollision({
                   persistenceKey: persistence.key,
                 })
               }
-              yield* Ref.update(claimedPersistenceKeys, (s) => new Set(s).add(persistence.key))
             }
 
             const id = Schema.decodeUnknownSync(ActorId)(crypto.randomUUID())
@@ -258,6 +275,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             }
             yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
 
+            if (behavior.serviceKey !== undefined) {
+              yield* receptionist.register(behavior.serviceKey, ref)
+            }
+
             const replyFor =
               (askId: string | undefined): ActorContext<M>["reply"] =>
               (answer: unknown): Effect.Effect<void> =>
@@ -274,9 +295,10 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               ask: <N, A>(target: ActorRef<N>, msg: N, replyKey: (a: A) => N) =>
                 ask(target, msg, replyKey),
               reply: replyFor(askId),
-              find: <N>(_key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
-                Effect.succeed([]),
-              subscribe: <N>(_key: ServiceKey<N>): Stream.Stream<ActorRef<N>> => Stream.never,
+              find: <N>(key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
+                receptionist.find(key),
+              subscribe: <N>(key: ServiceKey<N>): Stream.Stream<ReadonlyArray<ActorRef<N>>> =>
+                receptionist.subscribe(key),
             })
 
             // The mailbox stores envelopes typed as `unknown msg`. The
@@ -314,9 +336,9 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               Effect.forever,
             )
 
-            // On fiber exit (interrupt or defect): drop the mailbox entry
-            // and free the persistence-key claim so a redeploy of the
-            // same key in this engine is allowed.
+            // On fiber exit (interrupt or defect): drop the mailbox entry,
+            // free the persistence-key claim, and unregister from the
+            // Receptionist so dead refs do not leak into discovery results.
             const cleanup = Effect.gen(function* () {
               yield* Ref.update(mailboxes, (m) => {
                 const next = new Map(m)
@@ -329,6 +351,9 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                   next.delete(persistence.key)
                   return next
                 })
+              }
+              if (behavior.serviceKey !== undefined) {
+                yield* receptionist.unregister(behavior.serviceKey, ref)
               }
             })
 
@@ -354,5 +379,5 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
       }),
       ({ runtimeScope }) => Scope.close(runtimeScope, Exit.void),
     ).pipe(Effect.map(({ service }) => service)),
-  )
+  ).pipe(Layer.provide(Receptionist.Live))
 }
