@@ -126,6 +126,11 @@ interface MailboxEntry {
  */
 export type ActorSnapshot = ReadonlyMap<string, JsonValueT>
 
+export interface ActorSnapshotSettled {
+  readonly values: ActorSnapshot
+  readonly failures: ReadonlyArray<ActorSnapshotError>
+}
+
 /**
  * Engine-internal envelope. `askId`, when present, ties the message
  * to a pending `Deferred<A>` in `pendingAsks`. The behavior's
@@ -185,6 +190,12 @@ export interface ActorEngineService {
    * cut must invoke at a quiescent point (e.g. between agent-loop turns).
    */
   readonly snapshot: () => Effect.Effect<ActorSnapshot, ActorSnapshotError>
+  /**
+   * Snapshot all live durable actors, preserving healthy rows when one
+   * actor fails to encode. Used by host-level durability where a bad
+   * actor row should not block unrelated extensions from flushing.
+   */
+  readonly snapshotSettled: () => Effect.Effect<ActorSnapshotSettled>
   /**
    * Live changes-stream of the target actor's state. Emits the
    * current `S` on subscribe, then on every change. Consecutive
@@ -518,6 +529,23 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             return out
           })
 
+        const snapshotSettled = (): Effect.Effect<ActorSnapshotSettled> =>
+          Effect.gen(function* () {
+            const live = yield* Ref.get(mailboxes)
+            const values = new Map<string, JsonValueT>()
+            const failures: Array<ActorSnapshotError> = []
+            for (const entry of live.values()) {
+              const dump = yield* entry.snapshot().pipe(
+                Effect.catchEager((error) => {
+                  failures.push(error)
+                  return Effect.succeed(undefined)
+                }),
+              )
+              if (dump !== undefined) values.set(dump.persistenceKey, dump.state)
+            }
+            return { values, failures }
+          })
+
         const subscribeState = <M, S>(target: ActorRef<M, S>): Stream.Stream<S> =>
           // Resolve the mailbox lazily on subscribe so callers can
           // hand the stream around before the actor is necessarily
@@ -551,6 +579,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             tell,
             ask,
             snapshot,
+            snapshotSettled,
             subscribeState,
             peekView,
           } satisfies ActorEngineService,

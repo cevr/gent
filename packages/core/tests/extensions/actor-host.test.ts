@@ -8,9 +8,22 @@
  *  - host scope teardown interrupts every spawned fiber
  *  - persistence-key collisions are caught: extension still loads,
  *    the colliding actor is logged + skipped
+ *  - durable restore/persist failures fail closed without hiding
+ *    unrelated healthy actors
  */
 import { describe, expect, test, it } from "effect-bun-test"
-import { Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
+import {
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Ref,
+  Schema,
+  SchemaGetter,
+  Scope,
+} from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import {
   ActorHost,
@@ -43,6 +56,31 @@ const makePingBehavior = (persistenceKey?: string): Behavior<PingMsg, PingState,
   ...(persistenceKey !== undefined
     ? { persistence: { key: persistenceKey, state: PingState } }
     : {}),
+  receive: (msg, state, ctx) =>
+    Effect.gen(function* () {
+      switch (msg._tag) {
+        case "Bump":
+          return { hits: state.hits + 1 }
+        case "Get":
+          yield* ctx.reply(state.hits)
+          return state
+      }
+    }) as Effect.Effect<PingState, never, never>,
+})
+const RejectedSnapshotState = Schema.Struct({
+  hits: Schema.Number.pipe(
+    Schema.encode({
+      decode: SchemaGetter.passthrough(),
+      encode: SchemaGetter.forbidden(() => "snapshot rejected"),
+    }),
+  ),
+})
+const makeRejectedSnapshotBehavior = (
+  persistenceKey: string,
+): Behavior<PingMsg, PingState, never> => ({
+  initialState: { hits: 0 },
+  serviceKey: PingService,
+  persistence: { key: persistenceKey, state: RejectedSnapshotState },
   receive: (msg, state, ctx) =>
     Effect.gen(function* () {
       switch (msg._tag) {
@@ -408,6 +446,58 @@ describe("ActorHost", () => {
       )
       expect(failures.some((f) => f.extensionId === "@test/write-failure")).toBe(true)
       expect(failures.some((f) => f.error.includes("persist write failed"))).toBe(true)
+    }),
+  )
+  it.live("snapshot encode failure records the owner while healthy actors still persist", () =>
+    Effect.gen(function* () {
+      const profileId = "test-snapshot-settled"
+      const goodBehavior = makePingBehavior("good")
+      const badBehavior = makeRejectedSnapshotBehavior("bad")
+      const resolved = makeResolved([
+        makeLoaded("@test/good-snapshot", [goodBehavior]),
+        makeLoaded("@test/bad-snapshot", [badBehavior]),
+      ])
+      const storageLayer = Storage.MemoryWithSql()
+      yield* Effect.gen(function* () {
+        const ctx = yield* Layer.build(storageLayer)
+        const storage = Context.get(ctx, ActorPersistenceStorage)
+        const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId,
+          writeInterval: Duration.millis(1000),
+        }).pipe(
+          Layer.provideMerge(ActorEngine.Live),
+          Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
+        )
+        const hostScope = yield* Scope.make()
+        const hostCtx = yield* Layer.buildWithScope(hostLayer, hostScope)
+        const engine = Context.get(hostCtx, ActorEngine)
+        const refs = yield* Context.get(hostCtx, Receptionist).find(PingService)
+        for (const ref of refs) {
+          yield* engine.tell(ref, PingMsg.Bump.make({}))
+          yield* engine.ask(ref, PingMsg.Get.make({}))
+        }
+        yield* Scope.close(hostScope, Exit.void)
+
+        const goodRow = yield* storage.loadActorState({
+          profileId,
+          persistenceKey: namespacePersistenceKey("@test/good-snapshot", "good"),
+        })
+        const badRow = yield* storage.loadActorState({
+          profileId,
+          persistenceKey: namespacePersistenceKey("@test/bad-snapshot", "bad"),
+        })
+        const failures = yield* Context.get(hostCtx, ActorHostFailures).snapshot
+
+        expect(goodRow?.stateJson).toBe(`{"hits":1}`)
+        expect(badRow).toBeUndefined()
+        expect(
+          failures.some(
+            (f) =>
+              f.extensionId === "@test/bad-snapshot" &&
+              f.error.includes(namespacePersistenceKey("@test/bad-snapshot", "bad")),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.scoped)
     }),
   )
   it.live("flushes the trailing-window state on host scope close", () =>

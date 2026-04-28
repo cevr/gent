@@ -153,6 +153,9 @@ const recordActorHostFailure = (
     )
   })
 
+const extensionIdFromPersistenceKey = (persistenceKey: string): string =>
+  parseNamespacedPersistenceKey(persistenceKey)?.extensionId ?? "actor-host"
+
 const spawnWithoutPersistence = (
   resolved: ResolvedExtensions,
   failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
@@ -291,15 +294,16 @@ const spawnWithPersistence = (
 
 /**
  * Single durable-write pass. Walks every live durable actor via
- * `engine.snapshot()` and upserts each row through
+ * `engine.snapshotSettled()` and upserts each healthy row through
  * `ActorPersistenceStorage.saveActorState`. Used by the periodic
  * writer AND by the on-close finalizer so a graceful shutdown does
  * not leak the last interval's mutations.
  *
  * Typed failures (`ActorSnapshotError`, `StorageError`) are recorded in
- * `ActorHostFailures` and skipped. Interrupts pass through `catchEager`
- * untouched, so scope teardown stops the writer immediately without an extra
- * log cycle — the actor-engine's per-actor permit guarantees no torn row.
+ * `ActorHostFailures` and skipped per actor/row. Interrupts pass through
+ * `catchEager` untouched, so scope teardown stops the writer immediately
+ * without an extra log cycle — the actor-engine's per-actor permit guarantees
+ * no torn row.
  */
 const writeAllActorsOnce = (
   persistence: ActorHostPersistence,
@@ -308,19 +312,17 @@ const writeAllActorsOnce = (
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     const storage = yield* ActorPersistenceStorage
-    const snap = yield* engine
-      .snapshot()
-      .pipe(
-        Effect.catchEager((error) =>
-          recordActorHostFailure(
-            failuresRef,
-            "actor-host",
-            `snapshot failed: ${String(error)}`,
-            "actor-host.snapshot.failed",
-          ).pipe(Effect.as(new Map<string, unknown>())),
-        ),
+    const settled = yield* engine.snapshotSettled()
+    for (const error of settled.failures) {
+      yield* recordActorHostFailure(
+        failuresRef,
+        extensionIdFromPersistenceKey(error.persistenceKey),
+        `snapshot failed for ${error.persistenceKey}: ${String(error.cause)}`,
+        "actor-host.snapshot.failed",
+        { persistenceKey: error.persistenceKey },
       )
-    for (const [persistenceKey, state] of snap) {
+    }
+    for (const [persistenceKey, state] of settled.values) {
       yield* storage
         .saveActorState({
           profileId: persistence.profileId,
@@ -332,7 +334,7 @@ const writeAllActorsOnce = (
           Effect.catchEager((error) =>
             recordActorHostFailure(
               failuresRef,
-              parseNamespacedPersistenceKey(persistenceKey)?.extensionId ?? "actor-host",
+              extensionIdFromPersistenceKey(persistenceKey),
               `persist write failed for ${persistenceKey}: ${String(error)}`,
               "actor-host.persist.write-failed",
               {
