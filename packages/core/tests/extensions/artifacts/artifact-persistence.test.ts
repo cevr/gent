@@ -7,7 +7,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 
 // PlanTool/AuditTool/ReviewTool .effect signatures inherit R=any from
-// the AnyCapabilityContribution cast in the tool() factory. Tests run
+// the erased runtime leaf boundary in the tool() factory. Tests run
 // with no real services beyond ctx, so we narrow R to never at the
 // call site for it.live compatibility.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>

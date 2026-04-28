@@ -1,18 +1,12 @@
 /**
  * Asserts the typed-ref accessor invariants for capability tokens:
  *
- * 1. `request(...)` attaches a `CapabilityRef` under the `CAPABILITY_REF`
+ * 1. `request(...)` attaches a `CapabilityRef` under a private request-local
  *    symbol (private — only `ref(token)` reads it).
  * 2. `ref(requestToken)` returns the typed ref with the same id/intent
  *    metadata the author provided.
- * 3. `ref(toolToken)` and `ref(actionToken)` throw with a descriptive
- *    message — only request tokens carry a ref.
- *
- * The `CAPABILITY_REF` symbol's privacy is structural (a `unique symbol`
- * non-exported by name), so the runtime invariant "tool/action tokens
- * never carry a ref" is what `ref(...)` enforces in practice. If a future
- * factory accidentally attached the symbol, this test would not catch it
- * — that surface is fenced by the factories themselves at construction.
+ * 3. `ref(toolToken)` and `ref(actionToken)` fail at compile time — only
+ *    request tokens carry a ref.
  */
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
@@ -80,20 +74,14 @@ describe("ref(token)", () => {
     expect(r.output).toBe(outputSchema)
   })
 
-  test("throws for a tool token (no ref attached) with a descriptive message", () => {
+  test("ref accessor only accepts request tokens", () => {
     const token = tool({
       id: "test.tool",
       description: "ephemeral",
       params: Schema.Struct({ x: Schema.String }),
       execute: () => Effect.succeed("ok"),
     })
-
-    expect(() => ref(token)).toThrow(/test\.tool/)
-    expect(() => ref(token)).toThrow(/only request tokens carry a ref/)
-  })
-
-  test("throws for an action token (no ref attached)", () => {
-    const token = action({
+    const actionToken = action({
       id: "test.action",
       name: "Test Action",
       description: "ephemeral",
@@ -103,7 +91,9 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed({}),
     })
 
-    expect(() => ref(token)).toThrow(/test\.action/)
-    expect(() => ref(token)).toThrow(/only request tokens carry a ref/)
+    // @ts-expect-error Tool tokens are not request refs.
+    ref(token)
+    // @ts-expect-error Action tokens are not request refs.
+    ref(actionToken)
   })
 })

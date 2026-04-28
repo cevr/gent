@@ -1,38 +1,6 @@
-/**
- * Capability — runtime-erased callable endpoint behind the typed authoring
- * buckets (`tools`, `rpc`, `commands`).
- *
- * Authors use the `tool(...)`, `request(...)`, and `action(...)` factories.
- * Those factories return narrowed tokens that can only be slotted into their
- * matching `defineExtension` buckets; registry code consumes the erased shape
- * after package validation/runtime loading.
- *
- * `agent` stays as its own contribution kind (it is a configuration spec
- * with no handler — wrapping it as a Capability would be ceremony).
- *
- * Sequencing per `migrate-callers-then-delete-legacy-apis`:
- *   - C4.1: Capability shape + extension registry dispatch; legacy
- *     tool/query/mutation/command kinds untouched.
- *   - C4.2: migrate request read/write flows (only `task-tools` declared them then).
- *   - C4.3: migrate command (only `executor` declares them).
- *   - C4.4: migrate tool (~50 files).
- *   - C4.5: delete legacy types + per-kind registries.
- *
- * Audience surface:
- *
- *   - `"model"`         — LLM may invoke as a tool. Carries the optional
- *                         model-specific fields (`needs`, `promptSnippet`,
- *                         `promptGuidelines`, `interactive`).
- *   - `"agent-protocol"` — other server extensions may invoke via
- *                         `ctx.extension.request(...)`.
- *   - `"transport-public"` — any transport client (TUI, SDK, future web UI)
- *                         may invoke via the published transport surface.
- *   - `"human-slash"`   — slash-command surface in the TUI.
- *   - `"human-palette"` — command-palette surface in the TUI.
- *
- * `intent` is a typed mode replacing the old query/mutation split.
- * `intent: "read"` is enforced read-only via the lint rule that scans the
- * effect's R channel for write-tagged services.
+/** Shared extension callable primitives. Tool/action/request leaves are
+ * independent; this file holds only errors, host contexts, and typed request
+ * references used across those leaves.
  *
  * @module
  */
@@ -40,9 +8,6 @@
 import { type Effect, Schema } from "effect"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import { ExtensionId, type BranchId, type RpcId, type SessionId, type ToolCallId } from "./ids.js"
-import type { PermissionRule } from "./permission.js"
-import type { PromptSection } from "./prompt.js"
-import type { ToolNeed } from "./tool.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
@@ -62,18 +27,6 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
     capabilityId: Schema.String,
   },
 ) {}
-
-/** Who may invoke a Capability. Drives extension registry authorization. */
-export type Audience =
-  | "model"
-  | "agent-protocol"
-  | "transport-public"
-  | "human-slash"
-  | "human-palette"
-
-/** Read vs write. Lint enforces that `intent: "read"` Capabilities may not
- *  declare write-tagged services in their effect's R channel. */
-export type Intent = "read" | "write"
 
 /**
  * Per codex BLOCK on C4.1: a single fat `CapabilityContext extends
@@ -124,101 +77,17 @@ export interface ModelCapabilityContext extends ExtensionHostContext, Capability
  */
 export type CapabilityContext = ModelCapabilityContext
 
-/** Optional fields meaningful only when `audiences` includes `"model"`. */
-export interface ModelAudienceFields {
-  /** Service/resource needs this Capability touches while running. Read needs
-   *  can share; write needs exclude both reads and writes for the same tag. */
-  readonly needs?: ReadonlyArray<ToolNeed>
-  /** One-liner for the system prompt tool list. */
-  readonly promptSnippet?: string
-  /** Behavioral guidelines injected into the system prompt when this
-   *  Capability is active. */
-  readonly promptGuidelines?: ReadonlyArray<string>
-  /** If true, requires an interactive session — filtered out in headless
-   *  mode and subagent contexts. */
-  readonly interactive?: boolean
-}
+export type CapabilityEffect<Input = unknown, Output = unknown, R = never, E = CapabilityError> = {
+  bivarianceHack(input: Input, ctx: CapabilityContext): Effect.Effect<Output, E, R>
+}["bivarianceHack"]
 
-/** A typed callable endpoint contributed by an extension.
- *
- *  - `Input` and `Output` are validated at the host boundary
- *  - `R` is the service requirement of the `effect`; provided by the
- *    extension's contributed Resources
- *  - `intent: "read"` is lint-enforced read-only on the R channel
- *  - `audiences` drives dispatch — one Capability may be a tool AND a
- *    transport-public RPC by listing both
- */
-export interface CapabilityContribution<
-  Input = unknown,
-  Output = unknown,
-  R = never,
-  E = CapabilityError,
-> extends ModelAudienceFields {
-  /** Stable id (extension-local). Used for routing. */
-  readonly id: string
-  /** Human-readable description. For `audiences:["model"]`, this is sent to
-   *  the LLM as part of the tool schema (so the model knows what the
-   *  capability does); for other audiences it is informational. Distinct
-   *  from `promptSnippet`, which is the one-liner injected into the system
-   *  prompt's tool list. */
-  readonly description?: string
-  /** Who may invoke. */
-  readonly audiences: ReadonlyArray<Audience>
-  /** Read vs write. Lint-enforced on `R` for `"read"`. */
-  readonly intent: Intent
-  /** Display name for human-facing surfaces (slash menu, palette). Distinct
-   *  from `id` (routing key). Set by `action({ name })`; absent for tools and
-   *  requests. */
-  readonly displayName?: string
-  /** Category for palette grouping. Set by `action({ category })`. */
-  readonly category?: string
-  /** Keybind hint for the TUI. Display-only — TUI may ignore. Set by
-   *  `action({ keybind })`. */
-  readonly keybind?: string
-  /** Schema for validating `input` at the boundary. */
-  readonly input: Schema.Schema<Input>
-  /** Schema for validating `output` at the boundary. May be `Schema.Unknown`
-   *  when the audience does not require output validation (e.g., the LLM
-   *  consumes raw tool output). */
-  readonly output: Schema.Schema<Output>
-  /** Static system-prompt section bundled with this Capability. Rendered
-   *  whenever the Capability is loaded (no audience filter). For dynamic
-   *  prompt fragments (resolved per-turn from services), use a `Projection`
-   *  with `prompt:`. */
-  readonly prompt?: PromptSection
-  /** Permission rules bundled with this Capability — typically used by tools
-   *  whose execution should be gated by allow/deny patterns (e.g., `bash`).
-   *  Rules cross-reference the Capability by `tool:` field; bundling them on
-   *  the Capability keeps the rule and the Capability colocated. */
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
-  /** The Capability's effect. */
-  readonly effect: (input: Input, ctx: CapabilityContext) => Effect.Effect<Output, E, R>
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-export type AnyCapabilityContribution = CapabilityContribution<any, any, any, any>
-
-/**
- * Opaque token returned by the `tool()` / `request()` / `action()` factories.
- * The typed buckets on `ExtensionContributions` and `DefineExtensionInput`
- * accept their narrowed token shapes (`ToolToken`, `RequestToken`, `ActionToken`)
- * rather than raw `AnyCapabilityContribution`, so authors must go through a typed factory.
- * Internal registry code consumes erased `AnyCapabilityContribution` shapes only at
- * runtime-loaded boundaries.
- *
- * The `Input`/`Output` parameters carry through from the factory so a typed
- * `ref(token)` accessor can hand callers a `CapabilityRef<Input, Output>`
- * without restating the schema.
- */
-declare const CapabilityTokenBrand: unique symbol
-export interface CapabilityToken<
-  Input = unknown,
-  Output = unknown,
-> extends AnyCapabilityContribution {
-  readonly [CapabilityTokenBrand]: true
-  /** Typed read for `ref(token)`. Internal — do not consume directly. */
-  readonly [CAPABILITY_REF]?: CapabilityRef<Input, Output>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
+export type ErasedCapabilityEffect<E = any> = (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
+  input: any,
+  ctx: CapabilityContext,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
+) => Effect.Effect<any, E, any>
 
 /**
  * Reference object handed to callers so they can route + decode through the
@@ -228,29 +97,7 @@ export interface CapabilityToken<
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: ExtensionId
   readonly capabilityId: RpcId
-  readonly intent: Intent
+  readonly intent: "read" | "write"
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Decoder<Output, never>
-}
-
-/** Symbol under which `request({...})` attaches a typed `CapabilityRef` to its
- *  returned token. Read with `ref(token)`. Authors should not consume the
- *  symbol directly — the typed accessor preserves Input/Output parameters. */
-export const CAPABILITY_REF: unique symbol = Symbol("@gent/core/capability/ref")
-
-/**
- * Read the typed `CapabilityRef` attached to a `request(...)` token. Returns
- * undefined for tokens produced by `tool(...)` / `action(...)` (which do not
- * carry a ref).
- */
-export const ref = <Input, Output>(
-  token: CapabilityToken<Input, Output>,
-): CapabilityRef<Input, Output> => {
-  const stored = token[CAPABILITY_REF]
-  if (stored === undefined) {
-    throw new Error(
-      `ref(token): token "${token.id}" was not produced by request(...) — only request tokens carry a ref`,
-    )
-  }
-  return stored
 }

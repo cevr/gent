@@ -3,10 +3,8 @@
  *
  * Authors call `action({ id, name, description, surface, execute, ... })`.
  * Surface is `"slash" | "palette" | "both"` — presentation metadata
- * controlling where the action appears in the TUI. The `audiences[]` /
- * `intent` flag matrix is derived: actions always lower to
- * `audiences: [<surface-derived>]` and `intent: "write"` (UI affordances
- * always express user intent).
+ * controlling where the action appears in the TUI. Actions always lower to
+ * `intent: "write"` (UI affordances always express user intent).
  *
  * The handler context is `ModelCapabilityContext` (the wide host
  * surface), not the narrow `CapabilityCoreContext`, so human actions can
@@ -19,37 +17,38 @@
 
 import type { Effect, Schema } from "effect"
 import type {
-  AnyCapabilityContribution,
-  Audience,
+  CapabilityEffect,
   CapabilityError,
-  CapabilityToken,
+  ErasedCapabilityEffect,
   ModelCapabilityContext,
 } from "../capability.js"
 import { CommandId } from "../ids.js"
+import type { PermissionRule } from "../permission.js"
+import type { PromptSection } from "../prompt.js"
 
 export type ActionSurface = "slash" | "palette" | "both"
 
 /**
- * `ActionToken` — `action({...})` return type. Narrows `CapabilityToken` so
- * `audiences` is fixed to the human-surface cluster (`"human-slash"` and/or
- * `"human-palette"`) at the type level.
- * The `ExtensionContributions.commands` bucket only accepts this narrowed
- * shape — non-action capabilities (`tool`, `request`) cannot be slotted into
- * `commands:`, so the bucket name IS the audience discrimination (consistent
- * with W10-3a's `tools:` bucket).
- *
- * `ActionToken` extends `CapabilityToken`; runtime-loaded extensions can also
- * author capabilities directly without going through `action()`, but the
- * `commands:` bucket only accepts the branded shape.
+ * `ActionToken` — `action({...})` return type. The
+ * `ExtensionContributions.commands` bucket is the discrimination; non-action
+ * leaves (`tool`, `request`) cannot be slotted into `commands:`.
  */
 declare const ActionTokenBrand: unique symbol
-export interface ActionToken<Input = unknown, Output = unknown> extends CapabilityToken<
-  Input,
-  Output
-> {
+export interface ActionToken<Input = unknown, Output = unknown> {
   readonly [ActionTokenBrand]: true
   readonly id: CommandId
-  readonly audiences: ReadonlyArray<"human-slash" | "human-palette">
+  readonly surface: ReadonlyArray<"slash" | "palette">
+  readonly intent: "write"
+  readonly description: string
+  readonly displayName: string
+  readonly category?: string
+  readonly keybind?: string
+  readonly promptSnippet?: string
+  readonly prompt?: PromptSection
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  readonly input: Schema.Schema<Input>
+  readonly output: Schema.Schema<Output>
+  readonly effect: ErasedCapabilityEffect<CapabilityError>
 }
 
 /** Author-facing input to `action(...)`. */
@@ -81,32 +80,30 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   ) => Effect.Effect<Output, CapabilityError, R>
 }
 
-const surfaceToAudiences = (
-  surface: ActionSurface,
-): ReadonlyArray<"human-slash" | "human-palette"> => {
+const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "palette"> => {
   switch (surface) {
     case "slash":
-      return ["human-slash"]
+      return ["slash"]
     case "palette":
-      return ["human-palette"]
+      return ["palette"]
     case "both":
-      return ["human-slash", "human-palette"]
+      return ["slash", "palette"]
   }
 }
 
 /**
- * Lower an `ActionInput` to an `AnyCapabilityContribution` with the
- * derived `audiences[]` (one per surface) and `intent: "write"`.
+ * Lower an `ActionInput` to an `ActionToken` with the derived surfaces and
+ * `intent: "write"`.
  */
 export const action = <Input, Output, R>(
   input: ActionInput<Input, Output, R>,
 ): ActionToken<Input, Output> => {
-  const audiences: ReadonlyArray<Audience> = surfaceToAudiences(input.surface)
+  const surface = surfaceToSurfaces(input.surface)
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
   return {
     id: CommandId.make(input.id),
     description: input.description,
-    audiences,
+    surface,
     intent: "write",
     displayName: input.name,
     input: input.input,
@@ -115,6 +112,6 @@ export const action = <Input, Output, R>(
     ...(input.category !== undefined ? { category: input.category } : {}),
     ...(input.keybind !== undefined ? { keybind: input.keybind } : {}),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as AnyCapabilityContribution["effect"],
+    effect: input.execute as CapabilityEffect<Input, Output, R, CapabilityError>,
   } as unknown as ActionToken<Input, Output>
 }

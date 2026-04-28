@@ -645,7 +645,7 @@ describe("resolveExtensions — slash command discovery", () => {
     expect(resolved.modelCapabilities.has("run")).toBe(true)
     expect(resolved.modelCapabilities.get("run")?.description).toBe("project run override")
   })
-  test("model capability preserves all ModelAudienceFields", () => {
+  test("model capability preserves all tool metadata fields", () => {
     const cap = tool({
       id: "rich",
       description: "rich tool",

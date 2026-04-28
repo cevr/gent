@@ -502,7 +502,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC listCommands omits human-slash actions and lists slash requests", () =>
+  it.live("RPC listCommands omits local slash actions and lists slash requests", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-filter")
       const ext: LoadedExtension = {

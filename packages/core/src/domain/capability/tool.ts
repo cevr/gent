@@ -10,20 +10,18 @@
  * Replaces the previous two-step `tool(defineTool({...}))` pattern. The
  * old `defineTool` carrier dies in B11.5d.
  *
- * Lowering: produces an `AnyCapabilityContribution` with
- * `audiences: ["model"]` and the author-supplied `intent` (default
- * `"write"`). Read-only tools (`fs-tools/read.ts`, `grep.ts`,
- * `glob.ts`) pass `intent: "read"` so future read-only sub-agent gates
- * can filter honestly.
+ * Lowering: produces a branded `ToolToken` with the author-supplied `intent`
+ * (default `"write"`). Read-only tools (`fs-tools/read.ts`, `grep.ts`,
+ * `glob.ts`) pass `intent: "read"` so future read-only sub-agent gates can
+ * filter honestly.
  *
  * @module
  */
 
 import { type Effect, Schema } from "effect"
 import type {
-  AnyCapabilityContribution,
-  CapabilityToken,
-  Intent,
+  CapabilityEffect,
+  ErasedCapabilityEffect,
   ModelCapabilityContext,
 } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
@@ -32,25 +30,25 @@ import type { PromptSection } from "../prompt.js"
 import type { ToolNeed } from "../tool.js"
 
 /**
- * `ToolToken` — `tool({...})` return type. Narrows `CapabilityToken` so
- * `audiences` is fixed to `["model"]` at the type level. The `ExtensionContributions.tools`
- * bucket only accepts this narrowed shape — non-tool capabilities (`request`,
- * `action`) cannot be slotted into `tools:`, so the bucket name IS the
- * audience discrimination (consistent with C8: bucket name is the
- * discrimination, no runtime tag check needed).
- *
- * `ToolToken` extends `CapabilityToken`; runtime-loaded extensions can also
- * author capabilities directly without going through `tool()`, but the
- * `tools:` bucket only accepts the branded shape.
+ * `ToolToken` — `tool({...})` return type. The `ExtensionContributions.tools`
+ * bucket is the discrimination; non-tool leaves (`request`, `action`) cannot
+ * be slotted into `tools:`.
  */
 declare const ToolTokenBrand: unique symbol
-export interface ToolToken<Input = unknown, Output = unknown> extends CapabilityToken<
-  Input,
-  Output
-> {
+export interface ToolToken<Input = unknown, Output = unknown> {
   readonly [ToolTokenBrand]: true
   readonly id: ToolId
-  readonly audiences: readonly ["model"]
+  readonly description: string
+  readonly intent: "read" | "write"
+  readonly input: Schema.Schema<Input>
+  readonly output: Schema.Schema<Output>
+  readonly needs?: ReadonlyArray<ToolNeed>
+  readonly promptSnippet?: string
+  readonly promptGuidelines?: ReadonlyArray<string>
+  readonly interactive?: boolean
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  readonly prompt?: PromptSection
+  readonly effect: ErasedCapabilityEffect
 }
 
 /** Context passed to `tool({...}).execute`. Same shape as the wide
@@ -82,7 +80,7 @@ export interface ToolInput<
   /** Read vs write. Defaults to `"write"`. Read-only tools (e.g. `fs-tools/read`,
    *  `grep`, `glob`) should pass `intent: "read"` so that future read-only
    *  sub-agent gates can filter honestly. */
-  readonly intent?: Intent
+  readonly intent?: "read" | "write"
   /**
    * Schema for `execute` input. Must have no context requirement so the
    * LLM-bridge can decode JSON synchronously without resolving services.
@@ -118,14 +116,9 @@ export interface ToolInput<
 }
 
 /**
- * Lower a `ToolInput` to an `AnyCapabilityContribution` with
- * `audiences: ["model"], intent: "write"`. The author never sees the
- * audience/intent fields.
+ * Lower a `ToolInput` to a `ToolToken` with `intent: "write"` by default.
  *
  * Generic over `<Params, Result, Error, Deps>` so authors keep their
- * typed handler shape; the leaf is widened to `AnyCapabilityContribution`
- * at the bucket boundary.
- *
  * The legacy `defineTool` carrier was deleted in B11.5d.
  */
 export const tool = <
@@ -141,7 +134,6 @@ export const tool = <
   ({
     id: ToolId.make(input.id),
     description: input.description,
-    audiences: ["model"],
     intent: input.intent ?? "write",
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     input: input.params as Schema.Schema<unknown>,
@@ -158,5 +150,5 @@ export const tool = <
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as AnyCapabilityContribution["effect"],
+    effect: input.execute as CapabilityEffect<Schema.Schema.Type<Params>, Result, Deps, Error>,
   }) as unknown as ToolToken<Schema.Schema.Type<Params>, Result>

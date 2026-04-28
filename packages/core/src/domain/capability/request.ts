@@ -6,9 +6,9 @@
  *   - `request({ id, extensionId, input, output, intent: "write", execute })` for write RPCs
  *
  * Replaces the previous `query(...)` + `mutation(...)` pair. The lowering
- * collapses into one shape with `audiences: ["agent-protocol",
- * "transport-public"]` plus the chosen `intent`. Extension registries
- * dispatch by factory-origin metadata; authors never write the audience array.
+ * collapses into one public request leaf plus the chosen `intent`. Extension
+ * registries dispatch by factory-origin metadata; authors never write an
+ * audience array.
  *
  * Read-fence: `intent: "read"` capabilities have `R extends ReadOnlyTag`
  * (a structural narrowing of the constraint to the same brand projection
@@ -21,37 +21,41 @@
 import { type Effect, type Schema } from "effect"
 import { RpcId, type ExtensionId } from "../ids.js"
 import {
-  CAPABILITY_REF,
-  type AnyCapabilityContribution,
+  type CapabilityContext,
+  type ErasedCapabilityEffect,
   type CapabilityRef,
-  type CapabilityToken,
   type CapabilityCoreContext,
   type CapabilityError,
   type ModelCapabilityContext,
 } from "../capability.js"
+import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
 
 /**
- * `RequestToken` — `request({...})` return type. Narrows `CapabilityToken` so
- * `audiences` is fixed to `["agent-protocol", "transport-public"]` at the
- * type level. The `ExtensionContributions.rpc` bucket only accepts this
- * narrowed shape — non-request capabilities (`tool`, `action`) cannot be
- * slotted into `rpc:`, so the bucket name IS the audience discrimination
- * (consistent with W10-3a's `tools:` and W10-3c's `commands:` buckets).
- *
- * `RequestToken` extends `CapabilityToken`; runtime-loaded extensions can
- * also author capabilities directly without going through `request()`, but
- * the `rpc:` bucket only accepts the branded shape.
+ * `RequestToken` — `request({...})` return type. The
+ * `ExtensionContributions.rpc` bucket is the discrimination; non-request
+ * leaves (`tool`, `action`) cannot be slotted into `rpc:`.
  */
+const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
 declare const RequestTokenBrand: unique symbol
-export interface RequestToken<Input = unknown, Output = unknown> extends CapabilityToken<
-  Input,
-  Output
-> {
+export interface RequestToken<Input = unknown, Output = unknown> {
   readonly [RequestTokenBrand]: true
   readonly id: RpcId
-  readonly audiences: ReadonlyArray<"agent-protocol" | "transport-public" | "human-slash">
+  readonly intent: "read" | "write"
+  readonly public: true
+  readonly slash?: RequestInputBase<Input, Output>["slash"]
+  readonly description?: string
+  readonly displayName?: string
+  readonly category?: string
+  readonly keybind?: string
+  readonly promptSnippet?: string
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  readonly prompt?: PromptSection
+  readonly input: Schema.Schema<Input>
+  readonly output: Schema.Schema<Output>
+  readonly effect: ErasedCapabilityEffect<CapabilityError>
+  readonly [REQUEST_REF]: CapabilityRef<Input, Output>
 }
 
 /** Fields shared by both read- and write-intent request inputs. */
@@ -112,9 +116,8 @@ export interface WriteRequestInput<
 
 /**
  * Lower a `ReadRequestInput | WriteRequestInput` to a typed
- * `CapabilityToken<Input, Output>` with `audiences: ["agent-protocol",
- * "transport-public"]` and the chosen `intent`. The returned token also
- * carries a typed `CapabilityRef<Input, Output>` under `CAPABILITY_REF`,
+ * `RequestToken<Input, Output>` with the chosen `intent`. The returned token
+ * also carries a typed `CapabilityRef<Input, Output>` under a local symbol,
  * read via the `ref(token)` accessor — so callers no longer hand-roll a
  * parallel `*Ref` const next to every request.
  *
@@ -137,7 +140,10 @@ export function request(input: {
   readonly prompt?: PromptSection
   readonly description?: string
   readonly slash?: RequestInputBase<unknown, unknown>["slash"]
-  readonly execute: AnyCapabilityContribution["effect"]
+  readonly execute: (
+    input: unknown,
+    ctx: CapabilityContext,
+  ) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestToken {
   const rpcId = RpcId.make(input.id)
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
@@ -156,11 +162,9 @@ export function request(input: {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
   return {
     id: rpcId,
-    audiences:
-      input.slash === undefined
-        ? ["agent-protocol", "transport-public"]
-        : ["agent-protocol", "transport-public", "human-slash"],
     intent: input.intent,
+    public: true,
+    ...(input.slash !== undefined ? { slash: input.slash } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.slash?.name !== undefined ? { displayName: input.slash.name } : {}),
     ...(input.slash?.description !== undefined ? { description: input.slash.description } : {}),
@@ -170,6 +174,10 @@ export function request(input: {
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: input.execute,
-    [CAPABILITY_REF]: refValue,
+    [REQUEST_REF]: refValue,
   } as unknown as RequestToken
 }
+
+export const ref = <Input, Output>(
+  token: RequestToken<Input, Output>,
+): CapabilityRef<Input, Output> => token[REQUEST_REF]

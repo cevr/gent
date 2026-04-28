@@ -7,7 +7,6 @@ import type {
   CapabilityCoreContext,
   CapabilityError,
   CapabilityNotFoundError,
-  Intent,
 } from "../../domain/capability.js"
 import {
   CapabilityError as CapabilityErrorClass,
@@ -90,7 +89,7 @@ interface RegisteredRpcEntry {
 type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | RegisteredRpcEntry
 
 export interface CapabilityRunOptions {
-  readonly intent?: Intent
+  readonly intent?: "read" | "write"
 }
 
 export interface CompiledRpcRegistry {
@@ -588,10 +587,10 @@ export const listSlashCommands = (
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
     if (entry.kind !== "command" && entry.kind !== "rpc") continue
-    const cap = entry.capability
-    if (!cap.audiences.includes("human-slash")) continue
+    if (entry.kind === "command" && !entry.capability.surface.includes("slash")) continue
+    if (entry.kind === "rpc" && entry.capability.slash === undefined) continue
     if (options?.publicOnly === true && entry.kind !== "rpc") continue
-    commands.push(capabilityToCommand(entry.extensionId, cap))
+    commands.push(capabilityToCommand(entry.extensionId, entry.capability))
   }
   return commands
 }

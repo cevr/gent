@@ -11,7 +11,7 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-// Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
+// Tool .effect crosses the erased runtime leaf boundary in tool().
 // Tests provide everything via ctx; narrow R for it.live compatibility.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>

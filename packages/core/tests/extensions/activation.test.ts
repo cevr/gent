@@ -166,10 +166,9 @@ describe("extension activation isolation", () => {
       }),
   )
 
-  // C4.4 BLOCK: validation must catch capability/capability AND tool/capability
-  // collisions in addition to tool/tool. After the C4.4 tool bridge, a
-  // capability with `audiences:["model"]` becomes a tool by `cap.id` — the
-  // resolver overwrites silently in last-write-wins order without this check.
+  // C4.4 BLOCK: validation must catch cross-bucket capability collisions in
+  // addition to tool/tool. The resolver overwrites silently in last-write-wins
+  // order without this check.
 
   // Raw token-shaped leaves bypass the `tool()/action()/request()` factories
   // (whose runtime guards would catch malformed inputs at construction). The
@@ -181,7 +180,6 @@ describe("extension activation isolation", () => {
     ({
       id,
       ...(description !== undefined ? { description } : {}),
-      audiences: ["model"],
       intent: "write",
       input: Schema.Unknown,
       output: Schema.Unknown,
@@ -192,8 +190,8 @@ describe("extension activation isolation", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the RequestToken brand
     ({
       id,
-      audiences: ["agent-protocol", "transport-public"],
       intent: "read",
+      public: true,
       input: Schema.Unknown,
       output: Schema.Unknown,
       effect: () => Effect.succeed(undefined),
@@ -271,8 +269,8 @@ describe("extension activation isolation", () => {
 
   it.live("validation accepts non-model capability without description", () =>
     Effect.gen(function* () {
-      // Non-model capabilities don't ship to the LLM, so empty description
-      // is fine (the field is optional). Only `audiences:["model"]` requires.
+      // RPC requests don't ship to the LLM as tools, so empty description is
+      // fine. Only model-callable tool leaves require a description.
       const result = yield* validateLoadedExtensions([
         makeLoaded("rpc-no-desc", { rpc: [rawRpcLeaf("internal")] }),
       ])

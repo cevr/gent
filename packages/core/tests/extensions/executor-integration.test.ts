@@ -47,7 +47,7 @@ import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
-// Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
+// Tool .effect crosses the erased runtime leaf boundary in tool().
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>

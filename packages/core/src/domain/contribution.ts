@@ -76,22 +76,20 @@ export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. Bucket name IS the
-   * audience: every entry is a `ToolToken` with `audiences: ["model"]`
-   * — no runtime tag check needed downstream.
+   * dispatch surface: every entry is a `ToolToken` — no runtime tag check
+   * needed downstream.
    */
   readonly tools?: ReadonlyArray<ToolToken>
   /**
    * Human-driven UI commands authored via `action({...})`. Bucket name IS the
-   * audience cluster: every entry is an `ActionToken` whose `audiences` is a
-   * subset of `{"human-slash", "human-palette"}` — no runtime tag check
+   * dispatch surface: every entry is an `ActionToken` — no runtime tag check
    * needed downstream.
    */
   readonly commands?: ReadonlyArray<ActionToken>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
-   * Bucket name IS the audience cluster: every entry is a `RequestToken` with
-   * `audiences: ["agent-protocol", "transport-public"]` — no runtime tag
-   * check needed downstream.
+   * Bucket name IS the dispatch surface: every entry is a `RequestToken` — no
+   * runtime tag check needed downstream.
    */
   readonly rpc?: ReadonlyArray<RequestToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
@@ -109,25 +107,25 @@ export interface ExtensionContributions {
 // ── Bucket readers ──
 
 /**
- * Read all model-audience capabilities from a contributions bag. Bucket name
- * IS the audience discrimination — every entry in `tools:` has
- * `audiences: ["model"]` by construction.
+ * Read all model-callable capabilities from a contributions bag. Bucket name
+ * IS the dispatch discrimination — every entry in `tools:` is a tool leaf by
+ * construction.
  */
 export const modelCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ToolToken> =>
   contribs.tools ?? []
 
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
- * bag. Bucket name IS the audience discrimination — every entry in `commands:`
- * has audiences ⊆ `{"human-slash", "human-palette"}` by construction.
+ * bag. Bucket name IS the dispatch discrimination — every entry in
+ * `commands:` is an action leaf by construction.
  */
 export const humanCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ActionToken> =>
   contribs.commands ?? []
 
 /**
  * Read all extension-to-extension RPC capabilities from a contributions bag.
- * Bucket name IS the audience discrimination — every entry in `rpc:` has
- * `audiences: ["agent-protocol", "transport-public"]` by construction.
+ * Bucket name IS the dispatch discrimination — every entry in `rpc:` is a
+ * request leaf by construction.
  */
 export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<RequestToken> =>
   contribs.rpc ?? []

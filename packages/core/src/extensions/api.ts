@@ -203,7 +203,7 @@ export {
 export { ActorEngine } from "../runtime/extensions/actor-engine.js"
 export { Receptionist } from "../runtime/extensions/receptionist.js"
 
-// B11.5 typed capability factories — `audiences[] + intent` flag matrix
+// B11.5 typed capability factories — the old generic audience flag matrix
 // is gone from the author surface. Extension registries dispatch by
 // factory-origin metadata baked into the lowering. The B11.5 migration
 // window closed in B11.5d; the legacy `defineTool` smart constructor
@@ -217,6 +217,7 @@ export {
   type ToolToken,
 } from "../domain/capability/tool.js"
 export {
+  ref,
   request,
   type ReadRequestInput,
   type RequestToken,
@@ -234,7 +235,7 @@ export type {
   ModelCapabilityContext,
   CapabilityRef,
 } from "../domain/capability.js"
-export { ref, CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
+export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,
@@ -286,22 +287,21 @@ export interface DefineExtensionInput {
   readonly resources?: FieldSpec<AnyResourceContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
-   * audience: every entry must be a `ToolToken` (i.e. `audiences: ["model"]`)
-   * — `request({...})` and `action({...})` outputs cannot be slotted here.
+   * dispatch surface: every entry must be a `ToolToken` — `request({...})`
+   * and `action({...})` outputs cannot be slotted here.
    */
   readonly tools?: FieldSpec<ToolToken>
   /**
    * Human-driven UI commands authored via `action({...})`. The bucket name is
-   * the audience cluster: every entry must be an `ActionToken` (i.e.
-   * `audiences ⊆ {"human-slash", "human-palette"}`) —
-   * `tool({...})` and `request({...})` outputs cannot be slotted here.
+   * the dispatch surface: every entry must be an `ActionToken` — `tool({...})`
+   * and `request({...})` outputs cannot be slotted here.
    */
   readonly commands?: FieldSpec<ActionToken>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
-   * The bucket name is the audience cluster: every entry must be a
-   * `RequestToken` (i.e. `audiences: ["agent-protocol", "transport-public"]`)
-   * — `tool({...})` and `action({...})` outputs cannot be slotted here.
+   * The bucket name is the dispatch surface: every entry must be a
+   * `RequestToken` — `tool({...})` and `action({...})` outputs cannot be
+   * slotted here.
    */
   readonly rpc?: FieldSpec<RequestToken>
   readonly agents?: FieldSpec<AgentDefinition>
@@ -381,11 +381,9 @@ const resolveField = <A>(
  * messages is `Extension "@x" <field>[<i>] invalid: <reason>`.
  *
  * Invariants enforced here:
- *   - Capability `audiences` must be non-empty.
- *   - `audiences:["model"]` capabilities must have a non-empty description
- *     (model-audience disclosure requirement; was activation.ts:282 check).
- *   - Intra-extension capability/agent/driver id/name collisions are
- *     surfaced (cross-extension collisions are scope-precedence's concern).
+ *   - Tool leaves must have a non-empty description.
+ *   - Intra-extension capability/agent/driver id/name collisions are surfaced
+ *     (cross-extension collisions are scope-precedence's concern).
  */
 
 /**
@@ -408,10 +406,8 @@ const checkBucketIds = (
 }
 
 /**
- * Tools require a non-empty description (the model sees it as the tool
- * description). `ToolToken.audiences` is the literal `readonly ["model"]` at
- * the type level, so empty-audiences / missing-model-audience branches are
- * statically unreachable here.
+ * Tools require a non-empty description because the model sees it as the tool
+ * description. Bucket shape makes non-tool leaves unreachable here.
  */
 const checkToolDescriptions = (
   tools: ReadonlyArray<{ readonly id: string; readonly description?: string }>,

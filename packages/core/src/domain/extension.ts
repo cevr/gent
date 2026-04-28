@@ -351,7 +351,7 @@ export interface RequestResult<State, Reply> extends ReduceResult<State> {
 
 // `CommandContribution` (server slash commands) was deleted in C8 — no
 // extension contributes one anymore (executor migrated to a Capability with
-// `audiences:["human-slash"]` in C4.3). The TUI's separate client-facet
+// slash-visible action/request surfaces in C4.3). The TUI's separate client-facet
 // `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
