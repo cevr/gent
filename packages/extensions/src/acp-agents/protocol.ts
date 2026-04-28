@@ -137,14 +137,46 @@ export const makeAcpConnection = (
 
     const write = (msg: string) => Queue.offer(writeQueue, msg).pipe(Effect.asVoid)
 
-    // Writer fiber — drains writeQueue to stdin sink
+    /**
+     * Atomically seal `stateRef` to `closed` and return the pending map
+     * for the caller to fail. Only the first caller wins; subsequent
+     * calls observe `closed` and get `undefined`. Used by the public
+     * `close` and by the writer/reader stdio-error handlers — without
+     * this, a stdio failure would leave pending RPC Deferreds parked
+     * forever (they resolve only via `handleResponse`, which the dead
+     * reader will never run).
+     */
+    const sealAndClaimPending = Ref.modify(
+      stateRef,
+      (s): [HashMap.HashMap<RequestId, PendingRequest> | undefined, ConnState] => {
+        if (s._tag === "closed") return [undefined, s]
+        return [s.pending, { _tag: "closed" }]
+      },
+    )
+
+    const failPendingWith = (reason: string) =>
+      Effect.gen(function* () {
+        const claimed = yield* sealAndClaimPending
+        if (claimed === undefined) return false
+        for (const [, entry] of claimed) {
+          yield* Deferred.fail(entry.resolve, new AcpClosedError({ reason }))
+        }
+        yield* PubSub.shutdown(updatesPubSub).pipe(Effect.ignore)
+        return true
+      })
+
+    // Writer fiber — drains writeQueue to stdin sink. On stdio failure
+    // we must seal `stateRef` and fail every pending Deferred; otherwise
+    // an `rpc.prompt(...)` call already past the registration point
+    // parks forever and the executor's `Stream.interruptWhen(promptDone)`
+    // never fires.
     const writerFiber = yield* Stream.fromQueue(writeQueue).pipe(
       Stream.map((line) => encoder.encode(line)),
       Stream.run(proc.stdin),
       Effect.catchEager((err: PlatformError) =>
         Effect.gen(function* () {
-          const state = yield* Ref.get(stateRef)
-          if (state._tag !== "closed") {
+          const sealed = yield* failPendingWith(`writer error: ${String(err)}`)
+          if (sealed) {
             yield* Effect.logWarning("acp: writer error").pipe(
               Effect.annotateLogs({ error: String(err) }),
             )
@@ -271,7 +303,14 @@ export const makeAcpConnection = (
         }
       })
 
-    // Reader fiber — reads stdout line by line
+    // Reader fiber — reads stdout line by line. Same hand-off as the
+    // writer: a stdio-error must fail pending Deferreds, otherwise a
+    // pending RPC parks forever.
+    //
+    // `Stream.runDrain` also completes naturally when stdout ends (e.g.
+    // the agent process exits without an error). Treat that as a
+    // closure too — without sealing here, the caller's pending RPC
+    // would never see the broken pipe.
     const readerFiber = yield* proc.stdout.pipe(
       Stream.decodeText(),
       splitLines,
@@ -279,14 +318,15 @@ export const makeAcpConnection = (
       Stream.runDrain,
       Effect.catchEager((err: PlatformError) =>
         Effect.gen(function* () {
-          const state = yield* Ref.get(stateRef)
-          if (state._tag !== "closed") {
+          const sealed = yield* failPendingWith(`reader error: ${String(err)}`)
+          if (sealed) {
             yield* Effect.logWarning("acp: reader error").pipe(
               Effect.annotateLogs({ error: String(err) }),
             )
           }
         }),
       ),
+      Effect.tap(() => failPendingWith("stdout closed")),
       Effect.forkScoped,
     )
 
@@ -340,18 +380,7 @@ export const makeAcpConnection = (
       // as a typed error in the executor, not an interrupt.
       close: (reason = "connection closed") =>
         Effect.gen(function* () {
-          const claimed = yield* Ref.modify(
-            stateRef,
-            (s): [HashMap.HashMap<RequestId, PendingRequest> | undefined, ConnState] => {
-              if (s._tag === "closed") return [undefined, s]
-              return [s.pending, { _tag: "closed" }]
-            },
-          )
-          if (claimed === undefined) return
-          for (const [, entry] of claimed) {
-            yield* Deferred.fail(entry.resolve, new AcpClosedError({ reason }))
-          }
-          yield* PubSub.shutdown(updatesPubSub)
+          yield* failPendingWith(reason)
           yield* Fiber.interrupt(writerFiber)
           yield* Fiber.interrupt(readerFiber)
         }),
