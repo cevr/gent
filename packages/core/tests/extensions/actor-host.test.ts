@@ -14,6 +14,7 @@ import { Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schema, Scope } 
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import {
   ActorHost,
+  ActorHostFailures,
   namespacePersistenceKey,
   parseNamespacedPersistenceKey,
 } from "@gent/core/runtime/extensions/actor-host"
@@ -23,8 +24,11 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ResolvedExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionId } from "@gent/core/domain/ids"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-storage"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import {
+  ActorPersistenceStorage,
+  type ActorPersistenceStorageService,
+} from "@gent/core/storage/actor-persistence-storage"
 const PingMsg = TaggedEnumClass("PingMsg", {
   Bump: {},
   Get: TaggedEnumClass.askVariant<number>()({}),
@@ -337,6 +341,73 @@ describe("ActorHost", () => {
         })
         expect(observed).toBe(3)
       }).pipe(Effect.scoped)
+    }),
+  )
+  it.live("malformed restored state fails closed without overwriting the durable row", () =>
+    Effect.gen(function* () {
+      const profileId = "test-malformed-restore"
+      const persistedBehavior = makePingBehavior("counter")
+      const resolved = makeResolved([makeLoaded("@test/malformed", [persistedBehavior])])
+      const storageLayer = Storage.MemoryWithSql()
+      const namespacedKey = namespacePersistenceKey("@test/malformed", "counter")
+      yield* Effect.gen(function* () {
+        const ctx = yield* Layer.build(storageLayer)
+        const storage = Context.get(ctx, ActorPersistenceStorage)
+        yield* storage.saveActorState({
+          profileId,
+          persistenceKey: namespacedKey,
+          stateJson: "{bad-json",
+        })
+        const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId,
+          writeInterval: Duration.millis(1),
+        }).pipe(
+          Layer.provideMerge(ActorEngine.Live),
+          Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
+        )
+        const hostScope = yield* Scope.make()
+        const hostCtx = yield* Layer.buildWithScope(hostLayer, hostScope)
+        const reg = Context.get(hostCtx, Receptionist)
+        const refs = yield* reg.find(PingService)
+        expect(refs.length).toBe(0)
+        const failures = yield* Context.get(hostCtx, ActorHostFailures).snapshot
+        expect(failures.length).toBe(1)
+        expect(failures[0]?.extensionId).toBe("@test/malformed")
+        expect(failures[0]?.error).toContain("restore parse failed")
+        yield* Scope.close(hostScope, Exit.void)
+        const row = yield* storage.loadActorState({ profileId, persistenceKey: namespacedKey })
+        expect(row?.stateJson).toBe("{bad-json")
+      }).pipe(Effect.scoped)
+    }),
+  )
+  it.live("snapshot write failures are recorded in ActorHostFailures", () =>
+    Effect.gen(function* () {
+      const profileId = "test-write-failure"
+      const persistedBehavior = makePingBehavior("counter")
+      const resolved = makeResolved([makeLoaded("@test/write-failure", [persistedBehavior])])
+      const failingStorage: ActorPersistenceStorageService = {
+        saveActorState: () =>
+          Effect.fail(new StorageError({ message: "intentional actor save failure" })),
+        loadActorState: () => Effect.succeed(undefined),
+        listActorStatesForProfile: () => Effect.succeed([]),
+        deleteActorStatesForProfile: () => Effect.void,
+      }
+      const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+        profileId,
+        writeInterval: Duration.millis(1),
+      }).pipe(
+        Layer.provideMerge(ActorEngine.Live),
+        Layer.provideMerge(ActorPersistenceStorage.fromStorage(failingStorage)),
+      )
+      const failures = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const hostCtx = yield* Layer.build(hostLayer)
+          yield* Effect.sleep(Duration.millis(10))
+          return yield* Context.get(hostCtx, ActorHostFailures).snapshot
+        }),
+      )
+      expect(failures.some((f) => f.extensionId === "@test/write-failure")).toBe(true)
+      expect(failures.some((f) => f.error.includes("persist write failed"))).toBe(true)
     }),
   )
   it.live("flushes the trailing-window state on host scope close", () =>

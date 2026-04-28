@@ -241,7 +241,7 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("validation rejects model-audience capability with empty description", () =>
+  it.live("validation rejects model tool with empty description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
         makeLoaded("missing-desc", { tools: [rawToolLeaf("describeless", undefined)] }),
@@ -250,12 +250,13 @@ describe("extension activation isolation", () => {
       expect(result.active).toEqual([])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("missing-desc"))
-      expect(result.failed[0]?.error).toContain("describeless")
-      expect(result.failed[0]?.error).toContain("description")
+      expect(result.failed[0]?.error).toBe(
+        'Tool "describeless" is missing a non-empty description (the LLM tool schema requires one).',
+      )
     }),
   )
 
-  it.live("validation rejects model-audience capability with whitespace-only description", () =>
+  it.live("validation rejects model tool with whitespace-only description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
         makeLoaded("blank-desc", { tools: [rawToolLeaf("blanky", "   \t\n")] }),

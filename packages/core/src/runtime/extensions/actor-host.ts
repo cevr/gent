@@ -8,17 +8,18 @@
  * to the host layer's scope: when the runtime tears down, the engine's
  * scope-close interrupts every spawned actor fiber.
  *
- * Failure surfacing: a failing spawn does not collapse the layer — the
- * runtime should keep running with the actors that did spawn cleanly.
- * Failures are recorded into an `ActorHostFailures` snapshot so the
- * profile composer can route them into `RuntimeProfile.failed` and
- * make them visible to status / health surfaces. Pure log-and-skip
- * would leave the failure invisible to the rest of the system.
+ * Failure surfacing: a failing spawn or durable actor persistence failure
+ * does not collapse the layer — the runtime should keep running with the actors
+ * that did start cleanly. Failures are recorded into an `ActorHostFailures`
+ * snapshot so the profile composer can route them into `RuntimeProfile.failed`
+ * and make them visible to status / health surfaces. Pure log-and-skip would
+ * leave the failure invisible to the rest of the system.
  */
 
 import { Cause, Context, Effect, Layer, Ref, Schedule } from "effect"
 import type { Duration } from "effect"
 import type { Behavior, JsonValueT } from "../../domain/actor.js"
+import { parseJsonUnknown } from "../../domain/guards.js"
 import {
   ActorPersistenceStorage,
   type ActorPersistenceStorageService,
@@ -134,6 +135,24 @@ const recordSpawnFailure = (
     )
   })
 
+const recordActorHostFailure = (
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
+  extensionId: string,
+  error: string,
+  event: string,
+  annotations: Record<string, unknown> = {},
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* Ref.update(failuresRef, (xs) => [...xs, { extensionId, error }])
+    yield* Effect.logWarning(event).pipe(
+      Effect.annotateLogs({
+        ...annotations,
+        extensionId,
+        error,
+      }),
+    )
+  })
+
 const spawnWithoutPersistence = (
   resolved: ResolvedExtensions,
   failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
@@ -154,42 +173,85 @@ const spawnWithoutPersistence = (
   })
 
 /**
- * Hydrate one durable behavior's restoredState from
- * `ActorPersistenceStorage`. Returns `undefined` for ephemeral
- * behaviors, missing rows, malformed JSON, and storage errors —
- * a misencoded snapshot must not block the actor from starting at
- * all; the actor falls back to `initialState`.
+ * Hydrate one durable behavior's restoredState from `ActorPersistenceStorage`.
+ * Missing rows are normal and fall back to `initialState`. Malformed JSON or
+ * storage failures fail closed: the actor is skipped and the failure is exposed
+ * through `ActorHostFailures`, so a corrupt/unreadable durable row cannot be
+ * replaced by a fresh initial-state snapshot.
  */
+type RestoredActorState =
+  | { readonly status: "ephemeral" }
+  | { readonly status: "missing" }
+  | { readonly status: "restored"; readonly state: JsonValueT }
+  | { readonly status: "failed" }
+
+type ParsedActorState =
+  | { readonly ok: true; readonly value: JsonValueT }
+  | { readonly ok: false; readonly error: string }
+
+const isJsonValueT = (value: unknown): value is JsonValueT => {
+  if (value === null) return true
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+      return true
+    case "object":
+      if (Array.isArray(value)) return value.every(isJsonValueT)
+      return Object.values(value).every(isJsonValueT)
+    default:
+      return false
+  }
+}
+
+const parseActorStateJson = (raw: string): ParsedActorState => {
+  try {
+    const parsed = parseJsonUnknown(raw)
+    if (isJsonValueT(parsed)) return { ok: true, value: parsed }
+    return { ok: false, error: "actor snapshot JSON is not a JsonValueT" }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
 const loadRestoredState = (
   storage: ActorPersistenceStorageService,
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
   profileId: string,
   extensionId: string,
   namespaced: Behavior<unknown, unknown, never>,
-): Effect.Effect<JsonValueT | undefined> => {
-  if (namespaced.persistence === undefined) return Effect.succeed(undefined)
+): Effect.Effect<RestoredActorState> => {
+  if (namespaced.persistence === undefined) return Effect.succeed({ status: "ephemeral" })
   const key = namespaced.persistence.key
   return storage.loadActorState({ profileId, persistenceKey: key }).pipe(
     Effect.flatMap((row) => {
-      if (row === undefined) return Effect.succeed<JsonValueT | undefined>(undefined)
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- stateJson is the encoded form of behavior.persistence.state; engine decodes via Schema before use, so any decode mismatch surfaces as ActorRestoreError there
-        return Effect.succeed(JSON.parse(row.stateJson) as JsonValueT)
-      } catch (e) {
-        return Effect.logWarning("actor-host.restore.parse-failed").pipe(
-          Effect.annotateLogs({ extensionId, persistenceKey: key, error: String(e) }),
-          Effect.as<JsonValueT | undefined>(undefined),
-        )
+      if (row === undefined) return Effect.succeed<RestoredActorState>({ status: "missing" })
+      const parsed = parseActorStateJson(row.stateJson)
+      if (parsed.ok) {
+        return Effect.succeed<RestoredActorState>({
+          status: "restored",
+          state: parsed.value,
+        })
       }
+      return recordActorHostFailure(
+        failuresRef,
+        extensionId,
+        `restore parse failed for ${key}: ${parsed.error}`,
+        "actor-host.restore.parse-failed",
+        { persistenceKey: key },
+      ).pipe(Effect.as<RestoredActorState>({ status: "failed" }))
     }),
     Effect.catchCause((cause) =>
-      Effect.logWarning("actor-host.restore.load-failed").pipe(
-        Effect.annotateLogs({
+      recordActorHostFailure(
+        failuresRef,
+        extensionId,
+        `restore load failed for ${key}: ${String(Cause.squash(cause))}`,
+        "actor-host.restore.load-failed",
+        {
           extensionId,
           persistenceKey: key,
-          error: String(Cause.squash(cause)),
-        }),
-        Effect.as<JsonValueT | undefined>(undefined),
-      ),
+        },
+      ).pipe(Effect.as<RestoredActorState>({ status: "failed" })),
     ),
   )
 }
@@ -206,15 +268,20 @@ const spawnWithPersistence = (
       const behaviors = ext.contributions.actors ?? []
       for (const behavior of behaviors) {
         const namespaced = withNamespacedPersistenceKey(behavior, ext.manifest.id)
-        const restoredState = yield* loadRestoredState(
+        const restored = yield* loadRestoredState(
           storage,
+          failuresRef,
           persistence.profileId,
           ext.manifest.id,
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erase Behavior generics for the load helper; persistence schema pin is on the engine side
           namespaced as Behavior<unknown, unknown, never>,
         )
+        if (restored.status === "failed") continue
         yield* engine
-          .spawn(namespaced, restoredState !== undefined ? { restoredState } : undefined)
+          .spawn(
+            namespaced,
+            restored.status === "restored" ? { restoredState: restored.state } : undefined,
+          )
           .pipe(
             Effect.catchCause((cause) => recordSpawnFailure(failuresRef, ext.manifest.id, cause)),
           )
@@ -229,14 +296,14 @@ const spawnWithPersistence = (
  * writer AND by the on-close finalizer so a graceful shutdown does
  * not leak the last interval's mutations.
  *
- * Typed failures (`ActorSnapshotError`, `StorageError`) log + skip per
- * row so a single misencoded actor or transient IO failure does not
- * stall the rest. Interrupts pass through `catchEager` untouched, so
- * scope teardown stops the writer immediately without an extra log
- * cycle — the actor-engine's per-actor permit guarantees no torn row.
+ * Typed failures (`ActorSnapshotError`, `StorageError`) are recorded in
+ * `ActorHostFailures` and skipped. Interrupts pass through `catchEager`
+ * untouched, so scope teardown stops the writer immediately without an extra
+ * log cycle — the actor-engine's per-actor permit guarantees no torn row.
  */
 const writeAllActorsOnce = (
   persistence: ActorHostPersistence,
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
 ): Effect.Effect<void, never, ActorEngine | ActorPersistenceStorage> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
@@ -245,10 +312,12 @@ const writeAllActorsOnce = (
       .snapshot()
       .pipe(
         Effect.catchEager((error) =>
-          Effect.logWarning("actor-host.snapshot.failed").pipe(
-            Effect.annotateLogs({ error: String(error) }),
-            Effect.as(new Map<string, unknown>()),
-          ),
+          recordActorHostFailure(
+            failuresRef,
+            "actor-host",
+            `snapshot failed: ${String(error)}`,
+            "actor-host.snapshot.failed",
+          ).pipe(Effect.as(new Map<string, unknown>())),
         ),
       )
     for (const [persistenceKey, state] of snap) {
@@ -261,11 +330,14 @@ const writeAllActorsOnce = (
         })
         .pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning("actor-host.persist.write-failed").pipe(
-              Effect.annotateLogs({
+            recordActorHostFailure(
+              failuresRef,
+              parseNamespacedPersistenceKey(persistenceKey)?.extensionId ?? "actor-host",
+              `persist write failed for ${persistenceKey}: ${String(error)}`,
+              "actor-host.persist.write-failed",
+              {
                 persistenceKey,
-                error: String(error),
-              }),
+              },
             ),
           ),
         )
@@ -274,8 +346,11 @@ const writeAllActorsOnce = (
 
 const runPeriodicWriter = (
   persistence: ActorHostPersistence,
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
 ): Effect.Effect<void, never, ActorEngine | ActorPersistenceStorage> =>
-  writeAllActorsOnce(persistence).pipe(Effect.repeat(Schedule.spaced(persistence.writeInterval)))
+  writeAllActorsOnce(persistence, failuresRef).pipe(
+    Effect.repeat(Schedule.spaced(persistence.writeInterval)),
+  )
 
 /**
  * Layer that spawns every extension's `actors` into the running
@@ -312,15 +387,15 @@ export const ActorHost = {
         // Periodic snapshot writer runs for the lifetime of the host
         // scope. `forkScoped` ties it to layer teardown so profile
         // close stops the writer cleanly.
-        yield* Effect.forkScoped(runPeriodicWriter(persistence))
+        yield* Effect.forkScoped(runPeriodicWriter(persistence, failuresRef))
         // Flush-on-close: between the writer's last successful tick
         // and scope teardown, in-flight state mutations would be
         // lost (up to one `writeInterval`). The finalizer runs one
         // last `writeAllActorsOnce` so a graceful shutdown does not
         // silently drop the trailing window. `writeAllActorsOnce`
-        // already swallows typed errors per row, so the finalizer
+        // already records typed errors per row, so the finalizer
         // itself cannot fail.
-        yield* Effect.addFinalizer(() => writeAllActorsOnce(persistence))
+        yield* Effect.addFinalizer(() => writeAllActorsOnce(persistence, failuresRef))
         return { snapshot: Ref.get(failuresRef) }
       }),
     ),

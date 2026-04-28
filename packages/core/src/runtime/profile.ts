@@ -76,11 +76,9 @@ export interface RuntimeProfileInputs {
  * Output of the resolver — everything a downstream composer needs to wire layers.
  *
  * `coreSections` are the static, environment-derived sections (cwd, platform,
- * git state, custom instructions). `extensionSectionInputs` are the
- * extension-contributed sections in scope-precedence order (project > user > builtin),
- * possibly dynamic — they must be resolved later inside the extension-services
- * runtime so that dynamic resolvers like `Skills`'s prompt section can read their
- * required services.
+ * git state, custom instructions). `extensionSectionInputs` are static
+ * extension-contributed sections in scope-precedence order (project > user >
+ * builtin).
  *
  * Use `compileBaseSections(profile)` to get the merged static section array.
  * (Dynamic sections are assembled per-turn by extension reactions, not here.)

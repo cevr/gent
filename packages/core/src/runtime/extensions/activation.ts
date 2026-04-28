@@ -253,7 +253,7 @@ export const collectValidationFailures = (
     }
   }
 
-  // Tool collisions: same-scope same-id model-audience capabilities.
+  // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
     (cap) => cap.id,
