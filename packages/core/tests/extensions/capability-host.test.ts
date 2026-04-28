@@ -13,7 +13,6 @@ import {
   CapabilityError,
   CapabilityNotFoundError,
   type ModelCapabilityContext,
-  type AnyCapabilityContribution,
 } from "@gent/core/domain/capability"
 import {
   action,
@@ -194,18 +193,10 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("request dispatch rejects mixed model and agent-protocol shadowing lower request", () =>
+  it.live("request dispatch rejects higher-scope tool shadowing lower request", () =>
     Effect.gen(function* () {
-      const builtin = echoRequest({ id: "mixed", value: "builtin-request" })
-      const mixed: AnyCapabilityContribution = {
-        id: "mixed",
-        description: "mixed malformed capability",
-        audiences: ["model", "agent-protocol"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: (input) => Effect.succeed({ value: input.value }),
-      }
+      const builtin = echoRequest({ id: "same", value: "builtin-request" })
+      const project = shadowTool({ id: "same" })
       const resolved = resolveExtensions([
         {
           manifest: { id: extensionId },
@@ -216,9 +207,8 @@ describe("extension capability registries", () => {
         {
           manifest: { id: extensionId },
           scope: "project",
-          sourcePath: "/test/project-mixed",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- regression fixture crafts a malformed mixed-audience runtime-loaded leaf
-          contributions: { rpc: [mixed] as unknown as ReadonlyArray<never> },
+          sourcePath: "/test/project-tool",
+          contributions: { tools: [project] },
         },
       ])
       const result = yield* resolved.rpcRegistry

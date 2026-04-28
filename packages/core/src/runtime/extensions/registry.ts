@@ -24,7 +24,6 @@ import type {
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
-import type { ExtensionCapabilityLeaf } from "../../domain/contribution.js"
 import type { ActionToken } from "../../domain/capability/action.js"
 import type { RequestToken } from "../../domain/capability/request.js"
 import type { ToolToken } from "../../domain/capability/tool.js"
@@ -35,10 +34,10 @@ import {
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./effect-membrane.js"
 
-// SlashCommand — public-facing slash entry. Built from `Capability` winners
-// whose `audiences.includes("human-slash")`. Read- and write-intent both
-// surface as commands; the audience is the load-bearing filter. The legacy
-// server-side `CommandContribution` shape died in C8.
+// SlashCommand — public-facing slash entry. Built from `commands:` bucket
+// winners. Read- and write-intent both surface as commands; the bucket is the
+// load-bearing filter. The legacy server-side `CommandContribution` shape died
+// in C8.
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
@@ -72,10 +71,25 @@ export interface ResolvedExtensions {
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
 }
 
-interface RegisteredCapabilityEntry {
+interface RegisteredToolEntry {
+  readonly kind: "tool"
   readonly extensionId: ExtensionId
-  readonly capability: ExtensionCapabilityLeaf
+  readonly capability: ToolToken
 }
+
+interface RegisteredCommandEntry {
+  readonly kind: "command"
+  readonly extensionId: ExtensionId
+  readonly capability: ActionToken
+}
+
+interface RegisteredRpcEntry {
+  readonly kind: "rpc"
+  readonly extensionId: ExtensionId
+  readonly capability: RequestToken
+}
+
+type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | RegisteredRpcEntry
 
 export interface CapabilityRunOptions {
   readonly intent?: Intent
@@ -122,20 +136,24 @@ const compileBucket = <T>(
 
 const compileCapabilityWinners = (
   sorted: ReadonlyArray<LoadedExtension>,
-): ReadonlyMap<string, ExtensionCapabilityLeaf> => {
-  const winners = new Map<string, ExtensionCapabilityLeaf>()
+): ReadonlyMap<string, RegisteredCapabilityEntry> => {
+  const winners = new Map<string, RegisteredCapabilityEntry>()
   for (const ext of sorted) {
     // Sorted scope-ascending; later writes win. Iterate every typed bucket
     // for each extension so a later-scope contribution from any bucket
     // shadows an earlier registration with the same id.
     for (const cap of ext.contributions.tools ?? []) {
-      winners.set(String(cap.id), cap)
+      winners.set(String(cap.id), { kind: "tool", extensionId: ext.manifest.id, capability: cap })
     }
     for (const cap of ext.contributions.commands ?? []) {
-      winners.set(String(cap.id), cap)
+      winners.set(String(cap.id), {
+        kind: "command",
+        extensionId: ext.manifest.id,
+        capability: cap,
+      })
     }
     for (const cap of ext.contributions.rpc ?? []) {
-      winners.set(String(cap.id), cap)
+      winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
   }
   return winners
@@ -147,13 +165,13 @@ const compileCapabilityEntries = (
   const entries: RegisteredCapabilityEntry[] = []
   for (const ext of sorted) {
     for (const capability of ext.contributions.tools ?? []) {
-      entries.push({ extensionId: ext.manifest.id, capability })
+      entries.push({ kind: "tool", extensionId: ext.manifest.id, capability })
     }
     for (const capability of ext.contributions.commands ?? []) {
-      entries.push({ extensionId: ext.manifest.id, capability })
+      entries.push({ kind: "command", extensionId: ext.manifest.id, capability })
     }
     for (const capability of ext.contributions.rpc ?? []) {
-      entries.push({ extensionId: ext.manifest.id, capability })
+      entries.push({ kind: "rpc", extensionId: ext.manifest.id, capability })
     }
   }
   return entries
@@ -176,21 +194,6 @@ const resolveCapabilityEntry = (
   }
   return undefined
 }
-
-const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken =>
-  (cap.audiences as ReadonlyArray<string>).includes("model")
-
-const isRequestToken = (cap: ExtensionCapabilityLeaf): cap is RequestToken =>
-  !(cap.audiences as ReadonlyArray<string>).includes("model") &&
-  (cap.audiences as ReadonlyArray<string>).includes("agent-protocol")
-
-const isActionToken = (cap: ExtensionCapabilityLeaf): cap is ActionToken =>
-  (cap.audiences as ReadonlyArray<string>).includes("human-slash") ||
-  (cap.audiences as ReadonlyArray<string>).includes("human-palette")
-
-const isTransportToken = (cap: ExtensionCapabilityLeaf): cap is RequestToken | ActionToken =>
-  !(cap.audiences as ReadonlyArray<string>).includes("model") &&
-  (cap.audiences as ReadonlyArray<string>).includes("transport-public")
 
 const runExtensionCapability = (
   extensionId: ExtensionId,
@@ -266,7 +269,7 @@ const compileRpcRegistry = (
   run: (extensionId, capabilityId, input, ctx, options) =>
     Effect.gen(function* () {
       const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || !isRequestToken(entry.capability)) {
+      if (entry === undefined || entry.kind !== "rpc") {
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
       if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
@@ -282,7 +285,10 @@ const compileTransportRegistry = (
   run: (extensionId, capabilityId, input, ctx, options) =>
     Effect.gen(function* () {
       const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || !isTransportToken(entry.capability)) {
+      if (entry === undefined || (entry.kind !== "rpc" && entry.kind !== "command")) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      if (entry.kind === "command" && !entry.capability.audiences.includes("transport-public")) {
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
       if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
@@ -327,19 +333,18 @@ export const resolveExtensions = (
   const mergedFailures = [...failedExtensions]
   const sorted = sortExtensionsByScope(extensions)
 
-  // Tool resolution — identity-first scope shadowing followed by audience
-  // authorization. Tools' identity is `cap.id` (flat). Every capability
-  // (regardless of audience) enters the candidate map; authorization
-  // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
-  // override that narrows audiences correctly hides a shadowed builtin tool.
+  // Tool resolution — identity-first scope shadowing followed by bucket
+  // authorization. Every leaf (regardless of bucket) enters the candidate map;
+  // authorization (`kind === "tool"`) happens AFTER selection so a higher-scope
+  // command/rpc override correctly hides a shadowed builtin tool.
   const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
   const transportRegistry = compileTransportRegistry(capabilityEntries)
   const modelCapabilities = new Map<string, ToolToken>()
-  for (const [id, cap] of capabilityWinners) {
-    if (!isToolToken(cap)) continue
-    modelCapabilities.set(id, cap)
+  for (const [id, entry] of capabilityWinners) {
+    if (entry.kind !== "tool") continue
+    modelCapabilities.set(id, entry.capability)
   }
 
   const agents = compileBucket(
@@ -358,7 +363,7 @@ export const resolveExtensions = (
     (d) => d.id,
   )
 
-  // Prompt sections from `Capability.prompt` are read off the WINNERS map,
+  // Prompt sections from capability leaves are read off the WINNERS map,
   // not raw extractions. Otherwise a higher-scope capability shadowing a
   // lower-scope tool would still inherit the loser's prompt — defeating the
   // shadow (codex BLOCKER on C7). Last scope wins by section id, identical
@@ -366,7 +371,7 @@ export const resolveExtensions = (
   // (Dynamic prompt content lives on `Projection.prompt(value)` and is
   // assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
-  for (const cap of capabilityWinners.values()) {
+  for (const { capability: cap } of capabilityWinners.values()) {
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
@@ -374,7 +379,7 @@ export const resolveExtensions = (
   // otherwise overriding `bash` without `permissionRules` would still inherit
   // builtin denies (codex BLOCKER on C7).
   const permissionRules: PermissionRule[] = []
-  for (const cap of capabilityWinners.values()) {
+  for (const { capability: cap } of capabilityWinners.values()) {
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
   }
 
@@ -594,27 +599,29 @@ export const listSlashCommands = (
   extensions: ReadonlyArray<LoadedExtension>,
   options?: { readonly publicOnly?: boolean },
 ): ReadonlyArray<SlashCommand> => {
-  const winners = new Map<
-    string,
-    { readonly extensionId: ExtensionId; readonly cap: ExtensionCapabilityLeaf }
-  >()
+  const winners = new Map<string, RegisteredCapabilityEntry>()
   for (const ext of sortExtensionsByScope(extensions)) {
     for (const cap of ext.contributions.tools ?? []) {
-      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
+      winners.set(String(cap.id), { kind: "tool", extensionId: ext.manifest.id, capability: cap })
     }
     for (const cap of ext.contributions.commands ?? []) {
-      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
+      winners.set(String(cap.id), {
+        kind: "command",
+        extensionId: ext.manifest.id,
+        capability: cap,
+      })
     }
     for (const cap of ext.contributions.rpc ?? []) {
-      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
+      winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
   }
   const commands: SlashCommand[] = []
-  for (const { extensionId, cap } of winners.values()) {
-    if (!isActionToken(cap)) continue
+  for (const entry of winners.values()) {
+    if (entry.kind !== "command") continue
+    const cap = entry.capability
     if (!cap.audiences.includes("human-slash")) continue
     if (options?.publicOnly === true && !cap.audiences.includes("transport-public")) continue
-    commands.push(capabilityToCommand(extensionId, cap))
+    commands.push(capabilityToCommand(entry.extensionId, cap))
   }
   return commands
 }
