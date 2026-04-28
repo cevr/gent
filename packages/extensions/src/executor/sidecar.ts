@@ -6,20 +6,24 @@
  * PID registry, and graceful shutdown via Effect.addFinalizer.
  */
 
+import { BunServices } from "@effect/platform-bun"
 import {
   Clock,
   Context,
   DateTime,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Path,
   Schema,
+  Scope,
   Semaphore,
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
-import { isRecord } from "@gent/core/extensions/api"
+import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
+import { isRecord, runProcess } from "@gent/core/extensions/api"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
 import {
@@ -46,10 +50,9 @@ interface SidecarRecord {
   readonly pid: number | undefined
   readonly ownedByGent: boolean
   readonly scope: ScopeInfo | undefined
-  readonly subprocess: Subprocess | undefined
+  readonly handle: ChildProcessSpawner.ChildProcessHandle | undefined
+  readonly handleScope: Scope.Closeable | undefined
 }
-
-type Subprocess = ReturnType<typeof Bun.spawn>
 
 interface RegisteredSidecar {
   readonly cwd: string
@@ -277,20 +280,26 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           if (!exists) {
             // Run postinstall to bootstrap
             const installerPath = path.join(pkgRoot, "postinstall.cjs")
-            yield* Effect.tryPromise({
-              try: async () => {
-                const proc = Bun.spawn([process.execPath, installerPath], { cwd: pkgRoot })
-                await proc.exited
-                if (proc.exitCode !== 0) {
-                  throw new Error(`Bootstrap failed with exit code ${proc.exitCode}`)
-                }
-              },
-              catch: (e) =>
-                new ExecutorSidecarError({
-                  code: "BOOTSTRAP_FAILED",
-                  message: `Bootstrap failed: ${e instanceof Error ? e.message : String(e)}`,
-                }),
-            })
+            const result = yield* runProcess(process.execPath, [installerPath], {
+              cwd: pkgRoot,
+            }).pipe(
+              Effect.catchTag("ProcessError", (e) =>
+                Effect.fail(
+                  new ExecutorSidecarError({
+                    code: "BOOTSTRAP_FAILED",
+                    message: `Bootstrap failed: ${e.message}`,
+                  }),
+                ),
+              ),
+              // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
+              Effect.provide(BunServices.layer),
+            )
+            if (result.exitCode !== 0) {
+              return yield* new ExecutorSidecarError({
+                code: "BOOTSTRAP_FAILED",
+                message: `Bootstrap failed with exit code ${result.exitCode}`,
+              })
+            }
             // Verify after bootstrap
             const existsAfter = yield* fs.exists(runtimePath)
             if (!existsAfter) {
@@ -317,30 +326,39 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const spawnSidecar = (cwd: string, port: number) =>
           Effect.gen(function* () {
             const binary = yield* resolveBinary
-            const subprocess = yield* Effect.try({
-              try: () => {
-                const child = Bun.spawn([binary, "web", "--port", String(port)], {
-                  cwd,
-                  stdio: ["ignore", "ignore", "ignore"],
-                })
-                child.unref()
-                return child
-              },
-              catch: (e) =>
-                new ExecutorSidecarError({
-                  code: "BOOTSTRAP_FAILED",
-                  message: `Failed to spawn executor: ${e instanceof Error ? e.message : String(e)}`,
-                }),
+            const handleScope = yield* Scope.make()
+            const handle = yield* ChildProcess.make(binary, ["web", "--port", String(port)], {
+              cwd,
+              stdin: "ignore",
+              stdout: "ignore",
+              stderr: "ignore",
             })
+              .asEffect()
+              .pipe(
+                Scope.provide(handleScope),
+                Effect.catchTag("PlatformError", (e) =>
+                  Effect.fail(
+                    new ExecutorSidecarError({
+                      code: "BOOTSTRAP_FAILED",
+                      message: `Failed to spawn executor: ${e.message}`,
+                    }),
+                  ),
+                ),
+                Effect.tapError(() => Scope.close(handleScope, Exit.void)),
+                // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
+                Effect.provide(BunServices.layer),
+              )
+            yield* handle.unref.pipe(Effect.ignore)
 
             return {
               cwd,
               port,
               baseUrl: `http://127.0.0.1:${port}`,
-              pid: subprocess.pid,
+              pid: Number(handle.pid),
               ownedByGent: true,
               scope: undefined,
-              subprocess,
+              handle,
+              handleScope,
             } satisfies SidecarRecord
           })
 
@@ -387,13 +405,18 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const killRecord = (record: SidecarRecord) =>
           Effect.gen(function* () {
-            if (record.subprocess && !record.subprocess.killed) {
-              record.subprocess.kill(15 /* SIGTERM */)
-              yield* Effect.promise(
-                () => new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS)),
-              )
-              if (!record.subprocess.killed) {
-                record.subprocess.kill(9 /* SIGKILL */)
+            if (record.handle !== undefined) {
+              const running = yield* record.handle.isRunning.pipe(Effect.orElseSucceed(() => false))
+              if (running) {
+                yield* record.handle
+                  .kill({
+                    killSignal: "SIGTERM",
+                    forceKillAfter: Duration.millis(SHUTDOWN_TIMEOUT_MS),
+                  })
+                  .pipe(Effect.ignore)
+              }
+              if (record.handleScope !== undefined) {
+                yield* Scope.close(record.handleScope, Exit.void).pipe(Effect.ignore)
               }
             } else if (record.pid !== undefined) {
               yield* terminatePid(record.pid)
@@ -448,7 +471,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                 pid: undefined,
                 ownedByGent: false,
                 scope: scan.reusable.scope,
-                subprocess: undefined,
+                handle: undefined,
+                handleScope: undefined,
               }
               sidecarsByCwd.set(normalized, record)
               return record
