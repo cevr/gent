@@ -552,6 +552,13 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
   )
 })
 
+const dropRetiredTables = Effect.fn("Storage.dropRetiredTables")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_todos_branch`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS todos`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS extension_state`).pipe(Effect.ignoreCause)
+})
+
 const foreignKeys = Effect.fn("Storage.foreignKeys")(function* (table: string) {
   const sql = yield* SqlClient.SqlClient
   return yield* sql.unsafe<ForeignKeyListRow>(`PRAGMA foreign_key_list(${table})`)
@@ -1027,6 +1034,7 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
+  yield* dropRetiredTables()
   yield* repairForeignKeyOrphans()
   yield* migrateForeignKeyConstraints()
   yield* assertForeignKeyIntegrity()
@@ -1055,10 +1063,6 @@ const initSchema = Effect.gen(function* () {
     `CREATE INDEX IF NOT EXISTS idx_agent_loop_checkpoints_updated ON agent_loop_checkpoints(updated_at)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
-  // Drop dead `todos` table left over from earlier schemas. No writers
-  // remain — task tracking lives in the task-tools extension's own storage.
-  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_todos_branch`).pipe(Effect.ignoreCause)
-  yield* sql.unsafe(`DROP TABLE IF EXISTS todos`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,

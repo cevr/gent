@@ -674,16 +674,26 @@ describe("Storage", () => {
           )
         `)
               db.run(`
-          CREATE TABLE interaction_requests (
-            request_id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
+	          CREATE TABLE interaction_requests (
+	            request_id TEXT PRIMARY KEY,
+	            type TEXT NOT NULL,
             session_id TEXT NOT NULL,
             branch_id TEXT NOT NULL,
             params_json TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
-            created_at INTEGER NOT NULL
-          )
-        `)
+	            created_at INTEGER NOT NULL
+	          )
+	        `)
+              db.run(`
+	          CREATE TABLE extension_state (
+	            session_id TEXT NOT NULL,
+	            extension_id TEXT NOT NULL,
+	            state_json TEXT NOT NULL,
+	            updated_at INTEGER NOT NULL,
+	            PRIMARY KEY (session_id, extension_id),
+	            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	          )
+	        `)
               db.run(
                 `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
@@ -851,6 +861,10 @@ describe("Storage", () => {
                   15,
                 ],
               )
+              db.run(
+                `INSERT INTO extension_state (session_id, extension_id, state_json, updated_at) VALUES (?, ?, ?, ?)`,
+                ["missing-session", "legacy-extension", "{}", 16],
+              )
               db.close()
               const layer = Storage.LiveWithSql(dbPath).pipe(
                 Layer.provide(BunFileSystem.layer),
@@ -937,6 +951,9 @@ describe("Storage", () => {
                 const orphanInteractions = yield* sql<{
                   count: number
                 }>`SELECT COUNT(*) as count FROM interaction_requests WHERE request_id IN (${"missing-branch-request"}, ${"mismatched-request"})`
+                const retiredExtensionState = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM sqlite_schema WHERE type = ${"table"} AND name = ${"extension_state"}`
                 expect(orphanBranches[0]?.count).toBe(0)
                 expect(orphanMessages[0]?.count).toBe(0)
                 expect(orphanChunks[0]?.count).toBe(0)
@@ -944,6 +961,7 @@ describe("Storage", () => {
                 expect(orphanActorInbox[0]?.count).toBe(0)
                 expect(orphanCheckpoints[0]?.count).toBe(0)
                 expect(orphanInteractions[0]?.count).toBe(0)
+                expect(retiredExtensionState[0]?.count).toBe(0)
                 const rejected = yield* Effect.exit(
                   sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
                 )

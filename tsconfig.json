@@ -148,12 +148,6 @@
       ],
       "@gent/core/storage/event-storage": ["./packages/core/src/storage/event-storage.ts"],
       "@gent/core/storage/event-storage.js": ["./packages/core/src/storage/event-storage.ts"],
-      "@gent/core/storage/extension-state-storage": [
-        "./packages/core/src/storage/extension-state-storage.ts"
-      ],
-      "@gent/core/storage/extension-state-storage.js": [
-        "./packages/core/src/storage/extension-state-storage.ts"
-      ],
       "@gent/core/storage/interaction-storage": [
         "./packages/core/src/storage/interaction-storage.ts"
       ],
