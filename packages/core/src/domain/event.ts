@@ -274,18 +274,15 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     error: Schema.optional(Schema.String),
   },
   /**
-   * Typed pulse emitted whenever an extension's externally-observable state
-   * may have changed. Carries no payload — clients fetch via the extension's
-   * typed request capability (the published transport surface).
+   * Typed state-change notification emitted when an extension's
+   * externally-observable state may have changed. Carries no payload —
+   * clients fetch via the extension's typed request capability (the
+   * published transport surface).
    *
-   * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
+   * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The event
    * is honest: it tells subscribers "extension X has news" without coupling a
    * schema between server and client. Any transport consumer (TUI, SDK, future
    * web UI) reads the new state the same way — via `client.extension.request`.
-   *
-   * Server publishes this after:
-   *   - A workflow state machine transition (machine.afterTransition)
-   *   - A projection's underlying source emits an event the projection observes
    *
    * Client widgets subscribe by `extensionId` filter and refetch their typed
    * capability request on each pulse.

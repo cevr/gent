@@ -360,14 +360,14 @@ Other notes:
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
 - One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument and no sync `(ctx) => Array` arm. `ExtensionClientContext`, `getSnapshotRaw`, `SnapshotSource`, `ClientSnapshots`, and `defineExtensionPackage` were deleted in B11.6. `ExtensionPackage.tui()` remains as the standalone TUI extension factory (no longer paired with a server extension).
-- Widgets are transport-only: subscribe to `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.ask(extId, GetSnapshot)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,tasks}.client.{ts,tsx}` for the canonical pattern.
-- `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and pulse unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
+- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,tasks}.client.{ts,tsx}` for the canonical pattern.
+- `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
 
 ### Extension Actor Substrate
 
-After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `actors:` bucket) into one, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and extensions opt into pulse-on-event via declared `pulseTags`.
+After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `actors:` bucket) into one, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and event-backed client widgets subscribe to the normal session event stream.
 
 **ActorHost** (`runtime/extensions/resource-host/actor-host.ts`):
 
@@ -378,18 +378,19 @@ After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `act
 **Receptionist + ActorEngine** (`runtime/extensions/receptionist.ts`, `runtime/extensions/actor-engine.ts`):
 
 - `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
-- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` (registers) and `MachineEngine` (routes) share the same actor map.
+- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` (registers) and `ActorRouter` (routes) share the same actor map.
 
-**MachineEngine** (`runtime/extensions/resource-host/machine-engine.ts`):
+**ActorRouter** (`runtime/extensions/resource-host/actor-router.ts`):
 
 - A thin actor-router over `ActorEngine` + `Receptionist`. Decodes the `ExtensionMessage` envelope, looks up the target Behavior's `ServiceKey`, and dispatches via `tell` (commands) or `ask` (requests).
-- `publish(event, ctx)` is a near-no-op — Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`/`handoff.ts`). The implementation includes a load-bearing `Effect.yieldNow` to preserve the fiber-scheduling behavior that the old per-session mailbox provided implicitly via semaphore serialization — without it, the agent loop's driver fiber can miss the `Idle → Running` transition edge.
+- Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`/`handoff.ts`).
 - `getActorStatuses` returns `[]` and `terminateAll` is a no-op — kept on the interface for surface compat. Behaviors are process-scoped, not per-session.
 
-**Pulse-on-event** (`server/event-publisher.ts`):
+**Event-backed client invalidation**:
 
-- Extensions declare `pulseTags: AgentEventTag[]` to receive an `ExtensionStateChanged` envelope when matching events fire. After W10-PhaseB this is the **only** pulse path — the FSM-transition signal is gone.
-- `EventPublisherLive` builds a `pulseByTag` index from the registry once at boot and emits pulses inline after `stateRuntime.publish` returns. Extensions that need pulse-on-state-change must declare the relevant agent event tags.
+- Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
+- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/task-tools` is the canonical event-backed widget.
+- `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
 **MachineExecute** (`runtime/extensions/machine-execute.ts`):
 

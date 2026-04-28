@@ -13,10 +13,8 @@
  *
  * Note: there is no `publish(event, ctx)` — Behaviors do not receive
  * `AgentEvent` automatically. Extensions react to events via declared
- * `reactions:` handlers (which explicitly `tell` their actor) or
- * declared `pulseTags` (which trigger `ExtensionStateChanged` pulses
- * inside `EventPublisherLive`, not on the actor). See `auto.ts` /
- * `handoff.ts` for the reaction pattern.
+ * `reactions:` handlers, which explicitly `tell` their actor. See
+ * `auto.ts` / `handoff.ts` for the reaction pattern.
  *
  * @module
  */

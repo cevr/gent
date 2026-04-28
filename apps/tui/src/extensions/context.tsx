@@ -5,8 +5,9 @@
  * scope precedence. Provides resolved contributions to descendants.
  *
  * B11.6 deleted the paired-package snapshot cache. Widgets that need
- * server-side state subscribe to `ClientTransport.onExtensionStateChanged`
- * and call `client.extension.request`/`ask` directly — see e.g.
+ * server-side state subscribe to `ClientTransport.onSessionEvent` or
+ * `ClientTransport.onExtensionStateChanged` and call
+ * `client.extension.request`/`ask` directly — see e.g.
  * `builtins/tasks.client.tsx`.
  */
 
@@ -147,8 +148,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
   // Per-provider ManagedRuntime that augments the shared platform layer
   // (FileSystem, Path) with the TUI client services Effect-typed
-  // extensions may yield: `ClientTransport` (typed RPC client + pulse
-  // subscription), `ClientWorkspace` (cwd/home), `ClientShell`
+  // extensions may yield: `ClientTransport` (typed RPC client + event
+  // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
   // (send/sendMessage/overlays), `ClientComposer` (reactive composer
   // state). The loader's `invokeSetup` runs each setup against this
   // runtime.
@@ -165,6 +166,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           return { sessionId: current.sessionId, branchId: current.branchId }
         },
         onExtensionStateChanged: (cb) => transportState.onExtensionStateChanged(cb),
+        onSessionEvent: (cb) => transportState.onSessionEvent(cb),
       }),
       makeClientWorkspaceLayer({
         cwd: workspace.cwd,

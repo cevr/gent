@@ -3,9 +3,10 @@
  * for agent-loop concerns (system prompt sections, tool policy fragments).
  *
  * UI is NOT a projection surface. Client widgets fetch state via the
- * extension's typed `client.extension.request(...)` and refetch on
- * `ExtensionStateChanged` pulses. The privileged out-of-band UI snapshot
- * channel (`ExtensionUiSnapshot`, `Projection.ui`, `ctx.getSnapshot`) is gone.
+ * extension's typed `client.extension.request(...)` and refetch from
+ * session events or explicit `ExtensionStateChanged` notifications. The
+ * privileged out-of-band UI snapshot channel (`ExtensionUiSnapshot`,
+ * `Projection.ui`, `ctx.getSnapshot`) is gone.
  *
  * A projection:
  *   1. Has a `query` Effect that reads from services and produces a value `A`.

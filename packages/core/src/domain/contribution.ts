@@ -26,7 +26,6 @@ import type { AgentDefinition } from "./agent.js"
 import type { ActionToken } from "./capability/action.js"
 import type { RequestToken } from "./capability/request.js"
 import type { ToolToken } from "./capability/tool.js"
-import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ExtensionProtocol } from "./extension-protocol.js"
 import type { AnyProjectionContribution } from "./projection.js"
@@ -133,20 +132,6 @@ export interface ExtensionContributions {
   readonly reactions?: ExtensionReactions
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
-  /**
-   * Event tags that, when published, invalidate this extension's externally-
-   * observable state. The EventPublisher emits an `ExtensionStateChanged`
-   * pulse for this extension whenever a matching `AgentEvent._tag` lands.
-   *
-   * Used by query-backed / projection-only extensions whose state is event-
-   * driven but not held in a workflow actor (the workflow path emits pulses
-   * on actor transitions directly — see `ActorRouter.publish`).
-   *
-   * Keep minimal — every tag translates to one pulse per matching event for
-   * this extension. Honest set: "events whose occurrence invalidates the
-   * extension's snapshot."
-   */
-  readonly pulseTags?: ReadonlyArray<AgentEventTag>
 }
 
 export type ExtensionCapabilityLeaf = ToolToken | ActionToken | RequestToken

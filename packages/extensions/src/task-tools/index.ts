@@ -58,8 +58,4 @@ export const TaskExtension = defineExtension({
       layer: Layer.merge(TaskStorage.Live, TaskService.Live),
     }),
   ],
-  // Request-backed snapshot — builtin event sink will emit `ExtensionStateChanged`
-  // for `@gent/task-tools` whenever any of these tags is published, so the
-  // TUI widget refetches `TaskListRequest` on every relevant mutation.
-  pulseTags: ["TaskCreated", "TaskUpdated", "TaskCompleted", "TaskDeleted"],
 })

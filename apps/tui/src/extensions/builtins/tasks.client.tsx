@@ -3,8 +3,8 @@
  *
  * B11.6: migrated off the paired-package snapshot cache. The widget owns
  * its own Solid signal inside an Effect-typed setup, fetched via the
- * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed on
- * `ExtensionStateChanged` pulses for `@gent/task-tools`.
+ * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed
+ * when task mutation events arrive on the active session stream.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
  * `runtime.runPromise`. The Solid `createRoot` disposer and the pulse
@@ -96,7 +96,15 @@ export default defineClientExtension("@gent/task-tools", {
       }
     }
 
-    // Solid root + pulse subscription — both disposers registered with
+    const isTaskMutation = (tag: string): boolean =>
+      tag === "TaskCreated" ||
+      tag === "TaskUpdated" ||
+      tag === "TaskCompleted" ||
+      tag === "TaskFailed" ||
+      tag === "TaskStopped" ||
+      tag === "TaskDeleted"
+
+    // Solid root + event subscription — both disposers registered with
     // `ClientLifecycle.addCleanup` so the provider's `onCleanup` reaps
     // them when the surrounding `ExtensionUIProvider` unmounts.
     yield* Effect.sync(() => {
@@ -120,13 +128,13 @@ export default defineClientExtension("@gent/task-tools", {
       })
     })
 
-    const unsubscribePulse = transport.onExtensionStateChanged((p) => {
-      if (p.extensionId !== EXT_ID) return
+    const unsubscribeEvents = transport.onSessionEvent((envelope) => {
+      if (!isTaskMutation(envelope.event._tag)) return
       const session = transport.currentSession()
       if (session === undefined) return
       void runRefetch(session)
     })
-    lifecycle.addCleanup(unsubscribePulse)
+    lifecycle.addCleanup(unsubscribeEvents)
 
     const runningCount = (): number =>
       liveTasks().filter((t) => t.status === "in_progress" || t.status === "pending").length

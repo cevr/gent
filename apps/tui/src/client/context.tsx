@@ -150,6 +150,8 @@ export interface ClientTransportValue {
   onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void
+  /** Subscribe to every event for the active session/branch. */
+  onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
 }
 
 export interface ClientSessionValue {
@@ -270,6 +272,7 @@ export function useClientTransportState(): Pick<
   | "extensionHealth"
   | "setConnectionIssue"
   | "onExtensionStateChanged"
+  | "onSessionEvent"
 > {
   const {
     connectionState,
@@ -280,6 +283,7 @@ export function useClientTransportState(): Pick<
     extensionHealth,
     setConnectionIssue,
     onExtensionStateChanged,
+    onSessionEvent,
   } = useClientTransport()
   return {
     connectionState,
@@ -290,6 +294,7 @@ export function useClientTransportState(): Pick<
     extensionHealth,
     setConnectionIssue,
     onExtensionStateChanged,
+    onSessionEvent,
   }
 }
 
@@ -333,6 +338,8 @@ export function ClientProvider(props: ClientProviderProps) {
     extensionId: string
   }) => void
   const extensionStateChangedSubscribers = new Set<ExtensionPulseCallback>()
+  type SessionEventCallback = (envelope: EventEnvelope) => void
+  const sessionEventSubscribers = new Set<SessionEventCallback>()
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
@@ -508,6 +515,20 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
+      const forwardSessionEvent = (envelope: EventEnvelope): void => {
+        if (sessionEventSubscribers.size === 0) return
+        for (const cb of sessionEventSubscribers) {
+          try {
+            cb(envelope)
+          } catch (err) {
+            log.warn("client.sessionEvent.subscriber.threw", {
+              tag: envelope.event._tag,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+      }
+
       const processEvent = (envelope: EventEnvelope): void => {
         if (!isActiveSession()) return
 
@@ -517,6 +538,8 @@ export function ClientProvider(props: ClientProviderProps) {
           traceId: envelope.traceId,
         })
         setConnectionIssue(null)
+
+        forwardSessionEvent(envelope)
 
         setLastSeenEventId(envelope.id)
 
@@ -642,7 +665,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
                   // No initial-snapshot fan-out: the UI snapshot channel is gone.
                   // Widgets fetch initial state via `client.extension.request(...)`
-                  // and refetch on `ExtensionStateChanged` pulses.
+                  // and refetch from session events or explicit extension-state changes.
                 },
                 openEvents: (after) =>
                   client.session.events({
@@ -698,6 +721,12 @@ export function ClientProvider(props: ClientProviderProps) {
       extensionStateChangedSubscribers.add(cb)
       return () => {
         extensionStateChangedSubscribers.delete(cb)
+      }
+    },
+    onSessionEvent: (cb) => {
+      sessionEventSubscribers.add(cb)
+      return () => {
+        sessionEventSubscribers.delete(cb)
       }
     },
   }

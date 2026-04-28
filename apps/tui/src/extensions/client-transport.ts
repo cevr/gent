@@ -30,6 +30,7 @@
 
 import { Context, Effect, Layer, Schema } from "effect"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { CapabilityRef } from "@gent/core/extensions/api"
 import {
@@ -50,6 +51,8 @@ export interface ClientTransportShape {
   readonly onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void
+  /** Subscribe to every event for the active session/branch. */
+  readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
 }
 
 export class ClientTransport extends Context.Service<ClientTransport, ClientTransportShape>()(

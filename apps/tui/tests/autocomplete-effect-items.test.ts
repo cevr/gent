@@ -68,6 +68,7 @@ const makeFakeTransport = (
         branchId: BranchId.make("branch-1"),
       })),
     onExtensionStateChanged: () => () => {},
+    onSessionEvent: () => () => {},
   }
 }
 

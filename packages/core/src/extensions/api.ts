@@ -62,7 +62,7 @@ import type { ExternalDriverContribution, ModelDriverContribution } from "../dom
 import type { ExtensionProtocol } from "../domain/extension-protocol.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
-import type { AgentEvent, AgentEventTag } from "../domain/event.js"
+import type { AgentEvent } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -368,7 +368,6 @@ export interface DefineExtensionInput {
   readonly reactions?: ExtensionReactions
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
-  readonly pulseTags?: ReadonlyArray<AgentEventTag>
 }
 
 /**
@@ -594,9 +593,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
-          ...(params.pulseTags !== undefined && params.pulseTags.length > 0
-            ? { pulseTags: params.pulseTags }
-            : {}),
         }
         yield* validatePackageShape(manifest, contribs)
         return contribs

@@ -12,13 +12,16 @@ import type { ClientContribution } from "../src/extensions/client-facets.js"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
 import tasksBuiltin from "../src/extensions/builtins/tasks.client"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { AgentEvent, EventId, type EventEnvelope } from "@gent/core/domain/event"
+import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 
 const buildRuntime = (
   activeSession: { value: { sessionId: SessionId; branchId: BranchId } | undefined },
   opts: {
     readonly askDeferred?: Deferred.Deferred<unknown, never>
     readonly requestDeferred?: Deferred.Deferred<unknown, never>
+    readonly requestEffect?: () => Effect.Effect<unknown, never>
+    readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
   },
 ): ManagedRuntime.ManagedRuntime<never, never> =>
   ManagedRuntime.make(
@@ -45,10 +48,11 @@ const buildRuntime = (
           extension: {
             ask: () =>
               opts.askDeferred === undefined ? Effect.void : Deferred.await(opts.askDeferred),
-            request: () =>
-              opts.requestDeferred === undefined
-                ? Effect.void
-                : Deferred.await(opts.requestDeferred),
+            request: () => {
+              if (opts.requestEffect !== undefined) return opts.requestEffect()
+              if (opts.requestDeferred === undefined) return Effect.void
+              return Deferred.await(opts.requestDeferred)
+            },
             listCommands: () => Effect.succeed([]),
           },
         } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
@@ -57,6 +61,12 @@ const buildRuntime = (
         } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
         currentSession: () => activeSession.value,
         onExtensionStateChanged: () => () => {},
+        onSessionEvent: (cb) => {
+          opts.sessionEventSubscribers?.add(cb)
+          return () => {
+            opts.sessionEventSubscribers?.delete(cb)
+          }
+        },
       }),
       makeClientLifecycleLayer({ addCleanup: () => {} }),
     ),
@@ -374,6 +384,99 @@ describe("transport-only extension widgets", () => {
     } finally {
       await runtime.dispose()
     }
+  })
+
+  test("tasks widget refetches from every task mutation session event", async () => {
+    const sessionId = SessionId.make("session-A")
+    const branchId = BranchId.make("branch-A")
+    const taskId = TaskId.make("task-1")
+    const makeEnvelope = (tag: string, index: number): EventEnvelope => {
+      const base = { sessionId, branchId, taskId }
+      const event = (() => {
+        switch (tag) {
+          case "TaskCreated":
+            return AgentEvent.TaskCreated.make({ ...base, subject: "Audit" })
+          case "TaskUpdated":
+            return AgentEvent.TaskUpdated.make({ ...base, status: "in_progress" })
+          case "TaskCompleted":
+            return AgentEvent.TaskCompleted.make(base)
+          case "TaskFailed":
+            return AgentEvent.TaskFailed.make({ ...base, error: "boom" })
+          case "TaskStopped":
+            return AgentEvent.TaskStopped.make(base)
+          default:
+            return AgentEvent.TaskDeleted.make(base)
+        }
+      })()
+      return { id: EventId.make(index + 1), event, createdAt: Date.now() }
+    }
+
+    const tags = [
+      "TaskCreated",
+      "TaskUpdated",
+      "TaskCompleted",
+      "TaskFailed",
+      "TaskStopped",
+      "TaskDeleted",
+    ]
+
+    await Promise.all(
+      tags.map(async (tag, index) => {
+        await (async () => {
+          const activeSession = {
+            value: { sessionId, branchId } as
+              | { sessionId: SessionId; branchId: BranchId }
+              | undefined,
+          }
+          let tasks: readonly unknown[] = []
+          const sessionEventSubscribers = new Set<(envelope: EventEnvelope) => void>()
+          const runtime = buildRuntime(activeSession, {
+            sessionEventSubscribers,
+            requestEffect: () => Effect.succeed(tasks),
+          })
+
+          try {
+            const contributions = await runtime.runPromise(
+              tasksBuiltin.setup as unknown as Effect.Effect<
+                readonly ClientContribution[],
+                never,
+                never
+              >,
+            )
+            const borderLabel = contributions.find(
+              (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
+                entry._tag === "border-label" && entry.position === "bottom-left",
+            )
+
+            expect(borderLabel).toBeDefined()
+            await Promise.resolve()
+            await Promise.resolve()
+            expect(borderLabel?.produce()).toEqual([])
+
+            tasks = [
+              {
+                id: "task-1",
+                sessionId,
+                branchId,
+                subject: "Audit",
+                status: "in_progress",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            ]
+            for (const cb of sessionEventSubscribers) cb(makeEnvelope(tag, index))
+            await Promise.resolve()
+            await Promise.resolve()
+            await Promise.resolve()
+            await Promise.resolve()
+
+            expect(borderLabel?.produce()).toEqual([{ text: "1 task ↓", color: "info" }])
+          } finally {
+            await runtime.dispose()
+          }
+        })()
+      }),
+    )
   })
 
   test("tasks widget rejects undecodable task lists at the client seam", async () => {

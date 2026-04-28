@@ -1,15 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/event-publisher"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
-
-const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
-const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" })
 
 // Real AgentEvent variants used as stand-ins for synthetic test fixtures.
 // Tests assert on `event._tag` strings; mapping each placeholder to a distinct
@@ -87,8 +83,7 @@ const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
   })
 }
 
-// EventPublisher delivery is observable through EventStore append/broadcast and
-// ExtensionStateChanged pulses.
+// EventPublisher delivery is observable through EventStore append/broadcast.
 
 describe("EventPublisher", () => {
   test("normal publish appends and broadcasts the committed event", async () => {
@@ -112,10 +107,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const layer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(baseLayer, registryLayer, runtimePlatformLayer),
-    )
+    const layer = Layer.provide(EventPublisherLive, baseLayer)
 
     await Effect.gen(function* () {
       const publisher = yield* EventPublisher
@@ -126,53 +118,13 @@ describe("EventPublisher", () => {
     expect(broadcasted).toEqual([TAG.OuterEvent])
   })
 
-  test("declared pulseTags trigger ExtensionStateChanged for each matching event", async () => {
-    // After W10-PhaseB, FSM transitions are gone — the only pulse path is
-    // `pulseTags` declared at extension-load time. `event-publisher.ts`
-    // looks up subscribers for each event's tag and emits one
-    // `ExtensionStateChanged` per declared subscriber, regardless of what
-    // the ActorRouter returns.
-    const persisted: string[] = []
-    const pulseTagsRegistryLayer = ExtensionRegistry.fromResolved(
-      resolveExtensions([
-        {
-          manifest: { id: ExtensionId.make("pulse-only-ext") },
-          scope: "builtin",
-          sourcePath: "builtin",
-          contributions: { pulseTags: [TAG.OuterEvent, TAG.NestedEvent] },
-        },
-      ]),
-    )
-
-    const baseLayer = makeEventStoreLayer((event) => {
-      persisted.push(event._tag)
-    })
-
-    const layer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(baseLayer, pulseTagsRegistryLayer, runtimePlatformLayer),
-    )
-
-    await Effect.gen(function* () {
-      const publisher = yield* EventPublisher
-      yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-      yield* publisher.publish(makeEvent("NestedEvent", "session-1", "branch-1"))
-    }).pipe(Effect.provide(layer), Effect.runPromise)
-
-    expect(persisted).toEqual([
-      TAG.OuterEvent,
-      "ExtensionStateChanged",
-      TAG.NestedEvent,
-      "ExtensionStateChanged",
-    ])
-  })
-
   test("publish yields after broadcast so concurrent fibers observe the state transition", async () => {
-    // Regression: deliverInner has an `Effect.yieldNow` between
-    // baseEventStore.broadcast and pulse fanout. The yield lets fibers blocked
-    // on the broadcast (the agent-loop driver subscribed via EventStore) take a
-    // step before publish returns. Without it, sites that publish on the same
-    // fiber that drives the loop can skip the Idle → Running edge.
+    // Regression: deliverInner has an `Effect.yieldNow` after
+    // baseEventStore.broadcast and before publish returns. The yield lets
+    // fibers blocked on the broadcast (the agent-loop driver subscribed via
+    // EventStore) take a step before publish returns. Without it, sites that
+    // publish on the same fiber that drives the loop can skip the
+    // Idle → Running edge.
     //
     // We model the contract directly: a forked fiber released by the
     // broadcast hook sets a Ref. If the yield happens, publish returns after the
@@ -192,10 +144,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const layer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(customEventStore, registryLayer, runtimePlatformLayer),
-    )
+    const layer = Layer.provide(EventPublisherLive, customEventStore)
 
     await Effect.gen(function* () {
       const publisher = yield* EventPublisher
@@ -234,7 +183,7 @@ describe("EventPublisher per-cwd router", () => {
 
     const layer = Layer.provide(
       routerLayer,
-      Layer.mergeAll(baseLayer, registryLayer, cwdRegistryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, cwdRegistryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {

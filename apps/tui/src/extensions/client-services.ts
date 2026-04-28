@@ -72,7 +72,7 @@ export interface ClientLifecycleShape {
   /**
    * Register a cleanup callback to run when the surrounding
    * `ExtensionUIProvider` unmounts (i.e. when the per-provider runtime is
-   * disposed). Use for Solid `createRoot(dispose)` disposers, pulse
+   * disposed). Use for Solid `createRoot(dispose)` disposers, event
    * unsubscribes, and any other resource a widget setup detaches.
    *
    * Setups call this synchronously during `Effect.gen`; cleanups fire in

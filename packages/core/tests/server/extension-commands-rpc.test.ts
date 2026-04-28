@@ -123,7 +123,6 @@ describe("extension command RPCs", () => {
         receptionist: Context.get(layerContext, Receptionist),
         baseSections: [],
         instructions: "",
-        pulseByTag: new Map(),
       } satisfies SessionProfile
     })
 
