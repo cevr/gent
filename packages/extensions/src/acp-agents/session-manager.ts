@@ -14,22 +14,22 @@
  *
  * @module
  */
-import { Effect, Exit, Scope } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { Duration, Effect, Exit, Scope } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import type { AcpProtocolAgentConfig } from "./config.js"
-import {
-  makeAcpConnection,
-  type AcpClosedError,
-  type AcpConnection,
-  type AcpError,
-} from "./protocol.js"
+import { AcpError, makeAcpConnection, type AcpClosedError, type AcpConnection } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
 import { startCodemodeServer, type CodemodeServer, type CodemodeConfig } from "./mcp-codemode.js"
+
+const ACP_KILL_GRACE_MS = 5_000
 
 interface AcpProcess {
   readonly conn: AcpConnection
   readonly acpSessionId: string
-  readonly proc: { kill: () => void }
+  readonly killProc: Effect.Effect<void>
   readonly scope: Scope.Closeable
+  readonly procScope: Scope.Closeable
   readonly codemode?: CodemodeServer
   readonly fingerprint: string
 }
@@ -79,7 +79,8 @@ export const createAcpSessionManager = (): AcpSessionManager => {
     Effect.gen(function* () {
       yield* entry.conn.close("driver invalidated").pipe(Effect.ignore)
       yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
-      entry.proc.kill()
+      yield* entry.killProc
+      yield* Scope.close(entry.procScope, Exit.void).pipe(Effect.ignore)
       entry.codemode?.stop()
       sessions.delete(k)
     })
@@ -108,35 +109,57 @@ export const createAcpSessionManager = (): AcpSessionManager => {
       }
 
       // Spawn subprocess first — if the binary is missing, fail fast before
-      // starting the codemode server (avoids leaking an HTTP server)
-      const proc = Bun.spawn([config.command, ...config.args], {
-        stdio: ["pipe", "pipe", "inherit"],
+      // starting the codemode server (avoids leaking an HTTP server). The
+      // process lives in `procScope` so the parent scope is not bound to
+      // a long-lived child; the process survives across turns and is
+      // explicitly killed on tearDown.
+      const procScope = yield* Scope.make()
+      const handle = yield* ChildProcess.make(config.command, [...config.args], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "inherit",
       })
+        .asEffect()
+        .pipe(
+          Scope.provide(procScope),
+          Effect.catchTag("PlatformError", (e) =>
+            Effect.fail(new AcpError({ message: `failed to spawn ACP agent: ${e.message}` })),
+          ),
+          Effect.tapError(() => Scope.close(procScope, Exit.void)),
+          // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
+          Effect.provide(BunServices.layer),
+        )
+
+      const killProc = handle
+        .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS) })
+        .pipe(Effect.ignore)
 
       // Start codemode MCP server if tools are available
       let codemode: CodemodeServer | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
-        codemode = yield* startCodemodeServer(codemodeConfig)
+        codemode = yield* startCodemodeServer(codemodeConfig).pipe(
+          Effect.tapError(() =>
+            killProc.pipe(Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore))),
+          ),
+        )
       }
 
       // Create a long-lived scope for the connection's fibers
       const scope = yield* Scope.make()
+      const codemodeRef = codemode
 
-      // Cleanup helper — kill process + close scope + stop codemode on failure
+      // Cleanup helper — kill process + close scopes + stop codemode on failure
       const cleanup = Effect.gen(function* () {
         yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
-        proc.kill()
-        codemode?.stop()
+        yield* killProc
+        yield* Scope.close(procScope, Exit.void).pipe(Effect.ignore)
+        codemodeRef?.stop()
       })
 
       // Create ACP connection over stdio (within the session scope)
       const conn = yield* makeAcpConnection({
-        stdin: {
-          write: (data: string) => {
-            proc.stdin.write(data)
-          },
-        },
-        stdout: proc.stdout,
+        stdin: handle.stdin,
+        stdout: handle.stdout,
       }).pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.tapError(() => cleanup),
@@ -172,8 +195,9 @@ export const createAcpSessionManager = (): AcpSessionManager => {
       const entry: AcpProcess = {
         conn,
         acpSessionId: sessionResponse.sessionId,
-        proc: { kill: () => proc.kill() },
+        killProc,
         scope,
+        procScope,
         codemode,
         fingerprint,
       }

@@ -16,27 +16,27 @@
  * (no real subprocess) — the agent-loop wiring is covered separately.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Exit, Fiber, Scope } from "effect"
+import { Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
 import { makeAcpConnection } from "@gent/extensions/acp-agents/protocol"
 
 /**
- * Build a never-closing readable stdout and a write-spy stdin so
+ * Build a never-closing stdout stream and a write-spy stdin sink so
  * `makeAcpConnection` can be exercised without a child process.
  * The remote never replies — every RPC parks on its Deferred.
  */
 const makeFakeProc = () => {
   const writes: string[] = []
-  const stdout = new ReadableStream<Uint8Array>({
-    start() {
-      // Intentionally never enqueue / never close — keeps the reader
-      // fiber alive so we can verify `close` fails the pending RPC
-      // through the Deferred path, not via reader-stream end.
-    },
-  })
+  const decoder = new TextDecoder()
+  const stdin = Sink.forEach((chunk: Uint8Array) =>
+    Effect.sync(() => writes.push(decoder.decode(chunk))),
+  )
+  // Never-ending stream — reader fiber stays alive so `close` must
+  // fail pending Deferreds through the Deferred path, not via stream end.
+  const stdout = Stream.never
   return {
     writes,
     proc: {
-      stdin: { write: (data: string) => writes.push(data) },
+      stdin,
       stdout,
     },
   }

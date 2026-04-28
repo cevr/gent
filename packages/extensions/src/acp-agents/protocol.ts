@@ -1,8 +1,9 @@
 /**
  * Native Effect ACP client over newline-delimited JSON-RPC 2.0 on stdio.
  *
- * No npm dependency — uses Bun.spawn for the subprocess and Effect
- * primitives (Queue, Deferred, HashMap, PubSub, Stream) for multiplexing.
+ * No npm dependency — uses effect/unstable/process ChildProcess for the
+ * subprocess and Effect primitives (Queue, Deferred, HashMap, PubSub,
+ * Stream, Sink) for multiplexing.
  *
  * @module
  */
@@ -16,8 +17,10 @@ import {
   Queue,
   Ref,
   Schema,
+  type Sink,
   Stream,
 } from "effect"
+import type { PlatformError } from "effect/PlatformError"
 import type {
   InitializeRequest,
   InitializeResponse,
@@ -116,7 +119,10 @@ const decodeIncomingEnvelope = Schema.decodeUnknownOption(
 // ── Connection Factory ──
 
 export const makeAcpConnection = (
-  proc: { stdin: { write: (data: string) => void }; stdout: ReadableStream<Uint8Array> },
+  proc: {
+    readonly stdin: Sink.Sink<void, Uint8Array, never, PlatformError>
+    readonly stdout: Stream.Stream<Uint8Array, PlatformError>
+  },
   incomingRequestHandler?: IncomingRequestHandler,
 ) =>
   Effect.gen(function* () {
@@ -127,13 +133,24 @@ export const makeAcpConnection = (
     })
     const updatesPubSub = yield* PubSub.unbounded<SessionNotification>()
     const writeQueue = yield* Queue.unbounded<string>()
+    const encoder = new TextEncoder()
 
     const write = (msg: string) => Queue.offer(writeQueue, msg).pipe(Effect.asVoid)
 
-    // Writer fiber — drains writeQueue to stdin
+    // Writer fiber — drains writeQueue to stdin sink
     const writerFiber = yield* Stream.fromQueue(writeQueue).pipe(
-      Stream.tap((line) => Effect.sync(() => proc.stdin.write(line))),
-      Stream.runDrain,
+      Stream.map((line) => encoder.encode(line)),
+      Stream.run(proc.stdin),
+      Effect.catchEager((err: PlatformError) =>
+        Effect.gen(function* () {
+          const state = yield* Ref.get(stateRef)
+          if (state._tag !== "closed") {
+            yield* Effect.logWarning("acp: writer error").pipe(
+              Effect.annotateLogs({ error: String(err) }),
+            )
+          }
+        }),
+      ),
       Effect.forkScoped,
     )
 
@@ -255,15 +272,12 @@ export const makeAcpConnection = (
       })
 
     // Reader fiber — reads stdout line by line
-    const readerFiber = yield* Stream.fromReadableStream({
-      evaluate: () => proc.stdout,
-      onError: (e) => new AcpError({ message: `stdout read error: ${String(e)}` }),
-    }).pipe(
+    const readerFiber = yield* proc.stdout.pipe(
       Stream.decodeText(),
       splitLines,
       Stream.tap((line) => handleLine(line)),
       Stream.runDrain,
-      Effect.catchEager((err: AcpError) =>
+      Effect.catchEager((err: PlatformError) =>
         Effect.gen(function* () {
           const state = yield* Ref.get(stateRef)
           if (state._tag !== "closed") {
