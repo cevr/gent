@@ -9,11 +9,11 @@
  *
  * @module
  */
-import { Effect } from "effect"
+import { Effect, type Schema } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { type AnyCapabilityContribution, buildToolJsonSchema } from "@gent/core/extensions/api"
+import { buildToolJsonSchema } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -23,8 +23,14 @@ export interface CodemodeServer {
   readonly stop: () => void
 }
 
+interface CodemodeTool {
+  readonly id: string
+  readonly description?: string
+  readonly input: Schema.Schema<unknown>
+}
+
 export interface CodemodeConfig {
-  readonly tools: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools: ReadonlyArray<CodemodeTool>
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
@@ -39,9 +45,7 @@ export interface CodemodeConfig {
  * tool's description AND as the ACP system prompt's tools section
  * (replaces the default per-tool listing for external-routed agents).
  */
-export const generateToolDescription = (
-  tools: ReadonlyArray<AnyCapabilityContribution>,
-): string => {
+export const generateToolDescription = (tools: ReadonlyArray<CodemodeTool>): string => {
   const lines = [
     "Execute JavaScript with access to gent tools.",
     "",
@@ -89,11 +93,8 @@ export const generateToolDescription = (
 
 // ── Proxy factory ──
 
-const makeGentProxy = (
-  tools: ReadonlyArray<AnyCapabilityContribution>,
-  runTool: CodemodeConfig["runTool"],
-) => {
-  const toolNames = new Set(tools.map((t) => t.id))
+const makeGentProxy = (tools: ReadonlyArray<CodemodeTool>, runTool: CodemodeConfig["runTool"]) => {
+  const toolNames = new Set(tools.map((t) => String(t.id)))
 
   return new Proxy(
     {},

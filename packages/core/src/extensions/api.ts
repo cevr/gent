@@ -55,7 +55,6 @@ import type {
 } from "../domain/contribution.js"
 import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
-import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ActionToken } from "../domain/capability/action.js"
 import type { RequestToken } from "../domain/capability/request.js"
 import type { ToolToken } from "../domain/capability/tool.js"
@@ -243,23 +242,12 @@ export {
   type ActionToken,
 } from "../domain/capability/action.js"
 export type {
-  CapabilityToken,
-  CapabilityContribution,
-  AnyCapabilityContribution,
   CapabilityContext,
   CapabilityCoreContext,
   ModelCapabilityContext,
   CapabilityRef,
-  Audience,
-  Intent,
-  ModelAudienceFields,
 } from "../domain/capability.js"
-export {
-  ref,
-  CAPABILITY_REF,
-  CapabilityError,
-  CapabilityNotFoundError,
-} from "../domain/capability.js"
+export { ref, CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,

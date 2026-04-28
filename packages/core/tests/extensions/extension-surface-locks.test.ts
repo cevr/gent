@@ -277,6 +277,20 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadStorageError = PublicExtensionApi.StorageError
     // @ts-expect-error — storage-layer search rows are not public extension authoring API
     type _BadStorageSearchResult = PublicExtensionApi.SearchResult
+    // @ts-expect-error — generic capability substrate is internal; authors use concrete leaf factories
+    type _BadCapabilityToken = PublicExtensionApi.CapabilityToken
+    // @ts-expect-error — generic capability substrate is internal; authors use concrete leaf factories
+    type _BadCapabilityContribution = PublicExtensionApi.CapabilityContribution
+    // @ts-expect-error — generic capability substrate is internal; authors use concrete leaf factories
+    type _BadAnyCapabilityContribution = PublicExtensionApi.AnyCapabilityContribution
+    // @ts-expect-error — audience flags are internal lowering details, not public authoring API
+    type _BadAudience = PublicExtensionApi.Audience
+    // @ts-expect-error — request/tool factory inputs own their intent shape
+    type _BadIntent = PublicExtensionApi.Intent
+    // @ts-expect-error — model-audience metadata is internal lowering detail
+    type _BadModelAudienceFields = PublicExtensionApi.ModelAudienceFields
+    // @ts-expect-error — request refs are read via ref(...); the symbol stays private
+    type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
     // @ts-expect-error — all session facet methods must map storage failures to host errors
     const badSessionError: SessionErrors = new StorageError({ message: "storage failed" })
     // @ts-expect-error — search results must expose branded host-domain ids, not raw storage rows
