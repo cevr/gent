@@ -14,6 +14,8 @@ import type {
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
+import type { ExtensionCapabilityLeaf } from "../../domain/contribution.js"
+import type { ToolToken } from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
@@ -45,7 +47,7 @@ export interface SlashCommand {
 // Resolved snapshot — the immutable compiled state
 
 export interface ResolvedExtensions {
-  readonly modelCapabilities: ReadonlyMap<string, AnyCapabilityContribution>
+  readonly modelCapabilities: ReadonlyMap<string, ToolToken>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
@@ -80,24 +82,26 @@ const compileBucket = <T>(
 
 const compileCapabilityWinners = (
   sorted: ReadonlyArray<LoadedExtension>,
-): ReadonlyMap<string, AnyCapabilityContribution> => {
-  const winners = new Map<string, AnyCapabilityContribution>()
+): ReadonlyMap<string, ExtensionCapabilityLeaf> => {
+  const winners = new Map<string, ExtensionCapabilityLeaf>()
   for (const ext of sorted) {
     // Sorted scope-ascending; later writes win. Iterate every typed bucket
     // for each extension so a later-scope contribution from any bucket
     // shadows an earlier registration with the same id.
     for (const cap of ext.contributions.tools ?? []) {
-      winners.set(cap.id, cap)
+      winners.set(String(cap.id), cap)
     }
     for (const cap of ext.contributions.commands ?? []) {
-      winners.set(cap.id, cap)
+      winners.set(String(cap.id), cap)
     }
     for (const cap of ext.contributions.rpc ?? []) {
-      winners.set(cap.id, cap)
+      winners.set(String(cap.id), cap)
     }
   }
   return winners
 }
+
+const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken => cap.audiences[0] === "model"
 
 const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -143,9 +147,9 @@ export const resolveExtensions = (
   // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
   // override that narrows audiences correctly hides a shadowed builtin tool.
   const capabilityWinners = compileCapabilityWinners(sorted)
-  const modelCapabilities = new Map<string, AnyCapabilityContribution>()
+  const modelCapabilities = new Map<string, ToolToken>()
   for (const [id, cap] of capabilityWinners) {
-    if (!cap.audiences.includes("model")) continue
+    if (!isToolToken(cap)) continue
     modelCapabilities.set(id, cap)
   }
 

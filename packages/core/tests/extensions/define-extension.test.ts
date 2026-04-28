@@ -242,7 +242,7 @@ describe("defineExtension", () => {
         contributions,
       }
       const resolved = resolveExtensions([loaded])
-      expect(resolved.modelCapabilities.get("from-define")?.id).toBe("from-define")
+      expect(String(resolved.modelCapabilities.get("from-define")?.id)).toBe("from-define")
 
       const compiled = compileExtensionReactions([loaded])
       const result = yield* compiled.resolveSystemPrompt(

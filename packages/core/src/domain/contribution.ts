@@ -23,7 +23,6 @@
  */
 import type { Behavior, ServiceKey } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
-import type { CapabilityToken } from "./capability.js"
 import type { ActionToken } from "./capability/action.js"
 import type { RequestToken } from "./capability/request.js"
 import type { ToolToken } from "./capability/tool.js"
@@ -150,6 +149,8 @@ export interface ExtensionContributions {
   readonly pulseTags?: ReadonlyArray<AgentEventTag>
 }
 
+export type ExtensionCapabilityLeaf = ToolToken | ActionToken | RequestToken
+
 // ── Bucket readers ──
 
 /**
@@ -157,9 +158,8 @@ export interface ExtensionContributions {
  * IS the audience discrimination — every entry in `tools:` has
  * `audiences: ["model"]` by construction.
  */
-export const modelCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<CapabilityToken> => contribs.tools ?? []
+export const modelCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ToolToken> =>
+  contribs.tools ?? []
 
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
@@ -167,16 +167,15 @@ export const modelCapabilities = (
  * has audiences ⊆ `{"human-slash", "human-palette", "transport-public"}` by
  * construction.
  */
-export const humanCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<CapabilityToken> => contribs.commands ?? []
+export const humanCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ActionToken> =>
+  contribs.commands ?? []
 
 /**
  * Read all extension-to-extension RPC capabilities from a contributions bag.
  * Bucket name IS the audience discrimination — every entry in `rpc:` has
  * `audiences: ["agent-protocol", "transport-public"]` by construction.
  */
-export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<CapabilityToken> =>
+export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<RequestToken> =>
   contribs.rpc ?? []
 
 // ── Smart constructors ──
