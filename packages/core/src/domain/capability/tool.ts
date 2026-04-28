@@ -26,7 +26,7 @@ import type {
   Intent,
   ModelCapabilityContext,
 } from "../capability.js"
-import type { ToolCallId } from "../ids.js"
+import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 
@@ -48,6 +48,7 @@ export interface ToolToken<Input = unknown, Output = unknown> extends Capability
   Output
 > {
   readonly [ToolTokenBrand]: true
+  readonly id: ToolId
   readonly audiences: readonly ["model"]
 }
 
@@ -139,7 +140,7 @@ export const tool = <
 ): ToolToken<Schema.Schema.Type<Params>, Result> =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken brand applied at factory boundary
   ({
-    id: input.id,
+    id: ToolId.make(input.id),
     description: input.description,
     audiences: ["model"],
     intent: input.intent ?? "write",

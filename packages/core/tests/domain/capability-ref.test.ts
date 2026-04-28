@@ -17,9 +17,45 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { action, ref, request, tool } from "@gent/core/extensions/api"
+import type { CommandId, RpcId, ToolId } from "@gent/core/domain/ids"
 import { ExtensionId } from "@gent/core/domain/ids"
 
 describe("ref(token)", () => {
+  test("factories brand emitted bucket ids while accepting author strings", () => {
+    const toolToken = tool({
+      id: "test.tool",
+      description: "ephemeral",
+      params: Schema.Struct({ x: Schema.String }),
+      execute: () => Effect.succeed("ok"),
+    })
+    const actionToken = action({
+      id: "test.action",
+      name: "Test Action",
+      description: "ephemeral",
+      surface: "palette",
+      input: Schema.Struct({}),
+      output: Schema.Struct({}),
+      execute: () => Effect.succeed({}),
+    })
+    const requestToken = request({
+      id: "test.read",
+      extensionId: ExtensionId.make("ext-test"),
+      intent: "read",
+      input: Schema.Struct({ q: Schema.String }),
+      output: Schema.Struct({ n: Schema.Number }),
+      execute: () => Effect.succeed({ n: 1 }),
+    })
+
+    const toolId: ToolId = toolToken.id
+    const commandId: CommandId = actionToken.id
+    const rpcId: RpcId = requestToken.id
+    expect([String(toolId), String(commandId), String(rpcId)]).toEqual([
+      "test.tool",
+      "test.action",
+      "test.read",
+    ])
+  })
+
   test("returns the typed ref for a request token, preserving id + intent + schema identity", () => {
     const inputSchema = Schema.Struct({ q: Schema.String })
     const outputSchema = Schema.Struct({ n: Schema.Number })

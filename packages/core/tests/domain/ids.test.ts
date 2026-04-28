@@ -16,12 +16,15 @@ import {
   ActorId,
   ArtifactId,
   BranchId,
+  CommandId,
   ExtensionId,
   InteractionRequestId,
   MessageId,
+  RpcId,
   SessionId,
   TaskId,
   ToolCallId,
+  ToolId,
 } from "@gent/core/domain/ids"
 
 describe("branded ids — roundtrip", () => {
@@ -33,6 +36,12 @@ describe("branded ids — roundtrip", () => {
   test("ToolCallId decodes from a plain string and brand survives", () => {
     const id = Schema.decodeUnknownSync(ToolCallId)("tc-1")
     expect(String(id)).toBe("tc-1")
+  })
+
+  test("ToolId, CommandId, RpcId all roundtrip", () => {
+    expect(String(Schema.decodeUnknownSync(ToolId)("read_file"))).toBe("read_file")
+    expect(String(Schema.decodeUnknownSync(CommandId)("executor-start"))).toBe("executor-start")
+    expect(String(Schema.decodeUnknownSync(RpcId)("task.list"))).toBe("task.list")
   })
 
   test("BranchId, MessageId, TaskId, ActorCommandId, ArtifactId all roundtrip", () => {
@@ -76,6 +85,19 @@ describe("branded ids — cross-brand assignability is a type error", () => {
     // @ts-expect-error
     const c: ExtensionId = interaction
     expect([String(a), String(b), String(c)]).toEqual(["@gent/x", "a-1", "int-1"])
+  })
+
+  test("ToolId, CommandId, RpcId are mutually non-assignable", () => {
+    const tool = Schema.decodeUnknownSync(ToolId)("read_file")
+    const command = Schema.decodeUnknownSync(CommandId)("executor-start")
+    const rpc = Schema.decodeUnknownSync(RpcId)("task.list")
+    // @ts-expect-error
+    const a: CommandId = tool
+    // @ts-expect-error
+    const b: RpcId = command
+    // @ts-expect-error
+    const c: ToolId = rpc
+    expect([String(a), String(b), String(c)]).toEqual(["read_file", "executor-start", "task.list"])
   })
 })
 

@@ -19,7 +19,7 @@
  */
 
 import { type Effect, type Schema } from "effect"
-import type { ExtensionId } from "../ids.js"
+import { RpcId, type ExtensionId } from "../ids.js"
 import {
   CAPABILITY_REF,
   type AnyCapabilityContribution,
@@ -49,6 +49,7 @@ export interface RequestToken<Input = unknown, Output = unknown> extends Capabil
   Output
 > {
   readonly [RequestTokenBrand]: true
+  readonly id: RpcId
   readonly audiences: readonly ["agent-protocol", "transport-public"]
 }
 
@@ -141,7 +142,7 @@ export function request(input: {
   } as unknown as CapabilityRef
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
   return {
-    id: input.id,
+    id: RpcId.make(input.id),
     audiences: ["agent-protocol", "transport-public"],
     intent: input.intent,
     input: input.input,

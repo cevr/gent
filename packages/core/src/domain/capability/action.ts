@@ -29,6 +29,7 @@ import type {
   CapabilityToken,
   ModelCapabilityContext,
 } from "../capability.js"
+import { CommandId } from "../ids.js"
 
 export type ActionSurface = "slash" | "palette" | "both"
 
@@ -51,6 +52,7 @@ export interface ActionToken<Input = unknown, Output = unknown> extends Capabili
   Output
 > {
   readonly [ActionTokenBrand]: true
+  readonly id: CommandId
   readonly audiences: ReadonlyArray<"human-slash" | "human-palette" | "transport-public">
 }
 
@@ -114,7 +116,7 @@ export const action = <Input, Output, R>(
     : surfaceToAudiences(input.surface)
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
   return {
-    id: input.id,
+    id: CommandId.make(input.id),
     description: input.description,
     audiences,
     intent: "write",

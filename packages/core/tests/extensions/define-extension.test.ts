@@ -100,7 +100,7 @@ describe("defineExtension", () => {
       })
       const contributions = yield* setupOf(ext)
       const modelCaps = contributions.tools ?? []
-      expect(modelCaps[0]?.id).toBe("echo")
+      expect(String(modelCaps[0]?.id)).toBe("echo")
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
@@ -194,7 +194,7 @@ describe("defineExtension", () => {
           }),
       })
       const contributions = yield* setupOf(ext)
-      expect((contributions.tools ?? [])[0]?.id).toBe("from-effect")
+      expect(String((contributions.tools ?? [])[0]?.id)).toBe("from-effect")
     }),
   )
 
