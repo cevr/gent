@@ -32,7 +32,6 @@ import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
 } from "./extension-reactions.js"
-import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./effect-membrane.js"
 
@@ -68,7 +67,6 @@ export interface ResolvedExtensions {
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly extensionReactions: CompiledExtensionReactions
-  readonly projections: CompiledProjections
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
@@ -366,7 +364,7 @@ export const resolveExtensions = (
   // shadow (codex BLOCKER on C7). Last scope wins by section id, identical
   // to the legacy promptSection contribution semantics.
   // (Dynamic prompt content lives on `Projection.prompt(value)` and is
-  // assembled per-turn by ProjectionRegistry, not here.)
+  // assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const cap of capabilityWinners.values()) {
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
@@ -381,7 +379,6 @@ export const resolveExtensions = (
   }
 
   const extensionReactions = compileExtensionReactions(sorted)
-  const projections = compileProjections(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
@@ -411,7 +408,6 @@ export const resolveExtensions = (
     promptSections: promptSectionsMap,
     permissionRules,
     extensionReactions,
-    projections,
     extensions: sorted,
     failedExtensions: mergedFailures,
     extensionStatuses,

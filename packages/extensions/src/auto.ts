@@ -177,8 +177,8 @@ export const AutoService = ServiceKey<AutoMsg>("@gent/auto/workflow")
 // `projectSnapshot` is the typed RPC reply for `AutoProtocol.GetSnapshot` —
 // other extensions read the auto loop state through this shape. The behavior's
 // `view` slot uses the same projected snapshot to derive prompt sections + tool
-// policy fragments per turn (folded into the projection registry alongside
-// `ProjectionContribution`s in W10-2a.2).
+// policy fragments per turn alongside `ProjectionContribution`s in
+// `ExtensionReactions.resolveTurnProjection`.
 
 const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
   if (state._tag === "Inactive") return { active: false }
@@ -210,8 +210,8 @@ const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
 //
 // Per-turn prompt + tool-policy contribution derived from the actor's
 // current state. `Behavior.view` replaces the standalone `AutoProjection`
-// (W10-2a.3) — the projection registry samples this on every turn via
-// `ActorEngine.peekView` and folds it into the same prompt/policy aggregate
+// (W10-2a.3) — turn reactions sample this on every turn via
+// `ActorEngine.peekView` and fold it into the same prompt/policy aggregate
 // as `ProjectionContribution`s.
 
 const buildPromptSection = (snapshot: AutoSnapshotReply) => {

@@ -70,7 +70,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   )
   // Mirror profile.ts / e2e-layer.ts so projections under `extraLayers`
   // resolve their `MachineExecute` dependency instead of silently defecting
-  // through `ProjectionRegistry`'s failure isolation.
+  // through projection failure isolation.
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   const memoryStorage = Storage.MemoryWithSql()

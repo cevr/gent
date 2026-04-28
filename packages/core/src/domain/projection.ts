@@ -19,7 +19,7 @@
  *      - `policy` — `ToolPolicyFragment` shaping the active tool set
  *      - `systemPrompt` — explicit system-prompt rewrite slot
  *      - `contextMessages` — explicit context-message rewrite slot
- *   3. Is evaluated on demand by `ProjectionRegistry.evaluateTurn(ctx)`
+ *   3. Is evaluated on demand by `ExtensionReactions.resolveTurnProjection(ctx)`
  *      during prompt assembly. There is no per-event reducer.
  *
  * @module
@@ -42,7 +42,7 @@ export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()(
   reason: Schema.String,
 }) {}
 
-/** Turn context — `turn` is required. Used by `evaluateTurn` during prompt
+/** Turn context — `turn` is required. Used by `resolveTurnProjection` during prompt
  *  assembly when prompt sections / tool policy are derived from projections. */
 export interface ProjectionTurnContext {
   readonly sessionId: SessionId

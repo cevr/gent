@@ -1,16 +1,16 @@
 /**
- * ProjectionRegistry regression locks.
+ * Projection-backed turn reaction regression locks.
  *
  * Locks the projection contract:
- *  - `evaluateTurn(ctx)` runs only `prompt`/`policy`-bearing projections;
+ *  - `resolveTurnProjection(ctx)` runs only `prompt`/`policy`-bearing projections;
  *    emits promptSections + policyFragments. `turn` is type-required.
- *  - `query` runs once per projection per evaluator pass
+ *  - query runs once per projection per evaluator pass
  *  - failing query / prompt / policy projector is isolated and skipped
  *  - scope precedence: builtin < user < project (later contributions appear
  *    later in result lists)
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Context, Effect, Layer, Ref, type Schema } from "effect"
+import { Context, Effect, Layer, Ref, Stream, type Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { type Behavior, ServiceKey } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
@@ -24,7 +24,11 @@ import {
 } from "@gent/core/domain/projection"
 import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/domain/read-only"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine.js"
-import { compileProjections } from "../../src/runtime/extensions/projection-registry"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import {
+  Receptionist,
+  type ReceptionistService,
+} from "../../src/runtime/extensions/receptionist.js"
 
 const ext = (
   id: string,
@@ -55,15 +59,18 @@ const turnEvalCtx: ProjectionTurnContext = {
   turn: turnCtx,
 }
 
-// `evaluateTurn` now requires `ActorEngine | Receptionist` so it can sample
+// `resolveTurnProjection` requires `ActorEngine | Receptionist` so it can sample
 // each registered actor's `behavior.view(state)` alongside projections.
 // These tests only exercise the projection path; supplying `ActorEngine.Live`
 // (which composes `Receptionist.Live` via `provideMerge`) keeps actor route
 // collection a no-op when no extensions register actors.
 const evalCtxLayer = ActorEngine.Live
 
-describe("projection registry", () => {
-  it.live("evaluateTurn queries once and runs only prompt/policy projectors", () =>
+const compile = (extensions: ReadonlyArray<LoadedExtension>) =>
+  compileExtensionReactions(extensions)
+
+describe("projection-backed turn reactions", () => {
+  it.live("resolveTurnProjection queries once and runs only prompt/policy projectors", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
       const turnOnly: ProjectionContribution<{ greeting: string }> = {
@@ -73,8 +80,8 @@ describe("projection registry", () => {
         prompt: (v) => [{ id: "g", content: v.greeting, priority: 50 }],
         policy: (v) => ({ include: [v.greeting] }),
       }
-      const compiled = compileProjections([ext("a", "builtin", [turnOnly])])
-      const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      const compiled = compile([ext("a", "builtin", [turnOnly])])
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
       expect(yield* Ref.get(counter)).toBe(1)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("hi")
@@ -89,7 +96,7 @@ describe("projection registry", () => {
       const badFn = (): Effect.Effect<never, ProjectionError> =>
         Effect.fail(new ProjectionError({ projectionId: "bad", reason: "boom" }))
 
-      const compiled = compileProjections([
+      const compiled = compile([
         ext("a", "builtin", [
           { id: "bad", query: badFn, prompt: () => [{ id: "x", content: "x", priority: 1 }] },
           {
@@ -99,7 +106,7 @@ describe("projection registry", () => {
           },
         ]),
       ])
-      const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("good")
     }).pipe(Effect.provide(evalCtxLayer)),
@@ -107,7 +114,7 @@ describe("projection registry", () => {
 
   it.live("prompt sections with same id: higher-scope shadows lower-scope (id-keyed dedup)", () =>
     // Dynamic prompt sections used to be id-keyed in the legacy
-    // registry. After the Projection.prompt migration, evaluateTurn
+    // registry. After the Projection.prompt migration, resolveTurnProjection
     // now dedups by section id with last-write-wins (entries scope-sorted
     // builtin → user → project).
     Effect.gen(function* () {
@@ -118,11 +125,11 @@ describe("projection registry", () => {
         // higher-scope one should survive.
         prompt: (v) => [{ id: "shared-id", content: String(v), priority: 50 }],
       })
-      const compiled = compileProjections([
+      const compiled = compile([
         ext("a-built", "builtin", [make("p1", "builtin-content")]),
         ext("b-proj", "project", [make("p2", "project-content")]),
       ])
-      const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("project-content")
     }).pipe(Effect.provide(evalCtxLayer)),
@@ -137,39 +144,18 @@ describe("projection registry", () => {
           query: () => Effect.succeed(id),
           prompt: (v) => [{ id, content: String(v), priority: 50 }],
         })
-        const compiled = compileProjections([
+        const compiled = compile([
           ext("c-proj", "project", [make("project-section")]),
           ext("a-built", "builtin", [make("builtin-section")]),
           ext("b-user", "user", [make("user-section")]),
         ])
-        const result = yield* compiled.evaluateTurn(turnEvalCtx)
+        const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
         expect(result.promptSections.map((s) => s.content)).toEqual([
           "builtin-section",
           "user-section",
           "project-section",
         ])
       }).pipe(Effect.provide(evalCtxLayer)),
-  )
-
-  it.live("query yields the highest-precedence value, or undefined for missing ids", () =>
-    Effect.gen(function* () {
-      const builtin: ProjectionContribution<string> = {
-        id: "raw",
-        query: () => Effect.succeed("builtin"),
-      }
-      const project: ProjectionContribution<string> = {
-        id: "raw",
-        query: () => Effect.succeed("project"),
-      }
-      const compiled = compileProjections([
-        ext("shared", "builtin", [builtin]),
-        ext("shared", "project", [project]),
-      ])
-      const hit = yield* compiled.query(ExtensionId.make("shared"), "raw", turnEvalCtx)
-      const miss = yield* compiled.query(ExtensionId.make("shared"), "missing", turnEvalCtx)
-      expect(hit).toBe("project")
-      expect(miss).toBeUndefined()
-    }).pipe(Effect.provide(evalCtxLayer)),
   )
 
   it.live("ProjectionContext exposes cwd, home, sessionCwd to query Effect", () =>
@@ -186,8 +172,8 @@ describe("projection registry", () => {
           }),
         prompt: () => [{ id: "p", content: "x", priority: 1 }],
       }
-      const compiled = compileProjections([ext("a", "builtin", [projection])])
-      yield* compiled.evaluateTurn({
+      const compiled = compile([ext("a", "builtin", [projection])])
+      yield* compiled.resolveTurnProjection({
         sessionId: turnCtx.sessionId,
         branchId: turnCtx.branchId,
         cwd: "/proj",
@@ -222,9 +208,9 @@ describe("projection registry", () => {
             }),
           prompt: (v) => [{ id: "g", content: v, priority: 50 }],
         }
-        const compiled = compileProjections([ext("a", "builtin", [projection])])
+        const compiled = compile([ext("a", "builtin", [projection])])
         const result = yield* compiled
-          .evaluateTurn({
+          .resolveTurnProjection({
             ...turnEvalCtx,
             cwd: "/proj",
             home: "/home/test",
@@ -245,7 +231,7 @@ describe("projection registry", () => {
   )
 
   // W10-2a.2: actor `behavior.view(state)` contributes prompt sections + tool
-  // policy fragments to evaluateTurn alongside `ProjectionContribution`.
+  // policy fragments to resolveTurnProjection alongside `ProjectionContribution`.
   // Routes are picked off either an explicit `actorRoute` on the extension
   // or the `serviceKey` on a behavior in the `actors:` bucket; the engine's
   // `peekView` samples each live actor's view at the post-receive state.
@@ -271,8 +257,8 @@ describe("projection registry", () => {
       const engine = yield* ActorEngine
       yield* engine.spawn(viewBehavior)
 
-      // Register the same behavior via an extension's `actorRoute` so the
-      // projection registry can discover the live ref via Receptionist.
+      // Register the same behavior via an extension's `actorRoute` so turn
+      // reactions can discover the live ref via Receptionist.
       const extension: LoadedExtension = {
         manifest: { id: ExtensionId.make("actor-view-ext") },
         scope: "builtin",
@@ -280,12 +266,134 @@ describe("projection registry", () => {
         contributions: { actorRoute: ViewKey },
       }
 
-      const compiled = compileProjections([extension])
-      const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      const compiled = compile([extension])
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
 
       const section = result.promptSections.find((s) => s.id === "actor-view-section")
       expect(section?.content).toBe("count=7")
       expect(result.policyFragments).toContainEqual({ include: ["actor-tool"] })
     }).pipe(Effect.provide(evalCtxLayer)),
   )
+
+  it.live("actor view can be discovered from behavior.serviceKey", () =>
+    Effect.gen(function* () {
+      interface ViewState {
+        readonly label: string
+      }
+      const ViewMsg = TaggedEnumClass("ImplicitRouteMsg", { Ping: {} })
+      type ViewMsg = Schema.Schema.Type<typeof ViewMsg>
+      const ViewKey = ServiceKey<ViewMsg>("implicit-route-view-actor")
+      const viewBehavior: Behavior<ViewMsg, ViewState, never> = {
+        initialState: { label: "implicit-route" },
+        receive: (_msg, state) => Effect.succeed(state),
+        serviceKey: ViewKey,
+        view: (state) => ({
+          prompt: [{ id: "implicit-route-section", content: state.label, priority: 50 }],
+          toolPolicy: { include: ["implicit-route-tool"] },
+        }),
+      }
+
+      const engine = yield* ActorEngine
+      yield* engine.spawn(viewBehavior)
+
+      const extension: LoadedExtension = {
+        manifest: { id: ExtensionId.make("actor-view-implicit-ext") },
+        scope: "builtin",
+        sourcePath: "/test/actor-view-implicit-ext",
+        contributions: { actors: [viewBehavior] },
+      }
+
+      const compiled = compile([extension])
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+
+      expect(result.promptSections).toContainEqual({
+        id: "implicit-route-section",
+        content: "implicit-route",
+        priority: 50,
+      })
+      expect(result.policyFragments).toContainEqual({ include: ["implicit-route-tool"] })
+    }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live("failing actor view sampling is isolated and skipped", () =>
+    Effect.gen(function* () {
+      const ViewMsg = TaggedEnumClass("FailingViewMsg", { Ping: {} })
+      type ViewMsg = Schema.Schema.Type<typeof ViewMsg>
+      const ViewKey = ServiceKey<ViewMsg>("failing-view-actor")
+      const viewBehavior: Behavior<ViewMsg, { readonly count: number }, never> = {
+        initialState: { count: 1 },
+        receive: (_msg, state) => Effect.succeed(state),
+        serviceKey: ViewKey,
+        view: () => {
+          throw new Error("view boom")
+        },
+      }
+
+      const engine = yield* ActorEngine
+      yield* engine.spawn(viewBehavior)
+
+      const projection: ProjectionContribution<string> = {
+        id: "still-runs",
+        query: () => Effect.succeed("projection-ok"),
+        prompt: (value) => [{ id: "projection-section", content: value, priority: 50 }],
+      }
+      const extension: LoadedExtension = {
+        manifest: { id: ExtensionId.make("actor-view-failing-ext") },
+        scope: "builtin",
+        sourcePath: "/test/actor-view-failing-ext",
+        contributions: { actorRoute: ViewKey, projections: [projection] },
+      }
+
+      const compiled = compile([extension])
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+
+      expect(result.promptSections).toContainEqual({
+        id: "projection-section",
+        content: "projection-ok",
+        priority: 50,
+      })
+      expect(result.policyFragments).toEqual([])
+    }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live("failing receptionist lookup is isolated and projection slots continue", () => {
+    const failingReceptionist: Layer.Layer<Receptionist> = Layer.succeed(Receptionist, {
+      register: () => Effect.void,
+      unregister: () => Effect.void,
+      find: () => Effect.die("find failed"),
+      findOne: () => Effect.succeed(undefined),
+      subscribe: () => Stream.empty,
+    } satisfies ReceptionistService)
+    const layer = Layer.merge(
+      ActorEngine.Live.pipe(Layer.provide(failingReceptionist)),
+      failingReceptionist,
+    )
+
+    return Effect.gen(function* () {
+      const ViewMsg = TaggedEnumClass("FailingFindMsg", { Ping: {} })
+      type ViewMsg = Schema.Schema.Type<typeof ViewMsg>
+      const ViewKey = ServiceKey<ViewMsg>("failing-find-view-actor")
+      const projection: ProjectionContribution<string> = {
+        id: "still-runs",
+        query: () => Effect.succeed("projection-ok"),
+        prompt: (value) => [{ id: "projection-section", content: value, priority: 50 }],
+      }
+      const extension: LoadedExtension = {
+        manifest: { id: ExtensionId.make("actor-view-failing-find-ext") },
+        scope: "builtin",
+        sourcePath: "/test/actor-view-failing-find-ext",
+        contributions: { actorRoute: ViewKey, projections: [projection] },
+      }
+
+      const compiled = compile([extension])
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+
+      expect(result.promptSections).toContainEqual({
+        id: "projection-section",
+        content: "projection-ok",
+        priority: 50,
+      })
+      expect(result.policyFragments).toEqual([])
+    }).pipe(Effect.provide(layer))
+  })
 })

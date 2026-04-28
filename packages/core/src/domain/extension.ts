@@ -27,7 +27,7 @@ export interface LoadedExtension {
   readonly sourcePath: string
   /**
    * Typed contribution buckets produced by the extension's setup function.
-   * Consumers (registries, workflow runtime, scheduler, projection registry,
+   * Consumers (registries, workflow runtime, scheduler, turn reactions,
    * etc.) read each bucket directly — `contributions.tools`,
    * `contributions.commands`, `contributions.resources`, etc. The bucket name IS the discrimination;
    * there is no `_kind` discriminator and no `filterByKind`.

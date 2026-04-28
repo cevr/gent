@@ -10,16 +10,21 @@ import type {
   PermissionCheckInput,
   SystemPromptInput,
   ToolExecuteInput,
+  ToolPolicyFragment,
   ToolResultInput,
   TurnAfterInput,
   TurnBeforeInput,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
+import type { ServiceKey } from "../../domain/actor.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
+import { ActorEngine } from "./actor-engine.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
+import { Receptionist } from "./receptionist.js"
 
 export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
@@ -44,6 +49,9 @@ export interface CompiledExtensionReactions {
     input: SystemPromptInput,
     ctx: ExtensionReactionContext,
   ) => Effect.Effect<string>
+  readonly resolveTurnProjection: (
+    ctx: ProjectionTurnContext,
+  ) => Effect.Effect<ExtensionTurnProjection, never, ActorEngine | Receptionist>
   readonly executeTool: (
     input: ToolExecuteInput,
     base: (input: ToolExecuteInput) => Effect.Effect<unknown>,
@@ -64,11 +72,30 @@ export interface CompiledExtensionReactions {
   ) => Effect.Effect<void>
 }
 
+export interface ExtensionTurnProjection {
+  readonly promptSections: ReadonlyArray<PromptSection>
+  readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
+}
+
 interface ProjectionSystemPromptSlot {
   readonly extensionId: ExtensionId
   readonly projectionId: string
   readonly query: AnyProjectionContribution["query"]
   readonly systemPrompt: NonNullable<AnyProjectionContribution["systemPrompt"]>
+}
+
+interface ProjectionTurnSlot {
+  readonly extensionId: ExtensionId
+  readonly projectionId: string
+  readonly query: AnyProjectionContribution["query"]
+  readonly prompt?: NonNullable<AnyProjectionContribution["prompt"]>
+  readonly policy?: NonNullable<AnyProjectionContribution["policy"]>
+}
+
+interface RegisteredActorRoute {
+  readonly extensionId: ExtensionId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ServiceKey<M> is contravariant; storage erases M
+  readonly serviceKey: ServiceKey<any>
 }
 
 interface ProjectionContextMessagesSlot {
@@ -96,6 +123,24 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })
+
+const collectActorRoutes = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<RegisteredActorRoute> => {
+  const routes: RegisteredActorRoute[] = []
+  for (const ext of sortExtensions(extensions)) {
+    const explicit = ext.contributions.actorRoute
+    if (explicit !== undefined) {
+      routes.push({ extensionId: ext.manifest.id, serviceKey: explicit })
+      continue
+    }
+    for (const behavior of ext.contributions.actors ?? []) {
+      if (behavior.serviceKey === undefined) continue
+      routes.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })
+    }
+  }
+  return routes
+}
 
 const runProjectionQuery = (
   extensionId: ExtensionId,
@@ -162,6 +207,8 @@ export const compileExtensionReactions = (
   const sorted = sortExtensions(extensions)
   const systemPromptSlots: ProjectionSystemPromptSlot[] = []
   const contextMessageSlots: ProjectionContextMessagesSlot[] = []
+  const turnProjectionSlots: ProjectionTurnSlot[] = []
+  const actorRoutes = collectActorRoutes(sorted)
   const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
   const messageOutputSlots: RegisteredReaction<MessageOutputInput>[] = []
@@ -183,6 +230,15 @@ export const compileExtensionReactions = (
           projectionId: projection.id,
           query: projection.query,
           contextMessages: projection.contextMessages,
+        })
+      }
+      if (projection.prompt !== undefined || projection.policy !== undefined) {
+        turnProjectionSlots.push({
+          extensionId: ext.manifest.id,
+          projectionId: projection.id,
+          query: projection.query,
+          ...(projection.prompt !== undefined ? { prompt: projection.prompt } : {}),
+          ...(projection.policy !== undefined ? { policy: projection.policy } : {}),
         })
       }
     }
@@ -285,6 +341,83 @@ export const compileExtensionReactions = (
         }
         return current
       }) as Effect.Effect<string>,
+
+    resolveTurnProjection: (ctx) =>
+      Effect.gen(function* () {
+        const sectionsById = new Map<string, PromptSection>()
+        const policyFragments: ToolPolicyFragment[] = []
+
+        for (const slot of turnProjectionSlots) {
+          const value = yield* runProjectionQuery(
+            slot.extensionId,
+            slot.projectionId,
+            slot.query,
+            ctx,
+          )
+          if (value === undefined) continue
+          const prompt = slot.prompt
+          if (prompt !== undefined) {
+            const sectionsExit = yield* Effect.exit(Effect.sync(() => prompt(value)))
+            if (sectionsExit._tag === "Success") {
+              for (const section of sectionsExit.value) sectionsById.set(section.id, section)
+            } else {
+              yield* Effect.logWarning("extension.reaction.prompt-projection.failed").pipe(
+                Effect.annotateLogs({
+                  extensionId: slot.extensionId,
+                  projectionId: slot.projectionId,
+                }),
+              )
+            }
+          }
+          const policy = slot.policy
+          if (policy !== undefined) {
+            const policyExit = yield* Effect.exit(Effect.sync(() => policy(value, ctx)))
+            if (policyExit._tag === "Success") {
+              policyFragments.push(policyExit.value)
+            } else {
+              yield* Effect.logWarning("extension.reaction.policy-projection.failed").pipe(
+                Effect.annotateLogs({
+                  extensionId: slot.extensionId,
+                  projectionId: slot.projectionId,
+                }),
+              )
+            }
+          }
+        }
+
+        if (actorRoutes.length > 0) {
+          const engine = yield* ActorEngine
+          const receptionist = yield* Receptionist
+          for (const route of actorRoutes) {
+            const refsExit = yield* Effect.exit(receptionist.find(route.serviceKey))
+            if (refsExit._tag === "Failure") {
+              yield* Effect.logWarning("extension.actor-view.find.failed").pipe(
+                Effect.annotateLogs({ extensionId: route.extensionId }),
+              )
+              continue
+            }
+            for (const ref of refsExit.value) {
+              const viewExit = yield* Effect.exit(engine.peekView(ref))
+              if (viewExit._tag === "Failure") {
+                yield* Effect.logWarning("extension.actor-view.peek.failed").pipe(
+                  Effect.annotateLogs({ extensionId: route.extensionId }),
+                )
+                continue
+              }
+              const view = viewExit.value
+              if (view === undefined) continue
+              if (view.prompt !== undefined) {
+                for (const section of view.prompt) sectionsById.set(section.id, section)
+              }
+              if (view.toolPolicy !== undefined) {
+                policyFragments.push(view.toolPolicy)
+              }
+            }
+          }
+        }
+
+        return { promptSections: [...sectionsById.values()], policyFragments }
+      }),
 
     executeTool: (input, base) => base(input),
 

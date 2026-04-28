@@ -576,7 +576,7 @@ describe("ExtensionRegistry", () => {
 
   // C7 dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
   // After C7 dynamic content lives on `Projection.prompt(value)` and is
-  // assembled per-turn by ProjectionRegistry, not by `listPromptSections`
+  // assembled per-turn by ExtensionReactions, not by `listPromptSections`
   // (which only sees static sections from `Capability.prompt`).
 })
 

@@ -119,10 +119,10 @@ describe("Executor state machine", () => {
 //
 // `ExecutorActorConfig.derive` is gone. Prompt/policy come from
 // `viewForState(state)` — a pure function of `ExecutorState` sampled by
-// the projection registry via `ActorEngine.peekView`. We test it directly.
+// turn reactions via `ActorEngine.peekView`. We test it directly.
 
 describe("executor viewForState — prompt + tool policy", () => {
-  test("executorBehavior.view is wired so the projection registry samples it", () => {
+  test("executorBehavior.view is wired so turn reactions sample it", () => {
     // Regression-locks the W10-2 seam: if `view` is unset on the
     // behavior, `ActorEngine.peekView` returns undefined and the
     // executor-guidance prompt section / policy exclusions never

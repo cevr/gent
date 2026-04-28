@@ -205,10 +205,10 @@ describe("resolveRuntimeProfile", () => {
 
   // C7 dropped this test: dynamic prompt sections were `DynamicPromptSection`,
   // resolved by `compileBaseSections`. After C7 dynamic content lives on
-  // `Projection.prompt(value)` and is assembled per-turn by ProjectionRegistry,
+  // `Projection.prompt(value)` and is assembled per-turn by ExtensionReactions,
   // not by `compileBaseSections` (which only sees static sections). The
   // equivalent service-yielding-projection behavior is exercised by
-  // `tests/extensions/projection-registry.test.ts`.
+  // `tests/extensions/extension-turn-projections.test.ts`.
   it.live("dynamicExtension resolves through ResolvedExtensions (smoke)", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -218,7 +218,7 @@ describe("resolveRuntimeProfile", () => {
           platform: "darwin",
           extensions: [dynamicExtension],
         })
-        // Projection contributes through the projection registry, not
+        // Projection contributes through turn reactions, not
         // compileBaseSections; assert the extension was wired in.
         expect(profile.resolved.extensions.map((e) => e.manifest.id as string)).toContain(
           "@gent/test-runtime-profile-dynamic",

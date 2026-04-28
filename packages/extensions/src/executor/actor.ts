@@ -96,7 +96,7 @@ const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
 // ── Actor view (prompt + tool policy) ──
 //
 // Pure derivation from `ExecutorState`, sampled via
-// `ActorEngine.peekView` from the projection registry. Replaces the
+// `ActorEngine.peekView` from turn reactions. Replaces the
 // retired `ExecutorProjection` (W10-2): when state is `Ready` and an
 // `executorPrompt` is present, contribute the executor-guidance prompt
 // section; otherwise exclude `execute`/`resume` from the active policy

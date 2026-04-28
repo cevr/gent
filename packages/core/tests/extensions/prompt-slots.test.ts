@@ -65,7 +65,7 @@ describe("prompt slots", () => {
       )
   })
 
-  it.live("empty projection registry is a no-op", () =>
+  it.live("empty turn reactions are a no-op", () =>
     compileExtensionReactions([])
       .resolveSystemPrompt(
         { basePrompt: "x", agent: Agents["cowork"]! },

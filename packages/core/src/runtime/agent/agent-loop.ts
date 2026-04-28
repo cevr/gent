@@ -568,12 +568,8 @@ const resolveTurnContext = (params: {
     // Filter out hidden messages — visible in transcript but excluded from LLM context
     const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
 
-    // Evaluate `ProjectionContribution`-based projections — workflows no
-    // longer carry a `turn.project` bridge field; per-turn prompt/policy is
-    // exclusively the projection registry's responsibility now.
-    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateTurn({
-      ...projectionCtx,
-    })
+    const projEval =
+      yield* params.extensionRegistry.extensionReactions.resolveTurnProjection(projectionCtx)
     const extensionProjections = [
       ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
       ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),

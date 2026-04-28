@@ -228,7 +228,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Read-only call surface for projections — must mirror profile.ts
       // so any remaining ProjectionContribution that requires
       // `MachineExecute` doesn't silently defect under
-      // `ProjectionRegistry`'s failure isolation.
+      // projection failure isolation.
       const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
       // Base services — everything that doesn't depend on reducing event store
