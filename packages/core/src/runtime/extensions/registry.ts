@@ -13,8 +13,8 @@ import type {
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
-import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import type { ExtensionCapabilityLeaf } from "../../domain/contribution.js"
+import type { ActionToken } from "../../domain/capability/action.js"
 import type { ToolToken } from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
@@ -101,7 +101,8 @@ const compileCapabilityWinners = (
   return winners
 }
 
-const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken => cap.audiences[0] === "model"
+const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken =>
+  (cap.audiences as ReadonlyArray<string>).includes("model")
 
 const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -112,22 +113,19 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (
-  extensionId: ExtensionId,
-  cap: AnyCapabilityContribution,
-): SlashCommand => {
+const capabilityToCommand = (extensionId: ExtensionId, cap: ActionToken): SlashCommand => {
   // Prefer cap.description (author-supplied, human-readable) over
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
   const description = cap.description ?? cap.promptSnippet
   return {
-    name: cap.id,
+    name: String(cap.id),
     ...(cap.displayName !== undefined ? { displayName: cap.displayName } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(cap.category !== undefined ? { category: cap.category } : {}),
     ...(cap.keybind !== undefined ? { keybind: cap.keybind } : {}),
     extensionId,
-    capabilityId: cap.id,
+    capabilityId: String(cap.id),
     intent: cap.intent,
   }
 }
@@ -230,7 +228,7 @@ export const resolveExtensions = (
 // ToolPolicy compiler — unified tool filtering + prompt section collection
 
 export interface CompiledToolPolicy {
-  readonly tools: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools: ReadonlyArray<ToolToken>
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
@@ -244,12 +242,12 @@ export interface CompiledToolPolicy {
  * 4. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
-  allTools: ReadonlyArray<AnyCapabilityContribution>,
+  allTools: ReadonlyArray<ToolToken>,
   agent: AgentDefinition,
   runContext: RunContext,
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  const allToolsByName = new Map(allTools.map((t) => [t.id, t]))
+  const allToolsByName = new Map(allTools.map((t) => [String(t.id), t]))
 
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
@@ -267,7 +265,7 @@ export const compileToolPolicy = (
       })
     } else {
       if (policy.include !== undefined) {
-        const existing = new Set(tools.map((t) => t.id))
+        const existing = new Set(tools.map((t) => String(t.id)))
         for (const name of policy.include) {
           if (!existing.has(name)) {
             const t = allToolsByName.get(name)
@@ -280,7 +278,7 @@ export const compileToolPolicy = (
       }
       if (policy.exclude !== undefined) {
         const excludeSet = new Set(policy.exclude)
-        tools = tools.filter((t) => !excludeSet.has(t.id))
+        tools = tools.filter((t) => !excludeSet.has(String(t.id)))
       }
     }
   }
@@ -308,10 +306,8 @@ export const compileToolPolicy = (
 
 export interface ExtensionRegistryService {
   // Model capability resolution
-  readonly getModelCapability: (
-    name: string,
-  ) => Effect.Effect<AnyCapabilityContribution | undefined>
-  readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<AnyCapabilityContribution>>
+  readonly getModelCapability: (name: string) => Effect.Effect<ToolToken | undefined>
+  readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<ToolToken>>
   /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
     agent: AgentDefinition,
@@ -411,11 +407,11 @@ export const listSlashCommands = (
 ): ReadonlyArray<SlashCommand> => {
   const winners = new Map<
     string,
-    { readonly extensionId: ExtensionId; readonly cap: AnyCapabilityContribution }
+    { readonly extensionId: ExtensionId; readonly cap: ActionToken }
   >()
   for (const ext of sortExtensionsByScope(extensions)) {
     for (const cap of ext.contributions.commands ?? []) {
-      winners.set(cap.id, { extensionId: ext.manifest.id, cap })
+      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
     }
   }
   const commands: SlashCommand[] = []
@@ -445,14 +441,14 @@ export const requireAgent = (name: string) =>
 // Tool filtering — pure helper for agent tool visibility
 
 const filterToolsForAgent = (
-  allTools: ReadonlyArray<AnyCapabilityContribution>,
+  allTools: ReadonlyArray<ToolToken>,
   agent: AgentDefinition,
-): AnyCapabilityContribution[] => {
-  let tools: AnyCapabilityContribution[]
+): ToolToken[] => {
+  let tools: ToolToken[]
 
   if (agent.allowedTools !== undefined) {
     const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => names.has(t.id))
+    tools = allTools.filter((t) => names.has(String(t.id)))
   } else {
     tools = [...allTools]
   }
@@ -465,11 +461,8 @@ const filterToolsForAgent = (
 }
 
 /** Re-apply deny filter — extensions can't escape agent denials. */
-const applyDenyFilter = (
-  tools: ReadonlyArray<AnyCapabilityContribution>,
-  agent: AgentDefinition,
-): AnyCapabilityContribution[] => {
+const applyDenyFilter = (tools: ReadonlyArray<ToolToken>, agent: AgentDefinition): ToolToken[] => {
   if (agent.deniedTools === undefined) return [...tools]
   const denied = new Set(agent.deniedTools)
-  return tools.filter((t) => !denied.has(t.id))
+  return tools.filter((t) => !denied.has(String(t.id)))
 }

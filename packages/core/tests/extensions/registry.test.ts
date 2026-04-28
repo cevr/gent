@@ -5,6 +5,7 @@ import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -16,15 +17,13 @@ import type { PromptSection } from "@gent/core/domain/prompt"
 // Test helper: build a no-op model Capability directly. Post-B11.5d the
 // `tool({...})` factory rejects the legacy `{ name, params, execute }`
 // shape, so test fixtures here construct the lowered Capability literal.
-const makeTool = (name: string): AnyCapabilityContribution => ({
-  id: name,
-  description: `test tool ${name}`,
-  audiences: ["model"],
-  intent: "write",
-  input: Schema.Unknown,
-  output: Schema.Unknown,
-  effect: () => Effect.void,
-})
+const makeTool = (name: string): ToolToken =>
+  tool({
+    id: name,
+    description: `test tool ${name}`,
+    params: Schema.Struct({}),
+    execute: () => Effect.void,
+  })
 
 const makeAgent = (
   name: string,
@@ -40,16 +39,14 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
 
 // C7: static prompt sections live on `Capability.prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.
-const promptSectionAsToolContribution = (section: PromptSection): AnyCapabilityContribution => ({
-  id: `section-carrier-${section.id}`,
-  description: `carrier for ${section.id}`,
-  audiences: ["model"],
-  intent: "write",
-  input: Schema.Struct({}),
-  output: Schema.Unknown,
-  prompt: section,
-  effect: () => Effect.void,
-})
+const promptSectionAsToolContribution = (section: PromptSection): ToolToken =>
+  tool({
+    id: `section-carrier-${section.id}`,
+    description: `carrier for ${section.id}`,
+    params: Schema.Struct({}),
+    prompt: section,
+    execute: () => Effect.void,
+  })
 
 // Routes raw capability shapes into the typed bucket that matches their
 // audiences. Bucket name IS the audience discrimination — tests that need
@@ -80,7 +77,7 @@ const makeExt = (
   id: string,
   scope: "builtin" | "user" | "project",
   opts?: {
-    tools?: AnyCapabilityContribution[]
+    tools?: ToolToken[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
@@ -350,7 +347,7 @@ describe("ExtensionRegistry", () => {
   test("registered model capability is findable by name", async () => {
     const registry = await buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })])
     const tool = await Effect.runPromise(registry.getModelCapability("read"))
-    expect(tool?.id).toBe("read")
+    expect(String(tool?.id)).toBe("read")
   })
 
   test("unregistered model capability name returns undefined", async () => {
@@ -385,7 +382,7 @@ describe("ExtensionRegistry", () => {
     const failed = await Effect.runPromise(registry.listFailedExtensions())
     const statuses = await Effect.runPromise(registry.listExtensionStatuses())
 
-    expect(tools.map((tool) => tool.id)).toEqual(["read"])
+    expect(tools.map((tool) => String(tool.id))).toEqual(["read"])
     expect(failed).toEqual([
       {
         manifest: { id: ExtensionId.make("broken") },
@@ -457,7 +454,7 @@ describe("ExtensionRegistry", () => {
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
     expect(tools.length).toBe(1)
-    expect(tools[0]?.id).toBe("read")
+    expect(String(tools[0]?.id)).toBe("read")
   })
 
   test("allowedTools restricts the resolved set to exactly the listed names", async () => {
@@ -474,7 +471,7 @@ describe("ExtensionRegistry", () => {
     ])
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
-    const names = tools.map((t) => t.id)
+    const names = tools.map((t) => String(t.id))
     expect(names).toContain("read")
     expect(names).toContain("bash")
     expect(names).not.toContain("edit")
@@ -493,7 +490,7 @@ describe("ExtensionRegistry", () => {
     ])
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
-    const names = tools.map((t) => t.id)
+    const names = tools.map((t) => String(t.id))
     expect(names).toContain("read")
     expect(names).not.toContain("write")
   })
@@ -514,7 +511,7 @@ describe("ExtensionRegistry", () => {
     const { tools } = await Effect.runPromise(
       registry.resolveToolPolicy(agent, runCtx, [{ toolPolicy: { include: ["secret"] } }]),
     )
-    expect(tools.map((t) => t.id)).not.toContain("secret")
+    expect(tools.map((t) => String(t.id))).not.toContain("secret")
   })
 
   test("registered model driver is findable by ID", async () => {
