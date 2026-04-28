@@ -17,6 +17,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
+import { BadArgument, PlatformError } from "effect/PlatformError"
 import { makeAcpConnection } from "@gent/extensions/acp-agents/protocol"
 
 /**
@@ -40,6 +41,52 @@ const makeFakeProc = () => {
       stdout,
     },
   }
+}
+
+/**
+ * Variant where stdout *ends naturally* after a short delay. Models
+ * "agent process exited cleanly without error" — the runDrain finishes
+ * without throwing. Without the post-runDrain seal in the reader fiber,
+ * pending RPCs would never be failed.
+ */
+const makeFakeProcStdoutEof = () => {
+  const writes: string[] = []
+  const decoder = new TextDecoder()
+  const stdin = Sink.forEach((chunk: Uint8Array) =>
+    Effect.sync(() => writes.push(decoder.decode(chunk))),
+  )
+  // Stream that yields nothing for 50ms then ends — emulates agent
+  // closing stdout after exiting cleanly. The delay gives `initialize`
+  // time to register its pending Deferred before the seal fires.
+  const stdout = Stream.fromEffect(Effect.sleep("50 millis")).pipe(
+    Stream.flatMap(() => Stream.empty),
+  )
+  return { writes, proc: { stdin, stdout } }
+}
+
+/**
+ * Variant where stdout fails with a PlatformError after a short delay.
+ * Models "broken pipe / read error from a dying child process". Without
+ * the reader's catchEager calling failPendingWith, pending RPCs would
+ * be left parked.
+ */
+const makeFakeProcStdoutError = () => {
+  const writes: string[] = []
+  const decoder = new TextDecoder()
+  const stdin = Sink.forEach((chunk: Uint8Array) =>
+    Effect.sync(() => writes.push(decoder.decode(chunk))),
+  )
+  const err = new PlatformError(
+    new BadArgument({
+      module: "test",
+      method: "stdout",
+      description: "simulated read error",
+    }),
+  )
+  // 50ms gives `initialize` time to register its pending Deferred
+  // before the read failure fires.
+  const stdout = Stream.fromEffect(Effect.sleep("50 millis").pipe(Effect.andThen(Effect.fail(err))))
+  return { writes, proc: { stdin, stdout } }
 }
 
 describe("AcpConnection.close", () => {
@@ -192,5 +239,83 @@ describe("AcpConnection.close", () => {
     })
 
     await Effect.runPromise(program)
+  })
+
+  // Counsel BLOCKER #141: writer/reader fibers used to log a warning
+  // and exit on PlatformError without disturbing stateRef or the
+  // pending map. A pending RPC past the registration point would park
+  // forever because handleResponse is the only resolver and the dead
+  // reader will never run it. Both stdio-failure variants below
+  // exercise the failPendingWith hand-off.
+
+  test("stdout error fails in-flight RPCs with AcpClosedError", async () => {
+    const program = Effect.gen(function* () {
+      const scope = yield* Scope.make()
+      const { proc } = makeFakeProcStdoutError()
+      const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
+
+      const inflight = yield* Effect.forkIn(
+        conn.initialize({
+          protocolVersion: 1,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "gent-test", version: "0.0.0" },
+        }),
+        scope,
+      )
+
+      // The fake stdout fails after 5ms; the reader fiber's catchEager
+      // must seal stateRef and fail every pending Deferred. Bound by
+      // timeout so a regression surfaces as a hang.
+      const exit = yield* Fiber.await(inflight).pipe(Effect.timeout("1 seconds"))
+      yield* Scope.close(scope, exit).pipe(Effect.ignore)
+
+      return exit
+    })
+
+    const exit = await Effect.runPromise(program)
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const repr = JSON.stringify(exit.cause)
+      expect(repr).toContain("AcpClosedError")
+      expect(repr).toContain("reader error")
+    }
+  })
+
+  test("stdout natural EOF fails in-flight RPCs with AcpClosedError", async () => {
+    const program = Effect.gen(function* () {
+      const scope = yield* Scope.make()
+      const { proc } = makeFakeProcStdoutEof()
+      const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
+
+      const inflight = yield* Effect.forkIn(
+        conn.initialize({
+          protocolVersion: 1,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "gent-test", version: "0.0.0" },
+        }),
+        scope,
+      )
+
+      // stdout empties without error; the reader fiber's post-runDrain
+      // tap must seal stateRef so pending RPCs see the closure.
+      const exit = yield* Fiber.await(inflight).pipe(Effect.timeout("1 seconds"))
+      yield* Scope.close(scope, exit).pipe(Effect.ignore)
+
+      return exit
+    })
+
+    const exit = await Effect.runPromise(program)
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const repr = JSON.stringify(exit.cause)
+      expect(repr).toContain("AcpClosedError")
+      expect(repr).toContain("stdout closed")
+    }
   })
 })
