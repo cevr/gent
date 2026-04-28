@@ -32,7 +32,6 @@ const buildRuntime = (
       | undefined
   },
   opts: {
-    readonly askDeferred?: Deferred.Deferred<unknown, never>
     readonly requestDeferred?: Deferred.Deferred<unknown, never>
     readonly requestEffect?: () => Effect.Effect<unknown, never>
     readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
@@ -59,8 +58,6 @@ const buildRuntime = (
       makeClientTransportLayer({
         client: {
           extension: {
-            ask: () =>
-              opts.askDeferred === undefined ? Effect.void : waitForDeferred(opts.askDeferred),
             request: () => {
               if (opts.requestEffect !== undefined) return opts.requestEffect()
               if (opts.requestDeferred === undefined) return Effect.void

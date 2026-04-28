@@ -114,8 +114,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       getContent: () => noRpcError(null),
     },
     extension: {
-      send: () => noRpcError(undefined),
-      ask: () => noRpcError(undefined),
       request: () => noRpcError(undefined),
       listSlashCommands: () => noRpcError([]),
       listStatus: () =>
