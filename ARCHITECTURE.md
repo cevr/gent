@@ -188,7 +188,7 @@ client responds via respondInteraction RPC
           → continues normally
 ```
 
-**Projection-driven UI.** The `@gent/interaction-tools` extension contributes a `ProjectionContribution` that derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation. Post-B11.6 the client renders interactions from the typed event feed (`InteractionPresented` and friends on the session stream) — there is no `extensionSnapshots` cache to read from. Source of truth is the storage row, not an in-memory mirror (`derive-do-not-create-states`).
+**Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. There is no `extensionSnapshots` cache and no projection mirror; source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
 
 Key properties:
 
@@ -197,7 +197,7 @@ Key properties:
 - **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
 - **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
 
-Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-tools/projection.ts` (InteractionProjection — UI from storage), `interaction-pending-reader.ts` (read-only seam for extensions), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
+Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-pending-reader.ts` (pending storage read seam), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
 
 ## Platform Boundaries
 
@@ -348,11 +348,11 @@ Other notes:
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
-- `task.list` RPC removed — TUI reads from `TaskProjection` (`packages/extensions/src/task-tools/projection.ts`), which queries `TaskStorage` on demand. The actor no longer mirrors task events; UI snapshot derivation lives in the projection.
+- Task UI reads through typed task RPC and refetches from direct session events (`TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskFailed`, `TaskStopped`, `TaskDeleted`). The actor no longer mirrors task events, and there is no task-list projection.
 - task mutation flows through the extension boundary as typed Capability contributions (`intent: "write"`)
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
 - Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
-- Event-publisher evaluates registered projections (prompt + policy halves only — UI deleted in C2). Client widgets read state via `transport-public` Capabilities + typed events on the normal transport stream
+- Event-publisher persists and broadcasts session events only. Client widgets read state via typed RPC + typed events on the normal transport stream.
 
 ### TUI Extensions
 
@@ -453,9 +453,9 @@ One test file per source file. No god tests. Names match source owners.
 
 ## Interaction Tools Extension
 
-`@gent/interaction-tools` — `ask_user` and `prompt` tools, plus an `InteractionProjection`.
+`@gent/interaction-tools` — `ask_user` and `prompt` tools.
 
-The projection derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation (storage row is the source of truth — no actor mirror). Its UI snapshot shape is `{ requestId?, text?, metadata? }`. Post-B11.6 the TUI renders interactions from the typed event feed (`InteractionPresented` etc.) — routed by `metadata.type`. The projection re-evaluates per `EventPublisherLive` pulse so server-side state stays warm even though the client no longer caches it.
+The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume, but the UI no longer uses a projection or actor mirror.
 
 ## Artifacts Extension
 

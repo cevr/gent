@@ -3,7 +3,6 @@
  *
  * Composition:
  *   - Tools (task_create / task_list / task_get / task_update) for the LLM
- *   - TaskProjection — derives UI snapshot from TaskStorage on demand
  *   - Requests: TaskGet, TaskList, TaskGetDeps, TaskCreate, TaskUpdate,
  *     TaskDelete, TaskAddDep, TaskRemoveDep
  *   - Layer: TaskStorage.Live + TaskService.Live
@@ -23,7 +22,6 @@ import { TaskGetTool } from "./task-get.js"
 import { TaskUpdateTool } from "./task-update.js"
 import { TaskStorage } from "../task-tools-storage.js"
 import { TaskService } from "../task-tools-service.js"
-import { TaskProjection } from "./projection.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 import {
   TaskGetRequest,
@@ -51,7 +49,6 @@ export const TaskExtension = defineExtension({
     TaskAddDepRequest,
     TaskRemoveDepRequest,
   ],
-  projections: [TaskProjection],
   resources: [
     defineResource({
       scope: "process",

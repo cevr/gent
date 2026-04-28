@@ -354,12 +354,6 @@
       "@gent/extensions/interaction-tools/ask-user.js": [
         "./packages/extensions/src/interaction-tools/ask-user.ts"
       ],
-      "@gent/extensions/interaction-tools/projection": [
-        "./packages/extensions/src/interaction-tools/projection.ts"
-      ],
-      "@gent/extensions/interaction-tools/projection.js": [
-        "./packages/extensions/src/interaction-tools/projection.ts"
-      ],
       "@gent/extensions/interaction-tools/prompt": [
         "./packages/extensions/src/interaction-tools/prompt.ts"
       ],
@@ -445,12 +439,6 @@
       "@gent/extensions/task-tools/identity": ["./packages/extensions/src/task-tools/identity.ts"],
       "@gent/extensions/task-tools/identity.js": [
         "./packages/extensions/src/task-tools/identity.ts"
-      ],
-      "@gent/extensions/task-tools/projection": [
-        "./packages/extensions/src/task-tools/projection.ts"
-      ],
-      "@gent/extensions/task-tools/projection.js": [
-        "./packages/extensions/src/task-tools/projection.ts"
       ],
       "@gent/extensions/task-tools/requests": ["./packages/extensions/src/task-tools/requests.ts"],
       "@gent/extensions/task-tools/requests.js": [
