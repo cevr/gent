@@ -1,16 +1,11 @@
 /**
- * ResourceHost — tests for the C3.1 scaffolding.
+ * ResourceHost — service/lifecycle Resource tests.
  *
  * Covers:
- *   - SubscriptionEngine: pub/sub semantics (exact, wildcard, unsubscribe,
- *     handler error isolation, withSubscriptions pre-registration).
  *   - Resource shape: defineResource produces a contribution with
  *     the typed scope literal flowing through the shape.
- *   - Helpers: collectSubscriptions, collectProcessLayers iterate the
- *     LoadedExtension surface correctly.
- *
- * Engines for lifecycle, schedule, and machine arrive in C3.3 / C3.4 /
- * C3.5 alongside their migrations; this file grows with each.
+ *   - Resource layer assembly merges services and runs lifecycle effects.
+ *   - Resource schedule metadata remains attached for the scheduler.
  *
  * @module
  */
@@ -18,138 +13,10 @@
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
-import {
-  SubscriptionEngine,
-  collectSubscriptions,
-  buildResourceLayer,
-} from "../../src/runtime/extensions/resource-host"
-import type { AnyResourceContribution, ResourceBusEnvelope } from "@gent/core/domain/resource"
+import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
+import type { AnyResourceContribution } from "@gent/core/domain/resource"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-
-// ── SubscriptionEngine ──
-
-describe("SubscriptionEngine", () => {
-  const run = <A>(effect: Effect.Effect<A, never, SubscriptionEngine>) =>
-    Effect.runPromise(Effect.provide(effect, SubscriptionEngine.Live))
-
-  test("exact channel match delivers envelope", async () => {
-    const received: ResourceBusEnvelope[] = []
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.on("test:hello", (env) => {
-          received.push(env)
-          return Effect.void
-        })
-        yield* engine.emit({ channel: "test:hello", payload: { msg: "hi" } })
-      }),
-    )
-    expect(received.length).toBe(1)
-    expect(received[0]!.channel).toBe("test:hello")
-    expect(received[0]!.payload).toEqual({ msg: "hi" })
-  })
-
-  test("wildcard pattern matches prefix", async () => {
-    const received: ResourceBusEnvelope[] = []
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.on("agent:*", (env) => {
-          received.push(env)
-          return Effect.void
-        })
-        yield* engine.emit({ channel: "agent:TaskCreated", payload: {} })
-        yield* engine.emit({ channel: "agent:TaskCompleted", payload: {} })
-        yield* engine.emit({ channel: "other:event", payload: {} })
-      }),
-    )
-    expect(received.length).toBe(2)
-    expect(received[0]!.channel).toBe("agent:TaskCreated")
-    expect(received[1]!.channel).toBe("agent:TaskCompleted")
-  })
-
-  test("unsubscribe removes handler", async () => {
-    const received: ResourceBusEnvelope[] = []
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        const unsub = yield* engine.on("test:channel", (env) => {
-          received.push(env)
-          return Effect.void
-        })
-        yield* engine.emit({ channel: "test:channel", payload: "first" })
-        unsub()
-        yield* engine.emit({ channel: "test:channel", payload: "second" })
-      }),
-    )
-    expect(received.length).toBe(1)
-    expect(received[0]!.payload).toBe("first")
-  })
-
-  test("handler errors are caught — other handlers still run", async () => {
-    const received: string[] = []
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.on("test:multi", () => Effect.die("boom"))
-        yield* engine.on("test:multi", (env) => {
-          received.push(env.payload as string)
-          return Effect.void
-        })
-        yield* engine.emit({ channel: "test:multi", payload: "hello" })
-      }),
-    )
-    expect(received).toEqual(["hello"])
-  })
-
-  test("matching handlers run sequentially in registration order", async () => {
-    const received: string[] = []
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.on("test:ordered", () =>
-          Effect.gen(function* () {
-            received.push("first:start")
-            yield* Effect.yieldNow
-            received.push("first:end")
-          }),
-        )
-        yield* engine.on("test:ordered", () =>
-          Effect.sync(() => {
-            received.push("second")
-          }),
-        )
-        yield* engine.emit({ channel: "test:ordered", payload: undefined })
-      }),
-    )
-    expect(received).toEqual(["first:start", "first:end", "second"])
-  })
-
-  test("withSubscriptions pre-registers handlers", async () => {
-    const received: ResourceBusEnvelope[] = []
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.emit({ channel: "pre:registered", payload: "works" })
-      }).pipe(
-        Effect.provide(
-          SubscriptionEngine.withSubscriptions([
-            {
-              pattern: "pre:registered",
-              handler: (env) =>
-                Effect.sync(() => {
-                  received.push(env)
-                }),
-            },
-          ]),
-        ),
-      ),
-    )
-    expect(received.length).toBe(1)
-    expect(received[0]!.payload).toBe("works")
-  })
-})
 
 // ── Resource shape + helpers ──
 
@@ -192,20 +59,6 @@ describe("defineResource", () => {
     expect(r.tag).toBe(TestServiceA)
   })
 
-  test("subscriptions field round-trips", () => {
-    const subscription = {
-      pattern: "test:*",
-      handler: (_env: ResourceBusEnvelope) => Effect.void,
-    }
-    const r = defineResource({
-      scope: "process",
-      layer: layerA,
-      subscriptions: [subscription],
-    })
-    expect(r.subscriptions).toHaveLength(1)
-    expect(r.subscriptions![0]!.pattern).toBe("test:*")
-  })
-
   test("schedule field round-trips", () => {
     const r = defineResource({
       scope: "process",
@@ -221,65 +74,6 @@ describe("defineResource", () => {
     expect(r.schedule).toHaveLength(1)
     expect(r.schedule![0]!.id).toBe("tick")
     expect(r.schedule![0]!.cron).toBe("0 * * * *")
-  })
-})
-
-describe("collectSubscriptions", () => {
-  test("flattens subscriptions across extensions", () => {
-    const ext1 = makeStubExtension("ext1", [
-      defineResource({
-        scope: "process",
-        layer: layerA,
-        subscriptions: [
-          { pattern: "a:*", handler: () => Effect.void },
-          { pattern: "a:exact", handler: () => Effect.void },
-        ],
-      }),
-    ])
-    const ext2 = makeStubExtension("ext2", [
-      defineResource({
-        scope: "process",
-        layer: layerB,
-        subscriptions: [{ pattern: "b:*", handler: () => Effect.void }],
-      }),
-    ])
-    const subs = collectSubscriptions([ext1, ext2])
-    expect(subs).toHaveLength(3)
-    expect(subs.map((s) => s.pattern).sort()).toEqual(["a:*", "a:exact", "b:*"])
-  })
-
-  test("default scope filter is process — non-process subscriptions excluded", () => {
-    const ext = makeStubExtension("ext", [
-      defineResource({
-        scope: "process",
-        layer: layerA,
-        subscriptions: [{ pattern: "p:exact", handler: () => Effect.void }],
-      }),
-      defineResource({
-        scope: "session",
-        layer: layerB,
-        subscriptions: [{ pattern: "s:exact", handler: () => Effect.void }],
-      }),
-    ])
-    const subs = collectSubscriptions([ext])
-    expect(subs.map((s) => s.pattern)).toEqual(["p:exact"])
-  })
-
-  test("explicit scopes filter — request session/branch only", () => {
-    const ext = makeStubExtension("ext", [
-      defineResource({
-        scope: "process",
-        layer: layerA,
-        subscriptions: [{ pattern: "p:exact", handler: () => Effect.void }],
-      }),
-      defineResource({
-        scope: "session",
-        layer: layerB,
-        subscriptions: [{ pattern: "s:exact", handler: () => Effect.void }],
-      }),
-    ])
-    const subs = collectSubscriptions([ext], ["session", "branch"])
-    expect(subs.map((s) => s.pattern)).toEqual(["s:exact"])
   })
 })
 

@@ -13,12 +13,7 @@ import {
   type EventStoreError,
   type EventStoreService,
 } from "../domain/event.js"
-import {
-  SubscriptionEngine,
-  type SubscriptionEngineService,
-} from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { buildPulseIndex, type SessionProfileCacheService } from "../runtime/session-profile.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -30,13 +25,11 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 
 interface InnerPublisherDeps {
   readonly baseEventStore: EventStoreService
-  readonly bus: SubscriptionEngineService | undefined
 }
 
 /**
  * Inner delivery logic. Broadcasts an already-durable event through live
- * subscriptions, machine engine,
- * pulse index, and subscription bus. Used by both `EventPublisherLive`
+ * pulse index. Used by both `EventPublisherLive`
  * (single-profile, ephemeral children) and the router (per-cwd dispatch).
  */
 const deliverInner = (
@@ -51,9 +44,8 @@ const deliverInner = (
     if (sessionId === undefined) return
 
     const branchId = getEventBranchId(event)
-    const extensionSession = { sessionId }
 
-    // Yield the calling fiber before fanning out pulses + bus.emit.
+    // Yield the calling fiber before fanning out pulses.
     //
     // The legacy publisher routed every event through a per-session
     // mailbox (`mailbox.submit`), which forced a fiber yield as it
@@ -101,26 +93,6 @@ const deliverInner = (
         }
       }
     }
-
-    if (deps.bus !== undefined) {
-      yield* deps.bus
-        .emit({
-          channel: `agent:${event._tag}`,
-          payload: event,
-          sessionId,
-          ...(branchId !== undefined ? { branchId } : {}),
-        })
-        .pipe(
-          Effect.provideService(CurrentExtensionSession, extensionSession),
-          Effect.catchEager((error) =>
-            logDeliveryFailure("extension.subscription.emit.failed", {
-              sessionId,
-              event: event._tag,
-              error: String(error),
-            }),
-          ),
-        )
-    }
   })
 
 const makeIdempotentDeliver = (
@@ -148,8 +120,8 @@ const makePublisherContext = (publisher: EventPublisherService) =>
 /**
  * EventPublisher for single-profile contexts (ephemeral children, tests).
  *
- * Yields ActorRouter + ExtensionRegistry + optional SubscriptionEngine
- * once at construction and dispatches all events through them.
+ * Yields ExtensionRegistry once at construction and dispatches all events
+ * through the committed-event fanout.
  */
 export const EventPublisherLive: Layer.Layer<
   EventPublisher | BuiltinEventSink,
@@ -159,10 +131,7 @@ export const EventPublisherLive: Layer.Layer<
   Effect.gen(function* () {
     const baseEventStore = yield* EventStore
     const registry = yield* ExtensionRegistry
-    const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
-    const bus = busOpt._tag === "Some" ? busOpt.value : undefined
-
-    const deps: InnerPublisherDeps = { baseEventStore, bus }
+    const deps: InnerPublisherDeps = { baseEventStore }
     const pulseByTag = buildPulseIndex(registry)
     const deliver = makeIdempotentDeliver((envelope) => deliverInner(envelope, deps, pulseByTag))
 
@@ -198,8 +167,8 @@ export interface EventPublisherRouterHandle {
  * Create a per-cwd EventPublisher router + a handle for late-binding
  * the SessionProfileCache.
  *
- * Dispatches events through the correct cwd's ActorRouter, pulseTags
- * index, and SubscriptionEngine. Falls back to the primary cwd when the
+ * Dispatches events through the correct cwd's pulseTags index.
+ * Falls back to the primary cwd when the
  * session's cwd is unknown or matches the primary.
  *
  * Storage (EventStore.publish) is shared — events go into one store
@@ -219,15 +188,12 @@ export const makeEventPublisherRouter = (): {
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
       const primaryRegistry = yield* ExtensionRegistry
-      const primaryBusOpt = yield* Effect.serviceOption(SubscriptionEngine)
-      const primaryBus = primaryBusOpt._tag === "Some" ? primaryBusOpt.value : undefined
       const cwdRegistry = yield* SessionCwdRegistry
       const platform = yield* RuntimePlatform
 
       const primaryCwd = platform.cwd
       const primaryDeps: InnerPublisherDeps = {
         baseEventStore,
-        bus: primaryBus,
       }
       const primaryPulseByTag = buildPulseIndex(primaryRegistry)
 
@@ -303,7 +269,6 @@ export const makeEventPublisherRouter = (): {
 
           const cwdDeps: InnerPublisherDeps = {
             baseEventStore,
-            bus: profile.subscriptionEngine,
           }
 
           yield* deliverInner(envelope, cwdDeps, profile.pulseByTag)

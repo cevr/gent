@@ -12,8 +12,7 @@
  *
  * Resource-scope routing: today only `scope: "process"` Resources
  * contribute schedules. Session/branch/cwd schedules are not yet a thing
- * (no caller has asked for one); when one does, the engine grows a
- * `scopes` filter parameter the way `collectSubscriptions` did in C3.1.
+ * (no caller has asked for one).
  *
  * @module
  */
@@ -186,9 +185,8 @@ const resolveCronRuntime = (): CronRuntime | undefined => {
 
 /**
  * Collect every `ResourceSchedule` from every Resource matching the
- * requested scopes. Mirrors `collectSubscriptions` / `collectProcessLayers`
- * from C3.1: scope filtering at the collector boundary so non-process
- * schedules cannot accidentally be installed at process scope.
+ * requested scopes. Scope filtering happens at the collector boundary so
+ * non-process schedules cannot accidentally be installed at process scope.
  *
  * Returned tuples carry the owning extension id so reconciliation can
  * namespace + report failures per extension.

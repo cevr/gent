@@ -171,7 +171,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
 
   // Per-cwd EventPublisher router — dispatches events through the correct
-  // cwd's ActorRouter + pulseTags + SubscriptionEngine. The handle
+  // cwd's pulseTags index. The handle
   // receives the SessionProfileCache after it's constructed (breaks
   // circular dep: EventPublisher → baseServicesLive → allDeps → SessionProfileCache).
   const { handle: publisherRouterHandle, layer: eventPublisherRouterLayer } =

@@ -127,16 +127,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       )
       const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
       yield* stateRuntime.send(scope.sessionId, message, scope.branchId)
-      if (deps.bus !== undefined) {
-        yield* deps.bus
-          .emit({
-            channel: `${message.extensionId}:${message._tag}`,
-            payload: message,
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-          })
-          .pipe(Effect.catchEager(() => Effect.void))
-      }
     }),
 
   "extension.ask": ({ sessionId, message, branchId }: AskExtensionMessageInput) =>

@@ -333,7 +333,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("extension reactions, resource subscriptions, and lifecycle hooks reject Promise handlers", () => {
+  test("extension reactions and lifecycle hooks reject Promise handlers", () => {
     defineExtension({
       id: "purity-reaction",
       reactions: {
@@ -343,17 +343,6 @@ describe("Effect-purity locks (compile-time)", () => {
           handler: async () => undefined,
         },
       },
-    })
-    defineResource({
-      scope: "process",
-      layer: Layer.empty,
-      subscriptions: [
-        {
-          pattern: "agent:*",
-          // @ts-expect-error — async handler must not be assignable to Effect-returning bus handler
-          handler: async () => undefined,
-        },
-      ],
     })
     defineResource({
       scope: "process",
@@ -401,7 +390,6 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.empty,
             start: Effect.void,
             stop: Effect.void,
-            subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
             schedule: [
               {
                 id: "j",

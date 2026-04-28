@@ -262,8 +262,6 @@ export type {
   ResourceSpec,
   ResourceScope,
   ScopeOf,
-  ResourceBusEnvelope,
-  ResourceSubscription,
   ResourceSchedule,
 } from "../domain/resource.js"
 export type {

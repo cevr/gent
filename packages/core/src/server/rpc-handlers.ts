@@ -14,7 +14,6 @@ import { SessionQueries } from "./session-queries.js"
 import { SessionCommands } from "./session-commands.js"
 import { EventStore } from "../domain/event.js"
 import { InteractionCommands } from "./interaction-commands.js"
-import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -50,8 +49,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const receptionist = yield* Receptionist
     const extensionRegistry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
-    const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
-    const bus = busOpt._tag === "Some" ? busOpt.value : undefined
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const storageOpt = yield* Effect.serviceOption(Storage)
@@ -115,7 +112,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       extensionStateRuntime,
       extensionRegistry,
       platform,
-      bus,
       storage,
       connectionTracker,
       serverIdentity,

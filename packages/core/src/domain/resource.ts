@@ -1,20 +1,10 @@
 /**
  * Resource — long-lived state with explicit scope.
  *
- * Will replace 5 single-purpose contribution kinds (`layer`, `lifecycle`,
- * `bus-subscription`, `job`, `workflow.machine`) with one primitive that
+ * Replaces single-purpose contribution kinds (`layer`, `lifecycle`,
+ * `job`, `workflow.machine`) with one primitive that
  * carries the unifying concept: "this extension owns a long-lived service
- * with optional periodic work, optional pub/sub subscriptions, optional
- * startup/shutdown, and optionally an internal state machine."
- *
- * Sequencing per `migrate-callers-then-delete-legacy-apis`:
- *   - C3.1: scaffolding — Resource shape + SubscriptionEngine; legacy
- *     hosts untouched.
- *   - C3.2: migrate `layerContribution` callers → defineResource.
- *   - C3.3 (here): schedule engine + `defineResource.schedule`; legacy
- *     scheduler.ts and JobContribution deleted.
- *   - C3.4: migrate `lifecycle` callers → defineResource.start/stop.
- *   - C3.6: delete `bus-subscription` (no production users).
+ * with optional periodic work and optional startup/shutdown."
  *
  * The `scope` discriminator is the load-bearing addition over the legacy
  * kinds — every Resource declares its lifetime as one of:
@@ -33,22 +23,7 @@
 
 import type { Context, Effect, Layer } from "effect"
 import type { AgentName } from "./agent.js"
-import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "./scope-brand.js"
-
-// ── Bus envelope (shared with subscription handlers) ──
-
-/**
- * The shape pub/sub handlers receive. Channel string identifies the topic
- * (`"agent:<EventTag>"` for auto-published agent events, or
- * `"<extensionId>:<channel>"` for extension-targeted side effects).
- */
-export interface ResourceBusEnvelope {
-  readonly channel: string
-  readonly payload: unknown
-  readonly sessionId?: SessionId
-  readonly branchId?: BranchId
-}
 
 // ── Scope discriminator + brand mapping ──
 
@@ -67,33 +42,7 @@ export type ScopeOf<S extends ResourceScope> = S extends "process"
     ? CwdScope
     : EphemeralScope
 
-// ── Subscription + schedule sub-shapes ──
-
-/**
- * One pub/sub subscription. Multiple subscriptions per Resource are allowed.
- * Pattern: exact channel match, or `"<prefix>:*"` wildcard (matches all
- * `"<prefix>:<rest>"` channels). Errors caught per-handler — a failing
- * handler does not affect other subscribers.
- *
- * Handler `R` is `never` at the engine boundary. This matches the legacy
- * `BusHandler` contract: handlers that need their owning Resource's
- * service `A` must close over `A` themselves (typically by composing the
- * subscription handler inside an `Effect.gen` that yields the tag and
- * captures the resolved value before passing the closure to
- * `defineResource`). Authoring the handler with an open `R` channel and
- * relying on the engine to provide it is unsupported — subscriptions live
- * on the SubscriptionEngine layer, not on per-Resource layers, so the
- * engine cannot satisfy per-Resource requirements at emit time.
- *
- * The `Resource.layer` is the right place to provide `A`: subscriptions
- * defined inside a `Layer.scopedDiscard` that yields `A` and registers
- * pre-bound handlers will get `A` for free. C3.6 may revisit this once
- * real call sites exist.
- */
-export interface ResourceSubscription {
-  readonly pattern: string
-  readonly handler: (envelope: ResourceBusEnvelope) => Effect.Effect<void>
-}
+// ── Schedule sub-shape ──
 
 /**
  * One scheduled job. `cron` is a standard cron expression (consumed by
@@ -129,8 +78,6 @@ export interface ResourceSchedule {
  *   `LifecycleContribution` `phase: "startup" | "shutdown"` discriminator.
  *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
  *   may not fail (failures are not propagated through scope teardown).
- * - `subscriptions` — pub/sub handlers registered at install time on the
- *   `SubscriptionEngine` (channel-based exact / `<prefix>:*` wildcard).
  * - `schedule` — periodic jobs reconciled at host startup. Replaces the
  *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
  * - `runtime` — explicit runtime slots for long-lived behavior that reacts
@@ -150,8 +97,8 @@ export interface ResourceContribution<
 > {
   /**
    * Optional canonical service tag. When present, consumers may depend on the
-   * tag without knowing about Resource. The `start`/`stop`/`subscriptions`
-   * effects get `A` in their R channel so they can read the owned service.
+   * tag without knowing about Resource. The `start`/`stop` effects get `A`
+   * in their R channel so they can read the owned service.
    *
    * When absent, the Resource is a pure layer contribution (the `layer` may
    * provide multiple services via `Layer.merge(...)`), and the lifecycle
@@ -167,7 +114,6 @@ export interface ResourceContribution<
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
   readonly start?: Effect.Effect<void, E, A | R | StartR>
   readonly stop?: Effect.Effect<void, never, A>
-  readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
 }
 
@@ -200,7 +146,6 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
    */
   readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>
   readonly stop?: Effect.Effect<void, never, NoInfer<A>>
-  readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
 }
 

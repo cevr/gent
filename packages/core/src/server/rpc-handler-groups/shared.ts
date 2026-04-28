@@ -19,7 +19,6 @@ import type { ActorEngineService } from "../../runtime/extensions/actor-engine.j
 import type { ReceptionistService } from "../../runtime/extensions/receptionist.js"
 import type { ExtensionRegistryService } from "../../runtime/extensions/registry.js"
 import type { ActorRouterService } from "../../runtime/extensions/resource-host/actor-router.js"
-import type { SubscriptionEngineService } from "../../runtime/extensions/resource-host/subscription-engine.js"
 import type { ModelRegistryService } from "../../runtime/model-registry.js"
 
 export interface ResolvedSessionServices {
@@ -45,7 +44,6 @@ export interface RpcHandlerDeps {
   readonly extensionStateRuntime: ActorRouterService
   readonly extensionRegistry: ExtensionRegistryService
   readonly platform: RuntimePlatformShape
-  readonly bus: SubscriptionEngineService | undefined
   readonly storage: StorageService | undefined
   readonly connectionTracker: ConnectionTrackerService | undefined
   readonly serverIdentity: ServerIdentityShape

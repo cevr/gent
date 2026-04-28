@@ -352,7 +352,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     receptionist,
   })
 
-  // Every public session-scoped boundary (dispatch + reads + subscriptions) MUST
+  // Every public session-scoped boundary (dispatch + reads) MUST
   // validate durable existence before proceeding. In-memory tombstones do not
   // survive restart — a read for a deleted session would otherwise fall through
   // to "return idle" in the agent-loop and hide the ghost.

@@ -327,7 +327,7 @@ One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?,
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- **Resource** — `defineResource({ scope, layer?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC callable from transport-public or agent-protocol surfaces; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, transport, and slash registries.
 - **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
@@ -342,15 +342,6 @@ Other notes:
 ### EventPublisher
 
 `EventPublisherRouterLive` (`server/event-publisher.ts`) dispatches through per-cwd profiles. For a single-cwd run the profile is resolved once at boot; for multi-cwd server topologies the router resolves lazily per cwd and fans out to the correct extension runtime. Transport-level broadcast (session stream, WebSocket push) is cwd-agnostic; only the extension runtime dispatch is per-cwd.
-
-### Extension Pub/Sub
-
-`SubscriptionEngine` — channel-based pub/sub for extension communication (`runtime/extensions/resource-host/subscription-engine.ts`).
-
-- Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
-- Subscriptions live on Resources via `defineResource({ subscriptions: [{ pattern: "agent:*", handler }, ...] })` — wildcard `"<prefix>:*"` and exact-match patterns supported
-- Handlers MUST return `Effect<void>` — Effect-native end-to-end, no Promise edges
-- Pub/sub is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
 
 ### Task Service Ownership
 

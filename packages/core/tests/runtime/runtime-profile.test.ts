@@ -13,11 +13,11 @@
  *      C7 was specifically designed to handle.
  *   4. Server-style and per-cwd-style assemblies produce equivalent observable
  *      output (same registry contents, same merged sections). If the per-cwd
- *      path drops Resource subscriptions or skips an extension layer, this fails.
+ *      path skips an extension layer, this fails.
  *
  * If this regresses, the activation paths can drift again — e.g., an
  * extension's prompt section appears at server startup but not in a per-cwd
- * profile, or extension event subscriptions silently disappear in shared mode.
+ * profile.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"

@@ -2,7 +2,7 @@
  * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
  * every composition root that needs to *discover* extensions.
  *
- * Three callers build the same `{ registry, state-runtime, subscription-engine }`
+ * Three callers build the same `{ registry, state-runtime }`
  * shape via the same `buildExtensionLayers` substrate:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
@@ -13,9 +13,8 @@
  *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
  *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
- * All three end up with the same registry / state-runtime / subscription-engine
- * shape — no more drift like the per-cwd path silently dropping pub/sub
- * subscriptions and no more drift between ephemeral and server runtimes.
+ * All three end up with the same registry / state-runtime shape — no more
+ * drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
  * construction paths into a single substrate; downstream code becomes obvious.
@@ -38,11 +37,7 @@ import { DriverRegistry } from "./extensions/driver-registry.js"
 import { ActorRouter } from "./extensions/resource-host/actor-router.js"
 import { MachineExecute } from "./extensions/machine-execute.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
-import {
-  buildResourceLayer,
-  collectSubscriptions,
-  SubscriptionEngine,
-} from "./extensions/resource-host/index.js"
+import { buildResourceLayer } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
 import { ActorHost, ActorHostFailures, type ActorSpawnFailure } from "./extensions/actor-host.js"
 import { Receptionist } from "./extensions/receptionist.js"
@@ -304,8 +299,8 @@ export const compileBaseSections = (
   })
 
 /**
- * Build the extension-side layers (registry, state runtime, pub/sub
- * subscription engine, extension-contributed services) from a resolved profile.
+ * Build the extension-side layers (registry, state runtime, extension-contributed
+ * services) from a resolved profile.
  *
  * Used by the server composition root, the per-cwd cache, and the ephemeral
  * child-run path. Ephemeral runs forward the parent's already-resolved
@@ -333,12 +328,6 @@ export const buildExtensionLayers = (
   // session / branch Resources are routed through the per-cwd / ephemeral
   // composers (added in later commits).
   const resourceLayer = buildResourceLayer(resolved.extensions, "process")
-
-  // Resource subscriptions — single pub/sub host. SubscriptionEngine is
-  // both the agent-event fan-out target (`agent:<EventTag>` envelopes
-  // emitted by EventPublisher / agent-runner) and the registration sink
-  // for `Resource.subscriptions`.
-  const resourceSubscriptions = collectSubscriptions(resolved.extensions)
 
   // Actor engine + host: ActorEngine.Live is self-contained (it
   // composes its own Receptionist). ActorHost walks every extension's
@@ -379,7 +368,6 @@ export const buildExtensionLayers = (
     }),
     extensionRuntimeLive,
     machineExecuteLive,
-    SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
   // Resource layers may declare `R` deps on services from `baseLayers`
@@ -404,9 +392,6 @@ export const buildProfileRuntime = (params: {
     const extensionStateRuntime = Context.get(layerContext, ActorRouter)
     const actorEngine = Context.get(layerContext, ActorEngine)
     const receptionist = Context.get(layerContext, Receptionist)
-    const subscriptionEngineOpt = Context.getOption(layerContext, SubscriptionEngine)
-    const subscriptionEngine =
-      subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
     const actorHostFailures = yield* Context.get(layerContext, ActorHostFailures).snapshot
     const permissionService = makeProfilePermissionService({
       cwd: params.profile.cwd,
@@ -427,7 +412,6 @@ export const buildProfileRuntime = (params: {
       extensionStateRuntime,
       actorEngine,
       receptionist,
-      subscriptionEngine,
       actorHostFailures,
       baseSections,
     }

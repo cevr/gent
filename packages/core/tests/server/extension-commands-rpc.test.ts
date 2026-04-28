@@ -121,7 +121,6 @@ describe("extension command RPCs", () => {
         extensionStateRuntime: Context.get(layerContext, ActorRouter),
         actorEngine: Context.get(layerContext, ActorEngine),
         receptionist: Context.get(layerContext, Receptionist),
-        subscriptionEngine: undefined,
         baseSections: [],
         instructions: "",
         pulseByTag: new Map(),

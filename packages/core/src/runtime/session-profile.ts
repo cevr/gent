@@ -32,7 +32,6 @@ import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-
 import { ActorEngine, type ActorEngineService } from "./extensions/actor-engine.js"
 import { Receptionist, type ReceptionistService } from "./extensions/receptionist.js"
 import { ActorRouter, type ActorRouterService } from "./extensions/resource-host/actor-router.js"
-import { type SubscriptionEngineService } from "./extensions/resource-host/subscription-engine.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
@@ -60,8 +59,6 @@ export interface SessionProfile {
   readonly extensionStateRuntime: ActorRouterService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
-  /** Per-cwd subscription bus. Used by EventPublisher router for per-cwd dispatch. */
-  readonly subscriptionEngine: SubscriptionEngineService | undefined
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
   /**
@@ -188,7 +185,6 @@ export class SessionProfileCache extends Context.Service<
               extensionStateRuntime: runtime.extensionStateRuntime,
               actorEngine: runtime.actorEngine,
               receptionist: runtime.receptionist,
-              subscriptionEngine: runtime.subscriptionEngine,
               baseSections: runtime.baseSections,
               instructions: profileData.instructions,
               pulseByTag: buildPulseIndex(runtime.registryService),
@@ -279,7 +275,6 @@ export class SessionProfileCache extends Context.Service<
             extensionStateRuntime: Context.get(layerContext, ActorRouter),
             actorEngine: Context.get(layerContext, ActorEngine),
             receptionist: Context.get(layerContext, Receptionist),
-            subscriptionEngine: undefined,
             baseSections: [],
             instructions: "",
             pulseByTag: new Map(),

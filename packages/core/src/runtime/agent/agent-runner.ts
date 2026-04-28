@@ -25,8 +25,6 @@ import {
   ToolCallFailed,
   ToolCallStarted,
   ToolCallSucceeded,
-  getEventBranchId,
-  getEventSessionId,
   type AgentEvent,
   type EventStoreService,
   type EventEnvelope,
@@ -58,7 +56,6 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
-import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
 import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -867,7 +864,6 @@ export const InProcessRunner = (
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
-      const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
       // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
       const parentProfile = yield* ServerProfileService
@@ -876,23 +872,7 @@ export const InProcessRunner = (
       const parentServices = yield* Effect.context()
 
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
-      const notifyMirroredEventObservers = (event: AgentEvent) => {
-        const sessionId = getEventSessionId(event)
-        const branchId = getEventBranchId(event)
-        return Effect.all(
-          [
-            busOpt._tag === "Some" && sessionId !== undefined
-              ? busOpt.value.emit({
-                  channel: `agent:${event._tag}`,
-                  payload: event,
-                  sessionId,
-                  branchId,
-                })
-              : Effect.void,
-          ],
-          { discard: true },
-        )
-      }
+      const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
       const publishAgentSwitch = (params: {
         sessionId: SessionId
         branchId: BranchId
@@ -1065,7 +1045,6 @@ export const SubprocessRunner = (
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
-      const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
       // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
       const parentProfile = yield* ServerProfileService
@@ -1075,23 +1054,7 @@ export const SubprocessRunner = (
       const parentServices = yield* Effect.context()
 
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
-      const notifyMirroredEventObservers = (event: AgentEvent) => {
-        const sessionId = getEventSessionId(event)
-        const branchId = getEventBranchId(event)
-        return Effect.all(
-          [
-            busOpt._tag === "Some" && sessionId !== undefined
-              ? busOpt.value.emit({
-                  channel: `agent:${event._tag}`,
-                  payload: event,
-                  sessionId,
-                  branchId,
-                })
-              : Effect.void,
-          ],
-          { discard: true },
-        )
-      }
+      const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
 
       return {
         run: (params) => {

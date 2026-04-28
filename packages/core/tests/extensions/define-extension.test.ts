@@ -87,7 +87,6 @@ describe("defineExtension", () => {
           defineResource({
             scope: "process",
             layer: myLayer,
-            subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
             schedule: [
               {
                 id: "test-job",
@@ -108,7 +107,6 @@ describe("defineExtension", () => {
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
-      expect(resources[0]!.subscriptions?.[0]?.pattern).toBe("agent:*")
     }),
   )
 
@@ -152,28 +150,6 @@ describe("defineExtension", () => {
         // is now sequenced through one Effect, so this is deterministic.
         expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
       }),
-  )
-
-  it.live("multiple Resource subscriptions accumulate", () =>
-    Effect.gen(function* () {
-      const ext = defineExtension({
-        id: "multi",
-        resources: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty as Layer.Layer<unknown>,
-            subscriptions: [
-              { pattern: "a:*", handler: () => Effect.void },
-              { pattern: "b:*", handler: () => Effect.void },
-            ],
-          }) as never,
-        ],
-      })
-      const contributions = yield* setupOf(ext)
-      const resources = contributions.resources ?? []
-      expect(resources).toHaveLength(1)
-      expect(resources[0]!.subscriptions).toHaveLength(2)
-    }),
   )
 
   it.live("Effect-returning bucket factory is awaited", () =>

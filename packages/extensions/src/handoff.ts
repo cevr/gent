@@ -19,7 +19,7 @@ const EXTENSION_ID = HANDOFF_EXTENSION_ID
 //
 // State: a single integer. Suppressed by `Suppress(count)`, decremented on
 // every `TurnCompleted`. The slot handler below tells the actor on every
-// post-turn tick (interim until W10-4 lifts subscriptions to actor messages).
+// post-turn tick.
 // `GetCooldown` is the only legitimate cross-call read — workflows / actors
 // declare effects, projections derive views, and neither owns ad-hoc state
 // peeks (per `composability-not-flags`).
@@ -54,7 +54,7 @@ const cooldownBehavior: Behavior<CooldownMsg, CooldownState, never> = {
     }),
 }
 
-// ── Subscription: turn.after — auto-handoff at context-fill threshold ──
+// ── turn.after reaction — auto-handoff at context-fill threshold ──
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages
@@ -79,7 +79,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     if (cooldownRef === undefined) return
 
     // Decrement bridge: turnAfter is the natural place to drive the
-    // cooldown clock until W10-4 lifts subscriptions to actor messages.
+    // cooldown clock.
     yield* ctx.actors
       .tell(cooldownRef, CooldownMsg.TurnCompleted.make({}))
       .pipe(Effect.catchEager(() => Effect.void))
