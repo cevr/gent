@@ -1,9 +1,9 @@
 /**
- * Public capability host regression locks.
+ * Extension capability registry regression locks.
  *
  * Model tools are compiled through the model tool registry. Public capability
- * host serves extension RPC requests and public human actions invoked through
- * the transport command path.
+ * registries serve extension RPC requests and public human actions invoked
+ * through the transport command path.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
@@ -13,6 +13,7 @@ import {
   CapabilityError,
   CapabilityNotFoundError,
   type ModelCapabilityContext,
+  type AnyCapabilityContribution,
 } from "@gent/core/domain/capability"
 import {
   action,
@@ -22,7 +23,7 @@ import {
   type RequestToken,
   type ToolToken,
 } from "@gent/core/extensions/api"
-import { compileCapabilities } from "../../src/runtime/extensions/capability-host"
+import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
 const extensionId = ExtensionId.make("@test/c")
@@ -75,12 +76,12 @@ const shadowTool = (params?: { readonly id?: string }): ToolToken =>
     execute: (input) => Effect.succeed({ value: input.value }),
   })
 
-describe("capability-host", () => {
+describe("extension capability registries", () => {
   it.live("dispatches request tokens by (extensionId, capabilityId)", () =>
     Effect.gen(function* () {
       const cap = echoRequest()
-      const compiled = compileCapabilities([extWith("builtin", [cap])])
-      const result = yield* compiled.runRequest(extensionId, cap.id, { value: "hi" }, ctx, {
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
         intent: "read",
       })
       expect(result).toEqual({ value: "hi" })
@@ -96,10 +97,16 @@ describe("capability-host", () => {
         sourcePath: "/test/action",
         contributions: { commands: [cap] },
       }
-      const compiled = compileCapabilities([ext])
-      const result = yield* compiled.runTransport(extensionId, cap.id, { value: "hi" }, modelCtx, {
-        intent: "write",
-      })
+      const resolved = resolveExtensions([ext])
+      const result = yield* resolved.transportRegistry.run(
+        extensionId,
+        cap.id,
+        { value: "hi" },
+        modelCtx,
+        {
+          intent: "write",
+        },
+      )
       expect(result).toEqual({ value: "hi" })
     }),
   )
@@ -121,9 +128,9 @@ describe("capability-host", () => {
         sourcePath: "/test/private-action",
         contributions: { commands: [cap] },
       }
-      const compiled = compileCapabilities([ext])
-      const result = yield* compiled
-        .runTransport(extensionId, cap.id, { value: "hi" }, modelCtx, { intent: "write" })
+      const resolved = resolveExtensions([ext])
+      const result = yield* resolved.transportRegistry
+        .run(extensionId, cap.id, { value: "hi" }, modelCtx, { intent: "write" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -141,7 +148,7 @@ describe("capability-host", () => {
         output: Schema.Struct({ value: Schema.String }),
         execute: (input) => Effect.succeed({ value: input.value }),
       })
-      const compiled = compileCapabilities([
+      const resolved = resolveExtensions([
         {
           manifest: { id: extensionId },
           scope: "builtin",
@@ -155,8 +162,8 @@ describe("capability-host", () => {
           contributions: { commands: [project] },
         },
       ])
-      const result = yield* compiled
-        .runTransport(extensionId, project.id, { value: "hi" }, modelCtx, { intent: "write" })
+      const result = yield* resolved.transportRegistry
+        .run(extensionId, project.id, { value: "hi" }, modelCtx, { intent: "write" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -166,7 +173,7 @@ describe("capability-host", () => {
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
       const project = pingAction({ id: "same", value: "project-action" })
-      const compiled = compileCapabilities([
+      const resolved = resolveExtensions([
         {
           manifest: { id: extensionId },
           scope: "builtin",
@@ -180,8 +187,42 @@ describe("capability-host", () => {
           contributions: { commands: [project] },
         },
       ])
-      const result = yield* compiled
-        .runRequest(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
+      const result = yield* resolved.rpcRegistry
+        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
+        .pipe(Effect.flip)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+    }),
+  )
+
+  it.live("request dispatch rejects mixed model and agent-protocol shadowing lower request", () =>
+    Effect.gen(function* () {
+      const builtin = echoRequest({ id: "mixed", value: "builtin-request" })
+      const mixed: AnyCapabilityContribution = {
+        id: "mixed",
+        description: "mixed malformed capability",
+        audiences: ["model", "agent-protocol"],
+        intent: "read",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input) => Effect.succeed({ value: input.value }),
+      }
+      const resolved = resolveExtensions([
+        {
+          manifest: { id: extensionId },
+          scope: "builtin",
+          sourcePath: "/test/builtin-request",
+          contributions: { rpc: [builtin] },
+        },
+        {
+          manifest: { id: extensionId },
+          scope: "project",
+          sourcePath: "/test/project-mixed",
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- regression fixture crafts a malformed mixed-audience runtime-loaded leaf
+          contributions: { rpc: [mixed] as unknown as ReadonlyArray<never> },
+        },
+      ])
+      const result = yield* resolved.rpcRegistry
+        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -191,7 +232,7 @@ describe("capability-host", () => {
     Effect.gen(function* () {
       const builtin = pingAction({ id: "same", value: "builtin-action" })
       const project = shadowTool({ id: "same" })
-      const compiled = compileCapabilities([
+      const resolved = resolveExtensions([
         {
           manifest: { id: extensionId },
           scope: "builtin",
@@ -205,8 +246,8 @@ describe("capability-host", () => {
           contributions: { tools: [project] },
         },
       ])
-      const result = yield* compiled
-        .runTransport(extensionId, builtin.id, { value: "hi" }, modelCtx, { intent: "write" })
+      const result = yield* resolved.transportRegistry
+        .run(extensionId, builtin.id, { value: "hi" }, modelCtx, { intent: "write" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -216,11 +257,11 @@ describe("capability-host", () => {
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "thing", value: "builtin" })
       const project = echoRequest({ id: "thing", value: "project" })
-      const compiled = compileCapabilities([
+      const resolved = resolveExtensions([
         extWith("builtin", [builtin]),
         extWith("project", [project]),
       ])
-      const result = yield* compiled.runRequest(extensionId, project.id, { value: "x" }, ctx, {
+      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "x" }, ctx, {
         intent: "read",
       })
       expect(result).toEqual({ value: "project" })
@@ -245,18 +286,18 @@ describe("capability-host", () => {
         output: Schema.Unknown,
         execute: () => Effect.succeed("project-read"),
       })
-      const compiled = compileCapabilities([
+      const resolved = resolveExtensions([
         extWith("builtin", [writeCap]),
         extWith("project", [readCap]),
       ])
 
-      const readResult = yield* compiled.runRequest(extensionId, readCap.id, null, ctx, {
+      const readResult = yield* resolved.rpcRegistry.run(extensionId, readCap.id, null, ctx, {
         intent: "read",
       })
       expect(readResult).toBe("project-read")
 
-      const writeResult = yield* compiled
-        .runRequest(extensionId, readCap.id, null, ctx, { intent: "write" })
+      const writeResult = yield* resolved.rpcRegistry
+        .run(extensionId, readCap.id, null, ctx, { intent: "write" })
         .pipe(Effect.flip)
       expect(writeResult).toBeInstanceOf(CapabilityNotFoundError)
     }),
@@ -265,9 +306,9 @@ describe("capability-host", () => {
   it.live("input decode failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const cap = echoRequest()
-      const compiled = compileCapabilities([extWith("builtin", [cap])])
-      const result = yield* compiled
-        .runRequest(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const result = yield* resolved.rpcRegistry
+        .run(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       if (!(result instanceof CapabilityError)) return
@@ -286,9 +327,9 @@ describe("capability-host", () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture intentionally violates output contract
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
-      const compiled = compileCapabilities([extWith("builtin", [cap])])
-      const result = yield* compiled
-        .runRequest(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const result = yield* resolved.rpcRegistry
+        .run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       if (!(result instanceof CapabilityError)) return
@@ -306,9 +347,9 @@ describe("capability-host", () => {
         output: Schema.Struct({ value: Schema.String }),
         execute: () => Effect.die("boom"),
       })
-      const compiled = compileCapabilities([extWith("builtin", [cap])])
-      const result = yield* compiled
-        .runRequest(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const result = yield* resolved.rpcRegistry
+        .run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
       if (!(result instanceof CapabilityError)) return

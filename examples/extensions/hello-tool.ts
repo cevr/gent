@@ -17,5 +17,5 @@ const HelloTool = tool({
 
 export default defineExtension({
   id: "hello-tool",
-  capabilities: [HelloTool],
+  tools: [HelloTool],
 })

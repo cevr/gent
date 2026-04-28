@@ -230,9 +230,9 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         },
         hostDeps,
       )
-      const capabilities = registry.getResolved().capabilities
-      const request = capabilities
-        .runTransport(extensionId, capabilityId, input, hostCtx, { intent })
+      const transportRegistry = registry.getResolved().transportRegistry
+      const request = transportRegistry
+        .run(extensionId, capabilityId, input, hostCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({

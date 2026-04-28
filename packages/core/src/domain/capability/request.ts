@@ -2,13 +2,13 @@
  * `request(...)` — typed factory for extension-to-extension Capabilities.
  *
  * Authors call:
- *   - `request({ id, input, output, intent: "read", execute })` for read RPCs
- *   - `request({ id, input, output, intent: "write", execute })` for write RPCs
+ *   - `request({ id, extensionId, input, output, intent: "read", execute })` for read RPCs
+ *   - `request({ id, extensionId, input, output, intent: "write", execute })` for write RPCs
  *
  * Replaces the previous `query(...)` + `mutation(...)` pair. The lowering
  * collapses into one shape with `audiences: ["agent-protocol",
- * "transport-public"]` plus the chosen `intent`. CapabilityHost dispatches
- * by factory-origin metadata; authors never write the audience array.
+ * "transport-public"]` plus the chosen `intent`. Extension registries
+ * dispatch by factory-origin metadata; authors never write the audience array.
  *
  * Read-fence: `intent: "read"` capabilities have `R extends ReadOnlyTag`
  * (a structural narrowing of the constraint to the same brand projection

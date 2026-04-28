@@ -28,7 +28,7 @@ const GreetTool = tool({
 
 export default defineExtension({
   id: "greet-ext",
-  capabilities: [GreetTool],
+  tools: [GreetTool],
 })
 ```
 
@@ -101,7 +101,7 @@ const EchoTool = tool({
 
 export default defineExtension({
   id: "echo-ext",
-  capabilities: [EchoTool],
+  tools: [EchoTool],
 })
 ```
 
@@ -117,11 +117,14 @@ export default defineExtension({
 ### request — extension-to-extension RPC
 
 ```ts
-import { defineExtension, request } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionId, request } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
+
+const StatusExtensionId = ExtensionId.make("status-ext")
 
 const GetStatus = request({
   id: "get-status",
+  extensionId: StatusExtensionId,
   intent: "read",
   input: Schema.Struct({ key: Schema.String }),
   output: Schema.String,
@@ -130,6 +133,7 @@ const GetStatus = request({
 
 const SetStatus = request({
   id: "set-status",
+  extensionId: StatusExtensionId,
   intent: "write",
   input: Schema.Struct({ key: Schema.String, value: Schema.String }),
   output: Schema.Void,
@@ -137,8 +141,8 @@ const SetStatus = request({
 })
 
 export default defineExtension({
-  id: "status-ext",
-  capabilities: [GetStatus, SetStatus],
+  id: String(StatusExtensionId),
+  rpc: [GetStatus, SetStatus],
 })
 ```
 
@@ -159,15 +163,12 @@ const DeployAction = action({
   surface: "slash", // "slash" | "palette" | "both"
   input: Schema.Struct({}),
   output: Schema.Void,
-  execute: (_input, ctx) =>
-    Effect.gen(function* () {
-      yield* ctx.extension.send(ctx.extensionId, deployCommand)
-    }),
+  execute: () => Effect.logInfo("deploy requested"),
 })
 
 export default defineExtension({
   id: "deploy-ext",
-  capabilities: [DeployAction],
+  commands: [DeployAction],
 })
 ```
 

@@ -217,7 +217,7 @@ export { ActorEngine } from "../runtime/extensions/actor-engine.js"
 export { Receptionist } from "../runtime/extensions/receptionist.js"
 
 // B11.5 typed capability factories — `audiences[] + intent` flag matrix
-// is gone from the author surface. `CapabilityHost` dispatches by
+// is gone from the author surface. Extension registries dispatch by
 // factory-origin metadata baked into the lowering. The B11.5 migration
 // window closed in B11.5d; the legacy `defineTool` smart constructor
 // and the dual-shape `tool()` overload were deleted there.

@@ -57,7 +57,7 @@ const makeCtx = Effect.gen(function* () {
   const request = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
     const e = registry
       .getResolved()
-      .capabilities.runRequest(ref.extensionId, ref.capabilityId, input, ctxBase, {
+      .rpcRegistry.run(ref.extensionId, ref.capabilityId, input, ctxBase, {
         intent: ref.intent,
       })
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values

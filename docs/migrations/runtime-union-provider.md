@@ -138,6 +138,7 @@ const GetStatus = query({
 ```ts
 const GetStatus = request({
   id: "get-status",
+  extensionId: ExtensionId.make("status-ext"),
   intent: "read",
   input: Schema.Struct({ key: Schema.String }),
   output: Schema.String,

@@ -1,18 +1,17 @@
 /**
- * Capability — typed callable endpoint shared by all "the runtime calls this
- * Effect" contribution kinds (today: tool, request, command).
+ * Capability — runtime-erased callable endpoint behind the typed authoring
+ * buckets (`tools`, `rpc`, `commands`).
  *
- * Will collapse the per-kind callable contributions (`tool`, `request`,
- * `command`) into one shape distinguished by `audiences` (who
- * may invoke) and `intent` (read vs write). Smart constructors keep the
- * domain names — authors still write `tool(...)`, `request(...)`,
- * `command(...)`.
+ * Authors use the `tool(...)`, `request(...)`, and `action(...)` factories.
+ * Those factories return narrowed tokens that can only be slotted into their
+ * matching `defineExtension` buckets; registry code consumes the erased shape
+ * after package validation/runtime loading.
  *
  * `agent` stays as its own contribution kind (it is a configuration spec
  * with no handler — wrapping it as a Capability would be ceremony).
  *
  * Sequencing per `migrate-callers-then-delete-legacy-apis`:
- *   - C4.1 (here): Capability shape + CapabilityHost skeleton; legacy
+ *   - C4.1: Capability shape + extension registry dispatch; legacy
  *     tool/query/mutation/command kinds untouched.
  *   - C4.2: migrate request read/write flows (only `task-tools` declared them then).
  *   - C4.3: migrate command (only `executor` declares them).
@@ -64,7 +63,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
   },
 ) {}
 
-/** Who may invoke a Capability. Drives dispatch in `CapabilityHost`. */
+/** Who may invoke a Capability. Drives extension registry authorization. */
 export type Audience =
   | "model"
   | "agent-protocol"
@@ -203,10 +202,11 @@ export type AnyCapabilityContribution = CapabilityContribution<any, any, any, an
 
 /**
  * Opaque token returned by the `tool()` / `request()` / `action()` factories.
- * The `capabilities` bucket on `ExtensionContributions` and `DefineExtensionInput`
- * only accepts `CapabilityToken` — not raw `AnyCapabilityContribution` — so
- * authors must go through a typed factory. Internal runtime code (registry,
- * capability-host) consumes `AnyCapabilityContribution` directly.
+ * The typed buckets on `ExtensionContributions` and `DefineExtensionInput`
+ * accept their narrowed token shapes (`ToolToken`, `RequestToken`, `ActionToken`)
+ * rather than raw `AnyCapabilityContribution`, so authors must go through a typed factory.
+ * Internal registry code consumes erased `AnyCapabilityContribution` shapes only at
+ * runtime-loaded boundaries.
  *
  * The `Input`/`Output` parameters carry through from the factory so a typed
  * `ref(token)` accessor can hand callers a `CapabilityRef<Input, Output>`

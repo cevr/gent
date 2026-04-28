@@ -315,14 +315,14 @@ export const makeExtensionHostContext = (
     ask: (message, branchId) =>
       deps.extensionStateRuntime.execute(runInfo.sessionId, message, branchId ?? runInfo.branchId),
     request: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
-      const capabilities = deps.extensionRegistry.getResolved().capabilities
+      const rpcRegistry = deps.extensionRegistry.getResolved().rpcRegistry
       const ctx = {
         sessionId: runInfo.sessionId,
         branchId: runInfo.branchId,
         cwd: runInfo.sessionCwd ?? deps.platform.cwd,
         home: deps.platform.home,
       }
-      const e = capabilities.runRequest(ref.extensionId, ref.capabilityId, input, ctx, {
+      const e = rpcRegistry.run(ref.extensionId, ref.capabilityId, input, ctx, {
         intent: ref.intent,
       })
       const provided =

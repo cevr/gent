@@ -1,8 +1,19 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
-import type { ExtensionId } from "../../domain/ids.js"
+import type { CommandId, ExtensionId, RpcId } from "../../domain/ids.js"
 import type { ModelId } from "../../domain/model.js"
+import type {
+  CapabilityCoreContext,
+  CapabilityError,
+  CapabilityNotFoundError,
+  Intent,
+  ModelCapabilityContext,
+} from "../../domain/capability.js"
+import {
+  CapabilityError as CapabilityErrorClass,
+  CapabilityNotFoundError as CapabilityNotFoundErrorClass,
+} from "../../domain/capability.js"
 import type {
   ExtensionStatusInfo,
   FailedExtension,
@@ -15,14 +26,15 @@ import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import type { ExtensionCapabilityLeaf } from "../../domain/contribution.js"
 import type { ActionToken } from "../../domain/capability/action.js"
+import type { RequestToken } from "../../domain/capability/request.js"
 import type { ToolToken } from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
 } from "./extension-reactions.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
-import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
+import { sealErasedEffect } from "./effect-membrane.js"
 
 // SlashCommand — public-facing slash entry. Built from `Capability` winners
 // whose `audiences.includes("human-slash")`. Read- and write-intent both
@@ -48,6 +60,8 @@ export interface SlashCommand {
 
 export interface ResolvedExtensions {
   readonly modelCapabilities: ReadonlyMap<string, ToolToken>
+  readonly rpcRegistry: CompiledRpcRegistry
+  readonly transportRegistry: CompiledTransportRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
@@ -55,10 +69,38 @@ export interface ResolvedExtensions {
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly extensionReactions: CompiledExtensionReactions
   readonly projections: CompiledProjections
-  readonly capabilities: CompiledCapabilities
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
+}
+
+interface RegisteredCapabilityEntry {
+  readonly extensionId: ExtensionId
+  readonly capability: ExtensionCapabilityLeaf
+}
+
+export interface CapabilityRunOptions {
+  readonly intent?: Intent
+}
+
+export interface CompiledRpcRegistry {
+  readonly run: (
+    extensionId: ExtensionId,
+    capabilityId: RpcId,
+    input: unknown,
+    ctx: CapabilityCoreContext,
+    options?: CapabilityRunOptions,
+  ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
+}
+
+export interface CompiledTransportRegistry {
+  readonly run: (
+    extensionId: ExtensionId,
+    capabilityId: RpcId | CommandId | string,
+    input: unknown,
+    ctx: ModelCapabilityContext,
+    options?: CapabilityRunOptions,
+  ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
 }
 
 type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
@@ -101,12 +143,156 @@ const compileCapabilityWinners = (
   return winners
 }
 
+const compileCapabilityEntries = (
+  sorted: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<RegisteredCapabilityEntry> => {
+  const entries: RegisteredCapabilityEntry[] = []
+  for (const ext of sorted) {
+    for (const capability of ext.contributions.tools ?? []) {
+      entries.push({ extensionId: ext.manifest.id, capability })
+    }
+    for (const capability of ext.contributions.commands ?? []) {
+      entries.push({ extensionId: ext.manifest.id, capability })
+    }
+    for (const capability of ext.contributions.rpc ?? []) {
+      entries.push({ extensionId: ext.manifest.id, capability })
+    }
+  }
+  return entries
+}
+
+const resolveCapabilityEntry = (
+  entries: ReadonlyArray<RegisteredCapabilityEntry>,
+  extensionId: ExtensionId,
+  capabilityId: RpcId | CommandId | string,
+): RegisteredCapabilityEntry | undefined => {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const candidate = entries[i]
+    if (
+      candidate !== undefined &&
+      candidate.extensionId === extensionId &&
+      candidate.capability.id === capabilityId
+    ) {
+      return candidate
+    }
+  }
+  return undefined
+}
+
 const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken =>
   (cap.audiences as ReadonlyArray<string>).includes("model")
+
+const isRequestToken = (cap: ExtensionCapabilityLeaf): cap is RequestToken =>
+  !(cap.audiences as ReadonlyArray<string>).includes("model") &&
+  (cap.audiences as ReadonlyArray<string>).includes("agent-protocol")
 
 const isActionToken = (cap: ExtensionCapabilityLeaf): cap is ActionToken =>
   (cap.audiences as ReadonlyArray<string>).includes("human-slash") ||
   (cap.audiences as ReadonlyArray<string>).includes("human-palette")
+
+const isTransportToken = (cap: ExtensionCapabilityLeaf): cap is RequestToken | ActionToken =>
+  !(cap.audiences as ReadonlyArray<string>).includes("model") &&
+  (cap.audiences as ReadonlyArray<string>).includes("transport-public")
+
+const runExtensionCapability = (
+  extensionId: ExtensionId,
+  capabilityId: RpcId | CommandId | string,
+  capability: RequestToken | ActionToken,
+  input: unknown,
+  ctx: CapabilityCoreContext | ModelCapabilityContext,
+) =>
+  Effect.gen(function* () {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
+    const decodedInput = yield* Schema.decodeUnknownEffect(capability.input as Schema.Any)(
+      input,
+    ).pipe(
+      Effect.catchEager((e) =>
+        Effect.fail(
+          new CapabilityErrorClass({
+            extensionId,
+            capabilityId,
+            reason: `input decode failed: ${String(e)}`,
+          }),
+        ),
+      ),
+    )
+
+    const output = yield* sealErasedEffect(
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential extension leaf
+      () =>
+        capability.effect(
+          decodedInput,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- leaf registry owns erased ctx boundary
+          ctx as Parameters<typeof capability.effect>[1],
+        ),
+      {
+        onFailure: (error) =>
+          Schema.is(CapabilityErrorClass)(error)
+            ? Effect.fail(error)
+            : Effect.fail(
+                new CapabilityErrorClass({
+                  extensionId,
+                  capabilityId,
+                  reason: `handler failure: ${String(error)}`,
+                }),
+              ),
+        onDefect: (defect) =>
+          Effect.fail(
+            new CapabilityErrorClass({
+              extensionId,
+              capabilityId,
+              reason: `handler defect: ${String(defect)}`,
+            }),
+          ),
+      },
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
+    yield* Schema.encodeUnknownEffect(capability.output as Schema.Any)(output).pipe(
+      Effect.catchEager((e) =>
+        Effect.fail(
+          new CapabilityErrorClass({
+            extensionId,
+            capabilityId,
+            reason: `output validation failed: ${String(e)}`,
+          }),
+        ),
+      ),
+    )
+    return output
+  })
+
+const compileRpcRegistry = (
+  entries: ReadonlyArray<RegisteredCapabilityEntry>,
+): CompiledRpcRegistry => ({
+  run: (extensionId, capabilityId, input, ctx, options) =>
+    Effect.gen(function* () {
+      const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
+      if (entry === undefined || !isRequestToken(entry.capability)) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      return yield* runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx)
+    }),
+})
+
+const compileTransportRegistry = (
+  entries: ReadonlyArray<RegisteredCapabilityEntry>,
+): CompiledTransportRegistry => ({
+  run: (extensionId, capabilityId, input, ctx, options) =>
+    Effect.gen(function* () {
+      const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
+      if (entry === undefined || !isTransportToken(entry.capability)) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      return yield* runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx)
+    }),
+})
 
 const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -149,6 +335,9 @@ export const resolveExtensions = (
   // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
   // override that narrows audiences correctly hides a shadowed builtin tool.
   const capabilityWinners = compileCapabilityWinners(sorted)
+  const capabilityEntries = compileCapabilityEntries(sorted)
+  const rpcRegistry = compileRpcRegistry(capabilityEntries)
+  const transportRegistry = compileTransportRegistry(capabilityEntries)
   const modelCapabilities = new Map<string, ToolToken>()
   for (const [id, cap] of capabilityWinners) {
     if (!isToolToken(cap)) continue
@@ -193,7 +382,6 @@ export const resolveExtensions = (
 
   const extensionReactions = compileExtensionReactions(sorted)
   const projections = compileProjections(sorted)
-  const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
@@ -215,6 +403,8 @@ export const resolveExtensions = (
 
   return {
     modelCapabilities,
+    rpcRegistry,
+    transportRegistry,
     agents,
     modelDrivers,
     externalDrivers,
@@ -222,7 +412,6 @@ export const resolveExtensions = (
     permissionRules,
     extensionReactions,
     projections,
-    capabilities,
     extensions: sorted,
     failedExtensions: mergedFailures,
     extensionStatuses,

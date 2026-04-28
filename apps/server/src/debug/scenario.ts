@@ -580,7 +580,7 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
-    const capabilities = registry.getResolved().capabilities
+    const rpcRegistry = registry.getResolved().rpcRegistry
     const ctx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -596,7 +596,7 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = capabilities.runRequest(
+      const e = rpcRegistry.run(
         ExtensionId.make(ref.extensionId),
         RpcId.make(ref.capabilityId),
         input,
