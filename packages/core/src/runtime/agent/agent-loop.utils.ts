@@ -1,6 +1,6 @@
 import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition } from "../../domain/agent.js"
-import type { AnyCapabilityContribution } from "../../domain/capability.js"
+import type { ToolToken } from "../../domain/capability/tool.js"
 import {
   type ReasoningPart,
   type Message,
@@ -26,7 +26,7 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<AnyCapabilityContribution>,
+  tools: ReadonlyArray<ToolToken>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): ReadonlyArray<PromptSection> => {
@@ -113,7 +113,7 @@ export const buildTurnPromptSections = (
 export const buildTurnPrompt = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<AnyCapabilityContribution>,
+  tools: ReadonlyArray<ToolToken>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): string =>

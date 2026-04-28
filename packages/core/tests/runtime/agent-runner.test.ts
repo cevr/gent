@@ -262,7 +262,7 @@ describe("RunSpec", () => {
           assertRequest: (request) => {
             expect(request.model).toBe("custom/model")
             expect(request.reasoning).toBe("high")
-            expect(request.tools?.map((candidate) => candidate.id)).toEqual(["bash"])
+            expect(request.tools?.map((candidate) => String(candidate.id))).toEqual(["bash"])
           },
         },
       ]),

@@ -30,7 +30,6 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -55,7 +54,7 @@ export interface ActorHarnessOptions {
   readonly sessionId?: SessionId
   readonly branchId?: BranchId
   readonly agent?: AgentDefinition
-  readonly allTools?: ReadonlyArray<AnyCapabilityContribution>
+  readonly allTools?: ReadonlyArray<ToolToken>
 }
 
 // ── Event Factories ──

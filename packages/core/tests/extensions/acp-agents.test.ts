@@ -6,13 +6,14 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Schema } from "effect"
-import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import {
   ReasoningDelta,
   TextDelta,
   ToolCompleted,
   ToolFailed,
   ToolStarted,
+  tool,
+  type ToolToken,
 } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/extensions/internal.js"
 import { ToolResultPart } from "../../src/domain/message.js"
@@ -260,15 +261,12 @@ describe("codemode proxy", () => {
   test("dispatches known tool to runTool", async () => {
     const calls: Array<{ toolName: string; args: unknown }> = []
 
-    const mockTool: AnyCapabilityContribution = {
+    const mockTool: ToolToken = tool({
       id: "echo",
       description: "echo tool",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Struct({ text: Schema.String }),
-      output: Schema.Unknown,
-      effect: () => Effect.succeed({ echoed: true }),
-    }
+      params: Schema.Struct({ text: Schema.String }),
+      execute: () => Effect.succeed({ echoed: true }),
+    })
 
     const server = await Effect.runPromise(
       startCodemodeServer({
@@ -393,15 +391,12 @@ describe("codemode proxy via makeAcpRunTool", () => {
     ) as unknown as Context.Context<never>
     const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
 
-    const mockTool: AnyCapabilityContribution = {
+    const mockTool: ToolToken = tool({
       id: "echo",
       description: "echo tool",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Struct({ text: Schema.String }),
-      output: Schema.Unknown,
-      effect: () => Effect.succeed({ echoed: true }),
-    }
+      params: Schema.Struct({ text: Schema.String }),
+      execute: () => Effect.succeed({ echoed: true }),
+    })
 
     const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
 
@@ -445,15 +440,12 @@ describe("codemode proxy via makeAcpRunTool", () => {
     ) as unknown as Context.Context<never>
     const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
 
-    const mockTool: AnyCapabilityContribution = {
+    const mockTool: ToolToken = tool({
       id: "echo",
       description: "echo",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Struct({ text: Schema.String }),
-      output: Schema.Unknown,
-      effect: () => Effect.succeed({ echoed: true }),
-    }
+      params: Schema.Struct({ text: Schema.String }),
+      execute: () => Effect.succeed({ echoed: true }),
+    })
 
     const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
 

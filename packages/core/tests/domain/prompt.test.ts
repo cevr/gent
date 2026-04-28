@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   buildSystemPrompt,
   buildBasePromptSections,
@@ -9,7 +9,7 @@ import {
 } from "@gent/core/domain/prompt"
 import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 
 describe("buildSystemPrompt", () => {
   const base = {
@@ -153,17 +153,22 @@ describe("withSectionMarkers / sectionPatternFor", () => {
 describe("buildTurnPrompt", () => {
   const makeTool = (
     id: string,
-    overrides: Partial<AnyCapabilityContribution> = {},
-  ): AnyCapabilityContribution => ({
-    id,
-    description: id,
-    audiences: ["model"],
-    intent: "write",
-    input: Schema.Struct({}),
-    output: Schema.Unknown,
-    effect: (() => {}) as never,
-    ...overrides,
-  })
+    overrides: {
+      readonly description?: string
+      readonly promptSnippet?: string
+      readonly promptGuidelines?: ReadonlyArray<string>
+    } = {},
+  ): ToolToken =>
+    tool({
+      id,
+      description: overrides.description ?? id,
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed(undefined),
+      ...(overrides.promptSnippet !== undefined ? { promptSnippet: overrides.promptSnippet } : {}),
+      ...(overrides.promptGuidelines !== undefined
+        ? { promptGuidelines: overrides.promptGuidelines }
+        : {}),
+    })
 
   const agent = AgentDefinition.make({
     name: AgentName.make("test-agent"),

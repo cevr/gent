@@ -26,7 +26,7 @@ import {
   type RunSpec,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import { type AnyCapabilityContribution } from "../../domain/capability.js"
+import type { ToolToken } from "../../domain/capability/tool.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../../domain/queue.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import {
@@ -335,7 +335,7 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
 
 interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
-  tools: ReadonlyArray<AnyCapabilityContribution>
+  tools: ReadonlyArray<ToolToken>
 }
 
 type AssistantResponsePart = TextPart | ReasoningPart | ImagePart | ToolCallPart

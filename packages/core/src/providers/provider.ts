@@ -1,5 +1,5 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import type { AnyCapabilityContribution } from "../domain/capability.js"
+import type { ToolToken } from "../domain/capability/tool.js"
 import type { Message } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
@@ -174,7 +174,7 @@ interface ProviderRequestBase {
 export interface ProviderRequest<
   Tools extends ProviderToolMap = ProviderToolMap,
 > extends ProviderRequestBase {
-  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools?: ReadonlyArray<ToolToken>
   readonly toolkit?: AiToolkit.WithHandler<Tools>
 }
 
@@ -214,7 +214,7 @@ export interface ProviderService {
       request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
     ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
     (
-      request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
+      request: ProviderRequest & { readonly tools: ReadonlyArray<ToolToken> },
     ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
     (request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
   }
@@ -229,7 +229,7 @@ export interface ProviderService {
 // Tool JSON schema conversion — canonical implementation in domain/tool-schema.ts
 import { buildToolJsonSchema } from "../domain/tool-schema.js"
 
-const toCapabilityTool = (capability: AnyCapabilityContribution): AiTool.Any =>
+const toCapabilityTool = (capability: ToolToken): AiTool.Any =>
   AiTool.dynamic(capability.id, {
     description: capability.description ?? "",
     parameters: buildToolJsonSchema(capability),
@@ -253,9 +253,7 @@ const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
     ),
 })
 
-function convertTools(
-  tools: ReadonlyArray<AnyCapabilityContribution>,
-): AiToolkit.WithHandler<ProviderToolMap> {
+function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.WithHandler<ProviderToolMap> {
   const toolsRecord: ProviderToolMap = {}
 
   for (const capability of tools) {
@@ -644,7 +642,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
         request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
       ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
       function stream(
-        request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
+        request: ProviderRequest & { readonly tools: ReadonlyArray<ToolToken> },
       ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
       function stream(
         request: ProviderRequest,

@@ -32,7 +32,7 @@ import { Schema, type Effect, type Layer, type Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
-import type { AnyCapabilityContribution } from "./capability.js"
+import type { ToolToken } from "./capability/tool.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import { ToolCallId, type BranchId, type SessionId } from "./ids.js"
 import type { Message } from "./message.js"
@@ -263,7 +263,7 @@ export interface TurnContext {
   readonly branchId: BranchId
   readonly agent: AgentDefinition
   readonly messages: ReadonlyArray<Message>
-  readonly tools: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools: ReadonlyArray<ToolToken>
   readonly systemPrompt: string
   readonly cwd: string
   readonly abortSignal: AbortSignal

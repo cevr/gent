@@ -14,7 +14,7 @@ import {
   ExternalDriverRef,
   ModelDriverRef,
 } from "@gent/core/domain/agent"
-import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -25,15 +25,12 @@ const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
 
-const fakeTool: AnyCapabilityContribution = {
+const fakeTool: ToolToken = tool({
   id: "echo",
   description: "echo tool",
-  audiences: ["model"],
-  intent: "write",
-  input: Schema.Struct({ text: Schema.String }),
-  output: Schema.Unknown,
-  effect: () => Effect.succeed({ ok: true }),
-}
+  params: Schema.Struct({ text: Schema.String }),
+  execute: () => Effect.succeed({ ok: true }),
+})
 
 const stubHostCtx = {} as ExtensionHostContext
 const stubProjectionCtx = {
@@ -69,7 +66,7 @@ const runHandler = async (input: {
   readonly agent: AgentDefinition
   readonly driverSource?: "config" | "default"
   readonly driverToolSurface?: "native" | "codemode"
-  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools?: ReadonlyArray<ToolToken>
 }) =>
   Effect.runPromise(
     (await getRuntimeSlots()).resolveSystemPrompt(input, {

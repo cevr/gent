@@ -2,7 +2,7 @@ import type { Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
-import type { AnyCapabilityContribution } from "./capability"
+import type { ToolToken } from "./capability/tool.js"
 import { BranchId, ExtensionId, SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
@@ -141,7 +141,7 @@ export interface SystemPromptInput {
    * Tools resolved for this turn. ACP-aware hooks need this to render
    * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
    */
-  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
+  readonly tools?: ReadonlyArray<ToolToken>
   /**
    * Tool surface declared by the resolved driver (`"native"` or
    * `"codemode"`). Set by the agent loop from
@@ -280,7 +280,7 @@ export interface ExtensionReduceContext {
 
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
-  readonly allTools: ReadonlyArray<AnyCapabilityContribution>
+  readonly allTools: ReadonlyArray<ToolToken>
 }
 
 /** @deprecated Use ExtensionTurnContext */

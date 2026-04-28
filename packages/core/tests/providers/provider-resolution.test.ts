@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Cause, Effect, Layer, Schema, Stream } from "effect"
-import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -81,15 +81,12 @@ const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
 })
 
 const EchoParams = Schema.Struct({ text: Schema.String })
-const echoCapability: AnyCapabilityContribution = {
+const echoCapability: ToolToken = tool({
   id: "echo",
   description: "Echo input",
-  audiences: ["model"],
-  intent: "write",
-  input: EchoParams,
-  output: Schema.Unknown,
-  effect: () => Effect.succeed("echoed"),
-}
+  params: EchoParams,
+  execute: () => Effect.succeed("echoed"),
+})
 
 const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({
   manifest: { id: ExtensionId.make(extId) },

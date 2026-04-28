@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import type { AnyCapabilityContribution } from "../../domain/capability.js"
+import type { ToolToken } from "../../domain/capability/tool.js"
 import { type ToolContext } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
@@ -90,8 +90,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
-            const tool: AnyCapabilityContribution | undefined =
-              yield* activeRegistry.getModelCapability(toolCall.toolName)
+            const tool: ToolToken | undefined = yield* activeRegistry.getModelCapability(
+              toolCall.toolName,
+            )
             if (tool === undefined) {
               yield* WideEvent.set({ toolError: ToolError.Unknown })
               yield* Effect.logInfo("tool.unknown").pipe(

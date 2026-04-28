@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer, Ref, Stream } from "effect"
+import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -39,6 +39,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
 import { Agents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
+import { tool, type ToolToken } from "@gent/core/extensions/api"
 
 // ── Helpers ──
 
@@ -105,10 +106,18 @@ const makeFailingExecutor = (message: string): TurnExecutor => ({
 
 const externalAgent = AgentDefinition.make({
   name: "test-external" as never,
+  allowedTools: ["context_probe"],
   driver: ExternalDriverRef.make({ id: "test-runner" }),
 })
 
-const makeResolved = (executor: TurnExecutor) =>
+const contextProbeTool: ToolToken = tool({
+  id: "context_probe",
+  description: "Probe tool context",
+  params: Schema.Struct({ value: Schema.String }),
+  execute: () => Effect.succeed({ ok: true }),
+})
+
+const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolToken> = []) =>
   resolveExtensions([
     {
       manifest: { id: ExtensionId.make("test-ext") },
@@ -116,18 +125,19 @@ const makeResolved = (executor: TurnExecutor) =>
       sourcePath: "test",
       contributions: {
         agents: [externalAgent],
+        tools,
         externalDrivers: [{ id: "test-runner", executor, invalidate: () => Effect.void }],
       },
     },
   ])
 
-const makeExtRegistry = (executor: TurnExecutor) =>
-  ExtensionRegistry.fromResolved(makeResolved(executor))
+const makeExtRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolToken>) =>
+  ExtensionRegistry.fromResolved(makeResolved(executor, tools))
 
-const makeDriverRegistry = (executor: TurnExecutor) =>
+const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolToken>) =>
   DriverRegistry.fromResolved({
-    modelDrivers: makeResolved(executor).modelDrivers,
-    externalDrivers: makeResolved(executor).externalDrivers,
+    modelDrivers: makeResolved(executor, tools).modelDrivers,
+    externalDrivers: makeResolved(executor, tools).externalDrivers,
   })
 
 /** Counting event store that captures published events. */
@@ -147,7 +157,11 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
     removeSession: () => Effect.void,
   })
 
-const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEvent[]>) => {
+const makeLayerWithEvents = (
+  executor: TurnExecutor,
+  eventsRef: Ref.Ref<AgentEvent[]>,
+  options?: { readonly tools?: ReadonlyArray<ToolToken> },
+) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
   const providerLayer = Layer.succeed(Provider, {
     stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
@@ -157,8 +171,8 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
-    makeExtRegistry(executor),
-    makeDriverRegistry(executor),
+    makeExtRegistry(executor, options?.tools),
+    makeDriverRegistry(executor, options?.tools),
     ActorRouter.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
@@ -218,7 +232,7 @@ describe("external turn execution", () => {
       Finished.make({ stopReason: "stop" }),
     ])
 
-    const layer = makeLayerWithEvents(executor, eventsRef)
+    const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -386,7 +400,7 @@ describe("external turn execution", () => {
       capturedCtx = ctx
     })
 
-    const layer = makeLayerWithEvents(executor, eventsRef)
+    const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -403,6 +417,7 @@ describe("external turn execution", () => {
     expect(capturedCtx!.agent.name).toBe(AgentName.make("test-external"))
     expect(capturedCtx!.cwd).toBe("/tmp")
     expect(capturedCtx!.abortSignal).toBeDefined()
+    expect(capturedCtx!.tools.map((candidate) => String(candidate.id))).toEqual(["context_probe"])
   })
 
   test("executor receives all live user message parts", async () => {
