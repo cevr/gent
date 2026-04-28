@@ -39,7 +39,12 @@ import {
 } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
-import { tool, type AnyResourceContribution, type ToolToken } from "@gent/core/extensions/api"
+import {
+  tool,
+  ToolNeeds,
+  type AnyResourceContribution,
+  type ToolToken,
+} from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
 import {
   EventEnvelope,
@@ -1397,9 +1402,8 @@ describe("concurrency", () => {
     const makeSerialTool = (name: string) =>
       tool({
         id: name,
-        // All instances of "serial tool" share one resource lock — same
-        // behavior as the old `concurrency: "serial"` flag for one tool.
-        resources: ["test-serial"],
+        // All instances share one write need and therefore cannot overlap.
+        needs: [ToolNeeds.write("test-serial")],
         description: `Serial tool ${name}`,
         params: Schema.Struct({}),
         execute: () =>
@@ -1842,7 +1846,7 @@ describe("interaction", () => {
     tool({
       id: "interaction-tool",
       description: "Tool that triggers an interaction",
-      resources: ["interaction-tool"],
+      needs: [ToolNeeds.write("interaction")],
       params: Schema.Struct({ value: Schema.String }),
       execute: (params: { value: string }, ctx: ToolContext) =>
         Effect.gen(function* () {
@@ -2443,7 +2447,7 @@ describe("recovery", () => {
   const idempotentTestTool = tool({
     id: "test-idempotent",
     description: "Test idempotent tool",
-    idempotent: true,
+    needs: [ToolNeeds.read("recovery")],
     params: Schema.Unknown,
     execute: () => Effect.succeed({ ok: true }),
   })
@@ -2858,7 +2862,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
     const interactionTool = tool({
       id: "suspend-interaction-tool",
       description: "Tool that suspends on first call and succeeds on resume",
-      resources: ["suspend-interaction-tool"],
+      needs: [ToolNeeds.write("interaction")],
       params: Schema.Struct({ value: Schema.String }),
       execute: (toolParams: { value: string }, ctx: ToolContext) =>
         Effect.gen(function* () {

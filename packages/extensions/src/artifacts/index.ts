@@ -12,7 +12,13 @@
  */
 
 import { Effect, Schema } from "effect"
-import { ArtifactId, defineExtension, tool, type ToolContext } from "@gent/core/extensions/api"
+import {
+  ArtifactId,
+  defineExtension,
+  tool,
+  ToolNeeds,
+  type ToolContext,
+} from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "../artifacts-protocol.js"
 import { artifactsActor } from "./actor.js"
 
@@ -69,7 +75,7 @@ const ArtifactReadTool = tool({
 
 const ArtifactUpdateTool = tool({
   id: "artifact_update",
-  resources: ["artifact_update"],
+  needs: [ToolNeeds.write("artifact")],
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
   params: Schema.Struct({

@@ -6,6 +6,7 @@ import {
   getDurableAgentRunSessionId,
   makeRunSpec,
   tool,
+  ToolNeeds,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -291,7 +292,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
 export const ReviewTool = tool({
   id: "review",
-  resources: ["review"],
+  needs: [ToolNeeds.write("agent")],
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Adversarial dual-model code review",

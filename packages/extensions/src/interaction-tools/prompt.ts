@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 
 // Prompt Params — discriminated union on mode
 
@@ -58,7 +58,7 @@ export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewRe
 
 export const PromptTool = tool({
   id: "prompt",
-  resources: ["prompt"],
+  needs: [ToolNeeds.write("interaction")],
   description:
     "Present content to the user for review, confirmation, or informational display. " +
     "Use mode=present for informational content (no response needed), " +

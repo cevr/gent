@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, Schema, Stream } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core/domain/ids"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { ApprovalService } from "../../src/runtime/approval-service"
@@ -20,7 +20,7 @@ const InteractionProbeExtension: LoadedExtension = {
       tool({
         id: "approval_probe",
         description: "Request approval and report the result",
-        resources: ["approval_probe"],
+        needs: [ToolNeeds.write("interaction")],
         params: Schema.Struct({ text: Schema.String }),
         execute: Effect.fn("approval_probe")(function* (params, ctx) {
           const decision = yield* ctx.interaction.approve({ text: params.text })

@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   tool,
+  ToolNeeds,
   QuestionSchema,
   QuestionOptionSchema,
   type Question,
@@ -67,7 +68,7 @@ const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
 
 export const AskUserTool = tool({
   id: "ask_user",
-  resources: ["ask_user"],
+  needs: [ToolNeeds.write("interaction")],
   interactive: true,
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",

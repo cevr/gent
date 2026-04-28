@@ -1,5 +1,5 @@
 import { Effect, Schema, Path } from "effect"
-import { tool, FileIndex } from "@gent/core/extensions/api"
+import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
 import { Glob } from "bun"
 
 // Glob Tool Error
@@ -40,7 +40,7 @@ export const GlobResult = Schema.Struct({
 export const GlobTool = tool({
   id: "glob",
   intent: "read",
-  idempotent: true,
+  needs: [ToolNeeds.read("fs")],
   description: "Find files matching glob pattern. Returns paths sorted by mtime.",
   promptSnippet: "Find files by glob pattern",
   promptGuidelines: ["Use instead of bash find/ls"],

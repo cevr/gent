@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect"
-import { tool, ref } from "@gent/core/extensions/api"
+import { tool, ref, ToolNeeds } from "@gent/core/extensions/api"
 import { TaskListRequest } from "./requests.js"
 
 export const TaskListParams = Schema.Struct({})
 
 export const TaskListTool = tool({
   id: "task_list",
-  idempotent: true,
+  needs: [ToolNeeds.read("task")],
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {

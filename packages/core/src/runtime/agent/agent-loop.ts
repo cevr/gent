@@ -1086,7 +1086,7 @@ const executeToolCalls = (params: {
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getModelCapability(toolCall.toolName)
-        const result = yield* params.resourceManager.withResources(tool?.resources ?? [], run)
+        const result = yield* params.resourceManager.withNeeds(tool?.needs ?? [], run)
 
         const outputSummary = summarizeToolOutput(result)
         const isError = result.output.type === "error-json"

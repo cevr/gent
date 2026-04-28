@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Skills } from "./skills.js"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 
 export class SearchSkillsError extends Schema.TaggedErrorClass<SearchSkillsError>()(
   "SearchSkillsError",
@@ -21,7 +21,7 @@ export const SearchSkillsParams = Schema.Struct({
 
 export const SearchSkillsTool = tool({
   id: "search_skills",
-  idempotent: true,
+  needs: [ToolNeeds.read("skills")],
   description:
     "Search loaded skills by name or description. Optionally include the full skill content.",
   params: SearchSkillsParams,

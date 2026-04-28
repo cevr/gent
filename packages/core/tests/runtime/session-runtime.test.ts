@@ -7,7 +7,7 @@ import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
 import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
 import {
   Provider,
   finishPart,
@@ -366,7 +366,7 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
   tool({
     id: "interaction-tool",
     description: "Tool that triggers an interaction",
-    resources: ["interaction-tool"],
+    needs: [ToolNeeds.write("interaction")],
     params: Schema.Struct({ value: Schema.String }),
     execute: (params, ctx) =>
       Effect.gen(function* () {

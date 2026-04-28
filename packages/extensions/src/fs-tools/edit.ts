@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { tool, FileLockService } from "@gent/core/extensions/api"
+import { tool, FileLockService, ToolNeeds } from "@gent/core/extensions/api"
 
 // Edit Tool Error
 
@@ -137,7 +137,7 @@ export function findMatch(content: string, oldString: string): MatchResult | und
 
 export const EditTool = tool({
   id: "edit",
-  resources: ["edit"],
+  needs: [ToolNeeds.write("fs")],
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   promptSnippet: "Apply targeted edits to existing files",

@@ -4,6 +4,39 @@ import type { ExtensionHostContext } from "./extension-host-context"
 import type { PermissionRule } from "./permission"
 import type { PromptSection } from "./prompt"
 
+export type ToolNeedAccess = "read" | "write"
+
+export const LOCK_REGISTRY = [
+  // Shared subagent budget: review/research/audit/delegate/handoff/plan all
+  // spawn agent work and intentionally serialize against each other.
+  "agent",
+  "artifact",
+  "auto",
+  "fs",
+  "interaction",
+  "memory",
+  "network",
+  "process",
+  "recovery",
+  "repo",
+  "session",
+  "skills",
+  "task",
+  "test-serial",
+] as const
+
+export type ToolNeedTag = (typeof LOCK_REGISTRY)[number]
+
+export interface ToolNeed {
+  readonly tag: ToolNeedTag
+  readonly access: ToolNeedAccess
+}
+
+export const ToolNeeds = {
+  read: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "read" }),
+  write: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "write" }),
+} as const
+
 // Tool Definition
 
 // Params must have no context requirement (never) for sync decoding
@@ -18,16 +51,11 @@ export interface ToolDefinition<
   readonly name: Name
   readonly description: string
   /**
-   * Named resources this tool needs exclusive access to while running. Two
-   * tools requesting the same resource name run serially against each other;
-   * tools with disjoint resource sets run in parallel. Empty/undefined =
-   * fully parallel. Replaces the pre-Phase-6 `concurrency: "serial" | "parallel"`
-   * boolean flag (which couldn't distinguish "serial against the global bash
-   * lock" from "serial against my own writes").
+   * Service/resource needs this tool touches while running. Read needs can
+   * share; write needs exclude both reads and writes for the same tag.
+   * Empty/undefined = fully parallel.
    */
-  readonly resources?: ReadonlyArray<string>
-  /** Whether this tool is safe to replay after restart (read-only tools = true) */
-  readonly idempotent?: boolean
+  readonly needs?: ReadonlyArray<ToolNeed>
   /** One-liner for system prompt tool list (distinct from description which goes to LLM tool schema) */
   readonly promptSnippet?: string
   /** Behavioral guidelines injected into system prompt when this tool is active */

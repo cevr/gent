@@ -29,6 +29,7 @@ import type {
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
+import type { ToolNeed } from "../tool.js"
 
 /**
  * `ToolToken` — `tool({...})` return type. Narrows `CapabilityToken` so
@@ -89,13 +90,11 @@ export interface ToolInput<
    */
   readonly params: Params
   /**
-   * Named resources this tool needs exclusive access to while running.
-   * Two tools requesting the same resource name run serially; tools with
-   * disjoint resource sets run in parallel. Empty/undefined = fully parallel.
+   * Service/resource needs this tool touches while running. Read needs can
+   * share; write needs exclude both reads and writes for the same tag.
+   * Empty/undefined = fully parallel.
    */
-  readonly resources?: ReadonlyArray<string>
-  /** Whether this tool is safe to replay after restart. */
-  readonly idempotent?: boolean
+  readonly needs?: ReadonlyArray<ToolNeed>
   /** One-liner for the system prompt tool list (distinct from `description`,
    *  which is sent to the LLM as part of the tool schema). */
   readonly promptSnippet?: string
@@ -149,8 +148,7 @@ export const tool = <
     // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
     // Tools needing typed-output validation should author through `request(...)`.
     output: Schema.Unknown,
-    ...(input.resources !== undefined ? { resources: input.resources } : {}),
-    ...(input.idempotent !== undefined ? { idempotent: input.idempotent } : {}),
+    ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
     ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
     ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),

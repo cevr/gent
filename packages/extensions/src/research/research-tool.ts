@@ -4,6 +4,7 @@ import {
   defineAgent,
   makeRunSpec,
   tool,
+  ToolNeeds,
   type ToolContext,
 } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
@@ -79,7 +80,7 @@ const buildSynthesisPrompt = (
 
 export const ResearchTool = tool({
   id: "research",
-  resources: ["research"],
+  needs: [ToolNeeds.write("agent")],
   description:
     "Research external repositories to understand how they work. Single repo for focused explanation, multiple repos for comparative analysis.",
   promptSnippet: "Research external repositories",

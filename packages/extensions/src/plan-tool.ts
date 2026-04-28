@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
   tool,
+  ToolNeeds,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -183,7 +184,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
 
 export const PlanTool = tool({
   id: "plan",
-  resources: ["plan"],
+  needs: [ToolNeeds.write("agent")],
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,

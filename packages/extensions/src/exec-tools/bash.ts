@@ -2,6 +2,7 @@ import { Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import {
   tool,
+  ToolNeeds,
   OutputBuffer,
   PermissionRule,
   saveFullOutput,
@@ -118,7 +119,7 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
 
 export const BashTool = tool({
   id: "bash",
-  resources: ["bash"],
+  needs: [ToolNeeds.write("process")],
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   promptSnippet: "Execute shell commands",

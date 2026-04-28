@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ref, TaskId } from "@gent/core/extensions/api"
+import { tool, ref, TaskId, ToolNeeds } from "@gent/core/extensions/api"
 import { TaskGetDepsRequest, TaskGetRequest } from "./requests.js"
 
 export const TaskGetParams = Schema.Struct({
@@ -8,7 +8,7 @@ export const TaskGetParams = Schema.Struct({
 
 export const TaskGetTool = tool({
   id: "task_get",
-  idempotent: true,
+  needs: [ToolNeeds.read("task")],
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {

@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
   tool,
+  ToolNeeds,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -279,7 +280,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
 
 export const AuditTool = tool({
   id: "audit",
-  resources: ["audit"],
+  needs: [ToolNeeds.write("agent")],
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode runs one detect-audit-synthesize-execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Audit code with dual-model concern analysis",

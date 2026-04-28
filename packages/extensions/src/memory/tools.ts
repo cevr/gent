@@ -6,7 +6,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { MemoryVault, projectKey as projectKeyOf } from "./vault.js"
 import { memoryPath, newFrontmatter } from "./state.js"
 
@@ -38,7 +38,7 @@ const RememberParams = Schema.Struct({
 
 export const MemoryRememberTool = tool({
   id: "memory_remember",
-  resources: ["memory_remember"],
+  needs: [ToolNeeds.write("memory")],
   description:
     "Store a memory for future reference. Use 'session' for this conversation only, 'project' for this codebase, 'global' for cross-session knowledge.",
   promptGuidelines: [
@@ -103,7 +103,7 @@ const RecallParams = Schema.Struct({
 
 export const MemoryRecallTool = tool({
   id: "memory_recall",
-  idempotent: true,
+  needs: [ToolNeeds.read("memory")],
   description:
     "Search or list stored memories. Without a query, returns the memory index (titles + summaries). With a query, searches memory content.",
   params: RecallParams,
@@ -164,7 +164,7 @@ const ForgetParams = Schema.Struct({
 
 export const MemoryForgetTool = tool({
   id: "memory_forget",
-  resources: ["memory_forget"],
+  needs: [ToolNeeds.write("memory")],
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,
   execute: Effect.fn("MemoryForgetTool.execute")(function* (params, ctx) {

@@ -1,36 +1,32 @@
 /**
- * ResourceManager — named, lazily-created semaphores for cross-tool exclusion.
+ * ResourceManager — lazily-created read/write locks for cross-tool exclusion.
  *
- * Tools declare which named resources they need (e.g. `resources: ["bash"]`,
- * `resources: ["fs-write", "git"]`). The runtime serializes execution against
- * each named resource: any two effects asking for the same name run serially,
- * effects with disjoint resource sets run in parallel.
+ * Tools declare which service/resource needs they touch. Reads for the same
+ * tag can run together; writes exclude both reads and writes for that tag.
  *
- * Pre-Phase 6 the runtime had two parallel `bashSemaphore` instances (one in
- * `session-runtime.ts`, one inside `AgentLoop`) and only the bash tool's
- * `concurrency: "serial"` flag triggered them — so `edit`/`write` (also
- * declared serial) accidentally shared the bash lock instead of having their
- * own. This service replaces the boolean flag with a composable name-based
- * model:
+ * Replaces the prior bash-only semaphore plus boolean serial flag with a
+ * composable tag-based model:
  *
- *   - One ResourceManager per session/loop (or shared across actor + loop).
+ *   - Fresh ResourceManager per ephemeral run; subagents get their own budget.
  *   - Locks are created lazily on first request — no upfront enumeration.
- *   - `withResources([])` is a no-op (parallel by default).
- *   - `withResources([name])` acquires one named permit for the duration.
- *   - `withResources([a, b])` acquires both, ordered by name to avoid deadlock.
+ *   - `withNeeds([])` is a no-op (parallel by default).
+ *   - `withNeeds([{ tag, access: "read" }])` acquires one read permit.
+ *   - `withNeeds([{ tag, access: "write" }])` acquires the full write lock.
+ *   - Multi-need acquisition is ordered by tag to avoid deadlock.
  *
- * Replaces `concurrency: "serial" | "parallel"` (the boolean flag — violates
- * `composability-not-flags`) with `resources?: ReadonlyArray<string>`
- * (composable named locks).
+ * Replaces string resources and replay booleans with explicit needs.
  *
  * @module
  */
 import { Context, Effect, Layer, Ref, Semaphore } from "effect"
+import type { ToolNeed } from "../domain/tool.js"
 
-/** Service interface — opaque to tools, only `withResources` is used. */
+const READ_PERMITS = 1_000_000
+
+/** Service interface — opaque to tools, only `withNeeds` is used. */
 export interface ResourceManagerService {
-  readonly withResources: <A, E, R>(
-    names: ReadonlyArray<string>,
+  readonly withNeeds: <A, E, R>(
+    needs: ReadonlyArray<ToolNeed>,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
 }
@@ -43,40 +39,51 @@ export class ResourceManager extends Context.Service<ResourceManager, ResourceMa
 export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect.gen(function* () {
   const semaphoresRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
 
-  const acquire = (name: string): Effect.Effect<Semaphore.Semaphore> =>
+  const acquire = (tag: string): Effect.Effect<Semaphore.Semaphore> =>
     Effect.gen(function* () {
-      const existing = (yield* Ref.get(semaphoresRef)).get(name)
+      const existing = (yield* Ref.get(semaphoresRef)).get(tag)
       if (existing !== undefined) return existing
-      const fresh = yield* Semaphore.make(1)
+      const fresh = yield* Semaphore.make(READ_PERMITS)
       // Race-safe install: re-check, install only if still missing.
       const installed = yield* Ref.modify(semaphoresRef, (current) => {
-        const found = current.get(name)
+        const found = current.get(tag)
         if (found !== undefined) return [found, current]
         const next = new Map(current)
-        next.set(name, fresh)
+        next.set(tag, fresh)
         return [fresh, next]
       })
       return installed
     })
 
-  const withResources = <A, E, R>(
-    names: ReadonlyArray<string>,
+  const normalizeNeeds = (needs: ReadonlyArray<ToolNeed>): ReadonlyArray<ToolNeed> => {
+    const byTag = new Map<string, ToolNeed>()
+    for (const need of needs) {
+      const existing = byTag.get(need.tag)
+      if (existing?.access === "write") continue
+      byTag.set(need.tag, need)
+    }
+    return [...byTag.values()].sort((a, b) => a.tag.localeCompare(b.tag))
+  }
+
+  const withNeeds = <A, E, R>(
+    needs: ReadonlyArray<ToolNeed>,
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> => {
-    if (names.length === 0) return effect
-    // Sort by name to make multi-resource acquisition deadlock-free.
-    const sorted = [...names].sort()
+    if (needs.length === 0) return effect
+    const sorted = normalizeNeeds(needs)
     return Effect.gen(function* () {
-      const sems: Semaphore.Semaphore[] = []
-      for (const name of sorted) sems.push(yield* acquire(name))
+      const locks: Array<readonly [Semaphore.Semaphore, ToolNeed]> = []
+      for (const need of sorted) locks.push([yield* acquire(need.tag), need])
       // Nest withPermits acquisitions so all are held for the duration.
       let wrapped: Effect.Effect<A, E, R> = effect
-      for (const sem of sems) wrapped = sem.withPermits(1)(wrapped)
+      for (const [sem, need] of locks) {
+        wrapped = sem.withPermits(need.access === "write" ? READ_PERMITS : 1)(wrapped)
+      }
       return yield* wrapped
     })
   }
 
-  return { withResources } satisfies ResourceManagerService
+  return { withNeeds } satisfies ResourceManagerService
 })
 
 /** Live layer — fresh ResourceManager per scope. */

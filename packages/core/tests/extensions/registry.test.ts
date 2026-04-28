@@ -5,7 +5,7 @@ import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -747,8 +747,7 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
       intent: "write",
       input: Schema.Unknown,
       output: Schema.Unknown,
-      resources: ["fs:/tmp", "net:443"],
-      idempotent: true,
+      needs: [ToolNeeds.write("fs"), ToolNeeds.read("network")],
       promptSnippet: "Snippet here.",
       promptGuidelines: ["use carefully", "log result"],
       interactive: true,
@@ -758,8 +757,7 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
     const tool = resolved.modelCapabilities.get("rich")
     expect(tool).toBeDefined()
     expect(tool?.description).toBe("rich tool")
-    expect(tool?.resources).toEqual(["fs:/tmp", "net:443"])
-    expect(tool?.idempotent).toBe(true)
+    expect(tool?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
     expect(tool?.promptSnippet).toBe("Snippet here.")
     expect(tool?.promptGuidelines).toEqual(["use carefully", "log result"])
     expect(tool?.interactive).toBe(true)

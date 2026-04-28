@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 
 export const RenameSessionParams = Schema.Struct({
   name: Schema.String.annotate({
@@ -9,8 +9,7 @@ export const RenameSessionParams = Schema.Struct({
 
 export const RenameSessionTool = tool({
   id: "rename_session",
-  resources: ["rename_session"],
-  idempotent: true,
+  needs: [ToolNeeds.write("session")],
   description:
     "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
   params: RenameSessionParams,

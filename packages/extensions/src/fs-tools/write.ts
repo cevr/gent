@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { tool, FileLockService } from "@gent/core/extensions/api"
+import { tool, FileLockService, ToolNeeds } from "@gent/core/extensions/api"
 
 // Write Tool Error
 
@@ -31,7 +31,7 @@ export const WriteResult = Schema.Struct({
 
 export const WriteTool = tool({
   id: "write",
-  resources: ["write"],
+  needs: [ToolNeeds.write("fs")],
   description: "Write content to file. Creates directories if needed.",
   promptSnippet: "Create or overwrite files",
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],

@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { $ } from "bun"
 import { GitReader } from "./git-reader.js"
 
@@ -180,8 +180,7 @@ const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string
 
 export const RepoTool = tool({
   id: "repo",
-  resources: ["repo"],
-  idempotent: true,
+  needs: [ToolNeeds.read("repo")],
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
   params: RepoExplorerParams,

@@ -5,6 +5,7 @@ import {
   makeRunSpec,
   SessionId,
   tool,
+  ToolNeeds,
   type Branch,
   type Message,
   type MessagePart,
@@ -107,7 +108,7 @@ export function renderSessionTree(
 
 export const ReadSessionTool = tool({
   id: "read_session",
-  idempotent: true,
+  needs: [ToolNeeds.read("session")],
   description:
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,

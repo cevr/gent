@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, FileSystem, Path } from "effect"
-import { tool, FileIndex } from "@gent/core/extensions/api"
+import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
 import { Glob } from "bun"
 
 // Grep Tool Error
@@ -69,7 +69,7 @@ export const GrepResult = Schema.Struct({
 export const GrepTool = tool({
   id: "grep",
   intent: "read",
-  idempotent: true,
+  needs: [ToolNeeds.read("fs")],
   description: "Search file contents with regex. Returns matching lines.",
   promptSnippet: "Search file contents with regex",
   promptGuidelines: ["Use instead of bash grep/rg"],

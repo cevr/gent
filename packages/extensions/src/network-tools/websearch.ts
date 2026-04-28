@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 
 // WebSearch Error
 
@@ -81,7 +81,7 @@ function extractResult(data: McpResponse): string | undefined {
 
 export const WebSearchTool = tool({
   id: "websearch",
-  idempotent: true,
+  needs: [ToolNeeds.read("network")],
   get description() {
     const year = new Date().getFullYear()
     return `Search the web using Exa AI. Returns content from the most relevant websites. The current year is ${year} — use this year when searching for recent information.`

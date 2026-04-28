@@ -69,7 +69,15 @@ import type { AgentEvent, AgentEventTag } from "../domain/event.js"
 // `ToolContext` survives as the internal lowered execution context consumed by
 // the provider bridge and the tool-runner registry. Authors construct tools
 // via `tool({...})` from `domain/capability/tool.ts` (re-exported below).
-export { makeToolContext, type ToolContext } from "../domain/tool.js"
+export {
+  LOCK_REGISTRY,
+  makeToolContext,
+  ToolNeeds,
+  type ToolContext,
+  type ToolNeed,
+  type ToolNeedAccess,
+  type ToolNeedTag,
+} from "../domain/tool.js"
 export {
   defineAgent,
   AgentDefinition,

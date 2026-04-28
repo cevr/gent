@@ -21,8 +21,8 @@
  * Audience surface:
  *
  *   - `"model"`         — LLM may invoke as a tool. Carries the optional
- *                         model-specific fields (`resources`, `idempotent`,
- *                         `promptSnippet`, `promptGuidelines`, `interactive`).
+ *                         model-specific fields (`needs`, `promptSnippet`,
+ *                         `promptGuidelines`, `interactive`).
  *   - `"agent-protocol"` — other server extensions may invoke via
  *                         `ctx.extension.request(...)`.
  *   - `"transport-public"` — any transport client (TUI, SDK, future web UI)
@@ -43,6 +43,7 @@ import type { ExtensionHostContext } from "./extension-host-context.js"
 import { ExtensionId, type BranchId, type RpcId, type SessionId, type ToolCallId } from "./ids.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSection } from "./prompt.js"
+import type { ToolNeed } from "./tool.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
@@ -126,11 +127,9 @@ export type CapabilityContext = ModelCapabilityContext
 
 /** Optional fields meaningful only when `audiences` includes `"model"`. */
 export interface ModelAudienceFields {
-  /** Named resources this Capability needs exclusive access to while running.
-   *  Two Capabilities requesting the same resource name run serially. */
-  readonly resources?: ReadonlyArray<string>
-  /** Whether this Capability is safe to replay after restart (read-only = true). */
-  readonly idempotent?: boolean
+  /** Service/resource needs this Capability touches while running. Read needs
+   *  can share; write needs exclude both reads and writes for the same tag. */
+  readonly needs?: ReadonlyArray<ToolNeed>
   /** One-liner for the system prompt tool list. */
   readonly promptSnippet?: string
   /** Behavioral guidelines injected into the system prompt when this
