@@ -34,7 +34,7 @@ import { sealErasedEffect } from "./effect-membrane.js"
 
 // SlashCommand — public-facing slash entry. Built from `commands:` bucket
 // winners. Read- and write-intent both surface as commands; the bucket is the
-// load-bearing filter. The legacy server-side `CommandContribution` shape died
+// load-bearing filter. The legacy server-side command contribution shape died
 // in C8.
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
@@ -349,8 +349,7 @@ export const resolveExtensions = (
   // lower-scope tool would still inherit the loser's prompt — defeating the
   // shadow (codex BLOCKER on C7). Last scope wins by section id, identical
   // to the legacy promptSection contribution semantics.
-  // (Dynamic prompt content lives on `Projection.prompt(value)` and is
-  // assembled per-turn by ExtensionReactions, not here.)
+  // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
@@ -561,8 +560,8 @@ export class ExtensionRegistry extends Context.Service<
             "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
-      // C7: dynamic prompt sections live on `Projection.prompt(value)`. The
-      // sections here come from `Capability.prompt`, all static. No more
+      // C7: dynamic prompt sections are assembled per-turn by ExtensionReactions.
+      // The sections here come from capability leaf `prompt`, all static. No more
       // per-section Effect resolution — return the array directly.
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),

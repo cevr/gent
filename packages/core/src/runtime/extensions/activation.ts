@@ -284,7 +284,7 @@ export const collectValidationFailures = (
     (driver) => driver.id,
     "external driver",
   )
-  // Static prompt sections live on `Capability.prompt`. Collision check
+  // Static prompt sections live on capability leaf `prompt`. Collision check
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
@@ -295,7 +295,7 @@ export const collectValidationFailures = (
     "prompt section",
   )
 
-  // Model-audience capabilities MUST declare a non-empty description — the
+  // Model tools MUST declare a non-empty description — the
   // string is sent to the LLM as part of the tool schema, so empty/missing
   // becomes "why is the model dumb?" rot later. Codex ADVISORY on C4.4a.
   for (const ext of extensions) {
@@ -304,7 +304,7 @@ export const collectValidationFailures = (
       if (trimmed.length === 0) {
         addFailure(
           ext,
-          `Capability "${cap.id}" with audiences:["model"] is missing a non-empty description (the LLM tool schema requires one).`,
+          `Tool "${cap.id}" is missing a non-empty description (the LLM tool schema requires one).`,
         )
       }
     }

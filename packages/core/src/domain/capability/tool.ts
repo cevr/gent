@@ -60,8 +60,8 @@ export interface ToolCapabilityContext extends ModelCapabilityContext {
   readonly toolCallId: ToolCallId
 }
 
-/** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields without
- *  the `audiences[]` / `intent` flag matrix.
+/** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
+ *  standalone leaf with no shared capability parent.
  *
  *  `Params` is a `Schema.Decoder<I, never>` — the LLM bridge needs to
  *  decode JSON synchronously without resolving services, so the decoder
@@ -104,7 +104,7 @@ export interface ToolInput<
   /** Permission allow/deny rules gating execution. */
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Static system-prompt section bundled with this tool. For dynamic
-   *  prompt fragments (resolved per-turn from services), use a `Projection`. */
+   *  prompt fragments resolved per-turn from services, use a turn projection reaction. */
   readonly prompt?: PromptSection
   /** The tool body. Receives decoded `params` and a `ToolCapabilityContext`
    *  (the wide host context — subagents, interaction, turn-control all reachable —

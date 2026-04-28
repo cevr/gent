@@ -61,9 +61,8 @@ export interface CapabilityCoreContext {
   readonly home: string
 }
 
-/** The wide audience-specific context for `audiences: ["model"]` capabilities
- *  (today's `ToolContext` shape). Read+write surfaces, agent runner, session
- *  mutations, interaction, and turn-control are all reachable. */
+/** The wide tool-execution context. Read+write surfaces, agent runner,
+ *  session mutations, interaction, and turn-control are all reachable. */
 export interface ModelCapabilityContext extends ExtensionHostContext, CapabilityCoreContext {}
 
 /**

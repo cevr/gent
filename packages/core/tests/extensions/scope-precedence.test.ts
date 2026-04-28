@@ -97,7 +97,7 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
     })
 
-    it.live("prompt section by id (Capability.prompt): project shadows builtin", () => {
+    it.live("prompt section by id: project tool prompt shadows builtin", () => {
       const builtinTool = tool({
         id: "carrier-builtin",
         description: "carrier",
@@ -122,10 +122,10 @@ describe("scope precedence", () => {
       )
     })
 
-    it.live("Capability.prompt: shadowed capability's prompt does NOT survive", () => {
+    it.live("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
       // C7 codex BLOCKER: previously, prompts/rules were collected from raw
-      // extracted capabilities, not winners. A higher-scope capability
-      // shadowing a lower-scope tool would leak the loser's prompt.
+      // extracted leaves, not winners. A higher-scope tool shadowing a
+      // lower-scope tool would leak the loser's prompt.
       const builtinTool = tool({
         id: "shadow-me",
         description: "carrier",
@@ -148,7 +148,7 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
 
-    it.live("Capability.permissionRules: shadowed capability's rules do NOT survive", () => {
+    it.live("tool permissionRules: shadowed lower-scope rules do NOT survive", () => {
       // C7 codex BLOCKER companion: a project-scope tool shadowing the
       // builtin `bash` without `permissionRules` must NOT inherit the
       // builtin's deny rules.

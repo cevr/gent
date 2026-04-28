@@ -121,8 +121,7 @@ export interface RunContext {
 }
 
 // Turn-scoped input shapes for the explicit runtime seams. Prompt/context
-// shaping lives on `Projection`; turn/message reactions and tool-result
-// enrichment live on `Resource.runtime`.
+// shaping, turn/message hooks, and tool-result enrichment live on reactions.
 
 export interface SystemPromptInput {
   readonly basePrompt: string
@@ -349,10 +348,9 @@ export interface RequestResult<State, Reply> extends ReduceResult<State> {
   readonly reply: Reply
 }
 
-// `CommandContribution` (server slash commands) was deleted in C8 — no
-// extension contributes one anymore (executor migrated to a Capability with
-// slash-visible action/request surfaces in C4.3). The TUI's separate client-facet
-// `_kind: "command"` model is unrelated.
+// The legacy server slash-command contribution was deleted in C8 — human
+// surfaces now come from `commands:` action leaves. The TUI's separate
+// client-facet `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"
@@ -402,6 +400,5 @@ export interface GentExtension {
   ) => Effect.Effect<ExtensionContributions, ExtensionLoadError>
 }
 
-// Legacy keyed middleware primitives are gone. Prompt/context shaping now
-// lives on `Projection`; turn/message reactions and tool-result enrichment
-// live on `Resource.runtime`.
+// Legacy keyed middleware primitives are gone. Prompt/context shaping,
+// turn/message hooks, and tool-result enrichment live on reactions.

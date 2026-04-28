@@ -1,8 +1,8 @@
 /**
  * System prompt construction via ordered sections.
  *
- * Static prompt sections are bundled on `Capability.prompt`. Dynamic content
- * (resolved per-turn from services) lives on `Projection.prompt(value)`.
+ * Static prompt sections are bundled on capability leaf `prompt`. Dynamic
+ * content resolved per-turn from services lives on extension reactions.
  */
 export interface PromptSection {
   readonly id: string

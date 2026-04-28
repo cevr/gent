@@ -9,7 +9,7 @@ import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js
 import { validatePackageShape } from "../../extensions/api.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
-/** Static prompt sections live on `Capability.prompt` (folded by the
+/** Static prompt sections live on capability leaf `prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
  *  scope collision detection. Reads from every typed bucket — same shape,
  *  same precedence rules as the legacy promptSection contribution. */
@@ -318,7 +318,7 @@ export const validateExtensions = (
     }
 
     // Check keyed contributions — same key in same scope from different extensions is ambiguous.
-    // Tool collisions (now `Capability(audiences:["model"])`) are caught by
+    // Tool collisions are caught by
     // `collectScopedCollisions(extractModelToolIdentities, …)` in `activation.ts`.
     const checks = [
       checkScopedCollision(

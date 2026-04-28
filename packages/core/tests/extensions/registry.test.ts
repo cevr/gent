@@ -40,7 +40,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: empty layer
   resolveModel: (_modelName) => ({ layer: Layer.empty as never }),
 })
-// C7: static prompt sections live on `Capability.prompt`. Build a synthetic
+// C7: static prompt sections live on capability leaf `prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.
 const promptSectionAsToolContribution = (section: PromptSection): ToolToken =>
   tool({
@@ -574,9 +574,9 @@ describe("ExtensionRegistry", () => {
     }),
   )
   // C7 dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
-  // After C7 dynamic content lives on `Projection.prompt(value)` and is
-  // assembled per-turn by ExtensionReactions, not by `listPromptSections`
-  // (which only sees static sections from `Capability.prompt`).
+  // After C7 dynamic content is assembled per-turn by ExtensionReactions, not
+  // by `listPromptSections` (which only sees static sections from capability
+  // leaf `prompt`).
 })
 // Slash-command discovery — identity-first scope shadowing followed by
 // bucket/surface authorization.
