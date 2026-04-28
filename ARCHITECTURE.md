@@ -379,7 +379,7 @@ After W10-PhaseB collapsed the old FSM resource slot and the new `actors:` bucke
 - `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
 - One `ActorEngine` instance is wired at the composition boundary so `ActorHost` and direct actor callers share the same actor map.
 
-**ActorRouter** (`runtime/extensions/resource-host/actor-router.ts`):
+**ExtensionRuntime** (`runtime/extensions/resource-host/extension-runtime.ts`):
 
 - Runtime marker for the extension actor host. It has no public send/ask surface; extension code that needs actors uses `ExtensionHostContext.actors` with explicit `ServiceKey`s.
 - Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`).
