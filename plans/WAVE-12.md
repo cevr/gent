@@ -287,9 +287,9 @@ are intentionally allowed by the AST rule.
 
 ### Batch 11 — Stale TUI Extension Ghosts Removed
 
-**Status**
+**Commits**
 
-Implemented after Okra counsel flagged pre-existing doc/mock drift.
+- `7fb00f6d docs(plan): close wave 12 audit receipts`
 
 **Receipts**
 
@@ -305,7 +305,86 @@ Implemented after Okra counsel flagged pre-existing doc/mock drift.
 
 **Gate**
 
-Pending commit gate.
+- Pre-commit for `7fb00f6d`: passed `typecheck`, `build`,
+  `lint+fmt`, and `test`.
+
+### Batch 12 — Final Audit Fixes
+
+**Commits**
+
+- `799b70cc test: stabilize final audit subprocess gate`
+- `fb595aa2 test: isolate subprocess platform layers`
+
+**Receipts**
+
+- Live TUI source comment no longer advertises removed
+  `client.extension.ask(...)`; current widgets use
+  `client.extension.request(...)`:
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/context.tsx:7`.
+- Actor turn projection now names the internal collection source as actor
+  views, not actor routes, while preserving the same
+  `Receptionist.find(...)` to `ActorEngine.peekView(...)` behavior:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:90`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:115`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:212`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:297`.
+- Auto and exec-tools comments no longer describe current behavior with
+  retired `mapEvent`, `protocols`, or `actorRoute` terminology:
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto-checkpoint.ts:7`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto.ts:516`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto.ts:621`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto-protocol.ts:104`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/index.ts:4`.
+- Subprocess integration tests now put an Effect timeout inside the test
+  effect and use a longer Bun timeout outside it, matching the test
+  finalizer rule:
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:14`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:19`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/exec-tools/bash.test.ts:20`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/exec-tools/bash.test.ts:135`.
+- Subprocess integration tests build the Bun platform layer per test
+  invocation, avoiding shared layer memoization under
+  `bun test --parallel=6`:
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:5`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:10`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/exec-tools/bash.test.ts:3`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/exec-tools/bash.test.ts:11`.
+- The duplicate minimal stdout warm-up test was removed after full
+  parallel gates showed it could hang while the remaining stdout
+  assertions stayed green. Stdout coverage remains in the env and
+  stdout/stderr subprocess tests plus `BashTool` execution:
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:35`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/utils/run-process.test.ts:58`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/exec-tools/bash.test.ts:134`.
+
+**Review Receipt**
+
+- Codex subagent `019dd648-3063-7483-bfef-99b40e6165b2`: no
+  P0/P1/P2 for `799b70cc`; targeted subprocess tests, typecheck, and
+  lint passed.
+- Okra counsel
+  `/tmp/counsel/personal-gent-860892a9/20260428-224900-codex-to-claude-4e3392/claude.md`:
+  no P0/P1/P2 for `799b70cc`; it verified the actor-view rename,
+  timeout structure, and stale-name search keys.
+- Codex subagent `019dd655-e04d-7483-a06d-0cbd166a0e84`: no
+  P0/P1/P2 for `fb595aa2`; targeted subprocess tests, typecheck,
+  lint, and test passed.
+- Okra counsel
+  `/tmp/counsel/personal-gent-860892a9/20260428-230405-codex-to-claude-377e7b/claude.md`:
+  no P0/P1/P2 for `fb595aa2`; it verified the per-test platform layer
+  factory and remaining stdout coverage.
+
+**Gate**
+
+- Focused subprocess tests passed:
+  `bun test tests/utils/run-process.test.ts tests/extensions/exec-tools/bash.test.ts`.
+- Parallel focused subprocess tests passed:
+  `bun test --parallel=6 tests/utils/run-process.test.ts tests/extensions/exec-tools/bash.test.ts`.
+- `bun run typecheck && bun run lint && bun run test` passed.
+- Pre-commit for `799b70cc`: passed `typecheck`, `build`,
+  `lint+fmt`, and `test`.
+- Pre-commit for `fb595aa2`: passed `typecheck`, `build`,
+  `lint+fmt`, and `test`.
 
 ## Simplification Audit
 
@@ -367,31 +446,52 @@ keep fewer deeper primitives."
 
 ### Status
 
-Pending after Batch 11 commit.
+Completed after Batch 12 and the final recursive review round. No
+P0/P1/P2 findings remain.
 
-### Required Steps
+### Receipts
 
-1. Run final full gate:
-   `bun run typecheck && bun run lint && bun run test`.
-2. Launch fresh Codex subagents for:
-   extension surface, runtime/actor/storage, SDK/TUI transport,
-   test-rule coverage, and simplification/LOC pressure.
-3. Run Okra counsel with the same packet and explicitly ask it to
-   launch its own subagents.
-4. Ask both lanes to search again for P0/P1/P2:
-   `CapabilityHost`, stale `listCommands`, stale
-   `RequestCapabilityInput`, stale `ActorRouter`,
-   stale `ExtensionStateRuntime`, string tool `resources`, tool
-   `idempotent`, test `try/finally`, and test `async`/`await`.
-5. Fix any P0/P1/P2 with a new batch commit, then repeat this audit
-   batch once. No further implementation begins until both lanes report
-   no P0/P1/P2.
-6. Record the final audit receipts in this file before closeout.
+- Final full gate passed:
+  `bun run typecheck && bun run lint && bun run test`.
+- Fresh Codex recursive audit:
+  `019dd641-1757-7900-83c7-c5cafc92b026` found three P2 stale naming
+  issues; fixed in `799b70cc`.
+- Fresh Codex recursive audit:
+  `019dd641-1788-7173-918e-ece3721701d3` found no P0/P1/P2 in
+  runtime, storage, or test-rule coverage.
+- Fresh Codex recursive audit:
+  `019dd641-179b-7642-b7c7-c1eb5c8c9cd1` found no P0/P1/P2 in the
+  simplification lane and verified the pi-mono/opencode comparison.
+- Okra recursive audit
+  `/tmp/counsel/personal-gent-860892a9/20260428-224134-codex-to-claude-fe1b63/claude.md`:
+  no P0/P1/P2 at `7fb00f6d`; it verified transport names, stale
+  runtime names, test lint coverage, and simplification receipts.
+- Post-fix Codex review:
+  `019dd648-3063-7483-bfef-99b40e6165b2` found no P0/P1/P2 for
+  `799b70cc`.
+- Post-fix Okra counsel
+  `/tmp/counsel/personal-gent-860892a9/20260428-224900-codex-to-claude-4e3392/claude.md`:
+  no P0/P1/P2 for `799b70cc`.
+- Final subprocess stabilization `fb595aa2` passed pre-commit
+  `typecheck`, `build`, `lint+fmt`, and `test`; it also passed focused
+  parallel subprocess tests before commit.
+- Post-stabilization Codex review:
+  `019dd655-e04d-7483-a06d-0cbd166a0e84` found no P0/P1/P2 for
+  `fb595aa2`.
+- Post-stabilization Okra counsel
+  `/tmp/counsel/personal-gent-860892a9/20260428-230405-codex-to-claude-377e7b/claude.md`:
+  no P0/P1/P2 for `fb595aa2`.
+- Final stale-name sweep across current `apps/`, `packages/`,
+  `AGENTS.md`, and `ARCHITECTURE.md` found no current matches for
+  `extension.ask`, `extension.send`, `ActorRoute`, `actorRoutes`,
+  `collectActorRoutes`, `mapEvent`, `typed protocols`, `listCommands`,
+  `RequestCapabilityInput`, `ExtensionStateRuntime`, `ActorRouter`, or
+  `CapabilityHost`.
 
 ## Current Gate Receipts
 
-- `bun run typecheck`: passed after `f812864c`.
-- `bun run lint`: passed after `f812864c`.
-- `bun run test`: passed after `f812864c`.
-- Pre-commit for `f812864c`: passed `typecheck`, `build`, `lint+fmt`,
-  and `test`.
+- `bun run typecheck`: passed after `fb595aa2`.
+- `bun run lint`: passed after `fb595aa2`.
+- `bun run test`: passed after `fb595aa2`.
+- Pre-commit for `fb595aa2`: passed `typecheck`, `build`,
+  `lint+fmt`, and `test`.
