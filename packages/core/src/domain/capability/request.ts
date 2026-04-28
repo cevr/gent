@@ -127,6 +127,7 @@ export function request(input: {
   readonly prompt?: PromptSection
   readonly execute: AnyCapabilityContribution["effect"]
 }): RequestToken {
+  const rpcId = RpcId.make(input.id)
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
   // dispatcher boundary. Author-supplied schemas always satisfy this — the
   // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
@@ -135,14 +136,14 @@ export function request(input: {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- implementation-signature widening; overload signatures preserve typed ref
   const refValue = {
     extensionId: input.extensionId,
-    capabilityId: input.id,
+    capabilityId: rpcId,
     intent: input.intent,
     input: input.input,
     output: input.output,
   } as unknown as CapabilityRef
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
   return {
-    id: RpcId.make(input.id),
+    id: rpcId,
     audiences: ["agent-protocol", "transport-public"],
     intent: input.intent,
     input: input.input,

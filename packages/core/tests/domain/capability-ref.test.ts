@@ -69,7 +69,8 @@ describe("ref(token)", () => {
     })
 
     const r = ref(token)
-    expect(r.capabilityId).toBe("test.read")
+    const capabilityId: RpcId = r.capabilityId
+    expect(String(capabilityId)).toBe("test.read")
     expect(r.extensionId as string).toBe("ext-test")
     expect(r.intent).toBe("read")
     // Schema identity: refValue forwards author schemas by reference. A

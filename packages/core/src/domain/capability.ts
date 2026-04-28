@@ -41,7 +41,7 @@
 
 import { type Effect, Schema } from "effect"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
+import { ExtensionId, type BranchId, type RpcId, type SessionId, type ToolCallId } from "./ids.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSection } from "./prompt.js"
 
@@ -229,7 +229,7 @@ export interface CapabilityToken<
  */
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: ExtensionId
-  readonly capabilityId: string
+  readonly capabilityId: RpcId
   readonly intent: Intent
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Decoder<Output, never>

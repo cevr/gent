@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { defineResource } from "@gent/core/domain/resource"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
 import type { CapabilityRef } from "@gent/core/domain/capability"
 import { request } from "@gent/core/extensions/api"
@@ -152,7 +152,7 @@ describe("resolveSessionEnvironment", () => {
     const seenCwd: string[] = []
     const ref: CapabilityRef<string, string> = {
       extensionId: ExtensionId.make("@test/session-request-context"),
-      capabilityId: "echo-cwd",
+      capabilityId: RpcId.make("echo-cwd"),
       intent: "read",
       input: Schema.String,
       output: Schema.String,
@@ -252,7 +252,7 @@ describe("resolveSessionEnvironment", () => {
     const profileCwd = mkdtempSync(join(tmpdir(), "gent-session-resource-context-profile-"))
     const ref: CapabilityRef<string, string> = {
       extensionId: ExtensionId.make("@test/profile-resource-context"),
-      capabilityId: "read-profile-token",
+      capabilityId: RpcId.make("read-profile-token"),
       intent: "read",
       input: Schema.String,
       output: Schema.String,
