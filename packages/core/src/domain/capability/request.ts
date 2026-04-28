@@ -46,9 +46,6 @@ export interface RequestToken<Input = unknown, Output = unknown> {
   readonly public: true
   readonly slash?: RequestInputBase<Input, Output>["slash"]
   readonly description?: string
-  readonly displayName?: string
-  readonly category?: string
-  readonly keybind?: string
   readonly promptSnippet?: string
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
@@ -166,10 +163,6 @@ export function request(input: {
     public: true,
     ...(input.slash !== undefined ? { slash: input.slash } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
-    ...(input.slash?.name !== undefined ? { displayName: input.slash.name } : {}),
-    ...(input.slash?.description !== undefined ? { description: input.slash.description } : {}),
-    ...(input.slash?.category !== undefined ? { category: input.slash.category } : {}),
-    ...(input.slash?.keybind !== undefined ? { keybind: input.slash.keybind } : {}),
     input: input.input,
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),

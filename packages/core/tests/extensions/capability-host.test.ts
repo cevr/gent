@@ -255,7 +255,7 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("intent mismatch on the winning request is a hard miss", () =>
+  it.live("intent mismatch on the winning request is a typed capability error", () =>
     Effect.gen(function* () {
       const writeCap = request({
         id: "thing",
@@ -286,7 +286,9 @@ describe("extension capability registries", () => {
       const writeResult = yield* resolved.rpcRegistry
         .run(extensionId, readCap.id, null, ctx, { intent: "write" })
         .pipe(Effect.flip)
-      expect(writeResult).toBeInstanceOf(CapabilityNotFoundError)
+      expect(writeResult).toBeInstanceOf(CapabilityError)
+      if (!(writeResult instanceof CapabilityError)) return
+      expect(writeResult.reason).toContain("intent mismatch")
     }),
   )
 

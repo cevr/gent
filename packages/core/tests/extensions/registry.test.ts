@@ -591,6 +591,30 @@ describe("resolveExtensions — slash command discovery", () => {
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
+  test("slash request keeps registry description separate from slash metadata", () => {
+    const cap = request({
+      id: "inspect",
+      extensionId: ExtensionId.make("@test/request"),
+      intent: "write",
+      description: "Registry description.",
+      slash: {
+        name: "Inspect",
+        description: "Slash menu description.",
+        category: "Diagnostics",
+        keybind: "ctrl+i",
+      },
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      execute: () => Effect.succeed(undefined),
+    })
+    const resolved = resolveExtensions([makeExt("@test/request", "builtin", { rpc: [cap] })])
+    const command = listSlashCommands(resolved.extensions).find((c) => c.name === "inspect")
+    expect(cap.description).toBe("Registry description.")
+    expect(command?.displayName).toBe("Inspect")
+    expect(command?.description).toBe("Slash menu description.")
+    expect(command?.category).toBe("Diagnostics")
+    expect(command?.keybind).toBe("ctrl+i")
+  })
   test("project palette command shadows builtin slash command", () => {
     const builtinCap = makeCommand("act")
     const builtin = makeExt("@test/shadow", "builtin", { commands: [builtinCap] })

@@ -88,6 +88,8 @@ interface RegisteredRpcEntry {
 
 type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | RegisteredRpcEntry
 
+const isRequestToken = (cap: ActionToken | RequestToken): cap is RequestToken => "public" in cap
+
 export interface CapabilityRunOptions {
   readonly intent?: "read" | "write"
 }
@@ -260,7 +262,11 @@ const compileRpcRegistry = (
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
       if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+        return yield* new CapabilityErrorClass({
+          extensionId,
+          capabilityId,
+          reason: `intent mismatch: expected ${options.intent}, got ${entry.capability.intent}`,
+        })
       }
       return yield* runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx)
     }),
@@ -282,13 +288,18 @@ const capabilityToCommand = (
   // Prefer cap.description (author-supplied, human-readable) over
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
-  const description = cap.description ?? cap.promptSnippet
+  const isRequest = isRequestToken(cap)
+  const slash = isRequest ? cap.slash : undefined
+  const description = slash?.description ?? cap.description ?? cap.promptSnippet
+  const displayName = slash?.name ?? (isRequest ? undefined : cap.displayName)
+  const category = slash?.category ?? (isRequest ? undefined : cap.category)
+  const keybind = slash?.keybind ?? (isRequest ? undefined : cap.keybind)
   return {
     name: String(cap.id),
-    ...(cap.displayName !== undefined ? { displayName: cap.displayName } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
     ...(description !== undefined ? { description } : {}),
-    ...(cap.category !== undefined ? { category: cap.category } : {}),
-    ...(cap.keybind !== undefined ? { keybind: cap.keybind } : {}),
+    ...(category !== undefined ? { category } : {}),
+    ...(keybind !== undefined ? { keybind } : {}),
     extensionId,
     capabilityId: String(cap.id),
     intent: cap.intent,
