@@ -7,8 +7,9 @@
  * the bucket boundary as `Behavior<M, S, never>` without forcing the
  * actor host to learn about per-extension service deps.
  *
- * State is `{}` — there is no internal projection-worthy data. Every
- * reply is derived by calling the captured `skills.list()` / `get()`.
+ * State is the loaded skill list. The Skills resource loads once at
+ * process-scope start, so the actor owns the prompt/view and RPC surface
+ * without a parallel ProjectionContribution.
  *
  * `_tag` strings on `SkillsMsg.*` match `SkillsProtocol.*` so the
  * actor-route fallback in ActorRouter forwards extension RPC calls
@@ -17,7 +18,7 @@
 
 import { Effect, Schema } from "effect"
 import { ServiceKey, TaggedEnumClass, type Behavior } from "@gent/core/extensions/api"
-import type { SkillsService } from "./skills.js"
+import { formatSkillsForPrompt, resolveSkillName, type Skill } from "./skills.js"
 
 // ── Messages ──
 
@@ -29,7 +30,9 @@ export type SkillsMsg = Schema.Schema.Type<typeof SkillsMsg>
 
 export const SkillsService_Key = ServiceKey<SkillsMsg>("@gent/skills/store")
 
-interface SkillsState {}
+interface SkillsState {
+  readonly skills: ReadonlyArray<Skill>
+}
 
 // ── Behavior factory ──
 //
@@ -40,17 +43,19 @@ interface SkillsState {}
 // captured closure.
 
 export const makeSkillsBehavior = (
-  skills: SkillsService,
+  initialSkills: ReadonlyArray<Skill>,
 ): Behavior<SkillsMsg, SkillsState, never> => ({
-  initialState: {},
+  initialState: { skills: initialSkills },
   serviceKey: SkillsService_Key,
+  view: (state) => ({
+    prompt: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(state.skills) }],
+  }),
   receive: (msg, state, ctx) =>
     Effect.gen(function* () {
       switch (msg._tag) {
         case "ListSkills": {
-          const all = yield* skills.list()
           yield* ctx.reply(
-            all.map((s) => ({
+            state.skills.map((s) => ({
               name: s.name,
               description: s.description,
               level: s.level,
@@ -61,7 +66,7 @@ export const makeSkillsBehavior = (
           return state
         }
         case "GetSkillContent": {
-          const found = yield* skills.get(msg.name)
+          const found = resolveSkillName(state.skills, msg.name)
           yield* ctx.reply(
             found !== undefined
               ? {

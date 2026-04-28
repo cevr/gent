@@ -10,38 +10,12 @@
  */
 
 import { Effect, Layer } from "effect"
-import {
-  defineExtension,
-  defineResource,
-  ProjectionError,
-  ActorEngine,
-  type ProjectionContribution,
-} from "@gent/core/extensions/api"
-import { Skills, formatSkillsForPrompt, type Skill } from "./skills.js"
+import { defineExtension, defineResource, ActorEngine } from "@gent/core/extensions/api"
+import { Skills } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
 import { SkillsProtocol } from "./protocol.js"
 import { makeSkillsBehavior, SkillsService_Key } from "./actor.js"
-
-// ── Projection (dynamic prompt section) ──
-
-const SkillsProjection: ProjectionContribution<ReadonlyArray<Skill>, Skills> = {
-  id: "skills",
-  query: () =>
-    Effect.gen(function* () {
-      const skills = yield* Skills
-      return yield* skills
-        .list()
-        .pipe(
-          Effect.catchEager((e) =>
-            Effect.fail(new ProjectionError({ projectionId: "skills", reason: String(e) })),
-          ),
-        )
-    }),
-  prompt: (allSkills) => [
-    { id: "skills", priority: 80, content: formatSkillsForPrompt(allSkills) },
-  ],
-}
 
 // ── Extension ──
 
@@ -60,8 +34,9 @@ export const SkillsExtension = defineExtension({
       // own R.
       start: Effect.gen(function* () {
         const skills = yield* Skills
+        const allSkills = yield* skills.list()
         const engine = yield* ActorEngine
-        yield* engine.spawn(makeSkillsBehavior(skills))
+        yield* engine.spawn(makeSkillsBehavior(allSkills))
       }),
     }),
   ],
@@ -70,5 +45,4 @@ export const SkillsExtension = defineExtension({
   // bucket), so the route collector points at the serviceKey directly.
   actorRoute: SkillsService_Key,
   tools: [SkillsTool, SearchSkillsTool],
-  projections: [SkillsProjection],
 })

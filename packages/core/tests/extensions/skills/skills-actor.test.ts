@@ -9,12 +9,18 @@ import { Effect, type Layer } from "effect"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
+import { compileExtensionReactions } from "../../../src/runtime/extensions/extension-reactions"
+import type { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
+import type { Receptionist } from "../../../src/runtime/extensions/receptionist"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
+import { Agents } from "@gent/extensions/all-agents"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
+import { makeSkillsBehavior } from "../../../../extensions/src/skills/actor.js"
 import { defineResource } from "@gent/core/domain/contribution"
 import { makeActorRuntimeLayer } from "../helpers/actor-runtime-layer"
+import { AgentName } from "@gent/core/domain/agent"
 
 const sessionId = SessionId.make("skills-test-session")
 const branchId = BranchId.make("skills-test-branch")
@@ -122,6 +128,45 @@ describe("SkillsExtension actor via ActorRouter", () => {
 
         expect(reply).toBeNull()
       }).pipe(Effect.provide(layer))
+    }),
+  )
+
+  it.live("actor view contributes loaded skills to the prompt", () =>
+    Effect.gen(function* () {
+      const ext = yield* setupSkillsExtension
+      const layer = makeSkillsRuntimeLayer([ext])
+      const compiled = compileExtensionReactions([ext])
+      const projectionLayer = layer as unknown as Layer.Layer<ActorEngine | Receptionist>
+
+      const result = yield* compiled
+        .resolveTurnProjection({
+          sessionId,
+          branchId,
+          cwd: "/test/cwd",
+          home: "/test/home",
+          turn: {
+            sessionId,
+            branchId,
+            agent: Agents["cowork"]!,
+            allTools: [],
+            agentName: AgentName.make("cowork"),
+          },
+        })
+        .pipe(Effect.provide(projectionLayer))
+
+      const section = result.promptSections.find((s) => s.id === "skills")
+      expect(section?.content).toContain("effect-v4")
+      expect(section?.content).toContain("react")
+    }),
+  )
+
+  it.live("behavior view formats its initial skill state", () =>
+    Effect.sync(() => {
+      const behavior = makeSkillsBehavior(testSkills)
+      const view = behavior.view?.(behavior.initialState)
+      const section = view?.prompt?.find((s) => s.id === "skills")
+      expect(section?.content).toContain("effect-v4")
+      expect(section?.content).toContain("react")
     }),
   )
 })
