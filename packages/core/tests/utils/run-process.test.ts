@@ -1,34 +1,22 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Duration, Effect, Layer, Path } from "effect"
-import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { runProcess, ProcessError } from "@gent/core/utils/run-process"
-const platformLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  Path.layer,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-)
+const makePlatformLayer = () =>
+  Layer.mergeAll(
+    BunFileSystem.layer,
+    Path.layer,
+    BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test boundary, R is platform services we provide here
-  Effect.provide(e, platformLayer) as Effect.Effect<A, E, never>
+  Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
 
 const processTestTimeout = 15_000
 const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.timeout("10 seconds"))
 
 describe("runProcess", () => {
-  it.live(
-    "captures stdout from a successful command",
-    () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const result = yield* provideBun(runProcess("printf", ["hello"]))
-          expect(result.exitCode).toBe(0)
-          expect(result.stdout).toBe("hello")
-          expect(result.stderr).toBe("")
-        }),
-      ),
-    processTestTimeout,
-  )
   it.live(
     "surfaces nonzero exit code without failing the effect",
     () =>

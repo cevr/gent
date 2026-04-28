@@ -1,6 +1,6 @@
 import { describe, test, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer, Path } from "effect"
-import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import {
   splitCdCommand,
   injectGitTrailers,
@@ -8,14 +8,15 @@ import {
   BashTool,
 } from "@gent/extensions/exec-tools/bash"
 
-const platformLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  Path.layer,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-)
+const makePlatformLayer = () =>
+  Layer.mergeAll(
+    BunFileSystem.layer,
+    Path.layer,
+    BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test boundary, R is platform services we provide here
-  Effect.provide(e, platformLayer) as Effect.Effect<A, E, never>
+  Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
 
 const processTestTimeout = 15_000
 const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
