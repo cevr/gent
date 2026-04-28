@@ -329,10 +329,10 @@ describe("Auto runtime integration", () => {
 
   // Auto state hydration on cold actor spawn is covered end-to-end by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state
-  // across host scopes`. The legacy `storage.saveExtensionState` /
-  // `ActorRouter.publish(SessionStarted)` hydration path no longer
-  // exists — the actor primitive persists through `ActorPersistenceStorage`
-  // keyed on `(profileId, persistenceKey)`, not `(sessionId, extensionId)`.
+  // across host scopes`. The legacy session-keyed extension-state hydration
+  // path no longer exists — the actor primitive persists through
+  // `ActorPersistenceStorage` keyed on `(profileId, persistenceKey)`, not
+  // `(sessionId, extensionId)`.
 
   it.live("auto behavior.view injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {

@@ -26,7 +26,7 @@ import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
-import { ExtensionStateStorage } from "@gent/core/storage/extension-state-storage"
+import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-storage"
 import { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { BuiltinEventSink, EventPublisher } from "@gent/core/domain/event-publisher"
 
@@ -161,7 +161,7 @@ describe("scope brand type fences", () => {
         // Should be child's, not parent's
         expect((result as unknown as { sentinel: string }).sentinel).toBe("child-storage")
 
-        // All 6 sub-Tags should NOT be present (omitted from parent,
+        // Focused storage sub-Tags should NOT be present (omitted from parent,
         // not provided by child's layer). The child only provided
         // Storage, not the sub-Tags. The key test: sub-Tags from the
         // PARENT were stripped by the OVERRIDE_TAG_SETS omit-set.
@@ -174,7 +174,7 @@ describe("scope brand type fences", () => {
           yield* Effect.serviceOption(RelationshipStorage).pipe(Effect.provide(composed.layer)),
         )
         omitted(
-          yield* Effect.serviceOption(ExtensionStateStorage).pipe(Effect.provide(composed.layer)),
+          yield* Effect.serviceOption(ActorPersistenceStorage).pipe(Effect.provide(composed.layer)),
         )
         omitted(
           yield* Effect.serviceOption(InteractionPendingReader).pipe(

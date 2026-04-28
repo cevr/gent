@@ -45,7 +45,6 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
-import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
 import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
@@ -120,7 +119,7 @@ type ProvidesOf<Services extends ReadonlyArray<OwnedService<any, any, any, any>>
  * ONE mapping, not every callsite that constructs an ephemeral layer.
  */
 export interface EphemeralOverrides {
-  /** In-memory storage for ephemeral child. Omits Storage + all 6 sub-Tags. */
+  /** In-memory storage for ephemeral child. Omits Storage + focused sub-Tags. */
   readonly storage?: OpaqueLayer
   /** Event store for ephemeral child. Omits EventStore. */
   readonly eventStore?: OpaqueLayer
@@ -150,7 +149,6 @@ type EphemeralOverrideProvides =
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage
   | ActorPersistenceStorage
   | CheckpointStorage
   | InteractionStorage
@@ -182,7 +180,6 @@ const OVERRIDE_TAG_SETS: Record<
     MessageStorage,
     EventStorage,
     RelationshipStorage,
-    ExtensionStateStorage,
     ActorPersistenceStorage,
     CheckpointStorage,
     InteractionStorage,

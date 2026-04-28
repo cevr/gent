@@ -9,7 +9,7 @@ import {
   getEventBranchId,
   getEventSessionId,
 } from "../domain/event.js"
-import type { ExtensionId, SessionId, BranchId, MessageId } from "../domain/ids.js"
+import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { ReasoningEffort } from "../domain/agent.js"
 import { isRecord } from "../domain/guards.js"
 import { SqlClient, SqlError } from "effect/unstable/sql"
@@ -24,7 +24,6 @@ import { MessageStorage } from "./message-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { ActorPersistenceStorage } from "./actor-persistence-storage.js"
-import { ExtensionStateStorage } from "./extension-state-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 
 // Schema decoders - Effect-based (no sync throws)
@@ -183,18 +182,6 @@ export interface StorageService {
     },
     StorageError
   >
-
-  // Extension state persistence
-  readonly saveExtensionState: (params: {
-    sessionId: SessionId
-    extensionId: ExtensionId
-    stateJson: string
-    version: number
-  }) => Effect.Effect<void, StorageError>
-  readonly loadExtensionState: (params: {
-    sessionId: SessionId
-    extensionId: ExtensionId
-  }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
 
   // Actor persistence (profile-scoped, key-namespaced).
   readonly saveActorState: (params: {
@@ -554,7 +541,6 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
       yield* sql`DELETE FROM interaction_requests WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM interaction_requests WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = interaction_requests.branch_id AND branches.session_id != interaction_requests.session_id)`
-      yield* sql`DELETE FROM extension_state WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND active_branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.active_branch_id AND branches.session_id = sessions.id)`
       yield* sql`UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IS NOT NULL AND parent_session_id NOT IN (SELECT id FROM sessions)`
@@ -847,22 +833,6 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
           )
         `,
             })
-            yield* migrateTableForeignKeys({
-              table: "extension_state",
-              columns: ["session_id", "extension_id", "state_json", "version", "updated_at"],
-              expectedParents: ["sessions"],
-              createSql: `
-          CREATE TABLE extension_state (
-            session_id TEXT NOT NULL,
-            extension_id TEXT NOT NULL,
-            state_json TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (session_id, extension_id),
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-          )
-        `,
-            })
           }),
         ),
       () => sql.unsafe(`PRAGMA foreign_keys = ON`),
@@ -1044,18 +1014,6 @@ const initSchema = Effect.gen(function* () {
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS extension_state (
-      session_id TEXT NOT NULL,
-      extension_id TEXT NOT NULL,
-      state_json TEXT NOT NULL,
-      version INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, extension_id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `)
 
@@ -1698,32 +1656,6 @@ const makeStorageImpl = Effect.gen(function* () {
       Effect.mapError(mapError("Failed to get session detail")),
     ),
 
-    saveExtensionState: Effect.fn("Storage.saveExtensionState")(
-      function* (params: {
-        sessionId: SessionId
-        extensionId: ExtensionId
-        stateJson: string
-        version: number
-      }) {
-        const updatedAt = yield* Clock.currentTimeMillis
-        yield* sql`INSERT OR REPLACE INTO extension_state (session_id, extension_id, state_json, version, updated_at) VALUES (${params.sessionId}, ${params.extensionId}, ${params.stateJson}, ${params.version}, ${updatedAt})`
-      },
-      Effect.mapError(mapError("Failed to save extension state")),
-    ),
-
-    loadExtensionState: Effect.fn("Storage.loadExtensionState")(
-      function* (params: { sessionId: SessionId; extensionId: ExtensionId }) {
-        const rows = yield* sql<{
-          state_json: string
-          version: number
-        }>`SELECT state_json, version FROM extension_state WHERE session_id = ${params.sessionId} AND extension_id = ${params.extensionId}`
-        const row = rows[0]
-        if (row === undefined) return undefined
-        return { stateJson: row.state_json, version: row.version }
-      },
-      Effect.mapError(mapError("Failed to load extension state")),
-    ),
-
     saveActorState: Effect.fn("Storage.saveActorState")(
       function* (params: { profileId: string; persistenceKey: string; stateJson: string }) {
         const updatedAt = yield* Clock.currentTimeMillis
@@ -1836,12 +1768,12 @@ const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient
   )
 
 /**
- * Build 6 focused sub-Tag layers from a layer that provides Storage.
+ * Build focused sub-Tag layers from a layer that provides Storage.
  * Called at composition roots (dependencies.ts, test layers) to wire
  * sub-Tags alongside the existing Storage Tag. NOT wired inside Storage
  * class methods to prevent ephemeral compositor leakage.
  */
-/** Build 6 sub-Tag layers from a StorageService value (no extra scope). */
+/** Build focused sub-Tag layers from a StorageService value (no extra scope). */
 const subTagLayersFromService = (
   s: StorageService,
 ): Layer.Layer<
@@ -1850,7 +1782,6 @@ const subTagLayersFromService = (
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage
   | ActorPersistenceStorage
 > =>
   Layer.mergeAll(
@@ -1859,12 +1790,11 @@ const subTagLayersFromService = (
     MessageStorage.fromStorage(s),
     EventStorage.fromStorage(s),
     RelationshipStorage.fromStorage(s),
-    ExtensionStateStorage.fromStorage(s),
     ActorPersistenceStorage.fromStorage(s),
   )
 
 /**
- * Build 6 focused sub-Tag layers from a layer that provides Storage.
+ * Build focused sub-Tag layers from a layer that provides Storage.
  * Called at composition roots (dependencies.ts, test layers) to wire
  * sub-Tags alongside the existing Storage Tag.
  */
@@ -1876,7 +1806,6 @@ export const subTagLayers = <E, R>(
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage
   | ActorPersistenceStorage,
   E,
   R
@@ -1902,7 +1831,6 @@ const subTagsFromContext: Layer.Layer<
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | ExtensionStateStorage
   | ActorPersistenceStorage,
   never,
   Storage
@@ -1949,7 +1877,6 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ExtensionStateStorage
     | ActorPersistenceStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
@@ -1990,7 +1917,6 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ExtensionStateStorage
     | ActorPersistenceStorage
   > => {
     const base = Layer.effect(Storage, makeStorageImpl).pipe(
@@ -2021,7 +1947,6 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ExtensionStateStorage
     | ActorPersistenceStorage
   > => Storage.MemoryWithSql()
 }
