@@ -225,10 +225,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         Layer.provideMerge(ExtensionTurnControl.Live),
         Layer.provideMerge(actorRuntimeLive),
       )
-      // Read-only call surface for projections — must mirror profile.ts
-      // so any remaining ProjectionContribution that requires
-      // `MachineExecute` doesn't silently defect under
-      // projection failure isolation.
+      // Read-only call surface — must mirror profile.ts so read-intent
+      // capabilities that require `MachineExecute` resolve in tests.
       const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
       // Base services — everything that doesn't depend on reducing event store

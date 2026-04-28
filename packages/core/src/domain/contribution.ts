@@ -28,7 +28,6 @@ import type { RequestToken } from "./capability/request.js"
 import type { ToolToken } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ExtensionProtocol } from "./extension-protocol.js"
-import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
 import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
 
@@ -123,7 +122,6 @@ export interface ExtensionContributions {
    * regardless of which primitive owns it.
    */
   readonly protocols?: ExtensionProtocol
-  readonly projections?: ReadonlyArray<AnyProjectionContribution>
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
    * tool-result handlers. Per-extension, per-session — fired by the runtime

@@ -55,7 +55,7 @@ describe("defineExtension", () => {
       expect(contributions.modelDrivers ?? []).toEqual([])
       expect(contributions.resources ?? []).toEqual([])
       expect(contributions.externalDrivers ?? []).toEqual([])
-      expect(contributions.projections ?? []).toEqual([])
+      expect(contributions.reactions).toBeUndefined()
     }),
   )
 
@@ -76,13 +76,9 @@ describe("defineExtension", () => {
         id: "all-kinds",
         tools: [myTool],
         agents: [Agents["cowork"]!],
-        projections: [
-          {
-            id: "prompt-suffix",
-            query: () => Effect.succeed(" [suffix]"),
-            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-          },
-        ],
+        reactions: {
+          systemPrompt: (input) => Effect.succeed(`${input.basePrompt} [suffix]`),
+        },
         resources: [
           defineResource({
             scope: "process",
@@ -103,7 +99,7 @@ describe("defineExtension", () => {
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
-      expect((contributions.projections ?? [])[0]?.id).toBe("prompt-suffix")
+      expect(contributions.reactions?.systemPrompt).toBeDefined()
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
@@ -202,13 +198,9 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "wired",
         tools: [myTool],
-        projections: [
-          {
-            id: "prompt",
-            query: () => Effect.succeed("!!"),
-            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-          },
-        ],
+        reactions: {
+          systemPrompt: (input) => Effect.succeed(`${input.basePrompt}!!`),
+        },
       })
       const contributions = yield* setupOf(ext)
       const loaded = {

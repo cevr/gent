@@ -8,7 +8,6 @@ import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import type { ProjectionContribution } from "@gent/core/domain/projection"
 import { Provider } from "@gent/core/providers/provider"
 import {
   SessionRuntime,
@@ -403,26 +402,27 @@ const racySessionCommandsLayer = (params: {
   )
 }
 
-const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
-  id: "parent-tool-call-probe",
-  query: (ctx) => Effect.succeed(ctx.turn.parentToolCallId),
-  prompt: (parentToolCallId) =>
-    parentToolCallId === undefined
-      ? []
-      : [
-          {
-            id: "parent-tool-call-probe",
-            content: `parentToolCallId:${parentToolCallId}`,
-            priority: 45,
-          },
-        ],
-}
-
 const parentToolCallProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("parent-tool-call-probe") },
   scope: "builtin",
   sourcePath: "test",
-  contributions: { projections: [parentToolCallProbeProjection] },
+  contributions: {
+    reactions: {
+      turnProjection: (ctx) =>
+        Effect.succeed({
+          promptSections:
+            ctx.turn.parentToolCallId === undefined
+              ? []
+              : [
+                  {
+                    id: "parent-tool-call-probe",
+                    content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
+                    priority: 45,
+                  },
+                ],
+        }),
+    },
+  },
 }
 
 describe("session command persistence", () => {

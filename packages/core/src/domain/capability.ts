@@ -32,8 +32,7 @@
  *
  * `intent` is a typed mode replacing the old query/mutation split.
  * `intent: "read"` is enforced read-only via the lint rule that scans the
- * effect's R channel for write-tagged services (the same rule that fences
- * `ProjectionContribution.query` today).
+ * effect's R channel for write-tagged services.
  *
  * @module
  */

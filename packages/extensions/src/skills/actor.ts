@@ -9,7 +9,7 @@
  *
  * State is the loaded skill list. The Skills resource loads once at
  * process-scope start, so the actor owns the prompt/view and RPC surface
- * without a parallel ProjectionContribution.
+ * without a parallel prompt derivation path.
  *
  * `_tag` strings on `SkillsMsg.*` match `SkillsProtocol.*` so the
  * actor-route fallback in ActorRouter forwards extension RPC calls

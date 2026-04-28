@@ -67,8 +67,6 @@
       "@gent/core/domain/output-buffer.js": ["./packages/core/src/domain/output-buffer.ts"],
       "@gent/core/domain/permission": ["./packages/core/src/domain/permission.ts"],
       "@gent/core/domain/permission.js": ["./packages/core/src/domain/permission.ts"],
-      "@gent/core/domain/projection": ["./packages/core/src/domain/projection.ts"],
-      "@gent/core/domain/projection.js": ["./packages/core/src/domain/projection.ts"],
       "@gent/core/domain/prompt": ["./packages/core/src/domain/prompt.ts"],
       "@gent/core/domain/prompt.js": ["./packages/core/src/domain/prompt.ts"],
       "@gent/core/domain/queue": ["./packages/core/src/domain/queue.ts"],

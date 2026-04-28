@@ -199,13 +199,9 @@ describe("scope precedence", () => {
     it.live("systemPrompt rewrite order follows scope precedence", () => {
       const make = (id: string, scope: "builtin" | "user" | "project") =>
         ext(id, scope, {
-          projections: [
-            {
-              id: `prompt-${id}`,
-              query: () => Effect.succeed(`[${scope}]`),
-              systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-            },
-          ],
+          reactions: {
+            systemPrompt: (input) => Effect.succeed(`${input.basePrompt}[${scope}]`),
+          },
         })
 
       // Pass out of order to prove sorting, not insertion

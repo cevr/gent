@@ -6,7 +6,7 @@
  * `(ctx) => Effect<array>` per bucket), validates them, and produces a
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
  *
- * The bucket name IS the discrimination — TypeScript catches a Projection
+ * The bucket name IS the discrimination — TypeScript catches a command
  * placed in `tools` at the call site; runtime `validatePackageShape` adds
  * field-local error messages for runtime-loaded (JS) extensions.
  *
@@ -60,7 +60,6 @@ import type { RequestToken } from "../domain/capability/request.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { ExtensionProtocol } from "../domain/extension-protocol.js"
-import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AgentEvent } from "../domain/event.js"
 
@@ -101,6 +100,7 @@ export {
   type GentExtension,
   type ExtensionEffect,
   ExtensionEffectSchema,
+  type ProjectionTurnContext,
   type TurnProjection,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -264,13 +264,7 @@ export type {
   ScopeOf,
   ResourceSchedule,
 } from "../domain/resource.js"
-export type {
-  ProjectionContribution,
-  ProjectionContext,
-  ProjectionTurnContext,
-  AnyProjectionContribution,
-} from "../domain/projection.js"
-export { ProjectionError } from "../domain/projection.js"
+export { ProjectionError } from "../domain/projection-error.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only
 // be reachable from projections / read-intent capabilities by branding
@@ -359,7 +353,6 @@ export interface DefineExtensionInput {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: ServiceKey is contravariant in M; `any` opts out of variance checking so authors can pass any narrowly-typed key without an identity widener
   readonly actorRoute?: ServiceKeyType<any>
-  readonly projections?: FieldSpec<AnyProjectionContribution>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
@@ -572,7 +565,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const rpc = yield* resolveField(manifest, "rpc", params.rpc, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
-        const projections = yield* resolveField(manifest, "projections", params.projections, ctx)
         const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
         const externalDrivers = yield* resolveField(
           manifest,
@@ -589,7 +581,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(actors.length > 0 ? { actors } : {}),
           ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),
           ...(params.actorRoute !== undefined ? { actorRoute: params.actorRoute } : {}),
-          ...(projections.length > 0 ? { projections } : {}),
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),

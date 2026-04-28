@@ -9,7 +9,7 @@ import {
   projectKey,
   type MemoryFrontmatter,
 } from "@gent/extensions/memory/vault"
-import type { ProjectionTurnContext } from "@gent/core/domain/projection"
+import type { ProjectionTurnContext } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 let tmpDir: string

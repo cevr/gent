@@ -1,16 +1,10 @@
 /**
  * `ReadOnly` brand — type-level fence for service Tags that must be
- * usable from read-only contexts (projections + `request({ intent: "read" })`
+ * usable from read-only contexts (`request({ intent: "read" })`
  * capabilities) without leaking write capability.
  *
- * Background: pre-B11.4 the `gent/no-projection-writes` lint rule
- * heuristically scanned projection R-channels for known-write services
- * (e.g. `Skills.reload()`, `MemoryVault.rebuildIndex()`). The heuristic
- * missed plenty (any new write surface bypasses it; lint runs after
- * code lands). B11.4 replaces the heuristic with a structural type
- * fence: `ProjectionContribution<A, R extends ReadOnlyTag = never>`
- * + `MachineExecute & ReadOnlyTag` + per-service `*ReadOnly` Tags
- * make a write-capable Tag a compile error in any read-only R-channel.
+ * Per-service `*ReadOnly` Tags make a write-capable Tag a compile
+ * error in read-intent R-channels.
  *
  * Usage:
  *   - Define a service-shape interface as you normally would.
@@ -52,9 +46,8 @@ export type ReadOnly<S> = S & ReadOnlyTag
  * the runtime value is unchanged. Use at Tag construction sites where
  * the shape carries only read methods.
  *
- * The companion brand on the Tag identifier (so projection R-channels
- * resolve under the `R extends ReadOnlyTag` fence in
- * `ProjectionContribution`) is declared on the Tag class itself:
+ * The companion brand on the Tag identifier is declared on the Tag class
+ * itself:
  *
  * @example
  * ```ts
@@ -64,7 +57,7 @@ export type ReadOnly<S> = S & ReadOnlyTag
  *   ReadOnly<MyServiceShape>
  * >()("@me/MyService") {
  *   // Brand the class identifier so `yield* MyService` produces
- *   // `R extends ReadOnlyTag` for projection R-channels.
+ *   // `R extends ReadOnlyTag` for read-intent R-channels.
  *   declare readonly [ReadOnlyBrand]: true
  * }
  * ```

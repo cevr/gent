@@ -35,8 +35,8 @@ export interface MachineExecuteService {
 
 /**
  * `MachineExecute` carries the `ReadOnly` brand — it exposes only
- * `execute<M>` and projection R-channels (`ProjectionContribution.R`)
- * accept only `ReadOnly`-branded service Tags. See `domain/read-only.ts`.
+ * `execute<M>` and read-intent R-channels accept only `ReadOnly`-branded
+ * service Tags. See `domain/read-only.ts`.
  */
 export class MachineExecute extends Context.Service<
   MachineExecute,
@@ -44,9 +44,7 @@ export class MachineExecute extends Context.Service<
 >()("@gent/core/src/runtime/extensions/machine-execute/MachineExecute") {
   /**
    * Brand on the Tag identifier so `yield* MachineExecute` produces an
-   * `R extends ReadOnlyTag` requirement — projection R-channels accept
-   * it under the `ProjectionContribution<A, R extends ReadOnlyTag>`
-   * fence in `domain/projection.ts`.
+   * `R extends ReadOnlyTag` requirement for read-intent R-channels.
    */
   declare readonly [ReadOnlyBrand]: true
 

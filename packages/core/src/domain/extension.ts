@@ -11,7 +11,6 @@ import type { PromptSection } from "./prompt.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import type { AnyExtensionCommandMessage } from "./extension-protocol.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import type { ProjectionTurnContext } from "./projection.js"
 
 // Extension Manifest — authored by extension author
 
@@ -268,8 +267,7 @@ export interface ExtensionReactions<E = never, R = never> {
   ) => Effect.Effect<string, E, R>
   /**
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
-   * derivations that need current turn metadata plus services, without the
-   * legacy ProjectionContribution query/projector split.
+   * derivations that need current turn metadata plus services.
    */
   readonly turnProjection?: (ctx: ProjectionTurnContext) => Effect.Effect<TurnProjection, E, R>
   readonly turnBefore?: ExtensionReaction<TurnBeforeInput, E, R>
@@ -297,6 +295,19 @@ export interface ExtensionReduceContext {
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<ToolToken>
+}
+
+/** Turn-scoped host + agent context used by prompt/tool-policy reactions. */
+export interface ProjectionTurnContext {
+  readonly sessionId: SessionId
+  readonly branchId?: BranchId
+  /** Process working directory (host cwd). */
+  readonly cwd: string
+  /** User home directory. */
+  readonly home: string
+  /** Session-scoped working directory, if the session was opened in a specific cwd. */
+  readonly sessionCwd?: string
+  readonly turn: ExtensionTurnContext
 }
 
 /** @deprecated Use ExtensionTurnContext */

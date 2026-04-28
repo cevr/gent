@@ -8,9 +8,9 @@
  *   1. Same inputs → same resolved extensions (extension ids, scope precedence).
  *   2. `buildExtensionLayers` actually wires `ExtensionRegistry` from the
  *      resolved data (not just exported as a helper).
- *   3. `compileBaseSections` resolves dynamic prompt sections that yield
- *      services contributed via `setup.layer` — the Skills-shaped bug class
- *      C7 was specifically designed to handle.
+ *   3. turn-projection reactions resolve services contributed via
+ *      `defineResource` — the Skills-shaped bug class C7 was specifically
+ *      designed to handle.
  *   4. Server-style and per-cwd-style assemblies produce equivalent observable
  *      output (same registry contents, same merged sections). If the per-cwd
  *      path skips an extension layer, this fails.
@@ -22,13 +22,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
+import { Agents } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
   tool,
   behavior,
-  ProjectionError,
-  type ProjectionContribution,
+  AgentName,
   type ReadOnly,
   ReadOnlyBrand,
   withReadOnly,
@@ -70,10 +70,9 @@ const sectionExtension = defineExtension({
   tools: [sectionTool],
 })
 
-// Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection
-// whose `query` Effect yields a service from the extension's Resource layer.
-// The service Tag is `ReadOnly`-branded so the projection's R channel
-// satisfies `ProjectionContribution<A, R extends ReadOnlyTag>` (B11.4).
+// Dynamic prompt section: the reaction Effect yields a service from the
+// extension's Resource layer. The service Tag is `ReadOnly`-branded so the
+// prompt reaction only receives a read surface.
 interface FakeProviderShape {
   readonly text: () => string
 }
@@ -88,24 +87,18 @@ const fakeProviderLive = Layer.succeed(
   withReadOnly({ text: () => "dynamic-from-service" } satisfies FakeProviderShape),
 )
 
-const dynamicProjection: ProjectionContribution<string, FakeProvider> = {
-  id: "rp-dynamic-section",
-  query: () =>
-    Effect.gen(function* () {
-      const fp = yield* FakeProvider
-      return fp.text()
-    }).pipe(
-      Effect.catchEager((e) =>
-        Effect.fail(new ProjectionError({ projectionId: "rp-dynamic-section", reason: String(e) })),
-      ),
-    ),
-  prompt: (content) => [{ id: "rp-dynamic-section", priority: 60, content }],
-}
-
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
   resources: [defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive })],
-  projections: [dynamicProjection],
+  reactions: {
+    turnProjection: () =>
+      Effect.gen(function* () {
+        const fp = yield* FakeProvider
+        return {
+          promptSections: [{ id: "rp-dynamic-section", priority: 60, content: fp.text() }],
+        }
+      }),
+  },
 })
 
 const RpMsg = TaggedEnumClass("RpMsg", { Ping: {} })
@@ -203,13 +196,7 @@ describe("resolveRuntimeProfile", () => {
     ).pipe(Effect.provide(sharedLayer)),
   )
 
-  // C7 dropped this test: dynamic prompt sections were `DynamicPromptSection`,
-  // resolved by `compileBaseSections`. After C7 dynamic content lives on
-  // `Projection.prompt(value)` and is assembled per-turn by ExtensionReactions,
-  // not by `compileBaseSections` (which only sees static sections). The
-  // equivalent service-yielding-projection behavior is exercised by
-  // `tests/extensions/extension-turn-projections.test.ts`.
-  it.live("dynamicExtension resolves through ResolvedExtensions (smoke)", () =>
+  it.live("resource-backed turnProjection resolves through buildExtensionLayers", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const profile = yield* resolveRuntimeProfile({
@@ -218,11 +205,34 @@ describe("resolveRuntimeProfile", () => {
           platform: "darwin",
           extensions: [dynamicExtension],
         })
-        // Projection contributes through turn reactions, not
-        // compileBaseSections; assert the extension was wired in.
-        expect(profile.resolved.extensions.map((e) => e.manifest.id as string)).toContain(
-          "@gent/test-runtime-profile-dynamic",
+        const layer = buildExtensionLayers(profile.resolved).pipe(
+          Layer.provide(ExtensionTurnControl.Live),
         )
+        const registryService = yield* Effect.gen(function* () {
+          return yield* ExtensionRegistry
+        }).pipe(Effect.provide(layer))
+
+        const result = yield* registryService.extensionReactions
+          .resolveTurnProjection({
+            sessionId: "s" as never,
+            branchId: "b" as never,
+            cwd: "/tmp",
+            home: "/tmp",
+            turn: {
+              sessionId: "s" as never,
+              branchId: "b" as never,
+              agent: Agents["cowork"]!,
+              agentName: AgentName.make("cowork"),
+              allTools: [],
+            },
+          })
+          .pipe(Effect.provide(layer))
+
+        expect(result.promptSections).toContainEqual({
+          id: "rp-dynamic-section",
+          priority: 60,
+          content: "dynamic-from-service",
+        })
       }),
     ).pipe(Effect.provide(sharedLayer)),
   )

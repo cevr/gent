@@ -203,9 +203,7 @@ export interface ActorEngineService {
    * `undefined` for unknown refs (mirrors `tell` no-op semantics) or
    * for behaviors that did not declare a `view`. Used by prompt
    * assembly to fold actor-derived prompt sections + tool policy
-   * fragments into the per-turn projection evaluation, so the same
-   * pure data structure that `ProjectionContribution.{prompt,policy}`
-   * produces is also produced from actor state without a round-trip
+   * fragments into the per-turn prompt evaluation without a round-trip
    * through `ask`.
    */
   readonly peekView: <M>(target: ActorRef<M>) => Effect.Effect<ActorView | undefined>

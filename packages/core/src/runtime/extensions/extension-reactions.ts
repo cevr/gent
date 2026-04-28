@@ -14,6 +14,7 @@ import type {
   ToolResultInput,
   TurnAfterInput,
   TurnBeforeInput,
+  ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
 import type { ServiceKey } from "../../domain/actor.js"
@@ -21,7 +22,6 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
 import { ActorEngine } from "./actor-engine.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 import { Receptionist } from "./receptionist.js"
@@ -77,50 +77,20 @@ export interface ExtensionTurnProjection {
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
 }
 
-interface ProjectionSystemPromptSlot {
-  readonly kind: "projection"
-  readonly extensionId: ExtensionId
-  readonly projectionId: string
-  readonly query: AnyProjectionContribution["query"]
-  readonly systemPrompt: NonNullable<AnyProjectionContribution["systemPrompt"]>
-}
-
 interface RegisteredSystemPromptRewrite {
-  readonly kind: "reaction"
   readonly extensionId: ExtensionId
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["systemPrompt"]>
 }
 
-type SystemPromptSlot = ProjectionSystemPromptSlot | RegisteredSystemPromptRewrite
-
-interface ProjectionTurnSlot {
-  readonly kind: "projection"
-  readonly extensionId: ExtensionId
-  readonly projectionId: string
-  readonly query: AnyProjectionContribution["query"]
-  readonly prompt?: NonNullable<AnyProjectionContribution["prompt"]>
-  readonly policy?: NonNullable<AnyProjectionContribution["policy"]>
-}
-
 interface ReactionTurnProjectionSlot {
-  readonly kind: "reaction"
   readonly extensionId: ExtensionId
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["turnProjection"]>
 }
-
-type TurnProjectionSlot = ProjectionTurnSlot | ReactionTurnProjectionSlot
 
 interface RegisteredActorRoute {
   readonly extensionId: ExtensionId
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ServiceKey<M> is contravariant; storage erases M
   readonly serviceKey: ServiceKey<any>
-}
-
-interface ProjectionContextMessagesSlot {
-  readonly extensionId: ExtensionId
-  readonly projectionId: string
-  readonly query: AnyProjectionContribution["query"]
-  readonly contextMessages: NonNullable<AnyProjectionContribution["contextMessages"]>
 }
 
 interface RegisteredReaction<Input> {
@@ -159,27 +129,6 @@ const collectActorRoutes = (
   }
   return routes
 }
-
-const runProjectionQuery = (
-  extensionId: ExtensionId,
-  projectionId: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
-  query: (ctx: ProjectionTurnContext) => Effect.Effect<any, any, any>,
-  ctx: ProjectionTurnContext,
-) =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential ProjectionContribution
-  sealErasedEffect(() => query(ctx), {
-    onFailure: (error) =>
-      Effect.logWarning("extension.reaction.query.failed").pipe(
-        Effect.annotateLogs({ extensionId, projectionId, error: String(error) }),
-        Effect.as(undefined),
-      ),
-    onDefect: (defect) =>
-      Effect.logWarning("extension.reaction.query.defect").pipe(
-        Effect.annotateLogs({ extensionId, projectionId, defect: String(defect) }),
-        Effect.as(undefined),
-      ),
-  })
 
 const runReaction = <Input>(
   input: Input,
@@ -262,9 +211,8 @@ export const compileExtensionReactions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledExtensionReactions => {
   const sorted = sortExtensions(extensions)
-  const systemPromptSlots: SystemPromptSlot[] = []
-  const contextMessageSlots: ProjectionContextMessagesSlot[] = []
-  const turnProjectionSlots: TurnProjectionSlot[] = []
+  const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
+  const turnProjectionSlots: ReactionTurnProjectionSlot[] = []
   const actorRoutes = collectActorRoutes(sorted)
   const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
@@ -272,48 +220,16 @@ export const compileExtensionReactions = (
   const toolResultSlots: RegisteredToolResultTransform[] = []
 
   for (const ext of sorted) {
-    for (const projection of ext.contributions.projections ?? []) {
-      if (projection.systemPrompt !== undefined) {
-        systemPromptSlots.push({
-          kind: "projection",
-          extensionId: ext.manifest.id,
-          projectionId: projection.id,
-          query: projection.query,
-          systemPrompt: projection.systemPrompt,
-        })
-      }
-      if (projection.contextMessages !== undefined) {
-        contextMessageSlots.push({
-          extensionId: ext.manifest.id,
-          projectionId: projection.id,
-          query: projection.query,
-          contextMessages: projection.contextMessages,
-        })
-      }
-      if (projection.prompt !== undefined || projection.policy !== undefined) {
-        turnProjectionSlots.push({
-          kind: "projection",
-          extensionId: ext.manifest.id,
-          projectionId: projection.id,
-          query: projection.query,
-          ...(projection.prompt !== undefined ? { prompt: projection.prompt } : {}),
-          ...(projection.policy !== undefined ? { policy: projection.policy } : {}),
-        })
-      }
-    }
-
     const reactions = ext.contributions.reactions
     if (reactions === undefined) continue
     if (reactions.systemPrompt !== undefined) {
       systemPromptSlots.push({
-        kind: "reaction",
         extensionId: ext.manifest.id,
         handler: reactions.systemPrompt,
       })
     }
     if (reactions.turnProjection !== undefined) {
       turnProjectionSlots.push({
-        kind: "reaction",
         extensionId: ext.manifest.id,
         handler: reactions.turnProjection,
       })
@@ -337,105 +253,34 @@ export const compileExtensionReactions = (
 
     checkPermission: (input, base) => base(input),
 
-    resolveContextMessages: (input, ctx) =>
-      Effect.gen(function* () {
-        let current: ReadonlyArray<Message> = input.messages
-        for (const slot of contextMessageSlots) {
-          const value = yield* runProjectionQuery(
-            slot.extensionId,
-            slot.projectionId,
-            slot.query,
-            ctx.projection,
-          )
-          if (value === undefined) continue
-          current = yield* slot
-            .contextMessages(value, { ...input, messages: current }, ctx.projection)
-            .pipe(
-              Effect.catchEager((error) =>
-                Effect.logWarning("extension.reaction.context-messages.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    projectionId: slot.projectionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              ),
-              Effect.catchDefect((defect) =>
-                Effect.logWarning("extension.reaction.context-messages.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    projectionId: slot.projectionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-              ),
-            )
-        }
-        return current
-      }) as Effect.Effect<ReadonlyArray<Message>>,
+    resolveContextMessages: (input) => Effect.succeed(input.messages),
 
     resolveSystemPrompt: (input, ctx) =>
       Effect.gen(function* () {
         let current = input.basePrompt
         for (const slot of systemPromptSlots) {
-          if (slot.kind === "projection") {
-            const value = yield* runProjectionQuery(
-              slot.extensionId,
-              slot.projectionId,
-              slot.query,
-              ctx.projection,
-            )
-            if (value === undefined) continue
-            current = yield* slot
-              .systemPrompt(value, { ...input, basePrompt: current }, ctx.projection)
-              .pipe(
-                Effect.catchEager((error) =>
-                  Effect.logWarning("extension.reaction.system-prompt.failed").pipe(
-                    Effect.annotateLogs({
-                      extensionId: slot.extensionId,
-                      projectionId: slot.projectionId,
-                      error: String(error),
-                    }),
-                    Effect.as(current),
-                  ),
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous system-prompt slot
+          current = yield* sealErasedEffect(
+            () => slot.handler({ ...input, basePrompt: current }, ctx.host),
+            {
+              onFailure: (error) =>
+                Effect.logWarning("extension.reaction.system-prompt.failed").pipe(
+                  Effect.annotateLogs({
+                    extensionId: slot.extensionId,
+                    error: String(error),
+                  }),
+                  Effect.as(current),
                 ),
-                Effect.catchDefect((defect) =>
-                  Effect.logWarning("extension.reaction.system-prompt.defect").pipe(
-                    Effect.annotateLogs({
-                      extensionId: slot.extensionId,
-                      projectionId: slot.projectionId,
-                      defect: String(defect),
-                    }),
-                    Effect.as(current),
-                  ),
+              onDefect: (defect) =>
+                Effect.logWarning("extension.reaction.system-prompt.defect").pipe(
+                  Effect.annotateLogs({
+                    extensionId: slot.extensionId,
+                    defect: String(defect),
+                  }),
+                  Effect.as(current),
                 ),
-              )
-          } else {
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous system-prompt slot
-            current = yield* sealErasedEffect(
-              () => slot.handler({ ...input, basePrompt: current }, ctx.host),
-              {
-                onFailure: (error) =>
-                  Effect.logWarning("extension.reaction.system-prompt.failed").pipe(
-                    Effect.annotateLogs({
-                      extensionId: slot.extensionId,
-                      error: String(error),
-                    }),
-                    Effect.as(current),
-                  ),
-                onDefect: (defect) =>
-                  Effect.logWarning("extension.reaction.system-prompt.defect").pipe(
-                    Effect.annotateLogs({
-                      extensionId: slot.extensionId,
-                      defect: String(defect),
-                    }),
-                    Effect.as(current),
-                  ),
-              },
-            )
-          }
+            },
+          )
         }
         return current
       }) as Effect.Effect<string>,
@@ -446,49 +291,11 @@ export const compileExtensionReactions = (
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
-          if (slot.kind === "reaction") {
-            collectTurnProjection(
-              yield* runTurnProjectionReaction(slot, ctx),
-              sectionsById,
-              policyFragments,
-            )
-            continue
-          }
-          const value = yield* runProjectionQuery(
-            slot.extensionId,
-            slot.projectionId,
-            slot.query,
-            ctx,
+          collectTurnProjection(
+            yield* runTurnProjectionReaction(slot, ctx),
+            sectionsById,
+            policyFragments,
           )
-          if (value === undefined) continue
-          const prompt = slot.prompt
-          if (prompt !== undefined) {
-            const sectionsExit = yield* Effect.exit(Effect.sync(() => prompt(value)))
-            if (sectionsExit._tag === "Success") {
-              for (const section of sectionsExit.value) sectionsById.set(section.id, section)
-            } else {
-              yield* Effect.logWarning("extension.reaction.prompt-projection.failed").pipe(
-                Effect.annotateLogs({
-                  extensionId: slot.extensionId,
-                  projectionId: slot.projectionId,
-                }),
-              )
-            }
-          }
-          const policy = slot.policy
-          if (policy !== undefined) {
-            const policyExit = yield* Effect.exit(Effect.sync(() => policy(value, ctx)))
-            if (policyExit._tag === "Success") {
-              policyFragments.push(policyExit.value)
-            } else {
-              yield* Effect.logWarning("extension.reaction.policy-projection.failed").pipe(
-                Effect.annotateLogs({
-                  extensionId: slot.extensionId,
-                  projectionId: slot.projectionId,
-                }),
-              )
-            }
-          }
         }
 
         if (actorRoutes.length > 0) {

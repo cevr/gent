@@ -48,8 +48,6 @@
     "./domain/output-buffer.js": "./src/domain/output-buffer.ts",
     "./domain/permission": "./src/domain/permission.ts",
     "./domain/permission.js": "./src/domain/permission.ts",
-    "./domain/projection": "./src/domain/projection.ts",
-    "./domain/projection.js": "./src/domain/projection.ts",
     "./domain/prompt": "./src/domain/prompt.ts",
     "./domain/prompt.js": "./src/domain/prompt.ts",
     "./domain/queue": "./src/domain/queue.ts",

@@ -37,13 +37,9 @@ const ext = (
   scope,
   sourcePath: `/test/${id}`,
   contributions: {
-    projections: [
-      {
-        id: `prompt-${id}`,
-        query: () => Effect.succeed(suffix),
-        systemPrompt: (value, input) => Effect.succeed(`${input.basePrompt}${value}`),
-      },
-    ],
+    reactions: {
+      systemPrompt: (input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+    },
   },
 })
 

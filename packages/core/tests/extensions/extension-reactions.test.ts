@@ -67,25 +67,17 @@ describe("runtime slots", () => {
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello"))))
   })
 
-  it.live("systemPrompt composes explicit projection rewrites in scope order", () => {
+  it.live("systemPrompt composes explicit reaction rewrites in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
-        projections: [
-          {
-            id: "prompt-builtin",
-            query: () => Effect.succeed("[builtin]"),
-            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-          },
-        ],
+        reactions: {
+          systemPrompt: (input) => Effect.succeed(`${input.basePrompt}[builtin]`),
+        },
       }),
       makeExt("project", "project", {
-        projections: [
-          {
-            id: "prompt",
-            query: () => Effect.succeed("[projection]"),
-            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-          },
-        ],
+        reactions: {
+          systemPrompt: (input) => Effect.succeed(`${input.basePrompt}[project]`),
+        },
       }),
     ]
 
@@ -97,11 +89,11 @@ describe("runtime slots", () => {
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin][projection]"))),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin][project]"))),
       )
   })
 
-  it.live("systemPrompt composes projection and reaction rewrites in shared scope order", () => {
+  it.live("systemPrompt isolates failing reaction rewrites", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
         reactions: {
@@ -109,13 +101,9 @@ describe("runtime slots", () => {
         },
       }),
       makeExt("project", "project", {
-        projections: [
-          {
-            id: "project-prompt",
-            query: () => Effect.succeed("[project-projection]"),
-            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-          },
-        ],
+        reactions: {
+          systemPrompt: () => Effect.fail(new BoomError({ reason: "bad prompt" })),
+        },
       }),
     ]
 
@@ -127,13 +115,11 @@ describe("runtime slots", () => {
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => expect(result).toBe("base[builtin-reaction][project-projection]")),
-        ),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin-reaction]"))),
       )
   })
 
-  it.live("contextMessages applies explicit projection rewrites in sequence", () => {
+  it.live("contextMessages is a pass-through without explicit rewrites", () => {
     const baseMessage = Message.Regular.make({
       id: MessageId.make("m1"),
       sessionId: SessionId.make("test-session"),
@@ -142,36 +128,7 @@ describe("runtime slots", () => {
       parts: [new TextPart({ type: "text", text: "hello" })],
       createdAt: new Date(),
     })
-    const injectedMessage = Message.Regular.make({
-      id: MessageId.make("m2"),
-      sessionId: SessionId.make("test-session"),
-      branchId: BranchId.make("test-branch"),
-      role: "system",
-      parts: [new TextPart({ type: "text", text: "extra" })],
-      createdAt: new Date(),
-    })
-    const extensions = [
-      makeExt("prepend", "builtin", {
-        projections: [
-          {
-            id: "messages-prepend",
-            query: () => Effect.succeed(baseMessage),
-            contextMessages: (message, input) => Effect.succeed([message, ...input.messages]),
-          },
-        ],
-      }),
-      makeExt("append", "project", {
-        projections: [
-          {
-            id: "messages",
-            query: () => Effect.succeed(injectedMessage),
-            contextMessages: (message, input) => Effect.succeed([...input.messages, message]),
-          },
-        ],
-      }),
-    ]
-
-    const slots = compileExtensionReactions(extensions)
+    const slots = compileExtensionReactions([])
 
     return slots
       .resolveContextMessages(
@@ -186,11 +143,7 @@ describe("runtime slots", () => {
       .pipe(
         Effect.tap((messages) =>
           Effect.sync(() =>
-            expect(messages.map((message) => message.id)).toEqual([
-              MessageId.make("m1"),
-              MessageId.make("m1"),
-              MessageId.make("m2"),
-            ]),
+            expect(messages.map((message) => message.id)).toEqual([MessageId.make("m1")]),
           ),
         ),
       )

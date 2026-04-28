@@ -4,7 +4,7 @@
  * One intentional lock pack for the public extension authoring surface:
  * 1. capability factory shapes stay honest
  * 2. Promise/async handlers stay out of Effect-returning seams
- * 3. projection read-only fences reject write-capable service tags
+ * 3. read-only branding remains available for request/reaction service seams
  *
  * `scope-brands.test.ts` stays separate because it proves actor/runtime
  * ownership rather than extension surface typing.
@@ -18,8 +18,6 @@ import {
   defineExtension,
   defineResource,
   ExtensionId,
-  type ProjectionContribution,
-  ProjectionError,
   type ReadOnly,
   ReadOnlyBrand,
   type ReadOnlyTag,
@@ -318,17 +316,13 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("Projection.systemPrompt MUST return Effect — async handler rejected", () => {
+  test("reactions.systemPrompt MUST return Effect — async handler rejected", () => {
     defineExtension({
-      id: "bad-projection",
-      projections: [
-        {
-          id: "prompt",
-          query: () => Effect.succeed("x"),
-          // @ts-expect-error — async handler must not be assignable to Effect-returning systemPrompt
-          systemPrompt: async (value, input) => `${input.basePrompt}${value}`,
-        },
-      ],
+      id: "bad-prompt-reaction",
+      reactions: {
+        // @ts-expect-error — async handler must not be assignable to Effect-returning systemPrompt
+        systemPrompt: async (input) => `${input.basePrompt}x`,
+      },
     })
     expect(true).toBe(true)
   })
@@ -370,14 +364,8 @@ describe("Effect-purity locks (compile-time)", () => {
           execute: () => Effect.succeed("ok"),
         }),
       ],
-      projections: [
-        {
-          id: "prompt",
-          query: () => Effect.succeed("suffix"),
-          systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
-        },
-      ],
       reactions: {
+        systemPrompt: (input) => Effect.succeed(`${input.basePrompt}suffix`),
         turnAfter: {
           failureMode: "continue",
           handler: () => Effect.void,
@@ -406,112 +394,6 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 })
 
-describe("Projection ReadOnly-brand locks (compile-time)", () => {
-  test("Projection R must extend ReadOnlyTag — write-capable Tag rejected", () => {
-    const ok: ProjectionContribution<{ value: string }, ReadOnlyService> = {
-      id: "ok",
-      query: () =>
-        Effect.gen(function* () {
-          const svc = yield* ReadOnlyService
-          const value = yield* svc.read()
-          return { value }
-        }),
-    }
-    void ok
-
-    // @ts-expect-error — write-capable service tag fails the `R extends ReadOnlyTag` constraint
-    const bad: ProjectionContribution<{ value: number }, WriteCapableService> = {
-      id: "bad",
-      query: () =>
-        Effect.gen(function* () {
-          const svc = yield* WriteCapableService
-          yield* svc.write()
-          return { value: 1 }
-        }).pipe(Effect.mapError(() => new ProjectionError({ projectionId: "bad", reason: "x" }))),
-    }
-    void bad
-
-    expect(true).toBe(true)
-  })
-
-  test("Projection R = never compiles (no requirements is fine)", () => {
-    const empty: ProjectionContribution<{ value: number }> = {
-      id: "empty",
-      query: () => Effect.succeed({ value: 0 }),
-    }
-    void empty
-    expect(true).toBe(true)
-  })
-
-  test("Projection R must extend ReadOnlyTag — unbranded read service rejected", () => {
-    interface UnbrandedShape {
-      readonly get: () => Effect.Effect<string>
-    }
-    class UnbrandedService extends Context.Service<UnbrandedService, UnbrandedShape>()(
-      "@gent/core/tests/extension-surface-locks/UnbrandedService",
-    ) {}
-
-    // @ts-expect-error — Tag identifier lacks the `ReadOnlyTag` brand
-    const bad: ProjectionContribution<{ value: string }, UnbrandedService> = {
-      id: "bad-unbranded",
-      query: () =>
-        Effect.gen(function* () {
-          const svc = yield* UnbrandedService
-          const value = yield* svc.get()
-          return { value }
-        }),
-    }
-    void bad
-
-    expect(true).toBe(true)
-  })
-})
-
 type AssertReadOnlyExtendsTag = ReadOnly<ReadOnlyShape> extends ReadOnlyTag ? true : false
 const readOnlyExtendsTag: AssertReadOnlyExtendsTag = true
 void readOnlyExtendsTag
-
-describe("Projection ReadOnly-brand locks — defineExtension boundary", () => {
-  test("inline projections in defineExtension stay fenced", () => {
-    const ok = defineExtension({
-      id: "@gent/test/readonly-locks-ok",
-      projections: [
-        {
-          id: "ok-inline",
-          query: () =>
-            Effect.gen(function* () {
-              const svc = yield* ReadOnlyService
-              const value = yield* svc.read()
-              return { value }
-            }),
-        },
-      ],
-      resources: [{ scope: "process", layer: Layer.empty as Layer.Layer<unknown> }],
-    })
-    void ok
-
-    const bad = defineExtension({
-      id: "@gent/test/readonly-locks-bad",
-      projections: [
-        {
-          id: "bad-inline",
-          query: () =>
-            // @ts-expect-error — write-capable Tag fails the contextual `ReadOnlyTag` fence
-            Effect.gen(function* () {
-              const svc = yield* WriteCapableService
-              yield* svc.write()
-              return { value: 1 }
-            }).pipe(
-              Effect.mapError(
-                () => new ProjectionError({ projectionId: "bad-inline", reason: "x" }),
-              ),
-            ),
-        },
-      ],
-      resources: [{ scope: "process", layer: Layer.empty as Layer.Layer<unknown> }],
-    })
-    void bad
-
-    expect(true).toBe(true)
-  })
-})
