@@ -174,7 +174,7 @@
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
     "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.lint.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --parallel=6 tests/"
   },
   "dependencies": {
     "effect-wide-event": "catalog:"
