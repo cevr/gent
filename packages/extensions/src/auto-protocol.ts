@@ -103,7 +103,7 @@ export const AutoRpc = {
   }),
   /** Read the current workflow snapshot. Replaces `getUiSnapshot(@gent/auto)`
    *  self-reads from the auto-handoff and journal interceptors — workflows
-   *  expose state through typed protocols, not the UI snapshot pipe. */
+   *  expose state through typed requests, not the UI snapshot pipe. */
   GetSnapshot: request({
     id: "auto.snapshot",
     extensionId: AUTO_EXTENSION_ID,

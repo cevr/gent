@@ -9,7 +9,7 @@
  * effect ultimately reached. The state machine carried no observable
  * data — its sole job was to translate one inbound command into one
  * outbound effect — so it is deleted rather than migrated. This also
- * removes the extension's last `protocols`/`actorRoute` surface.
+ * removes the extension's last request/actor view surface.
  */
 
 import { defineExtension } from "@gent/core/extensions/api"

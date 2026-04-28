@@ -87,7 +87,7 @@ interface ReactionTurnProjectionSlot {
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["turnProjection"]>
 }
 
-interface RegisteredActorRoute {
+interface RegisteredActorViewSource {
   readonly extensionId: ExtensionId
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ServiceKey<M> is contravariant; storage erases M
   readonly serviceKey: ServiceKey<any>
@@ -112,17 +112,17 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const collectActorRoutes = (
+const collectActorViewSources = (
   extensions: ReadonlyArray<LoadedExtension>,
-): ReadonlyArray<RegisteredActorRoute> => {
-  const routes: RegisteredActorRoute[] = []
+): ReadonlyArray<RegisteredActorViewSource> => {
+  const sources: RegisteredActorViewSource[] = []
   for (const ext of sortExtensions(extensions)) {
     for (const behavior of ext.contributions.actors ?? []) {
       if (behavior.serviceKey === undefined) continue
-      routes.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })
+      sources.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })
     }
   }
-  return routes
+  return sources
 }
 
 const runReaction = <Input>(
@@ -209,7 +209,7 @@ export const compileExtensionReactions = (
   const sorted = sortExtensions(extensions)
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const turnProjectionSlots: ReactionTurnProjectionSlot[] = []
-  const actorRoutes = collectActorRoutes(sorted)
+  const actorViewSources = collectActorViewSources(sorted)
   const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
   const messageOutputSlots: RegisteredReaction<MessageOutputInput>[] = []
@@ -294,14 +294,14 @@ export const compileExtensionReactions = (
           )
         }
 
-        if (actorRoutes.length > 0) {
+        if (actorViewSources.length > 0) {
           const engine = yield* ActorEngine
           const receptionist = yield* Receptionist
-          for (const route of actorRoutes) {
-            const refsExit = yield* Effect.exit(receptionist.find(route.serviceKey))
+          for (const source of actorViewSources) {
+            const refsExit = yield* Effect.exit(receptionist.find(source.serviceKey))
             if (refsExit._tag === "Failure") {
               yield* Effect.logWarning("extension.actor-view.find.failed").pipe(
-                Effect.annotateLogs({ extensionId: route.extensionId }),
+                Effect.annotateLogs({ extensionId: source.extensionId }),
               )
               continue
             }
@@ -309,7 +309,7 @@ export const compileExtensionReactions = (
               const viewExit = yield* Effect.exit(engine.peekView(ref))
               if (viewExit._tag === "Failure") {
                 yield* Effect.logWarning("extension.actor-view.peek.failed").pipe(
-                  Effect.annotateLogs({ extensionId: route.extensionId }),
+                  Effect.annotateLogs({ extensionId: source.extensionId }),
                 )
                 continue
               }

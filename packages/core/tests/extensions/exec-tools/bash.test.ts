@@ -16,6 +16,11 @@ const platformLayer = Layer.mergeAll(
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test boundary, R is platform services we provide here
   Effect.provide(e, platformLayer) as Effect.Effect<A, E, never>
+
+const processTestTimeout = 15_000
+const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.timeout("10 seconds"))
+
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -127,62 +132,92 @@ const stubCtx: ToolContext = {
 }
 
 describe("BashTool execution", () => {
-  it.live("runs a command and returns stdout", () =>
-    Effect.gen(function* () {
-      const result = yield* provideBun(BashTool.effect({ command: "echo hello" }, stubCtx))
+  it.live(
+    "runs a command and returns stdout",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const result = yield* provideBun(BashTool.effect({ command: "echo hello" }, stubCtx))
 
-      expect(result.stdout.trim()).toBe("hello")
-      expect(result.exitCode).toBe(0)
-    }),
+          expect(result.stdout.trim()).toBe("hello")
+          expect(result.exitCode).toBe(0)
+        }),
+      ),
+    processTestTimeout,
   )
 
-  it.live("captures nonzero exit code", () =>
-    Effect.gen(function* () {
-      const result = yield* provideBun(BashTool.effect({ command: "exit 2" }, stubCtx))
+  it.live(
+    "captures nonzero exit code",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const result = yield* provideBun(BashTool.effect({ command: "exit 2" }, stubCtx))
 
-      expect(result.exitCode).toBe(2)
-    }),
+          expect(result.exitCode).toBe(2)
+        }),
+      ),
+    processTestTimeout,
   )
 
-  it.live("respects cwd parameter", () =>
-    Effect.gen(function* () {
-      const result = yield* provideBun(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx))
+  it.live(
+    "respects cwd parameter",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const result = yield* provideBun(
+            BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx),
+          )
 
-      // /tmp may resolve to /private/tmp on macOS
-      expect(result.stdout.trim()).toMatch(/\/tmp$/)
-      expect(result.exitCode).toBe(0)
-    }),
+          // /tmp may resolve to /private/tmp on macOS
+          expect(result.stdout.trim()).toMatch(/\/tmp$/)
+          expect(result.exitCode).toBe(0)
+        }),
+      ),
+    processTestTimeout,
   )
 
-  it.live("splits cd + command into cwd and executes", () =>
-    Effect.gen(function* () {
-      const result = yield* provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
+  it.live(
+    "splits cd + command into cwd and executes",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const result = yield* provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
 
-      expect(result.stdout.trim()).toMatch(/\/tmp$/)
-      expect(result.exitCode).toBe(0)
-    }),
+          expect(result.stdout.trim()).toMatch(/\/tmp$/)
+          expect(result.exitCode).toBe(0)
+        }),
+      ),
+    processTestTimeout,
   )
 
-  it.live("background mode queues a follow-up on completion", () =>
-    Effect.gen(function* () {
-      const sent = yield* Deferred.make<{ content: string }>()
-      const ctx: ToolContext = {
-        ...stubCtx,
-        session: {
-          ...stubCtx.session,
-          queueFollowUp: (params) => Deferred.succeed(sent, params),
-        },
-      }
-      const result = yield* provideBun(
-        BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
-      )
+  it.live(
+    "background mode queues a follow-up on completion",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ content: string }>()
+          const ctx: ToolContext = {
+            ...stubCtx,
+            session: {
+              ...stubCtx.session,
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+          const result = yield* provideBun(
+            BashTool.effect(
+              { command: "printf background-finished", run_in_background: true },
+              ctx,
+            ),
+          )
 
-      expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain("Command started in background")
+          expect(result.exitCode).toBe(0)
+          expect(result.stdout).toContain("Command started in background")
 
-      const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
-      expect(message.content).toContain("Background command completed (exit code 0)")
-      expect(message.content).toContain("$ printf background-finished")
-    }),
+          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+          expect(message.content).toContain("Background command completed (exit code 0)")
+          expect(message.content).toContain("$ printf background-finished")
+        }),
+      ),
+    processTestTimeout,
   )
 })

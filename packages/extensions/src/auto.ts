@@ -513,9 +513,8 @@ const drainAndQueueFollowUp = (ctx: ExtensionHostContext) =>
 
 // ── tool.result slot ──
 //
-// Translates `auto_checkpoint` / `review` tool results to actor messages
-// (formerly `mapEvent`'s job) and writes the journal. Also drains any
-// follow-up the resulting transition queued.
+// Translates `auto_checkpoint` / `review` tool results to actor messages and
+// writes the journal. Also drains any follow-up the resulting transition queued.
 
 const readSnapshot = (ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
@@ -619,9 +618,8 @@ const journalInterceptorImpl = (
 
 // ── turn.after slot ──
 //
-// Drives the `TurnCompleted` actor message (formerly `mapEvent`'s job),
-// drains pending follow-ups, and triggers handoff at the context-fill
-// threshold.
+// Drives the `TurnCompleted` actor message, drains pending follow-ups, and
+// triggers handoff at the context-fill threshold.
 
 const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {

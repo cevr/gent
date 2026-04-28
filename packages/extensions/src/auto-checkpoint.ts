@@ -4,8 +4,9 @@ import { tool, ToolNeeds } from "@gent/core/extensions/api"
 /**
  * Signal tool for the auto loop extension.
  *
- * The agent calls this to report iteration results. The extension's mapEvent
- * watches for ToolCallSucceeded("auto_checkpoint") and advances the machine.
+ * The agent calls this to report iteration results. The extension's tool-result
+ * reaction watches for ToolCallSucceeded("auto_checkpoint") and advances the
+ * machine.
  */
 export const AutoCheckpointTool = tool({
   id: "auto_checkpoint",
