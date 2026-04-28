@@ -1,4 +1,6 @@
-import { Effect, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { Duration, Effect, Schema, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import {
   tool,
   OutputBuffer,
@@ -81,27 +83,37 @@ export function stripBackground(cmd: string): string {
   return cmd.replace(/\s*&\s*$/, "")
 }
 
-/**
- * SIGTERM → wait → SIGKILL. Targets process group via negative PID.
- */
-function killGracefully(proc: { pid: number; kill: (signal?: number) => void }): void {
-  try {
-    // SIGTERM to process group
-    process.kill(-proc.pid, "SIGTERM")
-  } catch {
-    // already dead or no access
-    return
-  }
-
-  setTimeout(() => {
-    try {
-      process.kill(-proc.pid, 0) // existence check
-      process.kill(-proc.pid, "SIGKILL")
-    } catch {
-      // already dead
-    }
-  }, SIGKILL_DELAY_MS)
+const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
+  const decoder = new TextDecoder()
+  let out = ""
+  for (const chunk of chunks) out += decoder.decode(chunk)
+  return out
 }
+
+/**
+ * Spawn `bash -c <command>` and collect stdout, stderr, exit code.
+ * Scope owns the spawn finalizer — closing the scope kills the process
+ * group via SIGTERM with SIGKILL fallback after SIGKILL_DELAY_MS.
+ */
+const runBashCommand = (command: string, cwd: string | undefined) =>
+  Effect.gen(function* () {
+    const handle = yield* ChildProcess.make("bash", ["-c", command], {
+      ...(cwd !== undefined ? { cwd } : {}),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      forceKillAfter: Duration.millis(SIGKILL_DELAY_MS),
+    })
+    const [exitCode, stdoutChunks, stderrChunks] = yield* Effect.all(
+      [handle.exitCode, Stream.runCollect(handle.stdout), Stream.runCollect(handle.stderr)],
+      { concurrency: "unbounded" },
+    )
+    return {
+      stdout: decodeUtf8(stdoutChunks),
+      stderr: decodeUtf8(stderrChunks),
+      exitCode: Number(exitCode),
+    }
+  })
 
 // Bash Tool
 
@@ -157,40 +169,21 @@ export const BashTool = tool({
       }
     }
 
-    // Background mode — spawn, fork a watcher, return immediately
+    // Background mode — fork a fiber that spawns, collects, and queues
+    // a follow-up. The spawn lives in the forked fiber's scope, so the
+    // tool can return immediately while the watcher runs to completion.
     if (params.run_in_background === true) {
-      const spawnOpts: Parameters<typeof Bun.spawn>[1] = { stdout: "pipe", stderr: "pipe" }
-      if (cwd !== undefined) spawnOpts.cwd = cwd
-      const spawnExit = yield* Effect.try({
-        try: () => Bun.spawn(["bash", "-c", command], spawnOpts),
-        catch: (e) => String(e),
-      }).pipe(Effect.exit)
-      if (spawnExit._tag === "Failure") {
-        return {
-          stdout: `Failed to spawn background command: ${spawnExit.cause}`,
-          stderr: "",
-          exitCode: 1,
-        }
-      }
-      const proc = spawnExit.value
-
-      // Fork a fiber that waits for completion and queues a follow-up
       const bgEffect = Effect.gen(function* () {
-        const bgResult = yield* Effect.tryPromise({
-          try: async () => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            const stderrStream = proc.stderr as ReadableStream<Uint8Array>
-            const [stdout, stderr] = await Promise.all([
-              new Response(stdoutStream).text(),
-              new Response(stderrStream).text(),
-            ])
-            const exitCode = await proc.exited
-            return { stdout, stderr, exitCode }
-          },
-          catch: (e) => new BashError({ message: `Background command failed: ${e}`, command }),
-        })
+        const bgResult = yield* runBashCommand(command, cwd).pipe(
+          Effect.scoped,
+          // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
+          Effect.provide(BunServices.layer),
+          Effect.catchTag("PlatformError", (e) =>
+            Effect.fail(
+              new BashError({ message: `Background command failed: ${e.message}`, command }),
+            ),
+          ),
+        )
 
         const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
         const fullOutput =
@@ -222,53 +215,18 @@ export const BashTool = tool({
       }
     }
 
-    const result = yield* Effect.acquireUseRelease(
-      Effect.try({
-        try: () => {
-          const spawnOpts: Parameters<typeof Bun.spawn>[1] = {
-            stdout: "pipe",
-            stderr: "pipe",
-          }
-          if (cwd !== undefined) spawnOpts.cwd = cwd
-          return Bun.spawn(["bash", "-c", command], spawnOpts)
-        },
-        catch: (e) =>
-          new BashError({
-            message: `Failed to spawn command: ${e}`,
-            command,
-          }),
+    const result = yield* runBashCommand(command, cwd).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.millis(timeout),
+        orElse: () =>
+          Effect.fail(new BashError({ message: `Command timed out after ${timeout}ms`, command })),
       }),
-      (proc) =>
-        Effect.tryPromise({
-          try: async () => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            const stderrStream = proc.stderr as ReadableStream<Uint8Array>
-            const [stdout, stderr] = await Promise.all([
-              new Response(stdoutStream).text(),
-              new Response(stderrStream).text(),
-            ])
-            const exitCode = await proc.exited
-            return { stdout, stderr, exitCode }
-          },
-          catch: (e) =>
-            new BashError({
-              message: `Failed to execute command: ${e}`,
-              command,
-            }),
-        }).pipe(
-          Effect.timeout(timeout),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.fail(
-              new BashError({
-                message: `Command timed out after ${timeout}ms`,
-                command,
-              }),
-            ),
-          ),
-        ),
-      (proc) => Effect.sync(() => killGracefully(proc)),
+      Effect.catchTag("PlatformError", (e) =>
+        Effect.fail(new BashError({ message: `Failed to execute command: ${e.message}`, command })),
+      ),
+      Effect.scoped,
+      // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
+      Effect.provide(BunServices.layer),
     )
 
     // Use OutputBuffer for head+tail truncation
