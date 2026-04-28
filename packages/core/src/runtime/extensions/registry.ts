@@ -104,6 +104,10 @@ const compileCapabilityWinners = (
 const isToolToken = (cap: ExtensionCapabilityLeaf): cap is ToolToken =>
   (cap.audiences as ReadonlyArray<string>).includes("model")
 
+const isActionToken = (cap: ExtensionCapabilityLeaf): cap is ActionToken =>
+  (cap.audiences as ReadonlyArray<string>).includes("human-slash") ||
+  (cap.audiences as ReadonlyArray<string>).includes("human-palette")
+
 const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<LoadedExtension> =>
@@ -407,15 +411,22 @@ export const listSlashCommands = (
 ): ReadonlyArray<SlashCommand> => {
   const winners = new Map<
     string,
-    { readonly extensionId: ExtensionId; readonly cap: ActionToken }
+    { readonly extensionId: ExtensionId; readonly cap: ExtensionCapabilityLeaf }
   >()
   for (const ext of sortExtensionsByScope(extensions)) {
+    for (const cap of ext.contributions.tools ?? []) {
+      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
+    }
     for (const cap of ext.contributions.commands ?? []) {
+      winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
+    }
+    for (const cap of ext.contributions.rpc ?? []) {
       winners.set(String(cap.id), { extensionId: ext.manifest.id, cap })
     }
   }
   const commands: SlashCommand[] = []
   for (const { extensionId, cap } of winners.values()) {
+    if (!isActionToken(cap)) continue
     if (!cap.audiences.includes("human-slash")) continue
     if (options?.publicOnly === true && !cap.audiences.includes("transport-public")) continue
     commands.push(capabilityToCommand(extensionId, cap))

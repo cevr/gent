@@ -1,330 +1,318 @@
 /**
- * CapabilityHost regression locks (C4.1 skeleton).
+ * Public capability host regression locks.
  *
- * Locks the new typed-callable contract:
- *  - `compileCapabilities` registers entries from sorted extensions
- *  - dispatch by `(extensionId, capabilityId, audience)` finds the
- *    highest-precedence registration (project > user > builtin)
- *  - audience filtering: a Capability registered for `["model"]` is invisible
- *    to a `"human-slash"` invocation (returns `CapabilityNotFoundError`)
- *  - input is decoded via Schema before reaching the handler — bad input fails
- *    as `CapabilityError` with reason "input decode failed"
- *  - output is validated via Schema (encode-as-validation) — bad output fails
- *    as `CapabilityError` with reason "output validation failed"
- *  - missing `(extensionId, capabilityId)` returns `CapabilityNotFoundError`
- *  - handler defects are coerced into typed errors (no defects escape)
- *  - `listForAudience` filters Capabilities by audience membership
- *
- * Tied to planify Commit C4.1. If audience-based dispatch stops respecting
- * scope precedence or audience membership, the new substrate has regressed.
+ * Model tools are compiled through the model tool registry. Public capability
+ * host serves extension RPC requests and public human actions invoked through
+ * the transport command path.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
-  type CapabilityContribution,
-  type CapabilityContext,
+  type CapabilityCoreContext,
   CapabilityError,
   CapabilityNotFoundError,
-  type Audience,
+  type ModelCapabilityContext,
 } from "@gent/core/domain/capability"
+import {
+  action,
+  request,
+  tool,
+  type ActionToken,
+  type RequestToken,
+  type ToolToken,
+} from "@gent/core/extensions/api"
 import { compileCapabilities } from "../../src/runtime/extensions/capability-host"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
-// CapabilityContext extends ExtensionHostContext (large RPC surface). Tests
-// for the skeleton don't exercise extension RPC; cast a minimal shape.
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-const ctx = {
+const extensionId = ExtensionId.make("@test/c")
+const ctx: CapabilityCoreContext = {
   sessionId: SessionId.make("s"),
   branchId: BranchId.make("b"),
   cwd: "/tmp",
   home: "/tmp",
-} as unknown as CapabilityContext
-
-// Routes raw capability shapes into the typed bucket that matches their
-// audiences. Bucket name IS the audience discrimination; tests that need
-// CapabilityHost dispatch behavior author leaves directly without going
-// through `tool()/action()/request()` factories (token brand bypassed via
-// `as never` at the bucket boundary).
-const extWith = (
-  id: string,
-  scope: "builtin" | "user" | "project",
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture: capability typed-bucket bypass
-  caps: ReadonlyArray<CapabilityContribution<any, any, never>>,
-): LoadedExtension => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
-  const tools: Array<CapabilityContribution<any, any, never>> = []
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
-  const commands: Array<CapabilityContribution<any, any, never>> = []
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture
-  const rpc: Array<CapabilityContribution<any, any, never>> = []
-  for (const cap of caps) {
-    const audiences = cap.audiences ?? []
-    if (audiences.includes("model")) tools.push(cap)
-    else if (audiences.includes("human-slash") || audiences.includes("human-palette"))
-      commands.push(cap)
-    else rpc.push(cap)
-  }
-  return {
-    manifest: { id: ExtensionId.make(id) },
-    scope,
-    sourcePath: `/test/${id}`,
-    contributions: {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(tools.length > 0 ? { tools: tools as unknown as ReadonlyArray<never> } : {}),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(commands.length > 0 ? { commands: commands as unknown as ReadonlyArray<never> } : {}),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(rpc.length > 0 ? { rpc: rpc as unknown as ReadonlyArray<never> } : {}),
-    },
-  }
 }
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- public action tests only need core fields; handlers under test do not touch wide context
+const modelCtx = ctx as ModelCapabilityContext
 
-const echoCap = (
-  id: string,
-  audiences: ReadonlyArray<Audience>,
-): CapabilityContribution<{ value: string }, { value: string }, never> => ({
-  id,
-  audiences,
-  intent: "read",
-  input: Schema.Struct({ value: Schema.String }),
-  output: Schema.Struct({ value: Schema.String }),
-  effect: (input) => Effect.succeed({ value: input.value }),
+const extWith = (
+  scope: "builtin" | "user" | "project",
+  rpc: ReadonlyArray<RequestToken>,
+): LoadedExtension => ({
+  manifest: { id: extensionId },
+  scope,
+  sourcePath: `/test/${scope}`,
+  contributions: { rpc },
 })
 
+const echoRequest = (params?: { readonly id?: string; readonly value?: string }) =>
+  request({
+    id: params?.id ?? "echo",
+    extensionId,
+    intent: "read",
+    input: Schema.Struct({ value: Schema.String }),
+    output: Schema.Struct({ value: Schema.String }),
+    execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
+  })
+
+const pingAction = (params?: { readonly id?: string; readonly value?: string }) =>
+  action({
+    id: params?.id ?? "ping",
+    name: "Ping",
+    description: "Ping action",
+    surface: "slash",
+    public: true,
+    input: Schema.Struct({ value: Schema.String }),
+    output: Schema.Struct({ value: Schema.String }),
+    execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
+  })
+
+const shadowTool = (params?: { readonly id?: string }): ToolToken =>
+  tool({
+    id: params?.id ?? "tool-shadow",
+    description: "Tool shadow",
+    params: Schema.Struct({ value: Schema.String }),
+    execute: (input) => Effect.succeed({ value: input.value }),
+  })
+
 describe("capability-host", () => {
-  it.live("dispatches by (extensionId, capabilityId, audience) and returns decoded output", () =>
+  it.live("dispatches request tokens by (extensionId, capabilityId)", () =>
     Effect.gen(function* () {
-      const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [echoCap("echo", ["model"])]),
-      ])
-      const result = yield* compiled.run(
-        ExtensionId.make("@test/c"),
-        "echo",
-        "model",
-        { value: "hi" },
-        ctx,
-      )
+      const cap = echoRequest()
+      const compiled = compileCapabilities([extWith("builtin", [cap])])
+      const result = yield* compiled.runRequest(extensionId, cap.id, { value: "hi" }, ctx, {
+        intent: "read",
+      })
       expect(result).toEqual({ value: "hi" })
     }),
   )
 
-  it.live(
-    "scope precedence shadows first; audience mismatch on the winner is a hard miss (codex BLOCK on C4.1)",
-    () =>
-      Effect.gen(function* () {
-        // Project narrows audiences to ["human-slash"]; builtin still has ["model"].
-        // Invoking from "model" must NOT fall through to the builtin entry — the
-        // project override has shadowed `(@x, doThing)` for both audiences.
-        const builtinModel: CapabilityContribution<{ value: string }, { value: string }, never> = {
-          id: "doThing",
-          audiences: ["model"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: () => Effect.succeed({ value: "leaked-from-builtin" }),
-        }
-        const projectSlash: CapabilityContribution<{ value: string }, { value: string }, never> = {
-          id: "doThing",
-          audiences: ["human-slash"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: () => Effect.succeed({ value: "from-project-slash" }),
-        }
-        const compiled = compileCapabilities([
-          extWith("@test/c", "builtin", [builtinModel]),
-          extWith("@test/c", "project", [projectSlash]),
-        ])
-        // Model invocation must miss: the project entry shadows by identity but
-        // its audience set excludes "model".
-        const modelMiss = yield* compiled
-          .run(ExtensionId.make("@test/c"), "doThing", "model", { value: "x" }, ctx)
-          .pipe(Effect.flip)
-        expect(modelMiss).toBeInstanceOf(CapabilityNotFoundError)
-        // Slash invocation hits the project entry.
-        const slashHit = yield* compiled.run(
-          ExtensionId.make("@test/c"),
-          "doThing",
-          "human-slash",
-          { value: "x" },
-          ctx,
-        )
-        expect(slashHit).toEqual({ value: "from-project-slash" })
-      }),
-  )
-
-  it.live(
-    "listForAudience collapses by identity first — shadowed builtin is invisible to model audience",
-    () =>
-      Effect.sync(() => {
-        const builtinModel: CapabilityContribution<{ value: string }, { value: string }, never> = {
-          id: "doThing",
-          audiences: ["model"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: () => Effect.succeed({ value: "leaked" }),
-        }
-        const projectSlash: CapabilityContribution<{ value: string }, { value: string }, never> = {
-          id: "doThing",
-          audiences: ["human-slash"],
-          intent: "read",
-          input: Schema.Struct({ value: Schema.String }),
-          output: Schema.Struct({ value: Schema.String }),
-          effect: () => Effect.succeed({ value: "ok" }),
-        }
-        const compiled = compileCapabilities([
-          extWith("@test/c", "builtin", [builtinModel]),
-          extWith("@test/c", "project", [projectSlash]),
-        ])
-        // The builtin's "model" audience must NOT surface in the listing — it's
-        // been shadowed by a higher-precedence registration of the same identity
-        // that excludes "model".
-        const modelList = compiled.listForAudience("model").map((e) => e.capability.id)
-        expect(modelList).toEqual([])
-        // The project entry IS visible to its declared audience.
-        const slashList = compiled.listForAudience("human-slash").map((e) => e.capability.id)
-        expect(slashList).toEqual(["doThing"])
-      }),
-  )
-
-  it.live("input decode failure is wrapped in CapabilityError", () =>
+  it.live("dispatches public action tokens for transport command execution", () =>
     Effect.gen(function* () {
+      const cap = pingAction()
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "/test/action",
+        contributions: { commands: [cap] },
+      }
+      const compiled = compileCapabilities([ext])
+      const result = yield* compiled.runTransport(extensionId, cap.id, { value: "hi" }, modelCtx, {
+        intent: "write",
+      })
+      expect(result).toEqual({ value: "hi" })
+    }),
+  )
+
+  it.live("does not dispatch non-public action tokens", () =>
+    Effect.gen(function* () {
+      const cap: ActionToken = action({
+        id: "private-ping",
+        name: "Private Ping",
+        description: "Private action",
+        surface: "slash",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: (input) => Effect.succeed({ value: input.value }),
+      })
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "/test/private-action",
+        contributions: { commands: [cap] },
+      }
+      const compiled = compileCapabilities([ext])
+      const result = yield* compiled
+        .runTransport(extensionId, cap.id, { value: "hi" }, modelCtx, { intent: "write" })
+        .pipe(Effect.flip)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+    }),
+  )
+
+  it.live("higher-scope private action shadows lower-scope public action", () =>
+    Effect.gen(function* () {
+      const builtin = pingAction({ id: "shadowed", value: "builtin" })
+      const project: ActionToken = action({
+        id: "shadowed",
+        name: "Project Private",
+        description: "Project private action",
+        surface: "slash",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: (input) => Effect.succeed({ value: input.value }),
+      })
       const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [echoCap("echo", ["model"])]),
+        {
+          manifest: { id: extensionId },
+          scope: "builtin",
+          sourcePath: "/test/builtin-public-action",
+          contributions: { commands: [builtin] },
+        },
+        {
+          manifest: { id: extensionId },
+          scope: "project",
+          sourcePath: "/test/project-private-action",
+          contributions: { commands: [project] },
+        },
       ])
       const result = yield* compiled
-        .run(ExtensionId.make("@test/c"), "echo", "model", { value: 42 }, ctx)
+        .runTransport(extensionId, project.id, { value: "hi" }, modelCtx, { intent: "write" })
         .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-      expect((result as CapabilityError).reason).toMatch(/input decode failed/)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
   )
 
-  it.live("output validation failure is wrapped in CapabilityError", () =>
+  it.live("request dispatch rejects higher-scope public action shadowing lower request", () =>
     Effect.gen(function* () {
-      const badOutputCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "bad",
-        audiences: ["model"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-        effect: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [badOutputCap])])
+      const builtin = echoRequest({ id: "same", value: "builtin-request" })
+      const project = pingAction({ id: "same", value: "project-action" })
+      const compiled = compileCapabilities([
+        {
+          manifest: { id: extensionId },
+          scope: "builtin",
+          sourcePath: "/test/builtin-request",
+          contributions: { rpc: [builtin] },
+        },
+        {
+          manifest: { id: extensionId },
+          scope: "project",
+          sourcePath: "/test/project-public-action",
+          contributions: { commands: [project] },
+        },
+      ])
       const result = yield* compiled
-        .run(ExtensionId.make("@test/c"), "bad", "model", { value: "x" }, ctx)
+        .runRequest(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
         .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-      expect((result as CapabilityError).reason).toMatch(/output validation failed/)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
   )
 
-  it.live("handler defects are coerced into typed CapabilityError", () =>
+  it.live("transport dispatch rejects lower public action shadowed by higher-scope tool", () =>
     Effect.gen(function* () {
-      const defectCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "boom",
-        audiences: ["model"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: () => Effect.die("boom"),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [defectCap])])
+      const builtin = pingAction({ id: "same", value: "builtin-action" })
+      const project = shadowTool({ id: "same" })
+      const compiled = compileCapabilities([
+        {
+          manifest: { id: extensionId },
+          scope: "builtin",
+          sourcePath: "/test/builtin-public-action",
+          contributions: { commands: [builtin] },
+        },
+        {
+          manifest: { id: extensionId },
+          scope: "project",
+          sourcePath: "/test/project-tool",
+          contributions: { tools: [project] },
+        },
+      ])
       const result = yield* compiled
-        .run(ExtensionId.make("@test/c"), "boom", "model", { value: "x" }, ctx)
+        .runTransport(extensionId, builtin.id, { value: "hi" }, modelCtx, { intent: "write" })
         .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-      expect((result as CapabilityError).reason).toMatch(/handler defect/)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
     }),
   )
 
-  it.live("intent shadow: project read shadows builtin write of same id under read dispatch", () =>
+  it.live("scope precedence shadows lower-scope request tokens by identity", () =>
     Effect.gen(function* () {
-      // Identity-first scope precedence: a project-scope read capability with
-      // the same id MUST shadow the builtin write — and a `{ intent: "write" }`
-      // dispatch must NOT fall back to the builtin (codex C4.1 BLOCK pattern
-      // applied to intent: scope precedence selects identity, then audience
-      // and intent authorize the winner).
-      const writeCap: CapabilityContribution<unknown, unknown, never> = {
+      const builtin = echoRequest({ id: "thing", value: "builtin" })
+      const project = echoRequest({ id: "thing", value: "project" })
+      const compiled = compileCapabilities([
+        extWith("builtin", [builtin]),
+        extWith("project", [project]),
+      ])
+      const result = yield* compiled.runRequest(extensionId, project.id, { value: "x" }, ctx, {
+        intent: "read",
+      })
+      expect(result).toEqual({ value: "project" })
+    }),
+  )
+
+  it.live("intent mismatch on the winning request is a hard miss", () =>
+    Effect.gen(function* () {
+      const writeCap = request({
         id: "thing",
-        audiences: ["agent-protocol"],
+        extensionId,
         intent: "write",
         input: Schema.Unknown,
         output: Schema.Unknown,
-        effect: () => Effect.succeed("builtin-write"),
-      }
-      const readCap: CapabilityContribution<unknown, unknown, never> = {
+        execute: () => Effect.succeed("builtin-write"),
+      })
+      const readCap = request({
         id: "thing",
-        audiences: ["agent-protocol"],
+        extensionId,
         intent: "read",
         input: Schema.Unknown,
         output: Schema.Unknown,
-        effect: () => Effect.succeed("project-read"),
-      }
+        execute: () => Effect.succeed("project-read"),
+      })
       const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [writeCap]),
-        extWith("@test/c", "project", [readCap]),
+        extWith("builtin", [writeCap]),
+        extWith("project", [readCap]),
       ])
-      // Read dispatch finds the project capability.
-      const readResult = yield* compiled.run(
-        ExtensionId.make("@test/c"),
-        "thing",
-        "agent-protocol",
-        null,
-        ctx,
-        {
-          intent: "read",
-        },
-      )
+
+      const readResult = yield* compiled.runRequest(extensionId, readCap.id, null, ctx, {
+        intent: "read",
+      })
       expect(readResult).toBe("project-read")
-      // Write dispatch must NOT silently fall back to the shadowed builtin.
+
       const writeResult = yield* compiled
-        .run(ExtensionId.make("@test/c"), "thing", "agent-protocol", null, ctx, { intent: "write" })
+        .runRequest(extensionId, readCap.id, null, ctx, { intent: "write" })
         .pipe(Effect.flip)
       expect(writeResult).toBeInstanceOf(CapabilityNotFoundError)
     }),
   )
 
-  // ── narrow ctx guard ──
-  // A handler authored against the wide `ModelCapabilityContext` that reaches
-  // for `ctx.extension` (etc.) must surface a clear error when invoked through
-  // a non-model dispatch with a narrow `CapabilityCoreContext` — not a
-  // "Cannot read properties of undefined" runtime crash.
-
-  it.live("non-model dispatch with narrow ctx throws clear error on wide-ctx access", () =>
+  it.live("input decode failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
-      const widePeekCap: CapabilityContribution<unknown, unknown, never> = {
-        id: "wide-peek",
-        audiences: ["agent-protocol"],
-        intent: "read",
-        input: Schema.Unknown,
-        output: Schema.Unknown,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-        effect: (_, c) => Effect.succeed((c as { extension: { send: unknown } }).extension.send),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [widePeekCap])])
-      // Narrow ctx — no `extension` field.
-      const narrowCtx = {
-        sessionId: SessionId.make("s"),
-        branchId: BranchId.make("b"),
-        cwd: "/tmp",
-        home: "/tmp",
-      } as const
+      const cap = echoRequest()
+      const compiled = compileCapabilities([extWith("builtin", [cap])])
       const result = yield* compiled
-        .run(ExtensionId.make("@test/c"), "wide-peek", "agent-protocol", null, narrowCtx, {
-          intent: "read",
-        })
+        .runRequest(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" })
         .pipe(Effect.flip)
-      // The defect propagates as a CapabilityError via `catchDefect`.
       expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-      expect((result as CapabilityError).reason).toMatch(/wide-context key "extension"/)
+      if (!(result instanceof CapabilityError)) return
+      expect(result.reason).toMatch(/input decode failed/)
+    }),
+  )
+
+  it.live("output validation failure is wrapped in CapabilityError", () =>
+    Effect.gen(function* () {
+      const cap = request({
+        id: "bad",
+        extensionId,
+        intent: "read",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture intentionally violates output contract
+        execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
+      })
+      const compiled = compileCapabilities([extWith("builtin", [cap])])
+      const result = yield* compiled
+        .runRequest(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
+        .pipe(Effect.flip)
+      expect(result).toBeInstanceOf(CapabilityError)
+      if (!(result instanceof CapabilityError)) return
+      expect(result.reason).toMatch(/output validation failed/)
+    }),
+  )
+
+  it.live("handler defects are coerced into typed CapabilityError", () =>
+    Effect.gen(function* () {
+      const cap = request({
+        id: "boom",
+        extensionId,
+        intent: "read",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: () => Effect.die("boom"),
+      })
+      const compiled = compileCapabilities([extWith("builtin", [cap])])
+      const result = yield* compiled
+        .runRequest(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
+        .pipe(Effect.flip)
+      expect(result).toBeInstanceOf(CapabilityError)
+      if (!(result instanceof CapabilityError)) return
+      expect(result.reason).toMatch(/handler defect/)
     }),
   )
 })

@@ -22,7 +22,14 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message.js"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  RpcId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/domain/ids.js"
 import { SessionStorage } from "@gent/core/storage/session-storage.js"
 import { BranchStorage } from "@gent/core/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core/storage/message-storage.js"
@@ -589,10 +596,9 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = capabilities.run(
+      const e = capabilities.runRequest(
         ExtensionId.make(ref.extensionId),
-        ref.capabilityId,
-        "agent-protocol",
+        RpcId.make(ref.capabilityId),
         input,
         ctx,
         {

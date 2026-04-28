@@ -232,7 +232,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       )
       const capabilities = registry.getResolved().capabilities
       const request = capabilities
-        .run(extensionId, capabilityId, "transport-public", input, hostCtx, { intent })
+        .runTransport(extensionId, capabilityId, input, hostCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({

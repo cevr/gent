@@ -322,7 +322,7 @@ export const makeExtensionHostContext = (
         cwd: runInfo.sessionCwd ?? deps.platform.cwd,
         home: deps.platform.home,
       }
-      const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
+      const e = capabilities.runRequest(ref.extensionId, ref.capabilityId, input, ctx, {
         intent: ref.intent,
       })
       const provided =

@@ -815,6 +815,195 @@ describe("extension command RPCs", () => {
     )
   })
 
+  test("RPC request cannot invoke lower-scope public command shadowed by private project command", async () => {
+    const extensionId = ExtensionId.make("@test/public-shadow")
+    const builtinExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "builtin",
+      sourcePath: "builtin",
+      contributions: {
+        commands: [
+          action({
+            id: "shadowed",
+            name: "shadowed",
+            description: "shadowed",
+            surface: "slash",
+            public: true,
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: () => Effect.succeed({ value: "builtin" }),
+          }),
+        ],
+      },
+    }
+    const projectExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "project",
+      sourcePath: "project",
+      contributions: {
+        commands: [
+          action({
+            id: "shadowed",
+            name: "shadowed private",
+            description: "shadowed private",
+            surface: "slash",
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: (input) => Effect.succeed({ value: input.value }),
+          }),
+        ],
+      },
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [builtinExt, projectExt],
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+
+          const commands = yield* client.extension.listCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual([])
+
+          const result = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "shadowed",
+              intent: "write",
+              input: { value: "hi" },
+            })
+            .pipe(Effect.flip)
+
+          expect(result._tag).toBe("ExtensionProtocolError")
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    )
+  })
+
+  test("RPC listCommands omits lower-scope public command shadowed by project request", async () => {
+    const extensionId = ExtensionId.make("@test/public-rpc-shadow")
+    const builtinExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "builtin",
+      sourcePath: "builtin",
+      contributions: {
+        commands: [
+          action({
+            id: "shadowed",
+            name: "shadowed",
+            description: "shadowed",
+            surface: "slash",
+            public: true,
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: () => Effect.succeed({ value: "builtin" }),
+          }),
+        ],
+      },
+    }
+    const projectExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "project",
+      sourcePath: "project",
+      contributions: {
+        rpc: [
+          request({
+            id: "shadowed",
+            extensionId,
+            intent: "write",
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: (input) => Effect.succeed({ value: input.value }),
+          }),
+        ],
+      },
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [builtinExt, projectExt],
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+
+          const commands = yield* client.extension.listCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual([])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    )
+  })
+
+  test("RPC listCommands omits lower-scope public command shadowed by project tool", async () => {
+    const extensionId = ExtensionId.make("@test/public-tool-shadow")
+    const builtinExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "builtin",
+      sourcePath: "builtin",
+      contributions: {
+        commands: [
+          action({
+            id: "shadowed",
+            name: "shadowed",
+            description: "shadowed",
+            surface: "slash",
+            public: true,
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: () => Effect.succeed({ value: "builtin" }),
+          }),
+        ],
+      },
+    }
+    const projectExt: LoadedExtension = {
+      manifest: { id: extensionId },
+      scope: "project",
+      sourcePath: "project",
+      contributions: {
+        tools: [
+          tool({
+            id: "shadowed",
+            description: "shadowed tool",
+            params: Schema.Struct({ value: Schema.String }),
+            execute: (input) => Effect.succeed({ value: input.value }),
+          }),
+        ],
+      },
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [builtinExt, projectExt],
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+
+          const commands = yield* client.extension.listCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual([])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    )
+  })
+
   test("RPC listCommands resolves commands from the requested session profile", async () => {
     const alphaCwd = "/tmp/gent-alpha-profile"
     const betaCwd = "/tmp/gent-beta-profile"
