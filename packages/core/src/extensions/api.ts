@@ -314,7 +314,7 @@ export interface DefineExtensionInput {
   /**
    * Human-driven UI commands authored via `action({...})`. The bucket name is
    * the audience cluster: every entry must be an `ActionToken` (i.e.
-   * `audiences ⊆ {"human-slash", "human-palette", "transport-public"}`) —
+   * `audiences ⊆ {"human-slash", "human-palette"}`) —
    * `tool({...})` and `request({...})` outputs cannot be slotted here.
    */
   readonly commands?: FieldSpec<ActionToken>

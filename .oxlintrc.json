@@ -33,6 +33,8 @@
     "gent/no-scope-brand-cast": "error",
     // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
     "gent/no-dynamic-imports": "error",
+    // Custom — test control flow must stay in Effect, not try/finally/async/await
+    "gent/no-promise-control-flow-in-tests": "error",
     // Custom — hand-rolled `_tag` discriminated unions banned; use TaggedEnumClass
     "gent/no-hand-rolled-tagged-union": "error",
     // TypeScript - no any

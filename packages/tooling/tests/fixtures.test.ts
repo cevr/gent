@@ -124,6 +124,12 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "no-dynamic-imports.invalid.ts",
     valid: "no-dynamic-imports.valid.ts",
   },
+  {
+    rule: "gent/no-promise-control-flow-in-tests",
+    invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
+    valid: "no-promise-control-flow-in-tests.valid.test.ts",
+    expectedCount: 4,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {

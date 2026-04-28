@@ -5,8 +5,7 @@
  * Surface is `"slash" | "palette" | "both"` — presentation metadata
  * controlling where the action appears in the TUI. The `audiences[]` /
  * `intent` flag matrix is derived: actions always lower to
- * `audiences: [<surface-derived>]` (optionally with `"transport-public"`
- * appended when `public: true`) and `intent: "write"` (UI affordances
+ * `audiences: [<surface-derived>]` and `intent: "write"` (UI affordances
  * always express user intent).
  *
  * The handler context is `ModelCapabilityContext` (the wide host
@@ -36,7 +35,7 @@ export type ActionSurface = "slash" | "palette" | "both"
 /**
  * `ActionToken` — `action({...})` return type. Narrows `CapabilityToken` so
  * `audiences` is fixed to the human-surface cluster (`"human-slash"` and/or
- * `"human-palette"`, optionally with `"transport-public"`) at the type level.
+ * `"human-palette"`) at the type level.
  * The `ExtensionContributions.commands` bucket only accepts this narrowed
  * shape — non-action capabilities (`tool`, `request`) cannot be slotted into
  * `commands:`, so the bucket name IS the audience discrimination (consistent
@@ -53,7 +52,7 @@ export interface ActionToken<Input = unknown, Output = unknown> extends Capabili
 > {
   readonly [ActionTokenBrand]: true
   readonly id: CommandId
-  readonly audiences: ReadonlyArray<"human-slash" | "human-palette" | "transport-public">
+  readonly audiences: ReadonlyArray<"human-slash" | "human-palette">
 }
 
 /** Author-facing input to `action(...)`. */
@@ -66,11 +65,6 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   readonly description: string
   /** Where the action appears in the TUI. */
   readonly surface: ActionSurface
-  /** If true, also expose this action over the public transport surface
-   *  (`"transport-public"` audience) so non-TUI clients (SDK, future
-   *  web UI) can invoke it. Default false — actions are TUI-only by
-   *  default. */
-  readonly public?: boolean
   /** Optional one-liner injected into the system prompt's command list. */
   readonly promptSnippet?: string
   /** Optional category for palette grouping. */
@@ -105,15 +99,12 @@ const surfaceToAudiences = (
 
 /**
  * Lower an `ActionInput` to an `AnyCapabilityContribution` with the
- * derived `audiences[]` (one per surface, plus `"transport-public"`
- * when `public: true`) and `intent: "write"`.
+ * derived `audiences[]` (one per surface) and `intent: "write"`.
  */
 export const action = <Input, Output, R>(
   input: ActionInput<Input, Output, R>,
 ): ActionToken<Input, Output> => {
-  const audiences: ReadonlyArray<Audience> = input.public
-    ? [...surfaceToAudiences(input.surface), "transport-public"]
-    : surfaceToAudiences(input.surface)
+  const audiences: ReadonlyArray<Audience> = surfaceToAudiences(input.surface)
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
   return {
     id: CommandId.make(input.id),

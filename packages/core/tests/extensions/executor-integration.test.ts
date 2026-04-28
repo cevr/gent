@@ -13,12 +13,16 @@
 
 import { describe, test, expect } from "bun:test"
 import { it } from "effect-bun-test"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Layer, Schema } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { ensureStorageParents } from "@gent/core/test-utils"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { Provider } from "@gent/core/providers/provider"
+import { Gent } from "@gent/sdk"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { request } from "@gent/core/extensions/api"
 import { executorActor } from "@gent/extensions/executor/actor"
 import {
   type ExecutorMcpToolResult,
@@ -46,6 +50,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
+import { e2ePreset } from "./helpers/test-preset"
 
 // Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
@@ -149,6 +154,36 @@ const makeExecutorExtension = (overrides?: {
     scope: "builtin",
     sourcePath: "builtin",
     contributions: {
+      rpc: [
+        request({
+          id: "executor-start",
+          extensionId: EXECUTOR_EXTENSION_ID,
+          intent: "write",
+          slash: {
+            name: "Executor: Start",
+            description: "Connect to the configured Executor endpoint.",
+          },
+          input: Schema.String,
+          output: Schema.Void,
+          execute: (_args, extCtx) =>
+            extCtx.extension
+              .send(ExecutorProtocol.Connect.make({ cwd: extCtx.cwd }))
+              .pipe(Effect.orDie),
+        }),
+        request({
+          id: "executor-stop",
+          extensionId: EXECUTOR_EXTENSION_ID,
+          intent: "write",
+          slash: {
+            name: "Executor: Stop",
+            description: "Disconnect from the Executor sidecar.",
+          },
+          input: Schema.String,
+          output: Schema.Void,
+          execute: (_args, extCtx) =>
+            extCtx.extension.send(ExecutorProtocol.Disconnect.make()).pipe(Effect.orDie),
+        }),
+      ],
       actors: [executorActor],
       protocols: ExecutorProtocol,
       resources: [
@@ -240,10 +275,12 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
 const waitForExecutorStatus = (
   runtime: ActorRouterService,
   status: ExecutorSnapshotReply["status"],
+  targetSessionId: SessionId = sessionId,
+  targetBranchId: BranchId = branchId,
 ) =>
   waitFor(
     runtime
-      .execute(sessionId, ExecutorProtocol.GetSnapshot.make(), branchId)
+      .execute(targetSessionId, ExecutorProtocol.GetSnapshot.make(), targetBranchId)
       .pipe(
         Effect.catchEager(() => Effect.succeed(undefined as ExecutorSnapshotReply | undefined)),
       ),
@@ -543,6 +580,76 @@ describe("Executor actor lifecycle", () => {
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
           .pipe(Effect.timeout("8 seconds")),
+      )
+    },
+    10_000,
+  )
+
+  it.live(
+    "public executor commands list and dispatch through extension.request",
+    () => {
+      const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
+      return narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* Provider.Sequence([])
+            const { client } = yield* Gent.test(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [extension] }),
+            )
+            const { sessionId: createdSessionId, branchId: createdBranchId } =
+              yield* client.session.create({
+                cwd: "/tmp/gent-executor-public-command",
+              })
+
+            const commands = yield* client.extension.listCommands({ sessionId: createdSessionId })
+            expect(commands.map((command) => command.name).sort()).toEqual([
+              "executor-start",
+              "executor-stop",
+            ])
+
+            yield* client.extension.request({
+              sessionId: createdSessionId,
+              branchId: createdBranchId,
+              extensionId: EXECUTOR_EXTENSION_ID,
+              capabilityId: "executor-start",
+              intent: "write",
+              input: "",
+            })
+
+            const ready = (yield* waitFor(
+              client.extension.ask({
+                sessionId: createdSessionId,
+                branchId: createdBranchId,
+                message: ExecutorProtocol.GetSnapshot.make(),
+              }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
+              (snapshot) => snapshot.status === "ready",
+              3_000,
+              "executor public command ready",
+            )) as ExecutorSnapshotReply
+            expect(ready.status).toBe("ready")
+
+            yield* client.extension.request({
+              sessionId: createdSessionId,
+              branchId: createdBranchId,
+              extensionId: EXECUTOR_EXTENSION_ID,
+              capabilityId: "executor-stop",
+              intent: "write",
+              input: "",
+            })
+
+            const idle = (yield* waitFor(
+              client.extension.ask({
+                sessionId: createdSessionId,
+                branchId: createdBranchId,
+                message: ExecutorProtocol.GetSnapshot.make(),
+              }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
+              (snapshot) => snapshot.status === "idle",
+              3_000,
+              "executor public command idle",
+            )) as ExecutorSnapshotReply
+            expect(idle.status).toBe("idle")
+          }).pipe(Effect.timeout("8 seconds")),
+        ),
       )
     },
     10_000,

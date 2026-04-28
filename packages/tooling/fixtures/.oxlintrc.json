@@ -14,6 +14,7 @@
     "gent/no-r-equals-never-comment": "error",
     "gent/brand-constructor-callers": "error",
     "gent/no-scope-brand-cast": "error",
-    "gent/no-dynamic-imports": "error"
+    "gent/no-dynamic-imports": "error",
+    "gent/no-promise-control-flow-in-tests": "error"
   }
 }

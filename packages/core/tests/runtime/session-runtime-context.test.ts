@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { BunServices } from "@effect/platform-bun"
-import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { Cause, Context, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -378,6 +378,139 @@ describe("resolveSessionEnvironment", () => {
       rmSync(profileCwd, { recursive: true, force: true })
     }
   })
+
+  test("provides wide host context to nested write capability requests", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const launch = yield* fs.makeTempDirectoryScoped()
+          const profileCwd = yield* fs.makeTempDirectoryScoped()
+          const extensionId = ExtensionId.make("@test/nested-wide-context")
+          const targetRef: CapabilityRef<string, string> = {
+            extensionId,
+            capabilityId: RpcId.make("target"),
+            intent: "write",
+            input: Schema.String,
+            output: Schema.String,
+          }
+          const callerRef: CapabilityRef<string, string> = {
+            extensionId,
+            capabilityId: RpcId.make("caller"),
+            intent: "write",
+            input: Schema.String,
+            output: Schema.String,
+          }
+          const extension: LoadedExtension = {
+            manifest: { id: extensionId },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: {
+              rpc: [
+                request({
+                  id: "target",
+                  extensionId,
+                  intent: "write",
+                  input: Schema.String,
+                  output: Schema.String,
+                  execute: (_input, ctx) =>
+                    ctx.session.getSession().pipe(
+                      Effect.map((session) => session?.cwd ?? "missing"),
+                      Effect.orDie,
+                    ),
+                }),
+                request({
+                  id: "caller",
+                  extensionId,
+                  intent: "write",
+                  input: Schema.String,
+                  output: Schema.String,
+                  execute: (input, ctx) =>
+                    ctx.extension.request(targetRef, input).pipe(Effect.orDie),
+                }),
+              ],
+            },
+          }
+          const resolvedExtensions = resolveExtensions([extension])
+          const runtimePlatformLayer = RuntimePlatform.Test({
+            cwd: launch,
+            home: launch,
+            platform: "test",
+          })
+          const testLayer = Layer.mergeAll(
+            Storage.MemoryWithSql(),
+            ActorRouter.Test(),
+            ActorEngine.Live,
+            ExtensionRegistry.fromResolved(resolveExtensions([])),
+            DriverRegistry.fromResolved({
+              modelDrivers: new Map(),
+              externalDrivers: new Map(),
+            }),
+            runtimePlatformLayer,
+          )
+
+          yield* Effect.gen(function* () {
+            const storage = yield* Storage
+            const extensionRegistry = yield* ExtensionRegistry
+            const extensionStateRuntime = yield* ActorRouter
+            const platform = yield* RuntimePlatform
+            const now = new Date()
+            const layerContext = yield* Layer.build(buildExtensionLayers(resolvedExtensions))
+            const profile: SessionProfile = {
+              cwd: profileCwd,
+              extensions: resolvedExtensions.extensions,
+              resolved: resolvedExtensions,
+              layerContext,
+              permissionService: AllowAllPermission,
+              registryService: Context.get(layerContext, ExtensionRegistry),
+              driverRegistryService: Context.get(layerContext, DriverRegistry),
+              extensionStateRuntime: Context.get(layerContext, ActorRouter),
+              actorEngine: Context.get(layerContext, ActorEngine),
+              receptionist: Context.get(layerContext, Receptionist),
+              baseSections: [],
+              instructions: "",
+            }
+            const profileCache: SessionProfileCacheService = {
+              resolve: () => Effect.succeed(profile),
+            }
+
+            yield* storage.createSession(
+              new Session({
+                id: SessionId.make("session-runtime-context-wide"),
+                cwd: profileCwd,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            )
+
+            const resolved = yield* resolveSessionEnvironment({
+              sessionId: SessionId.make("session-runtime-context-wide"),
+              branchId: BranchId.make("branch-runtime-context-wide"),
+              storage,
+              profileCache,
+              hostDeps: yield* makeAmbientExtensionHostContextDeps({
+                storage,
+                extensionRegistry,
+                extensionStateRuntime,
+                actorEngine: yield* ActorEngine,
+                receptionist: yield* Receptionist,
+                overrides: { platform },
+              }),
+              defaults: {
+                driverRegistry: yield* DriverRegistry,
+                permission: AllowAllPermission,
+                baseSections: [],
+              },
+            })
+
+            expect(resolved._tag).toBe("SessionFound")
+            expect(yield* resolved.environment.hostCtx.extension.request(callerRef, "token")).toBe(
+              profileCwd,
+            )
+          }).pipe(Effect.provide(testLayer))
+        }).pipe(Effect.provide(BunFileSystem.layer)),
+      ),
+    ))
 
   test("falls back to host deps and defaults when no session profile is available", async () => {
     const runtimePlatformLayer = RuntimePlatform.Test({

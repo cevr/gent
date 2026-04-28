@@ -181,6 +181,7 @@ const collectTurnProjection = (
 const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot, ctx: ProjectionTurnContext) =>
   sealErasedEffect(
     () =>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous turn-projection slot
       slot.handler(ctx).pipe(
         Effect.map((projection) => ({
           promptSections: projection.promptSections ?? [],

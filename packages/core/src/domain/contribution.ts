@@ -84,8 +84,8 @@ export interface ExtensionContributions {
   /**
    * Human-driven UI commands authored via `action({...})`. Bucket name IS the
    * audience cluster: every entry is an `ActionToken` whose `audiences` is a
-   * subset of `{"human-slash", "human-palette", "transport-public"}` — no
-   * runtime tag check needed downstream.
+   * subset of `{"human-slash", "human-palette"}` — no runtime tag check
+   * needed downstream.
    */
   readonly commands?: ReadonlyArray<ActionToken>
   /**
@@ -145,8 +145,7 @@ export const modelCapabilities = (contribs: ExtensionContributions): ReadonlyArr
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
  * bag. Bucket name IS the audience discrimination — every entry in `commands:`
- * has audiences ⊆ `{"human-slash", "human-palette", "transport-public"}` by
- * construction.
+ * has audiences ⊆ `{"human-slash", "human-palette"}` by construction.
  */
 export const humanCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ActionToken> =>
   contribs.commands ?? []

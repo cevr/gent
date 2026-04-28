@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { BranchId, ExtensionId, SessionId } from "../../domain/ids.js"
+import { BranchId, ExtensionId, RpcId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
@@ -193,15 +193,15 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         return yield* extensionRequestError({
           extensionId,
           capabilityId,
-          message: "Storage unavailable for transport-public capability dispatch",
+          message: "Storage unavailable for public extension request dispatch",
         })
       }
       const { registry, stateRuntime, actorEngine, receptionist, capabilityContext } =
         yield* deps.resolveSessionServices(sessionId)
-      // Transport-public action handlers are typed against `ModelCapabilityContext`
-      // (wide host surface — `extension.send/ask`, `session.*`, `agent.*`, etc.).
-      // Build the full ExtensionHostContext here so handlers like `executor-start`
-      // / `executor-stop` can steer their sidecar actors over `ctx.extension.send`.
+      // Public write request handlers may ask for the wide host surface
+      // (`extension.send/ask`, `session.*`, `agent.*`, etc.). Build the full
+      // ExtensionHostContext here so handlers like `executor-start` /
+      // `executor-stop` can steer their sidecar actors over `ctx.extension.send`.
       // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
       // dispatch where handlers author against `CapabilityCoreContext`.
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
@@ -220,9 +220,9 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         },
         hostDeps,
       )
-      const transportRegistry = registry.getResolved().transportRegistry
-      const request = transportRegistry
-        .run(extensionId, capabilityId, input, hostCtx, { intent })
+      const rpcRegistry = registry.getResolved().rpcRegistry
+      const request = rpcRegistry
+        .run(extensionId, RpcId.make(capabilityId), input, hostCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({

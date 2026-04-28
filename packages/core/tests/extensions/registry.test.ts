@@ -654,9 +654,9 @@ describe("resolveExtensions — slash command discovery", () => {
     expect(resolved.modelCapabilities.has("act")).toBe(false)
   })
 
-  test("project public command shadows builtin tool", () => {
+  test("project command shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
-    const projectCap = makeCommand("look", { public: true })
+    const projectCap = makeCommand("look")
     const project = makeExt("@test/shadow", "project", { commands: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])

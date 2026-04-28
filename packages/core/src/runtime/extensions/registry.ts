@@ -8,7 +8,6 @@ import type {
   CapabilityError,
   CapabilityNotFoundError,
   Intent,
-  ModelCapabilityContext,
 } from "../../domain/capability.js"
 import {
   CapabilityError as CapabilityErrorClass,
@@ -59,7 +58,6 @@ export interface SlashCommand {
 export interface ResolvedExtensions {
   readonly modelCapabilities: ReadonlyMap<string, ToolToken>
   readonly rpcRegistry: CompiledRpcRegistry
-  readonly transportRegistry: CompiledTransportRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
@@ -101,16 +99,6 @@ export interface CompiledRpcRegistry {
     capabilityId: RpcId,
     input: unknown,
     ctx: CapabilityCoreContext,
-    options?: CapabilityRunOptions,
-  ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
-}
-
-export interface CompiledTransportRegistry {
-  readonly run: (
-    extensionId: ExtensionId,
-    capabilityId: RpcId | CommandId | string,
-    input: unknown,
-    ctx: ModelCapabilityContext,
     options?: CapabilityRunOptions,
   ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
 }
@@ -200,7 +188,7 @@ const runExtensionCapability = (
   capabilityId: RpcId | CommandId | string,
   capability: RequestToken | ActionToken,
   input: unknown,
-  ctx: CapabilityCoreContext | ModelCapabilityContext,
+  ctx: CapabilityCoreContext,
 ) =>
   Effect.gen(function* () {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
@@ -279,25 +267,6 @@ const compileRpcRegistry = (
     }),
 })
 
-const compileTransportRegistry = (
-  entries: ReadonlyArray<RegisteredCapabilityEntry>,
-): CompiledTransportRegistry => ({
-  run: (extensionId, capabilityId, input, ctx, options) =>
-    Effect.gen(function* () {
-      const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || (entry.kind !== "rpc" && entry.kind !== "command")) {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-      }
-      if (entry.kind === "command" && !entry.capability.audiences.includes("transport-public")) {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-      }
-      if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-      }
-      return yield* runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx)
-    }),
-})
-
 const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<LoadedExtension> =>
@@ -307,7 +276,10 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (extensionId: ExtensionId, cap: ActionToken): SlashCommand => {
+const capabilityToCommand = (
+  extensionId: ExtensionId,
+  cap: ActionToken | RequestToken,
+): SlashCommand => {
   // Prefer cap.description (author-supplied, human-readable) over
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
@@ -340,7 +312,6 @@ export const resolveExtensions = (
   const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
-  const transportRegistry = compileTransportRegistry(capabilityEntries)
   const modelCapabilities = new Map<string, ToolToken>()
   for (const [id, entry] of capabilityWinners) {
     if (entry.kind !== "tool") continue
@@ -406,7 +377,6 @@ export const resolveExtensions = (
   return {
     modelCapabilities,
     rpcRegistry,
-    transportRegistry,
     agents,
     modelDrivers,
     externalDrivers,
@@ -617,10 +587,10 @@ export const listSlashCommands = (
   }
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
-    if (entry.kind !== "command") continue
+    if (entry.kind !== "command" && entry.kind !== "rpc") continue
     const cap = entry.capability
     if (!cap.audiences.includes("human-slash")) continue
-    if (options?.publicOnly === true && !cap.audiences.includes("transport-public")) continue
+    if (options?.publicOnly === true && entry.kind !== "rpc") continue
     commands.push(capabilityToCommand(entry.extensionId, cap))
   }
   return commands

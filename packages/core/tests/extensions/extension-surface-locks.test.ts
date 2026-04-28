@@ -152,6 +152,26 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("request({...}) accepts slash presentation metadata", () => {
+    const ok = request({
+      id: "ok-slash-request",
+      extensionId: ExtensionId.make("test-ext"),
+      intent: "write",
+      slash: {
+        name: "Ok Slash",
+        description: "Visible over transport command listing",
+        category: "Test",
+        keybind: "ctrl+o",
+      },
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.succeed("x"),
+    })
+
+    void ok
+    expect(true).toBe(true)
+  })
+
   test("request({...}) rejects `params` field (tool-only)", () => {
     const badInput = {
       id: "bad-request",
@@ -180,6 +200,21 @@ describe("Capability factory-shape locks (compile-time)", () => {
     })
 
     void ok
+    expect(true).toBe(true)
+  })
+
+  test("action({...}) rejects public transport exposure", () => {
+    action({
+      id: "bad-public-action",
+      name: "x",
+      description: "x",
+      surface: "slash",
+      // @ts-expect-error — public transport exposure belongs on slash-decorated request()
+      public: true,
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.succeed("x"),
+    })
     expect(true).toBe(true)
   })
 

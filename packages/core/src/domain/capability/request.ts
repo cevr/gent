@@ -27,6 +27,7 @@ import {
   type CapabilityToken,
   type CapabilityCoreContext,
   type CapabilityError,
+  type ModelCapabilityContext,
 } from "../capability.js"
 import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
@@ -50,7 +51,7 @@ export interface RequestToken<Input = unknown, Output = unknown> extends Capabil
 > {
   readonly [RequestTokenBrand]: true
   readonly id: RpcId
-  readonly audiences: readonly ["agent-protocol", "transport-public"]
+  readonly audiences: ReadonlyArray<"agent-protocol" | "transport-public" | "human-slash">
 }
 
 /** Fields shared by both read- and write-intent request inputs. */
@@ -66,6 +67,15 @@ interface RequestInputBase<Input, Output> {
   readonly output: Schema.Schema<Output>
   /** Static system-prompt section bundled with this request. */
   readonly prompt?: PromptSection
+  /** Human-readable description for registry/listing surfaces. */
+  readonly description?: string
+  /** Optional slash-command presentation for public transport clients. */
+  readonly slash?: {
+    readonly name?: string
+    readonly description?: string
+    readonly category?: string
+    readonly keybind?: string
+  }
 }
 
 /** Author-facing input to `request({ intent: "read", ... })`. R is
@@ -96,7 +106,7 @@ export interface WriteRequestInput<
   /** The request handler. */
   readonly execute: (
     input: Input,
-    ctx: CapabilityCoreContext,
+    ctx: ModelCapabilityContext,
   ) => Effect.Effect<Output, CapabilityError, R>
 }
 
@@ -125,6 +135,8 @@ export function request(input: {
   readonly input: Schema.Schema<unknown>
   readonly output: Schema.Schema<unknown>
   readonly prompt?: PromptSection
+  readonly description?: string
+  readonly slash?: RequestInputBase<unknown, unknown>["slash"]
   readonly execute: AnyCapabilityContribution["effect"]
 }): RequestToken {
   const rpcId = RpcId.make(input.id)
@@ -144,8 +156,16 @@ export function request(input: {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
   return {
     id: rpcId,
-    audiences: ["agent-protocol", "transport-public"],
+    audiences:
+      input.slash === undefined
+        ? ["agent-protocol", "transport-public"]
+        : ["agent-protocol", "transport-public", "human-slash"],
     intent: input.intent,
+    ...(input.description !== undefined ? { description: input.description } : {}),
+    ...(input.slash?.name !== undefined ? { displayName: input.slash.name } : {}),
+    ...(input.slash?.description !== undefined ? { description: input.slash.description } : {}),
+    ...(input.slash?.category !== undefined ? { category: input.slash.category } : {}),
+    ...(input.slash?.keybind !== undefined ? { keybind: input.slash.keybind } : {}),
     input: input.input,
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),

@@ -50,22 +50,20 @@ const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, nev
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string; cwd: string }> = []
 
-  // Slash commands are authored via `action({ surface: "slash" })` (lowers to
-  // `audiences: ["human-slash"]` in the `commands:` bucket). `action()` requires
-  // a `description` which is shown in the slash list; `promptSnippet` is an
-  // optional system-prompt fragment.
+  // Server-visible slash commands are slash-decorated RPC requests. Local
+  // human-only commands stay in the `commands:` bucket and are not listed by
+  // the transport API.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
     setup: () =>
       Effect.succeed({
-        commands: [
-          action({
+        rpc: [
+          request({
             id: "greet",
-            name: "greet",
+            extensionId: ExtensionId.make("@test/commands"),
+            intent: "write",
+            slash: { name: "greet", description: "Say hello" },
             description: "Say hello",
-            surface: "slash",
-            public: true,
-            promptSnippet: "Say hello",
             input: Schema.String,
             output: Schema.Void,
             execute: (args, ctx) =>
@@ -73,6 +71,8 @@ describe("extension command RPCs", () => {
                 invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
               }),
           }),
+        ],
+        commands: [
           action({
             id: "noop",
             name: "noop",
@@ -131,13 +131,12 @@ describe("extension command RPCs", () => {
     scope: "builtin",
     sourcePath: "test",
     contributions: {
-      commands: [
-        action({
+      rpc: [
+        request({
           id: commandId,
-          name: commandId,
-          description: commandId,
-          surface: "slash",
-          public: true,
+          extensionId: ExtensionId.make(extensionId),
+          intent: "write",
+          slash: { name: commandId, description: commandId },
           input: Schema.String,
           output: Schema.Void,
           execute: () => Effect.void,
@@ -582,25 +581,24 @@ describe("extension command RPCs", () => {
     }
   })
 
-  test("RPC request gives transport-public handlers the wide host context (ctx.extension.send)", async () => {
-    // Regression: `action({ public: true })` handlers are typed against
-    // `ModelCapabilityContext` and call `ctx.extension.send(...)`. Pre-fix,
-    // `extension.request` passed a narrow 4-key ctx so the narrowCtxGuard
-    // threw on `ctx.extension` and the transport path silently no-op'd
-    // (the exact bug behind `/executor-start` / `/executor-stop`).
+  test("RPC request gives write handlers the wide host context (ctx.extension.send)", async () => {
+    // Regression: public write RPC handlers can call `ctx.extension.send(...)`.
+    // Pre-fix, `extension.request` passed a narrow 4-key ctx so the guard threw
+    // on `ctx.extension` and the transport path silently no-op'd (the exact bug
+    // behind `/executor-start` / `/executor-stop`).
     boundaryReceived.length = 0
 
     const wideExtension: GentExtension = {
       manifest: { id: ExtensionId.make("@test/wide-ctx-action") },
       setup: () =>
         Effect.succeed({
-          commands: [
-            action({
+          rpc: [
+            request({
               id: "touch",
-              name: "touch",
+              extensionId: ExtensionId.make("@test/wide-ctx-action"),
+              intent: "write",
+              slash: { name: "touch", description: "Touch the boundary" },
               description: "Touch the boundary",
-              surface: "slash",
-              public: true,
               input: Schema.String,
               output: Schema.Void,
               execute: (label, ctx) =>
@@ -766,23 +764,25 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("RPC listCommands omits human-slash capabilities that are not transport-public", async () => {
+  test("RPC listCommands omits human-slash actions and lists slash requests", async () => {
+    const extensionId = ExtensionId.make("@test/public-filter")
     const ext: LoadedExtension = {
-      manifest: { id: ExtensionId.make("@test/public-filter") },
+      manifest: { id: extensionId },
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        commands: [
-          action({
+        rpc: [
+          request({
             id: "visible",
-            name: "visible",
-            description: "visible",
-            surface: "slash",
-            public: true,
+            extensionId,
+            intent: "write",
+            slash: { name: "visible", description: "visible" },
             input: Schema.String,
             output: Schema.Void,
             execute: () => Effect.void,
           }),
+        ],
+        commands: [
           action({
             id: "hidden",
             name: "hidden",
@@ -813,20 +813,19 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("RPC request cannot invoke lower-scope public command shadowed by private project command", async () => {
+  test("RPC request cannot invoke lower-scope slash request shadowed by project command", async () => {
     const extensionId = ExtensionId.make("@test/public-shadow")
     const builtinExt: LoadedExtension = {
       manifest: { id: extensionId },
       scope: "builtin",
       sourcePath: "builtin",
       contributions: {
-        commands: [
-          action({
+        rpc: [
+          request({
             id: "shadowed",
-            name: "shadowed",
-            description: "shadowed",
-            surface: "slash",
-            public: true,
+            extensionId,
+            intent: "write",
+            slash: { name: "shadowed", description: "shadowed" },
             input: Schema.Struct({ value: Schema.String }),
             output: Schema.Struct({ value: Schema.String }),
             execute: () => Effect.succeed({ value: "builtin" }),
@@ -886,20 +885,19 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("RPC listCommands omits lower-scope public command shadowed by project request", async () => {
+  test("RPC listCommands omits lower-scope slash request shadowed by project request", async () => {
     const extensionId = ExtensionId.make("@test/public-rpc-shadow")
     const builtinExt: LoadedExtension = {
       manifest: { id: extensionId },
       scope: "builtin",
       sourcePath: "builtin",
       contributions: {
-        commands: [
-          action({
+        rpc: [
+          request({
             id: "shadowed",
-            name: "shadowed",
-            description: "shadowed",
-            surface: "slash",
-            public: true,
+            extensionId,
+            intent: "write",
+            slash: { name: "shadowed", description: "shadowed" },
             input: Schema.Struct({ value: Schema.String }),
             output: Schema.Struct({ value: Schema.String }),
             execute: () => Effect.succeed({ value: "builtin" }),
@@ -945,20 +943,19 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("RPC listCommands omits lower-scope public command shadowed by project tool", async () => {
+  test("RPC listCommands omits lower-scope slash request shadowed by project tool", async () => {
     const extensionId = ExtensionId.make("@test/public-tool-shadow")
     const builtinExt: LoadedExtension = {
       manifest: { id: extensionId },
       scope: "builtin",
       sourcePath: "builtin",
       contributions: {
-        commands: [
-          action({
+        rpc: [
+          request({
             id: "shadowed",
-            name: "shadowed",
-            description: "shadowed",
-            surface: "slash",
-            public: true,
+            extensionId,
+            intent: "write",
+            slash: { name: "shadowed", description: "shadowed" },
             input: Schema.Struct({ value: Schema.String }),
             output: Schema.Struct({ value: Schema.String }),
             execute: () => Effect.succeed({ value: "builtin" }),

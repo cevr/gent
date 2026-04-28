@@ -3,7 +3,7 @@
  */
 
 import { Effect, Layer, Schema } from "effect"
-import { action, defineExtension, defineResource } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, request } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
@@ -18,13 +18,16 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   tools: [ExecuteTool, ResumeTool],
-  commands: [
-    action({
+  rpc: [
+    request({
       id: "executor-start",
-      name: "Executor: Start",
+      extensionId: EXECUTOR_EXTENSION_ID,
+      intent: "write",
+      slash: {
+        name: "Executor: Start",
+        description: "Connect to the configured Executor endpoint.",
+      },
       description: "Connect to the configured Executor endpoint.",
-      surface: "slash",
-      public: true,
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
@@ -32,12 +35,12 @@ export const ExecutorExtension = defineExtension({
           .send(ExecutorProtocol.Connect.make({ cwd: extCtx.cwd }))
           .pipe(Effect.orDie),
     }),
-    action({
+    request({
       id: "executor-stop",
-      name: "Executor: Stop",
+      extensionId: EXECUTOR_EXTENSION_ID,
+      intent: "write",
+      slash: { name: "Executor: Stop", description: "Disconnect from the Executor sidecar." },
       description: "Disconnect from the Executor sidecar.",
-      surface: "slash",
-      public: true,
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
