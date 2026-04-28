@@ -23,6 +23,7 @@
  */
 
 import { Context, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ActorEngine, Receptionist, type ActorRef } from "@gent/core/extensions/api"
 import { ExecutorEndpoint, ExecutorMcpInspection, type ResolvedExecutorSettings } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
@@ -68,7 +69,11 @@ const tellFailure = (
 const runConnection = (
   cwd: string,
   ref: ActorRef<ExecutorMsg>,
-): Effect.Effect<void, never, ActorEngine | ExecutorSidecar | ExecutorMcpBridge> =>
+): Effect.Effect<
+  void,
+  never,
+  ActorEngine | ExecutorSidecar | ExecutorMcpBridge | ChildProcessSpawner.ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     const sidecar = yield* ExecutorSidecar
@@ -115,7 +120,11 @@ const awaitExecutorRef: Effect.Effect<ActorRef<ExecutorMsg>, never, Receptionist
 
 const supervise = (
   ref: ActorRef<ExecutorMsg>,
-): Effect.Effect<void, never, ActorEngine | ExecutorSidecar | ExecutorMcpBridge> =>
+): Effect.Effect<
+  void,
+  never,
+  ActorEngine | ExecutorSidecar | ExecutorMcpBridge | ChildProcessSpawner.ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     // Track the in-flight `runConnection` fork so we can interrupt it
@@ -180,7 +189,11 @@ export const ExecutorConnectionRunnerLayer = (
 ): Layer.Layer<
   ExecutorConnectionRunner,
   never,
-  ActorEngine | Receptionist | ExecutorSidecar | ExecutorMcpBridge
+  | ActorEngine
+  | Receptionist
+  | ExecutorSidecar
+  | ExecutorMcpBridge
+  | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Layer.effect(
     ExecutorConnectionRunner,

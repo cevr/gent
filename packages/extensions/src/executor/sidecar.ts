@@ -6,7 +6,6 @@
  * PID registry, and graceful shutdown via Effect.addFinalizer.
  */
 
-import { BunServices } from "@effect/platform-bun"
 import {
   Clock,
   Context,
@@ -43,16 +42,35 @@ import {
 
 // ── Internal types ──
 
-interface SidecarRecord {
-  readonly cwd: string
-  readonly port: number
-  readonly baseUrl: string
-  readonly pid: number | undefined
-  readonly ownedByGent: boolean
-  readonly scope: ScopeInfo | undefined
-  readonly handle: ChildProcessSpawner.ChildProcessHandle | undefined
-  readonly handleScope: Scope.Closeable | undefined
-}
+/**
+ * Two valid sidecar configurations:
+ * - `owned`: gent spawned the process; we hold the handle + handleScope
+ *   for graceful shutdown. The remote `ScopeInfo` is filled in after the
+ *   first successful health probe.
+ * - `external`: gent discovered an already-running sidecar via port scan.
+ *   No process control — we only know the URL and its self-reported scope.
+ *
+ * Discriminating on `_tag` makes the impossible states (handle without
+ * handleScope, external with pid, etc.) unrepresentable.
+ */
+type SidecarRecord =
+  | {
+      readonly _tag: "owned"
+      readonly cwd: string
+      readonly port: number
+      readonly baseUrl: string
+      readonly pid: number
+      readonly handle: ChildProcessSpawner.ChildProcessHandle
+      readonly handleScope: Scope.Closeable
+      readonly scope: ScopeInfo | undefined
+    }
+  | {
+      readonly _tag: "external"
+      readonly cwd: string
+      readonly port: number
+      readonly baseUrl: string
+      readonly scope: ScopeInfo
+    }
 
 interface RegisteredSidecar {
   readonly cwd: string
@@ -75,7 +93,13 @@ type PortProbe =
 // ── Service interface ──
 
 export interface ExecutorSidecarService {
-  readonly resolveEndpoint: (cwd: string) => Effect.Effect<ExecutorEndpoint, ExecutorSidecarError>
+  readonly resolveEndpoint: (
+    cwd: string,
+  ) => Effect.Effect<
+    ExecutorEndpoint,
+    ExecutorSidecarError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >
   readonly stop: (cwd: string) => Effect.Effect<"stopped" | "missing", ExecutorSidecarError>
   readonly find: (cwd: string) => Effect.Effect<ExecutorEndpoint | undefined>
   readonly resolveSettings: (cwd: string) => Effect.Effect<ResolvedExecutorSettings>
@@ -231,7 +255,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const registerSidecar = (record: SidecarRecord) =>
           Effect.gen(function* () {
-            if (record.pid === undefined) return
+            if (record._tag === "external") return
             const registry = yield* readRegistry
             registry.sidecars[record.cwd] = {
               cwd: record.cwd,
@@ -291,8 +315,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                   }),
                 ),
               ),
-              // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
-              Effect.provide(BunServices.layer),
             )
             if (result.exitCode !== 0) {
               return yield* new ExecutorSidecarError({
@@ -345,20 +367,18 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                   ),
                 ),
                 Effect.tapError(() => Scope.close(handleScope, Exit.void)),
-                // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
-                Effect.provide(BunServices.layer),
               )
             yield* handle.unref.pipe(Effect.ignore)
 
             return {
+              _tag: "owned" as const,
               cwd,
               port,
               baseUrl: `http://127.0.0.1:${port}`,
               pid: Number(handle.pid),
-              ownedByGent: true,
-              scope: undefined,
               handle,
               handleScope,
+              scope: undefined,
             } satisfies SidecarRecord
           })
 
@@ -405,31 +425,26 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const killRecord = (record: SidecarRecord) =>
           Effect.gen(function* () {
-            if (record.handle !== undefined) {
-              const running = yield* record.handle.isRunning.pipe(Effect.orElseSucceed(() => false))
-              if (running) {
-                yield* record.handle
-                  .kill({
-                    killSignal: "SIGTERM",
-                    forceKillAfter: Duration.millis(SHUTDOWN_TIMEOUT_MS),
-                  })
-                  .pipe(Effect.ignore)
-              }
-              if (record.handleScope !== undefined) {
-                yield* Scope.close(record.handleScope, Exit.void).pipe(Effect.ignore)
-              }
-            } else if (record.pid !== undefined) {
-              yield* terminatePid(record.pid)
+            if (record._tag === "external") return // not ours to kill
+            const running = yield* record.handle.isRunning.pipe(Effect.orElseSucceed(() => false))
+            if (running) {
+              yield* record.handle
+                .kill({
+                  killSignal: "SIGTERM",
+                  forceKillAfter: Duration.millis(SHUTDOWN_TIMEOUT_MS),
+                })
+                .pipe(Effect.ignore)
             }
-            if (record.pid !== undefined) {
-              yield* unregisterSidecar(record.cwd, record.pid)
-            }
+            yield* Scope.close(record.handleScope, Exit.void).pipe(Effect.ignore)
+            yield* unregisterSidecar(record.cwd, record.pid)
           })
 
         // Register finalizer to shut down owned sidecars (respects stopLocalOnShutdown)
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            const owned = Array.from(sidecarsByCwd.values()).filter((r) => r.ownedByGent)
+            const owned = Array.from(sidecarsByCwd.values()).filter(
+              (r): r is Extract<SidecarRecord, { _tag: "owned" }> => r._tag === "owned",
+            )
             yield* Effect.all(
               owned.map((record) =>
                 Effect.gen(function* () {
@@ -465,14 +480,11 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             const scan = yield* scanPorts(normalized)
             if (scan.reusable) {
               const record: SidecarRecord = {
+                _tag: "external",
                 cwd: normalized,
                 port: scan.reusable.port,
                 baseUrl: `http://127.0.0.1:${scan.reusable.port}`,
-                pid: undefined,
-                ownedByGent: false,
                 scope: scan.reusable.scope,
-                handle: undefined,
-                handleScope: undefined,
               }
               sidecarsByCwd.set(normalized, record)
               return record
@@ -524,8 +536,11 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const toEndpoint = (record: SidecarRecord): ExecutorEndpoint => ({
           mode: "local",
           baseUrl: record.baseUrl,
-          ownedByGent: record.ownedByGent,
-          scope: record.scope ?? { id: "", name: "", dir: record.cwd },
+          ownedByGent: record._tag === "owned",
+          scope:
+            record._tag === "external"
+              ? record.scope
+              : (record.scope ?? { id: "", name: "", dir: record.cwd }),
         })
 
         // ── Service implementation ──
