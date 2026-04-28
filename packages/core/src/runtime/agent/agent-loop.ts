@@ -85,7 +85,10 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { ActorEngine } from "../extensions/actor-engine.js"
 import { Receptionist } from "../extensions/receptionist.js"
-import { ActorRouter, type ActorRouterService } from "../extensions/resource-host/actor-router.js"
+import {
+  ExtensionRuntime,
+  type ExtensionRuntimeService,
+} from "../extensions/resource-host/extension-runtime.js"
 import {
   ExtensionTurnControl,
   TurnControlError,
@@ -482,7 +485,7 @@ const resolveTurnContext = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: ActorRouterService
+  extensionRuntime: ExtensionRuntimeService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
@@ -1118,7 +1121,7 @@ const resolveTurnPhase = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: ActorRouterService
+  extensionRuntime: ExtensionRuntimeService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
@@ -1859,7 +1862,7 @@ type LoopHandle = {
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
-    turnExtensionStateRuntime: ActorRouterService
+    turnExtensionRuntime: ExtensionRuntimeService
     turnPermission: PermissionService
     turnBaseSections: ReadonlyArray<PromptSection>
     turnHostCtx: ExtensionHostContext
@@ -2144,7 +2147,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | Provider
     | ExtensionRegistry
     | DriverRegistry
-    | ActorRouter
+    | ExtensionRuntime
     | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
@@ -2162,7 +2165,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
-        const extensionStateRuntime = yield* ActorRouter
+        const extensionRuntime = yield* ExtensionRuntime
         const actorEngine = yield* ActorEngine
         const receptionist = yield* Receptionist
         const extensionTurnControl = yield* ExtensionTurnControl
@@ -2273,7 +2276,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const permissionService = yield* Effect.serviceOption(Permission)
 
             const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-              extensionStateRuntime,
+              extensionRuntime,
               extensionRegistry,
               storage,
               actorEngine,
@@ -2302,7 +2305,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.map(({ environment }) => ({
                 turnExtensionRegistry: environment.extensionRegistry,
                 turnDriverRegistry: environment.driverRegistry,
-                turnExtensionStateRuntime: environment.extensionStateRuntime,
+                turnExtensionRuntime: environment.extensionRuntime,
                 turnPermission: environment.permission,
                 turnBaseSections: environment.baseSections,
                 turnHostCtx: environment.hostCtx,
@@ -2480,7 +2483,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               const {
                 turnExtensionRegistry,
                 turnDriverRegistry,
-                turnExtensionStateRuntime,
+                turnExtensionRuntime,
                 turnPermission,
                 turnBaseSections,
                 turnHostCtx,
@@ -2572,7 +2575,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   storage,
                   branchId,
                   extensionRegistry: turnExtensionRegistry,
-                  extensionStateRuntime: turnExtensionStateRuntime,
+                  extensionRuntime: turnExtensionRuntime,
                   driverRegistry: turnDriverRegistry,
                   sessionId,
                   publishEvent: publishEventOrDie,

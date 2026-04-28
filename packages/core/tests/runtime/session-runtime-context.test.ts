@@ -14,7 +14,7 @@ import type { LoadedExtension } from "../../src/domain/extension"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
 import {
@@ -82,7 +82,7 @@ describe("resolveSessionEnvironment", () => {
       const testLayer = Layer.mergeAll(
         BunServices.layer,
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
@@ -96,7 +96,7 @@ describe("resolveSessionEnvironment", () => {
             yield* Effect.gen(function* () {
               const storage = yield* Storage
               const extensionRegistry = yield* ExtensionRegistry
-              const extensionStateRuntime = yield* ActorRouter
+              const extensionRuntime = yield* ExtensionRuntime
               const platform = yield* RuntimePlatform
               const profileCache = yield* SessionProfileCache
               const now = new Date()
@@ -116,7 +116,7 @@ describe("resolveSessionEnvironment", () => {
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
                   storage,
                   extensionRegistry,
-                  extensionStateRuntime,
+                  extensionRuntime,
                   actorEngine: yield* ActorEngine,
                   receptionist: yield* Receptionist,
                   overrides: { platform },
@@ -190,7 +190,7 @@ describe("resolveSessionEnvironment", () => {
       })
       const testLayer = Layer.mergeAll(
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         extensionRegistryLayer,
         driverRegistryLayer,
@@ -203,7 +203,7 @@ describe("resolveSessionEnvironment", () => {
             yield* Effect.gen(function* () {
               const storage = yield* Storage
               const extensionRegistry = yield* ExtensionRegistry
-              const extensionStateRuntime = yield* ActorRouter
+              const extensionRuntime = yield* ExtensionRuntime
               const platform = yield* RuntimePlatform
               const now = new Date()
               yield* storage.createSession(
@@ -221,7 +221,7 @@ describe("resolveSessionEnvironment", () => {
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
                   storage,
                   extensionRegistry,
-                  extensionStateRuntime,
+                  extensionRuntime,
                   actorEngine: yield* ActorEngine,
                   receptionist: yield* Receptionist,
                   overrides: { platform },
@@ -303,7 +303,7 @@ describe("resolveSessionEnvironment", () => {
       })
       const testLayer = Layer.mergeAll(
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         extensionRegistryLayer,
         driverRegistryLayer,
@@ -317,7 +317,7 @@ describe("resolveSessionEnvironment", () => {
               Effect.gen(function* () {
                 const storage = yield* Storage
                 const extensionRegistry = yield* ExtensionRegistry
-                const extensionStateRuntime = yield* ActorRouter
+                const extensionRuntime = yield* ExtensionRuntime
                 const platform = yield* RuntimePlatform
                 const now = new Date()
                 const layerContext = yield* Layer.build(buildExtensionLayers(resolvedExtensions))
@@ -329,7 +329,7 @@ describe("resolveSessionEnvironment", () => {
                   permissionService: AllowAllPermission,
                   registryService: Context.get(layerContext, ExtensionRegistry),
                   driverRegistryService: Context.get(layerContext, DriverRegistry),
-                  extensionStateRuntime: Context.get(layerContext, ActorRouter),
+                  extensionRuntime: Context.get(layerContext, ExtensionRuntime),
                   actorEngine: Context.get(layerContext, ActorEngine),
                   receptionist: Context.get(layerContext, Receptionist),
                   baseSections: [],
@@ -354,7 +354,7 @@ describe("resolveSessionEnvironment", () => {
                   hostDeps: yield* makeAmbientExtensionHostContextDeps({
                     storage,
                     extensionRegistry,
-                    extensionStateRuntime,
+                    extensionRuntime,
                     actorEngine: yield* ActorEngine,
                     receptionist: yield* Receptionist,
                     overrides: { platform },
@@ -440,7 +440,7 @@ describe("resolveSessionEnvironment", () => {
           })
           const testLayer = Layer.mergeAll(
             Storage.MemoryWithSql(),
-            ActorRouter.Test(),
+            ExtensionRuntime.Test(),
             ActorEngine.Live,
             ExtensionRegistry.fromResolved(resolveExtensions([])),
             DriverRegistry.fromResolved({
@@ -452,7 +452,7 @@ describe("resolveSessionEnvironment", () => {
           yield* Effect.gen(function* () {
             const storage = yield* Storage
             const extensionRegistry = yield* ExtensionRegistry
-            const extensionStateRuntime = yield* ActorRouter
+            const extensionRuntime = yield* ExtensionRuntime
             const platform = yield* RuntimePlatform
             const now = new Date()
             const layerContext = yield* Layer.build(buildExtensionLayers(resolvedExtensions))
@@ -464,7 +464,7 @@ describe("resolveSessionEnvironment", () => {
               permissionService: AllowAllPermission,
               registryService: Context.get(layerContext, ExtensionRegistry),
               driverRegistryService: Context.get(layerContext, DriverRegistry),
-              extensionStateRuntime: Context.get(layerContext, ActorRouter),
+              extensionRuntime: Context.get(layerContext, ExtensionRuntime),
               actorEngine: Context.get(layerContext, ActorEngine),
               receptionist: Context.get(layerContext, Receptionist),
               baseSections: [],
@@ -489,7 +489,7 @@ describe("resolveSessionEnvironment", () => {
               hostDeps: yield* makeAmbientExtensionHostContextDeps({
                 storage,
                 extensionRegistry,
-                extensionStateRuntime,
+                extensionRuntime,
                 actorEngine: yield* ActorEngine,
                 receptionist: yield* Receptionist,
                 overrides: { platform },
@@ -544,7 +544,7 @@ describe("resolveSessionEnvironment", () => {
       }
       const testLayer = Layer.mergeAll(
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         emptyRegistryLayer,
         runtimePlatformLayer,
@@ -552,7 +552,7 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* ActorRouter
+        const extensionRuntime = yield* ExtensionRuntime
         const platform = yield* RuntimePlatform
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
@@ -561,7 +561,7 @@ describe("resolveSessionEnvironment", () => {
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
             extensionRegistry,
-            extensionStateRuntime,
+            extensionRuntime,
             actorEngine: yield* ActorEngine,
             receptionist: yield* Receptionist,
             overrides: { platform },
@@ -589,7 +589,7 @@ describe("resolveSessionEnvironment", () => {
       })
       const testLayer = Layer.mergeAll(
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
@@ -598,7 +598,7 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* ActorRouter
+        const extensionRuntime = yield* ExtensionRuntime
         const platform = yield* RuntimePlatform
         const failingStorage: StorageService = {
           ...storage,
@@ -612,7 +612,7 @@ describe("resolveSessionEnvironment", () => {
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               storage: failingStorage,
               extensionRegistry,
-              extensionStateRuntime,
+              extensionRuntime,
               actorEngine: yield* ActorEngine,
               receptionist: yield* Receptionist,
               overrides: { platform },
@@ -636,7 +636,7 @@ describe("resolveSessionEnvironment", () => {
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               storage: failingStorage,
               extensionRegistry,
-              extensionStateRuntime,
+              extensionRuntime,
               actorEngine: yield* ActorEngine,
               receptionist: yield* Receptionist,
               overrides: { platform },
@@ -690,7 +690,7 @@ describe("resolveSessionEnvironment", () => {
       })
       const testLayer = Layer.mergeAll(
         Storage.MemoryWithSql(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         emptyRegistryLayer,
         defaultDriverRegistryLayer,
@@ -699,7 +699,7 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const storage = yield* Storage
         const extensionRegistry = yield* ExtensionRegistry
-        const extensionStateRuntime = yield* ActorRouter
+        const extensionRuntime = yield* ExtensionRuntime
         const actorEngine = yield* ActorEngine
         const receptionist = yield* Receptionist
         const platform = yield* RuntimePlatform
@@ -730,7 +730,7 @@ describe("resolveSessionEnvironment", () => {
           },
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,
-          extensionStateRuntime,
+          extensionRuntime,
           actorEngine,
           receptionist,
           baseSections: [],
@@ -747,7 +747,7 @@ describe("resolveSessionEnvironment", () => {
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
             extensionRegistry,
-            extensionStateRuntime,
+            extensionRuntime,
             actorEngine: yield* ActorEngine,
             receptionist: yield* Receptionist,
             overrides: { platform },

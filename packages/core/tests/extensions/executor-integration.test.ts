@@ -37,7 +37,7 @@ import {
   ExecutorConnectionRunner,
   ExecutorConnectionRunnerLayer,
 } from "@gent/extensions/executor/connection-runner"
-import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
@@ -163,7 +163,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // both stay in the output set so the runner layer can pull them. The
   // resource-layer chain below is provideMerged onto this stack so it
   // shares the same engine instance that the host registers actors with.
-  const machine = ActorRouter.Live([extension]).pipe(
+  const machine = ExtensionRuntime.Live([extension]).pipe(
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),

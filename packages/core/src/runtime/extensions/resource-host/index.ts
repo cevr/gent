@@ -4,7 +4,7 @@
  * This facade exports the independent host pieces:
  * - Resource service/lifecycle layer assembly.
  * - Schedule collection + reconciliation.
- * - ActorRouter lives in `actor-router.ts` to keep actor protocol separate.
+ * - ExtensionRuntime lives in `extension-runtime.ts` to keep actor protocol separate.
  *
  * @module
  */

@@ -15,7 +15,7 @@ import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
-import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
@@ -59,7 +59,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorRouter.Test(),
+    ExtensionRuntime.Test(),
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     ToolRunner.Test(),

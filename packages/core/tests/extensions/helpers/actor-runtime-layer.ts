@@ -8,7 +8,7 @@ import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
-import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../../src/runtime/extensions/resource-host/extension-runtime"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -20,7 +20,7 @@ export const makeActorRuntimeLayer = (config: {
 }) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  const machine = ActorRouter.Live(config.extensions).pipe(
+  const machine = ExtensionRuntime.Live(config.extensions).pipe(
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorEngine.Live),
   )

@@ -2,7 +2,7 @@
  * E2E test layer with real extension actors, queued event publishing, and tool execution.
  *
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
- * prod-shaped event publisher, real ActorRouter.Live, real ToolRunner.Live,
+ * prod-shaped event publisher, real ExtensionRuntime.Live, real ToolRunner.Live,
  * and real ExtensionTurnControl.Live — so QueueFollowUp actually drives multi-turn loops.
  *
  * Import from @gent/core/test-utils/e2e-layer
@@ -34,7 +34,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
+import { ExtensionRuntime } from "../runtime/extensions/resource-host/extension-runtime.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ActorHost } from "../runtime/extensions/actor-host.js"
@@ -90,7 +90,7 @@ export interface E2ELayerConfig {
  * Build a complete E2E test layer with real extension actors and queued event publishing.
  *
  * Key differences from baseLocalLayerWithProvider:
- * - ActorRouter.Live(extensions) — spawns real actors
+ * - ExtensionRuntime.Live(extensions) — spawns real actors
  * - EventPublisherLive — appends events, then delivers them through the queued extension runtime
  * - ToolRunner.Live — executes tools for real
  * - ExtensionTurnControl.Live — QueueFollowUp enqueues directly into the live loop
@@ -175,7 +175,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // (`buildResourceLayer` in profile.ts) so `Resource.start` fires —
       // this is load-bearing for actor-only extensions whose Behavior is
       // spawned inside `start` and discovered via Receptionist + the
-      // route fallback in ActorRouter. The legacy "extract `r.layer`
+      // route fallback in ExtensionRuntime. The legacy "extract `r.layer`
       // and merge" path skipped lifecycle entirely.
       //
       // Extension layers may require SqlClient — provide it below via
@@ -214,13 +214,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       // Mirror profile.ts: build ActorHost first, then feed it into
-      // ActorRouter via provideMerge so the engine's route fallback
+      // ExtensionRuntime via provideMerge so the engine's route fallback
       // and the host both see the same ActorEngine instance, and any
       // actor-bearing extension actually has its `actors` spawned.
       const actorRuntimeLive = ActorHost.fromResolved(resolved).pipe(
         Layer.provideMerge(ActorEngine.Live),
       )
-      const extensionRuntimeLive = ActorRouter.Live(resolved.extensions).pipe(
+      const extensionRuntimeLive = ExtensionRuntime.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
         Layer.provideMerge(actorRuntimeLive),
       )

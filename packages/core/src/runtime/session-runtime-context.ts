@@ -10,7 +10,7 @@ import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import type { ActorRouterService } from "./extensions/resource-host/actor-router.js"
+import type { ExtensionRuntimeService } from "./extensions/resource-host/extension-runtime.js"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
@@ -26,7 +26,7 @@ export interface SessionEnvironmentDefaults {
 export interface SessionEnvironment {
   readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
-  readonly extensionStateRuntime: ActorRouterService
+  readonly extensionRuntime: ExtensionRuntimeService
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -49,7 +49,7 @@ export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
-  readonly extensionStateRuntime: ActorRouterService
+  readonly extensionRuntime: ExtensionRuntimeService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>
@@ -72,8 +72,7 @@ const resolveActiveRuntimeBindings = (params: {
   readonly defaults: SessionEnvironmentDefaults
 }): ActiveRuntimeBindings => ({
   extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
-  extensionStateRuntime:
-    params.profile?.extensionStateRuntime ?? params.hostDeps.extensionStateRuntime,
+  extensionRuntime: params.profile?.extensionRuntime ?? params.hostDeps.extensionRuntime,
   actorEngine: params.profile?.actorEngine ?? params.hostDeps.actorEngine,
   receptionist: params.profile?.receptionist ?? params.hostDeps.receptionist,
   capabilityContext: params.profile?.layerContext ?? params.hostDeps.capabilityContext,
@@ -100,7 +99,7 @@ const buildSessionEnvironment = (params: {
     {
       ...params.hostDeps,
       extensionRegistry: params.bindings.extensionRegistry,
-      extensionStateRuntime: params.bindings.extensionStateRuntime,
+      extensionRuntime: params.bindings.extensionRuntime,
       actorEngine: params.bindings.actorEngine,
       receptionist: params.bindings.receptionist,
       ...(params.bindings.capabilityContext !== undefined
@@ -112,7 +111,7 @@ const buildSessionEnvironment = (params: {
   return {
     cwd: hostCtx.cwd,
     extensionRegistry: params.bindings.extensionRegistry,
-    extensionStateRuntime: params.bindings.extensionStateRuntime,
+    extensionRuntime: params.bindings.extensionRuntime,
     ...(params.bindings.capabilityContext !== undefined
       ? { capabilityContext: params.bindings.capabilityContext }
       : {}),

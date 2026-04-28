@@ -25,7 +25,7 @@ import { BunServices } from "@effect/platform-bun"
 import { CommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
@@ -113,7 +113,7 @@ describe("extension command RPCs", () => {
         permissionService: allowAllPermission,
         registryService: Context.get(layerContext, ExtensionRegistry),
         driverRegistryService: Context.get(layerContext, DriverRegistry),
-        extensionStateRuntime: Context.get(layerContext, ActorRouter),
+        extensionRuntime: Context.get(layerContext, ExtensionRuntime),
         actorEngine: Context.get(layerContext, ActorEngine),
         receptionist: Context.get(layerContext, Receptionist),
         baseSections: [],

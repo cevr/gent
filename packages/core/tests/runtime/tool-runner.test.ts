@@ -6,7 +6,7 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
+import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
@@ -34,7 +34,7 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -77,7 +77,7 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -126,7 +126,7 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -180,7 +180,7 @@ describe("ToolRunner", () => {
         denyAllPermission,
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))

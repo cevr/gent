@@ -188,7 +188,7 @@ export const makeEventPublisherRouter = (): {
           // Different cwd — resolve per-cwd profile. If profile cache
           // is unavailable or resolution fails, persist the event but
           // skip runtime dispatch (fail closed). Falling back to the
-          // primary cwd's ActorRouter would be silent wrong-runtime
+          // primary cwd's ExtensionRuntime would be silent wrong-runtime
           // delivery.
           if (handle.profileCache === undefined) {
             yield* baseEventStore.broadcast(envelope)

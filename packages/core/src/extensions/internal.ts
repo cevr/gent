@@ -8,7 +8,7 @@
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 export { BuiltinEventSink, type BuiltinEventSinkService } from "../domain/event-publisher.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
-export { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
+export { ExtensionRuntime } from "../runtime/extensions/resource-host/extension-runtime.js"
 export {
   InteractionPendingReader,
   type InteractionPendingReaderService,

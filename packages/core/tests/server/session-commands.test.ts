@@ -15,9 +15,9 @@ import {
   SessionRuntimeStateSchema,
 } from "../../src/runtime/session-runtime"
 import {
-  ActorRouter,
-  type ActorRouterService,
-} from "../../src/runtime/extensions/resource-host/actor-router"
+  ExtensionRuntime,
+  type ExtensionRuntimeService,
+} from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -70,7 +70,7 @@ const failingSessionCommandsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
-    ActorRouter.Test(),
+    ExtensionRuntime.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -108,7 +108,7 @@ const postCommitFailingSessionCommandsLayer = () => {
     eventStoreLayer,
     postCommitFailingPublisherLayer,
     Provider.Debug(),
-    ActorRouter.Test(),
+    ExtensionRuntime.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -175,7 +175,7 @@ const sendFailingSessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    ActorRouter.Test(),
+    ExtensionRuntime.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -195,7 +195,7 @@ const sessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    ActorRouter.Test(),
+    ExtensionRuntime.Test(),
     ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
@@ -244,10 +244,10 @@ const sessionCommandsLayerWithMachineProbe = (
   runtimeRestored?: Array<SessionId>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
-  const machineProbeLayer = Layer.succeed(ActorRouter, {
+  const machineProbeLayer = Layer.succeed(ExtensionRuntime, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-  } satisfies ActorRouterService)
+  } satisfies ExtensionRuntimeService)
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
@@ -270,10 +270,10 @@ const sessionCommandsLayerWithMachineProbe = (
 const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
   const storageLayer = Storage.MemoryWithSql()
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  const machineProbeLayer = Layer.succeed(ActorRouter, {
+  const machineProbeLayer = Layer.succeed(ExtensionRuntime, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-  } satisfies ActorRouterService)
+  } satisfies ExtensionRuntimeService)
   const terminatorRegistrationLayer = Layer.provide(
     SessionCommands.RegisterSessionRuntimeTerminatorLive,
     Layer.mergeAll(runtimeLayer, SessionCommands.SessionRuntimeTerminatorLive),
@@ -309,10 +309,10 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
       }
     }),
   ).pipe(Layer.provide(baseSessionStorage))
-  const machineProbeLayer = Layer.succeed(ActorRouter, {
+  const machineProbeLayer = Layer.succeed(ExtensionRuntime, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-  } satisfies ActorRouterService)
+  } satisfies ExtensionRuntimeService)
   const deps = Layer.mergeAll(
     storageLayer,
     baseSessionStorage,
@@ -380,10 +380,10 @@ const racySessionCommandsLayer = (params: {
     }),
   ).pipe(Layer.provide(baseSubTags))
 
-  const machineProbeLayer = Layer.succeed(ActorRouter, {
+  const machineProbeLayer = Layer.succeed(ExtensionRuntime, {
     send: () => Effect.void,
     execute: () => Effect.die("unexpected machine request"),
-  } satisfies ActorRouterService)
+  } satisfies ExtensionRuntimeService)
   const deps = Layer.mergeAll(
     storageLayer,
     baseSubTags,
@@ -1631,7 +1631,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
@@ -1708,7 +1708,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        ActorRouter.Test(),
+        ExtensionRuntime.Test(),
         ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )

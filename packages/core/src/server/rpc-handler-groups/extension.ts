@@ -145,7 +145,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           message: "Storage unavailable for public extension request dispatch",
         })
       }
-      const { registry, stateRuntime, actorEngine, receptionist, capabilityContext } =
+      const { registry, extensionRuntime, actorEngine, receptionist, capabilityContext } =
         yield* deps.resolveSessionServices(sessionId)
       // Public write request handlers may ask for the wide host surface
       // (`session.*`, `agent.*`, typed extension RPC, etc.). Build the full
@@ -153,7 +153,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
       // dispatch where handlers author against `CapabilityCoreContext`.
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-        extensionStateRuntime: stateRuntime,
+        extensionRuntime: extensionRuntime,
         extensionRegistry: registry,
         actorEngine,
         receptionist,
