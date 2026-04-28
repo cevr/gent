@@ -9,16 +9,21 @@
  * fixtures-local config enables every rule under test as `error` so the test
  * needs no CLI flag plumbing.
  *
+ * To keep the suite fast, the invalid fixtures are linted in one batched
+ * oxlint invocation and the valid fixtures in another. Each per-rule test
+ * filters the shared report by `filename` instead of re-spawning oxlint.
+ *
  * @module
  */
 
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import { resolve as pathResolve } from "node:path"
 
 interface Diagnostic {
   readonly code?: string
   readonly rule_id?: string
   readonly message: string
+  readonly filename?: string
 }
 
 interface OxlintReport {
@@ -35,12 +40,15 @@ interface OxlintRun {
 const FIXTURES_DIR = pathResolve(import.meta.dir, "..", "fixtures")
 const FIXTURES_CONFIG = pathResolve(FIXTURES_DIR, ".oxlintrc.json")
 
-const runOxlint = async (fixtureFile: string): Promise<OxlintRun> => {
-  const proc = Bun.spawn(["bunx", "oxlint", "-c", FIXTURES_CONFIG, "--format=json", fixtureFile], {
-    cwd: FIXTURES_DIR,
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+const runOxlint = async (fixtureFiles: ReadonlyArray<string>): Promise<OxlintRun> => {
+  const proc = Bun.spawn(
+    ["bunx", "oxlint", "-c", FIXTURES_CONFIG, "--format=json", ...fixtureFiles],
+    {
+      cwd: FIXTURES_DIR,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -51,12 +59,15 @@ const runOxlint = async (fixtureFile: string): Promise<OxlintRun> => {
   return { report, exitCode, stderr }
 }
 
-const countViolations = (report: OxlintReport, ruleId: string): number => {
+const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
+  report.diagnostics.filter((d) => d.filename === fixtureFile)
+
+const countViolations = (diagnostics: ReadonlyArray<Diagnostic>, ruleId: string): number => {
   // JSON output writes the rule id as `code: "gent(rule-name)"`. Compare
   // against both that shape and the bare prefixed form for resilience.
   const tail = ruleId.replace(/^gent\//, "")
   const codeForm = `gent(${tail})`
-  return report.diagnostics.filter((d) => {
+  return diagnostics.filter((d) => {
     const code = d.code ?? d.rule_id ?? ""
     return code === codeForm || code === ruleId || code.endsWith(`(${tail})`)
   }).length
@@ -115,36 +126,58 @@ const CASES: ReadonlyArray<RuleCase> = [
   },
 ]
 
-const assertOxlintProcessed = (run: OxlintRun, fixtureFile: string): void => {
-  // Sanity: oxlint must have actually loaded the file. A stderr containing
-  // "Failed to parse" or `number_of_files: 0` indicates a config error or
-  // ignore-pattern oversight, not a passing test.
-  if (run.report.number_of_files === 0) {
+const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
+  // Sanity: oxlint must have actually loaded the file. A diagnostic-less
+  // result on a known-invalid fixture or a `number_of_files` mismatch
+  // indicates a config error or ignore-pattern oversight, not a passing
+  // test.
+  const seen = run.report.diagnostics.some((d) => d.filename === fixtureFile)
+  if (!seen && run.report.number_of_files < CASES.length) {
     throw new Error(`oxlint did not process fixture "${fixtureFile}". stderr:\n${run.stderr}`)
   }
 }
 
 describe("custom lint rules", () => {
+  let invalidRun: OxlintRun
+  let validRun: OxlintRun
+
+  beforeAll(async () => {
+    // One spawn per fixture set instead of N. Each per-rule test then
+    // filters the shared report by filename.
+    ;[invalidRun, validRun] = await Promise.all([
+      runOxlint(CASES.map((c) => c.invalid)),
+      runOxlint(CASES.map((c) => c.valid)),
+    ])
+  })
+
   for (const c of CASES) {
-    test(`${c.rule} fires on invalid fixture`, async () => {
-      const run = await runOxlint(c.invalid)
-      assertOxlintProcessed(run, c.invalid)
-      // oxlint exits non-zero when violations are found
-      expect(run.exitCode).not.toBe(0)
-      const violations = countViolations(run.report, c.rule)
+    test(`${c.rule} fires on invalid fixture`, () => {
+      assertProcessed(invalidRun, c.invalid)
+      // oxlint exits non-zero when ANY fixture has violations — and our
+      // invalid set always does, so we just need to assert the per-file
+      // diagnostics.
+      expect(invalidRun.exitCode).not.toBe(0)
+      const fileDiagnostics = filterByFile(invalidRun.report, c.invalid)
+      const violations = countViolations(fileDiagnostics, c.rule)
       if (c.expectedCount !== undefined) {
         expect(violations).toBe(c.expectedCount)
       } else {
         expect(violations).toBeGreaterThan(0)
       }
-    }, 30_000)
+    })
 
-    test(`${c.rule} does not fire on valid fixture`, async () => {
-      const run = await runOxlint(c.valid)
-      assertOxlintProcessed(run, c.valid)
-      expect(run.exitCode).toBe(0)
-      const violations = countViolations(run.report, c.rule)
+    test(`${c.rule} does not fire on valid fixture`, () => {
+      // The valid fixture set should produce zero diagnostics overall;
+      // exit-code 0 is the global signal. Per-file: zero violations of
+      // this specific rule.
+      const fileDiagnostics = filterByFile(validRun.report, c.valid)
+      const violations = countViolations(fileDiagnostics, c.rule)
       expect(violations).toBe(0)
-    }, 30_000)
+    })
   }
+
+  test("valid fixture set passes oxlint cleanly", () => {
+    expect(validRun.exitCode).toBe(0)
+    expect(validRun.report.diagnostics.length).toBe(0)
+  })
 })
