@@ -253,7 +253,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     })
 
     transport.runtime.cast(
-      transport.client.extension.listCommands({ sessionId: current.sessionId }).pipe(
+      transport.client.extension.listSlashCommands({ sessionId: current.sessionId }).pipe(
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return

@@ -347,16 +347,16 @@ export { AuthProviderInfo, AuthProviderQuery, ListAuthProvidersPayload }
 export { EventEnvelope }
 export { QueueSnapshot }
 
-/** Input shape for transport capability RPCs.
- *  `extensionId` + `capabilityId` route to the registered capability;
+/** Input shape for public extension RPC dispatch.
+ *  `extensionId` + `capabilityId` route to the registered request;
  *  `intent` preserves the read/write fence at the transport boundary.
  *
- *  `branchId` is required because capability requests execute against the
+ *  `branchId` is required because extension RPCs execute against the
  *  live session runtime, not a transport-local stub. Callers must pass the
  *  active branch so the runtime can construct a complete
  *  `CapabilityCoreContext` for the handler.
  */
-export const RequestCapabilityInput = Schema.Struct({
+export const ExtensionRpcRequestInput = Schema.Struct({
   sessionId: SessionId,
   extensionId: ExtensionId,
   capabilityId: Schema.String,
@@ -364,19 +364,19 @@ export const RequestCapabilityInput = Schema.Struct({
   input: Schema.Unknown,
   branchId: BranchId,
 })
-export type RequestCapabilityInput = typeof RequestCapabilityInput.Type
+export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
 
 export const ListExtensionStatusInput = Schema.Struct({
   sessionId: Schema.optional(SessionId),
 })
 export type ListExtensionStatusInput = typeof ListExtensionStatusInput.Type
 
-export const ListExtensionCommandsInput = Schema.Struct({
+export const ListExtensionSlashCommandsInput = Schema.Struct({
   sessionId: SessionId,
 })
-export type ListExtensionCommandsInput = typeof ListExtensionCommandsInput.Type
+export type ListExtensionSlashCommandsInput = typeof ListExtensionSlashCommandsInput.Type
 
-export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
+export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
   /** Routing key (capability id). */
   name: Schema.String,
   /** Author-supplied display name (slash menu / palette). Falls back to

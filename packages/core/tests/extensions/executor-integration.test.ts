@@ -459,7 +459,9 @@ describe("Executor actor lifecycle", () => {
               yield* client.session.create({
                 cwd: "/tmp/gent-executor-public-command",
               })
-            const commands = yield* client.extension.listCommands({ sessionId: createdSessionId })
+            const commands = yield* client.extension.listSlashCommands({
+              sessionId: createdSessionId,
+            })
             expect(commands.map((command) => command.name).sort()).toEqual([
               "executor-start",
               "executor-stop",

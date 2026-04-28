@@ -4,7 +4,7 @@ export {
   BranchInfo,
   MessageInfo,
   SessionSnapshot,
-  CommandInfo,
+  SlashCommandInfo,
   DriverInfo,
   DriverListResult,
   GentConnectionError,

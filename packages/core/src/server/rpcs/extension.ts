@@ -2,16 +2,16 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
 import {
-  CommandInfo,
+  ExtensionRpcRequestInput,
   ExtensionHealthSnapshot,
-  ListExtensionCommandsInput,
-  RequestCapabilityInput,
+  ListExtensionSlashCommandsInput,
   ListExtensionStatusInput,
+  SlashCommandInfo,
 } from "../transport-contract.js"
 
 export class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("request", {
-    payload: RequestCapabilityInput.fields,
+    payload: ExtensionRpcRequestInput.fields,
     success: Schema.Unknown,
     error: GentRpcError,
   }),
@@ -20,9 +20,9 @@ export class ExtensionRpcs extends RpcGroup.make(
     success: ExtensionHealthSnapshot,
     error: GentRpcError,
   }),
-  Rpc.make("listCommands", {
-    payload: ListExtensionCommandsInput.fields,
-    success: Schema.Array(CommandInfo),
+  Rpc.make("listSlashCommands", {
+    payload: ListExtensionSlashCommandsInput.fields,
+    success: Schema.Array(SlashCommandInfo),
     error: GentRpcError,
   }),
 ).prefix("extension.") {}

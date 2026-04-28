@@ -9,11 +9,11 @@ import {
   makeExtensionHostContext,
 } from "../../runtime/make-extension-host-context.js"
 import { buildExtensionHealthSnapshot } from "../extension-health.js"
-import { CommandInfo } from "../transport-contract.js"
+import { SlashCommandInfo } from "../transport-contract.js"
 import type {
-  ListExtensionCommandsInput,
+  ExtensionRpcRequestInput,
+  ListExtensionSlashCommandsInput,
   ListExtensionStatusInput,
-  RequestCapabilityInput,
 } from "../transport-contract.js"
 import type { RpcHandlerDeps } from "./shared.js"
 
@@ -114,7 +114,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     intent,
     input,
     branchId,
-  }: RequestCapabilityInput) =>
+  }: ExtensionRpcRequestInput) =>
     Effect.gen(function* () {
       const scope = yield* resolveExtensionSession(deps, {
         extensionId,
@@ -185,12 +185,12 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         : request
     }),
 
-  "extension.listCommands": ({ sessionId }: ListExtensionCommandsInput) =>
+  "extension.listSlashCommands": ({ sessionId }: ListExtensionSlashCommandsInput) =>
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionServices(sessionId)
       return listSlashCommands(registry.getResolved().extensions, { publicOnly: true }).map(
         (command) =>
-          new CommandInfo({
+          new SlashCommandInfo({
             name: command.name,
             displayName: command.displayName,
             description: command.description,

@@ -89,7 +89,7 @@ export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient 
     extension: {
       request: flat["extension.request"],
       listStatus: flat["extension.listStatus"],
-      listCommands: flat["extension.listCommands"],
+      listSlashCommands: flat["extension.listSlashCommands"],
     },
     interaction: {
       respondInteraction: flat["interaction.respondInteraction"],

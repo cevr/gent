@@ -66,7 +66,7 @@ const buildRuntime = (
               if (opts.requestDeferred === undefined) return Effect.void
               return waitForDeferred(opts.requestDeferred)
             },
-            listCommands: () => Effect.succeed([]),
+            listSlashCommands: () => Effect.succeed([]),
           },
         } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
         runtime: {

@@ -22,7 +22,7 @@ import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
-import { CommandInfo } from "@gent/core/server/transport-contract"
+import { SlashCommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
@@ -138,7 +138,7 @@ describe("extension command RPCs", () => {
       ],
     },
   })
-  it.live("listCommands returns registered commands", () =>
+  it.live("listSlashCommands returns registered commands", () =>
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
@@ -150,7 +150,7 @@ describe("extension command RPCs", () => {
       }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>
     }),
   )
-  it.live("RPC listCommands + request round-trip through the transport boundary", () =>
+  it.live("RPC listSlashCommands + request round-trip through the transport boundary", () =>
     Effect.gen(function* () {
       invoked.length = 0
       let createdSessionId = ""
@@ -166,8 +166,8 @@ describe("extension command RPCs", () => {
               cwd: "/tmp/gent-extension-request-session",
             })
             createdSessionId = sessionId
-            const commands = yield* client.extension.listCommands({ sessionId })
-            expect(commands[0]).toBeInstanceOf(CommandInfo)
+            const commands = yield* client.extension.listSlashCommands({ sessionId })
+            expect(commands[0]).toBeInstanceOf(SlashCommandInfo)
             expect(commands.map((command) => command.name)).toEqual(["greet"])
             const greet = commands.find((command) => command.name === "greet")
             expect(greet?.description).toBe("Say hello")
@@ -502,7 +502,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC listCommands omits local slash actions and lists slash requests", () =>
+  it.live("RPC listSlashCommands omits local slash actions and lists slash requests", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-filter")
       const ext: LoadedExtension = {
@@ -541,7 +541,7 @@ describe("extension command RPCs", () => {
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-          const commands = yield* client.extension.listCommands({ sessionId })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
         }).pipe(Effect.timeout("4 seconds")),
       )
@@ -597,7 +597,7 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-          const commands = yield* client.extension.listCommands({ sessionId })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
           const result = yield* client.extension
             .request({
@@ -614,7 +614,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC listCommands omits lower-scope slash request shadowed by project request", () =>
+  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-rpc-shadow")
       const builtinExt: LoadedExtension = {
@@ -663,13 +663,13 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-          const commands = yield* client.extension.listCommands({ sessionId })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
   )
-  it.live("RPC listCommands omits lower-scope slash request shadowed by project tool", () =>
+  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project tool", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-tool-shadow")
       const builtinExt: LoadedExtension = {
@@ -716,13 +716,13 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-          const commands = yield* client.extension.listCommands({ sessionId })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
   )
-  it.live("RPC listCommands resolves commands from the requested session profile", () =>
+  it.live("RPC listSlashCommands resolves commands from the requested session profile", () =>
     Effect.gen(function* () {
       const alphaCwd = "/tmp/gent-alpha-profile"
       const betaCwd = "/tmp/gent-beta-profile"
@@ -750,10 +750,10 @@ describe("extension command RPCs", () => {
             )
             const alpha = yield* client.session.create({ cwd: alphaCwd })
             const beta = yield* client.session.create({ cwd: betaCwd })
-            const alphaCommands = yield* client.extension.listCommands({
+            const alphaCommands = yield* client.extension.listSlashCommands({
               sessionId: alpha.sessionId,
             })
-            const betaCommands = yield* client.extension.listCommands({
+            const betaCommands = yield* client.extension.listSlashCommands({
               sessionId: beta.sessionId,
             })
             expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])

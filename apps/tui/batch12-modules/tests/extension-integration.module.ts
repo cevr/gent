@@ -359,7 +359,7 @@ export default defineClientExtension("@test/b", {
               extension: {
                 ask: () => Effect.void,
                 request: () => Effect.void,
-                listCommands: () => Effect.succeed([]),
+                listSlashCommands: () => Effect.succeed([]),
               },
             } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
             runtime: {
