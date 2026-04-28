@@ -938,10 +938,6 @@ const plugin: Plugin = {
             { finalizers: 0, asyncs: 9, awaits: 20 },
           ],
           [
-            "packages/core/tests/extensions/exec-tools/bash.test.ts",
-            { finalizers: 0, asyncs: 5, awaits: 6 },
-          ],
-          [
             "packages/core/tests/extensions/executor-integration.test.ts",
             { finalizers: 0, asyncs: 7, awaits: 8 },
           ],

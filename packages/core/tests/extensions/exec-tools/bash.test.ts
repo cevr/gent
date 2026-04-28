@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Path } from "effect"
+import { describe, test, it, expect } from "effect-bun-test"
+import { Deferred, Effect, Layer, Path } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import {
   splitCdCommand,
@@ -129,66 +129,62 @@ const stubCtx: ToolContext = {
 }
 
 describe("BashTool execution", () => {
-  test("runs a command and returns stdout", async () => {
-    const result = await Effect.runPromise(
-      provideBun(BashTool.effect({ command: "echo hello" }, stubCtx)),
-    )
-    expect(result.stdout.trim()).toBe("hello")
-    expect(result.exitCode).toBe(0)
-  })
+  it.live("runs a command and returns stdout", () =>
+    Effect.gen(function* () {
+      const result = yield* provideBun(BashTool.effect({ command: "echo hello" }, stubCtx))
 
-  test("captures nonzero exit code", async () => {
-    const result = await Effect.runPromise(
-      provideBun(BashTool.effect({ command: "exit 2" }, stubCtx)),
-    )
-    expect(result.exitCode).toBe(2)
-  })
+      expect(result.stdout.trim()).toBe("hello")
+      expect(result.exitCode).toBe(0)
+    }),
+  )
 
-  test("respects cwd parameter", async () => {
-    const result = await Effect.runPromise(
-      provideBun(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx)),
-    )
-    // /tmp may resolve to /private/tmp on macOS
-    expect(result.stdout.trim()).toMatch(/\/tmp$/)
-    expect(result.exitCode).toBe(0)
-  })
+  it.live("captures nonzero exit code", () =>
+    Effect.gen(function* () {
+      const result = yield* provideBun(BashTool.effect({ command: "exit 2" }, stubCtx))
 
-  test("splits cd + command into cwd and executes", async () => {
-    const result = await Effect.runPromise(
-      provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx)),
-    )
-    expect(result.stdout.trim()).toMatch(/\/tmp$/)
-    expect(result.exitCode).toBe(0)
-  })
+      expect(result.exitCode).toBe(2)
+    }),
+  )
 
-  test("background mode queues a follow-up on completion", async () => {
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    let resolveSent: ((value: { content: string }) => void) | undefined
-    const sent = new Promise<{ content: string }>((resolve, reject) => {
-      resolveSent = resolve
-      timeout = setTimeout(() => reject(new Error("background notification timed out")), 2_000)
-    })
-    const ctx: ToolContext = {
-      ...stubCtx,
-      session: {
-        ...stubCtx.session,
-        queueFollowUp: (params) =>
-          Effect.sync(() => {
-            if (timeout !== undefined) clearTimeout(timeout)
-            resolveSent?.(params)
-          }),
-      },
-    }
-    const result = await Effect.runPromise(
-      provideBun(
+  it.live("respects cwd parameter", () =>
+    Effect.gen(function* () {
+      const result = yield* provideBun(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx))
+
+      // /tmp may resolve to /private/tmp on macOS
+      expect(result.stdout.trim()).toMatch(/\/tmp$/)
+      expect(result.exitCode).toBe(0)
+    }),
+  )
+
+  it.live("splits cd + command into cwd and executes", () =>
+    Effect.gen(function* () {
+      const result = yield* provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
+
+      expect(result.stdout.trim()).toMatch(/\/tmp$/)
+      expect(result.exitCode).toBe(0)
+    }),
+  )
+
+  it.live("background mode queues a follow-up on completion", () =>
+    Effect.gen(function* () {
+      const sent = yield* Deferred.make<{ content: string }>()
+      const ctx: ToolContext = {
+        ...stubCtx,
+        session: {
+          ...stubCtx.session,
+          queueFollowUp: (params) => Deferred.succeed(sent, params),
+        },
+      }
+      const result = yield* provideBun(
         BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
-      ),
-    )
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("Command started in background")
+      )
 
-    const message = await sent
-    expect(message.content).toContain("Background command completed (exit code 0)")
-    expect(message.content).toContain("$ printf background-finished")
-  })
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain("Command started in background")
+
+      const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+      expect(message.content).toContain("Background command completed (exit code 0)")
+      expect(message.content).toContain("$ printf background-finished")
+    }),
+  )
 })
