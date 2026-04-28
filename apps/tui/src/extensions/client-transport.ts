@@ -33,11 +33,6 @@ import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { CapabilityRef } from "@gent/core/extensions/api"
-import {
-  type AnyExtensionRequestMessage,
-  type ExtractExtensionReply,
-  getExtensionReplyDecoder,
-} from "@gent/core/domain/extension-protocol.js"
 
 export interface ClientTransportShape {
   readonly client: GentNamespacedClient
@@ -68,19 +63,8 @@ export const makeClientTransportLayer = (
   payload: ClientTransportShape,
 ): Layer.Layer<ClientTransport> => Layer.succeed(ClientTransport, payload)
 
-// ── ask helper ────────────────────────────────────────────────────────────
+// ── request helper ────────────────────────────────────────────────────────
 
-/**
- * Effect-typed mirror of the legacy `ctx.ask(message)`. Sends to the active
- * session captured by `ClientTransport.currentSession()`, decodes the reply
- * via `getExtensionReplyDecoder`, and fails with a tagged error if no
- * session is active.
- *
- * The legacy `ctx.ask` returns a Promise and throws when there's no active
- * session. The Effect-typed surface fails with a typed `NoActiveSessionError`
- * instead — autocomplete `items` callers can `Effect.catchTag(...)` or
- * surface the error to the user.
- */
 export class NoActiveSessionError extends Schema.TaggedErrorClass<NoActiveSessionError>()(
   "NoActiveSessionError",
   {},
@@ -114,85 +98,6 @@ const currentOrActiveSession = (
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
   const session = activeSession ?? transport.currentSession()
   return session === undefined ? Effect.fail(new NoActiveSessionError()) : Effect.succeed(session)
-}
-
-const askExtensionAt = <M extends AnyExtensionRequestMessage>(
-  transport: ClientTransportShape,
-  message: M,
-  activeSession?: ActiveExtensionSession,
-): Effect.Effect<
-  ExtractExtensionReply<M>,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  never
-> =>
-  Effect.gen(function* () {
-    const session = yield* currentOrActiveSession(transport, activeSession)
-    const reply = yield* transport.client.extension
-      .ask({
-        sessionId: session.sessionId,
-        message,
-        branchId: session.branchId,
-      })
-      .pipe(
-        Effect.catchEager((cause) =>
-          Effect.fail(
-            new ClientTransportRequestError({
-              extensionId: message.extensionId,
-              tag: message._tag,
-              message: `request failed: ${String(cause)}`,
-              cause,
-            }),
-          ),
-        ),
-      )
-    const decoder = getExtensionReplyDecoder(message)
-    if (decoder === undefined) {
-      return yield* new ClientTransportReplyDecodeError({
-        extensionId: message.extensionId,
-        tag: message._tag,
-        message: "missing reply decoder for request message",
-        cause: message,
-      })
-    }
-    return yield* Schema.decodeUnknownEffect(decoder)(reply).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ClientTransportReplyDecodeError({
-            extensionId: message.extensionId,
-            tag: message._tag,
-            message: `reply decode failed: ${String(cause)}`,
-            cause,
-          }),
-      ),
-    )
-  })
-
-export function askExtension<M extends AnyExtensionRequestMessage>(
-  message: M,
-): Effect.Effect<
-  ExtractExtensionReply<M>,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  ClientTransport
->
-export function askExtension<M extends AnyExtensionRequestMessage>(
-  message: M,
-  transport: ClientTransportShape,
-  activeSession?: ActiveExtensionSession,
-): Effect.Effect<
-  ExtractExtensionReply<M>,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  never
->
-export function askExtension<M extends AnyExtensionRequestMessage>(
-  message: M,
-  transport?: ClientTransportShape,
-  activeSession?: ActiveExtensionSession,
-) {
-  if (transport !== undefined) return askExtensionAt(transport, message, activeSession)
-  return Effect.gen(function* () {
-    const service = yield* ClientTransport
-    return yield* askExtensionAt(service, message)
-  })
 }
 
 const requestExtensionAt = <Input, Output>(

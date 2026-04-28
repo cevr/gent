@@ -17,7 +17,6 @@ import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import type {
   CapabilityError,
@@ -46,7 +45,6 @@ const mockRunnerSuccess: AgentRunner = {
 }
 
 const makeCtx = Effect.gen(function* () {
-  const runtime = yield* ActorRouter
   const registry = yield* ExtensionRegistry
   const ctxBase = {
     sessionId: SessionId.make("s1"),
@@ -85,10 +83,6 @@ const makeCtx = Effect.gen(function* () {
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
     extension: {
-      send: (message, branchId) =>
-        runtime.send(SessionId.make("s1"), message, branchId ?? BranchId.make("b1")),
-      ask: (message, branchId) =>
-        runtime.execute(SessionId.make("s1"), message, branchId ?? BranchId.make("b1")),
       request,
     },
   })

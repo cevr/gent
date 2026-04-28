@@ -13,7 +13,6 @@ import type {
 import {
   ExtensionProtocolError,
   isExtensionRequestDefinition,
-  listExtensionProtocolDefinitions,
 } from "../../../domain/extension-protocol.js"
 
 /**
@@ -184,22 +183,6 @@ const collectActorRoutes = (
 ): Map<string, ActorBackedRoute> => {
   const actorRoutes = new Map<string, ActorBackedRoute>()
   for (const ext of extensions) {
-    const explicit = ext.contributions.actorRoute
-    if (explicit !== undefined) {
-      const existing = actorRoutes.get(ext.manifest.id)
-      if (
-        existing === undefined ||
-        SCOPE_PRECEDENCE[ext.scope] > SCOPE_PRECEDENCE[existing.scope]
-      ) {
-        actorRoutes.set(ext.manifest.id, {
-          extensionId: ext.manifest.id,
-          scope: ext.scope,
-          serviceKey: explicit,
-        })
-      }
-      continue
-    }
-
     const behaviors = ext.contributions.actors ?? []
     for (const b of behaviors) {
       if (b.serviceKey === undefined) continue
@@ -230,24 +213,10 @@ const collectActorRoutes = (
 export const collectExtensionProtocol = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CollectedExtensionProtocol => {
-  const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
-  for (const ext of extensions) {
-    const protocols = ext.contributions.protocols
-    if (protocols === undefined) continue
-    const allDefs = listExtensionProtocolDefinitions(protocols)
-    for (const definition of allDefs) {
-      const byTag = protocolMap.get(definition.extensionId) ?? new Map()
-      if (!byTag.has(definition._tag)) {
-        byTag.set(definition._tag, definition)
-        protocolMap.set(definition.extensionId, byTag)
-      }
-    }
-  }
-
   return {
     actorRoutes: collectActorRoutes(extensions),
     protocols: new MachineProtocol({
-      get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),
+      get: () => undefined,
     }),
   }
 }

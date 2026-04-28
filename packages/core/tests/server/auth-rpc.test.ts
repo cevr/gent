@@ -29,7 +29,6 @@ import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, SessionId } from "@gent/core/domain/ids"
-
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
   AuthStore.of({
@@ -40,7 +39,6 @@ const failingAuthStoreLayer = Layer.succeed(
     listInfo: () => Effect.succeed({}),
   }),
 )
-
 const failingReadAuthStoreLayer = Layer.succeed(
   AuthStorage,
   AuthStorage.of({
@@ -50,7 +48,6 @@ const failingReadAuthStoreLayer = Layer.succeed(
     list: () => Effect.succeed([]),
   }),
 ).pipe((storageLayer) => Layer.provide(AuthStore.Live, storageLayer))
-
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()
   const oauthProvider: ModelDriverContribution = {
@@ -99,7 +96,6 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
     },
   ]
 }
-
 describe("auth.listProviders", () => {
   it.live("returns providers without sessionId (back-compat with launch-cwd default)", () =>
     Effect.scoped(
@@ -111,7 +107,6 @@ describe("auth.listProviders", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-
   it.live(
     "driver override written at session cwd is honored by auth.listProviders(sessionId) through ConfigService.Live",
     () =>
@@ -125,7 +120,6 @@ describe("auth.listProviders", () => {
           const launch = mkdtempSync(join(tmpdir(), "gent-authrpc-launch-"))
           const sessionCwd = mkdtempSync(join(tmpdir(), "gent-authrpc-session-"))
           const home = mkdtempSync(join(tmpdir(), "gent-authrpc-home-"))
-
           // Seed the session cwd's project config with a driver override
           // for `cowork`. The id points at the acp-claude-code external
           // driver that the ACP extension registers under e2ePreset.
@@ -136,7 +130,6 @@ describe("auth.listProviders", () => {
               driverOverrides: { cowork: { _tag: "external", id: "acp-claude-code" } },
             }),
           )
-
           const runtimePlatformLive = RuntimePlatform.Live({
             cwd: launch,
             home,
@@ -145,7 +138,6 @@ describe("auth.listProviders", () => {
           const configServiceLive = ConfigService.Live.pipe(
             Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
           )
-
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
@@ -154,34 +146,37 @@ describe("auth.listProviders", () => {
               configServiceLayer: configServiceLive,
             }),
           )
-
-          try {
-            // Launch cwd has no override → cowork (anthropic-modeled)
-            // requires anthropic. Proves the override is NOT in user config.
-            const launchSession = yield* client.session.create({ cwd: launch })
-            const launchList = yield* client.auth.listProviders({
-              agentName: AgentName.make("cowork"),
-              sessionId: launchSession.sessionId,
-            })
-            expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
-
-            // Session cwd has the project override → anthropic is NOT
-            // required because the agent is externally routed.
-            const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
-            const overriddenList = yield* client.auth.listProviders({
-              agentName: AgentName.make("cowork"),
-              sessionId: overriddenSession.sessionId,
-            })
-            expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
-          } finally {
-            rmSync(launch, { recursive: true, force: true })
-            rmSync(sessionCwd, { recursive: true, force: true })
-            rmSync(home, { recursive: true, force: true })
-          }
+          yield* Effect.acquireUseRelease(
+            Effect.void,
+            () =>
+              Effect.gen(function* () {
+                // Launch cwd has no override → cowork (anthropic-modeled)
+                // requires anthropic. Proves the override is NOT in user config.
+                const launchSession = yield* client.session.create({ cwd: launch })
+                const launchList = yield* client.auth.listProviders({
+                  agentName: AgentName.make("cowork"),
+                  sessionId: launchSession.sessionId,
+                })
+                expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
+                // Session cwd has the project override → anthropic is NOT
+                // required because the agent is externally routed.
+                const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
+                const overriddenList = yield* client.auth.listProviders({
+                  agentName: AgentName.make("cowork"),
+                  sessionId: overriddenSession.sessionId,
+                })
+                expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
+              }),
+            () =>
+              Effect.sync(() => {
+                rmSync(launch, { recursive: true, force: true })
+                rmSync(sessionCwd, { recursive: true, force: true })
+                rmSync(home, { recursive: true, force: true })
+              }),
+          )
         }).pipe(Effect.timeout("4 seconds")),
       ),
   )
-
   it.live(
     "legacy RPC path: driver.set followed by no-sessionId listProviders honors override",
     () =>
@@ -204,16 +199,13 @@ describe("auth.listProviders", () => {
         }).pipe(Effect.timeout("4 seconds")),
       ),
   )
-
   it.live("rejects auth provider listing for a deleted session", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
-
         const session = yield* client.session.create({})
         yield* client.session.delete({ sessionId: session.sessionId })
-
         const exit = yield* Effect.exit(
           client.auth.listProviders({
             agentName: AgentName.make("cowork"),
@@ -228,7 +220,6 @@ describe("auth.listProviders", () => {
     ),
   )
 })
-
 describe("auth persistence RPC failures", () => {
   it.live("auth.listProviders surfaces auth read failures", () =>
     Effect.scoped(
@@ -241,7 +232,6 @@ describe("auth persistence RPC failures", () => {
             authStoreLayer: failingReadAuthStoreLayer,
           }),
         )
-
         const exit = yield* Effect.exit(client.auth.listProviders({}))
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
@@ -250,7 +240,6 @@ describe("auth persistence RPC failures", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-
   it.live("auth.setKey surfaces write failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -262,7 +251,6 @@ describe("auth persistence RPC failures", () => {
             authStoreLayer: failingAuthStoreLayer,
           }),
         )
-
         const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
@@ -271,7 +259,6 @@ describe("auth persistence RPC failures", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-
   it.live("auth.deleteKey surfaces delete failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -283,7 +270,6 @@ describe("auth persistence RPC failures", () => {
             authStoreLayer: failingAuthStoreLayer,
           }),
         )
-
         const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
@@ -292,7 +278,6 @@ describe("auth persistence RPC failures", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-
   it.live("auth.authorize surfaces credentials persisted during authorize", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -305,7 +290,6 @@ describe("auth persistence RPC failures", () => {
             authStoreLayer: failingAuthStoreLayer,
           }),
         )
-
         const exit = yield* Effect.exit(
           client.auth.authorize({
             sessionId: SessionId.make("auth-rpc-session"),
@@ -320,7 +304,6 @@ describe("auth persistence RPC failures", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-
   it.live("auth.callback surfaces callback credential persistence failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -333,14 +316,12 @@ describe("auth persistence RPC failures", () => {
             authStoreLayer: failingAuthStoreLayer,
           }),
         )
-
         const authorization = yield* client.auth.authorize({
           sessionId: SessionId.make("auth-rpc-session"),
           provider: "persisting-oauth",
           method: 0,
         })
         if (authorization === null) return yield* Effect.die("auth setup failed")
-
         const exit = yield* Effect.exit(
           client.auth.callback({
             sessionId: SessionId.make("auth-rpc-session"),

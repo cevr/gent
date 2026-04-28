@@ -6,7 +6,7 @@
  * for non-interactive ones. Test pins both branches against the
  * runtime slot compiler.
  */
-import { describe, test, expect } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/extensions/session-tools"
 import { Agents } from "@gent/extensions/all-agents"
@@ -15,7 +15,6 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { AgentName } from "@gent/core/domain/agent"
-
 const stubCtx = {} as unknown as ExtensionHostContext
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),
@@ -30,48 +29,42 @@ const stubProjectionCtx = {
     agentName: AgentName.make("cowork"),
   },
 }
-
 describe("SessionToolsExtension", () => {
-  test("injects naming instruction for interactive prompts", async () => {
-    const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
-    const compiled = compileExtensionReactions([
-      {
-        manifest: SessionToolsExtension.manifest,
-        scope: "builtin",
-        sourcePath: "test",
-        contributions,
-      },
-    ])
-
-    const prompt = await Effect.runPromise(
-      compiled.resolveSystemPrompt(
+  it.live("injects naming instruction for interactive prompts", () =>
+    Effect.gen(function* () {
+      const contributions = yield* SessionToolsExtension.setup(testSetupCtx())
+      const compiled = compileExtensionReactions([
+        {
+          manifest: SessionToolsExtension.manifest,
+          scope: "builtin",
+          sourcePath: "test",
+          contributions,
+        },
+      ])
+      const prompt = yield* compiled.resolveSystemPrompt(
         { basePrompt: "base", agent: Agents["cowork"]!, interactive: true },
         { projection: stubProjectionCtx, host: stubCtx },
-      ),
-    )
-
-    expect(prompt).toContain("## Session naming")
-    expect(prompt.startsWith("base")).toBe(true)
-  })
-
-  test("non-interactive prompts pass through unchanged", async () => {
-    const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
-    const compiled = compileExtensionReactions([
-      {
-        manifest: SessionToolsExtension.manifest,
-        scope: "builtin",
-        sourcePath: "test",
-        contributions,
-      },
-    ])
-
-    const prompt = await Effect.runPromise(
-      compiled.resolveSystemPrompt(
+      )
+      expect(prompt).toContain("## Session naming")
+      expect(prompt.startsWith("base")).toBe(true)
+    }),
+  )
+  it.live("non-interactive prompts pass through unchanged", () =>
+    Effect.gen(function* () {
+      const contributions = yield* SessionToolsExtension.setup(testSetupCtx())
+      const compiled = compileExtensionReactions([
+        {
+          manifest: SessionToolsExtension.manifest,
+          scope: "builtin",
+          sourcePath: "test",
+          contributions,
+        },
+      ])
+      const prompt = yield* compiled.resolveSystemPrompt(
         { basePrompt: "base", agent: Agents["cowork"]!, interactive: false },
         { projection: stubProjectionCtx, host: stubCtx },
-      ),
-    )
-
-    expect(prompt).toBe("base")
-  })
+      )
+      expect(prompt).toBe("base")
+    }),
+  )
 })

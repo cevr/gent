@@ -173,17 +173,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         home: workspace.home,
       }),
       makeClientShellLayer({
-        send: (message) => {
-          const current = session.session()
-          if (current === null) return
-          transport.runtime.cast(
-            transport.client.extension.send({
-              sessionId: current.sessionId,
-              message,
-              branchId: current.branchId,
-            }),
-          )
-        },
         sendMessage: (content) => actions.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),

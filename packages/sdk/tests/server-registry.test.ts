@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+import { afterEach, beforeEach, test } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
@@ -42,32 +43,30 @@ const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
   })
 
 describe("Build Fingerprint", () => {
-  test("computeLocalFingerprint returns a non-empty string", async () => {
-    const fp = await Effect.runPromise(
-      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
-    )
-    expect(fp).toBeTruthy()
-    expect(typeof fp).toBe("string")
-    expect(fp.length).toBeGreaterThan(0)
-  })
+  it.live("computeLocalFingerprint returns a non-empty string", () =>
+    Effect.gen(function* () {
+      const fp = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
+      expect(fp).toBeTruthy()
+      expect(typeof fp).toBe("string")
+      expect(fp.length).toBeGreaterThan(0)
+    }),
+  )
 
-  test("computeLocalFingerprint is stable across calls", async () => {
-    const fp1 = await Effect.runPromise(
-      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
-    )
-    const fp2 = await Effect.runPromise(
-      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
-    )
-    expect(fp1).toBe(fp2)
-  })
+  it.live("computeLocalFingerprint is stable across calls", () =>
+    Effect.gen(function* () {
+      const fp1 = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
+      const fp2 = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
+      expect(fp1).toBe(fp2)
+    }),
+  )
 
-  test("resolveBuildFingerprint resolves to a string", async () => {
-    const fp = await Effect.runPromise(
-      resolveBuildFingerprint.pipe(Effect.provide(BunServices.layer)),
-    )
-    expect(typeof fp).toBe("string")
-    expect(fp.length).toBeGreaterThan(0)
-  })
+  it.live("resolveBuildFingerprint resolves to a string", () =>
+    Effect.gen(function* () {
+      const fp = yield* resolveBuildFingerprint.pipe(Effect.provide(BunServices.layer))
+      expect(typeof fp).toBe("string")
+      expect(fp.length).toBeGreaterThan(0)
+    }),
+  )
 })
 
 describe("Server Registry", () => {
@@ -267,64 +266,70 @@ describe("Registry Process Ownership", () => {
     expect(canSignalRegistryEntry(makeEntry({ pid: 99999999 }))).toBe(false)
   })
 
-  test("PID-reused stale registry entries are removed without SIGTERM", async () => {
-    const dbPath = join(home, "pid-reuse.db")
-    const entry = makeEntry({
-      pid: process.pid,
-      dbPath,
-      buildFingerprint: "stale-fingerprint",
-    })
-    const fakeOwner = Bun.serve({
-      port: 0,
-      fetch: (request) => {
-        if (new URL(request.url).pathname !== "/_gent/identity") {
-          return new Response("not found", { status: 404 })
-        }
-        return Response.json({
-          serverId: entry.serverId,
-          pid: 99999999,
-          hostname: entry.hostname,
-          dbPath: entry.dbPath,
-          buildFingerprint: entry.buildFingerprint,
-        })
-      },
-    })
-    const fakeOwnerUrl = new URL(fakeOwner.url)
-    const entryWithEndpoint = new ServerRegistryEntry({
-      ...entry,
-      rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
-    })
-    writeRegistryEntry(home, entryWithEndpoint)
-
-    const signals: Array<{ pid: number; signal: string | number | undefined }> = []
-    const originalKill = Reflect.get(process, "kill") as typeof process.kill
-    const replacement = ((pid: number, signal?: string | number) => {
-      if (signal === "SIGTERM") {
-        signals.push({ pid, signal })
-        return true
-      }
-      return originalKill(pid, signal)
-    }) as typeof process.kill
-
-    process.kill = replacement
-    try {
-      await Effect.runPromise(
-        Effect.scoped(
-          Gent.server({
-            cwd: process.cwd(),
-            state: Gent.state.sqlite({ home, dbPath }),
-            provider: Gent.provider.mock(),
+  it.scoped("PID-reused stale registry entries are removed without SIGTERM", () =>
+    Effect.gen(function* () {
+      const dbPath = join(home, "pid-reuse.db")
+      const entry = makeEntry({
+        pid: process.pid,
+        dbPath,
+        buildFingerprint: "stale-fingerprint",
+      })
+      const fakeOwner = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            port: 0,
+            fetch: (request) => {
+              if (new URL(request.url).pathname !== "/_gent/identity") {
+                return new Response("not found", { status: 404 })
+              }
+              return Response.json({
+                serverId: entry.serverId,
+                pid: 99999999,
+                hostname: entry.hostname,
+                dbPath: entry.dbPath,
+                buildFingerprint: entry.buildFingerprint,
+              })
+            },
           }),
         ),
+        (server) => Effect.sync(() => server.stop(true)),
       )
-    } finally {
-      process.kill = originalKill
-      fakeOwner.stop(true)
-    }
+      const fakeOwnerUrl = new URL(fakeOwner.url)
+      const entryWithEndpoint = new ServerRegistryEntry({
+        ...entry,
+        rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
+      })
+      writeRegistryEntry(home, entryWithEndpoint)
 
-    expect(signals).toEqual([])
-    expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entryWithEndpoint.serverId)
-  })
+      const signals: Array<{ pid: number; signal: string | number | undefined }> = []
+      const originalKill = Reflect.get(process, "kill") as typeof process.kill
+      const replacement = ((pid: number, signal?: string | number) => {
+        if (signal === "SIGTERM") {
+          signals.push({ pid, signal })
+          return true
+        }
+        return originalKill(pid, signal)
+      }) as typeof process.kill
+
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          process.kill = replacement
+        }),
+        () =>
+          Effect.sync(() => {
+            process.kill = originalKill
+          }),
+      )
+      yield* Gent.server({
+        cwd: process.cwd(),
+        state: Gent.state.sqlite({ home, dbPath }),
+        provider: Gent.provider.mock(),
+      })
+
+      expect(signals).toEqual([])
+      expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entryWithEndpoint.serverId)
+    }),
+  )
 })
 
 describe("isPidAlive", () => {
@@ -368,10 +373,10 @@ describe("Cross-Process Lock", () => {
     expect(acquireLock(home, "/tmp/b.db")).toBe(true)
   })
 
-  test("withLock acquires and releases", async () => {
-    let inside = false
-    await Effect.runPromise(
-      withLock(
+  it.live("withLock acquires and releases", () =>
+    Effect.gen(function* () {
+      let inside = false
+      yield* withLock(
         home,
         "/tmp/test.db",
         Effect.sync(() => {
@@ -379,25 +384,29 @@ describe("Cross-Process Lock", () => {
           // Lock should be held during body
           expect(acquireLock(home, "/tmp/test.db")).toBe(false)
         }),
-      ),
-    )
-    expect(inside).toBe(true)
-    // Lock should be released after body
-    expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-  })
+      )
+      expect(inside).toBe(true)
+      // Lock should be released after body
+      expect(acquireLock(home, "/tmp/test.db")).toBe(true)
+    }),
+  )
 
-  test("withLock releases on error", async () => {
-    const result = await Effect.runPromiseExit(withLock(home, "/tmp/test.db", Effect.fail("boom")))
-    expect(result._tag).toBe("Failure")
-    // Lock should still be released
-    expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-  })
+  it.live("withLock releases on error", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.fail("boom")))
+      expect(result._tag).toBe("Failure")
+      // Lock should still be released
+      expect(acquireLock(home, "/tmp/test.db")).toBe(true)
+    }),
+  )
 
-  test("withLock fails with LockAcquireError when lock is held", async () => {
-    acquireLock(home, "/tmp/test.db")
-    const result = await Effect.runPromiseExit(withLock(home, "/tmp/test.db", Effect.succeed("ok")))
-    expect(result._tag).toBe("Failure")
-  })
+  it.live("withLock fails with LockAcquireError when lock is held", () =>
+    Effect.gen(function* () {
+      acquireLock(home, "/tmp/test.db")
+      const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.succeed("ok")))
+      expect(result._tag).toBe("Failure")
+    }),
+  )
 
   test("stale lock from dead PID is cleaned up", () => {
     // Manually create a lock with a dead PID
@@ -429,75 +438,75 @@ describe("Cross-Process Lock", () => {
 })
 
 describe("signalIfIdentityOwned", () => {
-  test("skips when PID is not alive (PID-reuse guard)", async () => {
-    const entry = makeEntry({ pid: 99999999 })
-    let probeCalled = false
-    const result = await Effect.runPromise(
-      signalIfIdentityOwned(entry, () => {
+  it.live("skips when PID is not alive (PID-reuse guard)", () =>
+    Effect.gen(function* () {
+      const entry = makeEntry({ pid: 99999999 })
+      let probeCalled = false
+      const result = yield* signalIfIdentityOwned(entry, () => {
         probeCalled = true
         return Effect.succeed(true)
-      }),
-    )
-    expect(result).toBe("skipped")
-    expect(probeCalled).toBe(false)
-  })
+      })
+      expect(result).toBe("skipped")
+      expect(probeCalled).toBe(false)
+    }),
+  )
 
-  test("skips when probe says identity does not match", async () => {
-    // Spawn a subprocess that outlives the test window so PID stays alive
-    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
-    try {
-      const entry = makeEntry({ pid: proc.pid })
-      const result = await Effect.runPromise(
-        signalIfIdentityOwned(entry, () => Effect.succeed(false)),
+  it.scoped("skips when probe says identity does not match", () =>
+    Effect.gen(function* () {
+      // Spawn a subprocess that outlives the test window so PID stays alive
+      const proc = yield* Effect.acquireRelease(
+        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
+        (subprocess) => Effect.sync(() => subprocess.kill()),
       )
+      const entry = makeEntry({ pid: proc.pid })
+      const result = yield* signalIfIdentityOwned(entry, () => Effect.succeed(false))
       expect(result).toBe("skipped")
       // Subprocess should still be alive — we didn't signal it
       expect(isPidAlive(proc.pid)).toBe(true)
-    } finally {
-      proc.kill()
-    }
-  })
+    }),
+  )
 
-  test("skips on cross-host entry", async () => {
-    const entry = makeEntry({ hostname: "definitely-not-this-host" })
-    let probeCalled = false
-    const result = await Effect.runPromise(
-      signalIfIdentityOwned(entry, () => {
+  it.live("skips on cross-host entry", () =>
+    Effect.gen(function* () {
+      const entry = makeEntry({ hostname: "definitely-not-this-host" })
+      let probeCalled = false
+      const result = yield* signalIfIdentityOwned(entry, () => {
         probeCalled = true
         return Effect.succeed(true)
-      }),
-    )
-    expect(result).toBe("skipped")
-    expect(probeCalled).toBe(false)
-  })
+      })
+      expect(result).toBe("skipped")
+      expect(probeCalled).toBe(false)
+    }),
+  )
 
-  test("signals when probe confirms identity", async () => {
-    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
-    try {
-      const entry = makeEntry({ pid: proc.pid })
-      const result = await Effect.runPromise(
-        signalIfIdentityOwned(entry, () => Effect.succeed(true)),
+  it.scoped("signals when probe confirms identity", () =>
+    Effect.gen(function* () {
+      const proc = yield* Effect.acquireRelease(
+        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
+        (subprocess) =>
+          Effect.sync(() => {
+            if (isPidAlive(subprocess.pid)) subprocess.kill()
+          }),
       )
+      const entry = makeEntry({ pid: proc.pid })
+      const result = yield* signalIfIdentityOwned(entry, () => Effect.succeed(true))
       expect(result).toBe("signaled")
       // Wait briefly for SIGTERM to propagate
-      await new Promise((r) => setTimeout(r, 200))
+      yield* Effect.promise(() => Bun.sleep(200))
       expect(isPidAlive(proc.pid)).toBe(false)
-    } finally {
-      if (isPidAlive(proc.pid)) proc.kill()
-    }
-  })
+    }),
+  )
 
-  test("skips when probe fails (treated as no identity proof)", async () => {
-    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
-    try {
-      const entry = makeEntry({ pid: proc.pid })
-      const result = await Effect.runPromise(
-        signalIfIdentityOwned(entry, () => Effect.fail("probe boom")),
+  it.scoped("skips when probe fails (treated as no identity proof)", () =>
+    Effect.gen(function* () {
+      const proc = yield* Effect.acquireRelease(
+        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
+        (subprocess) => Effect.sync(() => subprocess.kill()),
       )
+      const entry = makeEntry({ pid: proc.pid })
+      const result = yield* signalIfIdentityOwned(entry, () => Effect.fail("probe boom"))
       expect(result).toBe("skipped")
       expect(isPidAlive(proc.pid)).toBe(true)
-    } finally {
-      proc.kill()
-    }
-  })
+    }),
+  )
 })

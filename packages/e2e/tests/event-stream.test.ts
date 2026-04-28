@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { transportCases, waitFor } from "./transport-harness"
+import { waitDeferred } from "../src/effect-test-adapters"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural helpers only need the methods they call
 type AnyEventsClient = any
@@ -24,7 +25,7 @@ const startCollecting = (
       ),
       Effect.forkScoped,
     )
-    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return { events, fiber }
   })
 
@@ -68,8 +69,8 @@ describe("event stream contracts", () => {
 
     test(
       `${transport.name} replays buffered events for a completed turn`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -102,15 +103,14 @@ describe("event stream contracts", () => {
               )
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
 
     test(
       `${transport.name} live stream continues after turn completion`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -166,15 +166,14 @@ describe("event stream contracts", () => {
               ).toBe(true)
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
 
     test(
       `${transport.name} branch-scoped live stream excludes sibling branch messages`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -213,15 +212,14 @@ describe("event stream contracts", () => {
               ).toBe(false)
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
 
     test(
       `${transport.name} honors the after cursor`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -284,8 +282,7 @@ describe("event stream contracts", () => {
               )
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
   }

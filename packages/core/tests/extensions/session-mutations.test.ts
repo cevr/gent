@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import {
   makeExtensionHostContext,
@@ -7,15 +7,12 @@ import {
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
-
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
   const sessions = new Map<string, Session>()
   const branches = new Map<string, Branch>()
   const messages = new Map<string, Message[]>()
-
   const die = (label: string) => () => Effect.die(`${label} not implemented in test`)
-
   return {
     storage: {
       withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -93,15 +90,15 @@ const createTestStorage = () => {
     messages,
   }
 }
-
 const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
   const die = (label: string) => () => Effect.die(`${label} not available`)
-  const published: Array<{ _tag: string }> = []
+  const published: Array<{
+    _tag: string
+  }> = []
   const publish = (event: { _tag: string }) =>
     Effect.sync(() => {
       published.push(event)
     })
-
   const sessionMutations: MakeExtensionHostContextDeps["sessionMutations"] = {
     renameSession: ({ sessionId, name }) =>
       Effect.gen(function* () {
@@ -212,7 +209,6 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       }),
     updateReasoningLevel: ({ reasoningLevel }) => Effect.succeed({ reasoningLevel }),
   }
-
   const deps: MakeExtensionHostContextDeps = {
     platform: {
       cwd: "/tmp",
@@ -262,13 +258,10 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       queueFollowUp: die("ExtensionTurnControl"),
     } as unknown as MakeExtensionHostContextDeps["turnControl"],
   }
-
   return { deps, published }
 }
-
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
-
 const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutations"] => {
   const fail = () => Effect.fail(new EventStoreError({ message: "publish failed" }))
   return {
@@ -283,7 +276,6 @@ const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutatio
     updateReasoningLevel: fail,
   }
 }
-
 const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
   const session = new Session({
     id: SESSION_ID,
@@ -294,17 +286,14 @@ const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
     updatedAt: new Date(),
   })
   testStorage.sessions.set(SESSION_ID, session)
-
   const branch = new Branch({
     id: BRANCH_ID,
     sessionId: SESSION_ID,
     createdAt: new Date(),
   })
   testStorage.branches.set(BRANCH_ID, branch)
-
   return { session, branch }
 }
-
 const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: number) => {
   const msgs: Message[] = []
   for (let i = 0; i < count; i++) {
@@ -321,274 +310,254 @@ const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: 
   testStorage.messages.set(BRANCH_ID, msgs)
   return msgs
 }
-
 describe("session mutation primitives", () => {
-  test("listBranches returns branches for current session", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    const branches = await Effect.runPromise(ctx.session.listBranches())
-    expect(branches).toHaveLength(1)
-    expect(branches[0]!.id).toBe(BRANCH_ID)
-  })
-
-  test("createBranch creates a branch and publishes event", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps, published } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    const result = await Effect.runPromise(ctx.session.createBranch({ name: "feature" }))
-    expect(result.branchId).toBeDefined()
-    expect(testStorage.branches.get(result.branchId)?.name).toBe("feature")
-    expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
-  })
-
-  test("forkBranch copies messages up to target", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const msgs = seedMessages(testStorage, 4)
-    msgs[1] = Message.Interjection.make({
-      id: msgs[1]!.id,
-      sessionId: SESSION_ID,
-      branchId: BRANCH_ID,
-      role: "user",
-      parts: [new TextPart({ type: "text", text: "steer" })],
-      createdAt: msgs[1]!.createdAt,
-    })
-    testStorage.messages.set(BRANCH_ID, msgs)
-    const { deps, published } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    const result = await Effect.runPromise(
-      ctx.session.forkBranch({ atMessageId: msgs[1]!.id, name: "fork" }),
-    )
-    expect(result.branchId).toBeDefined()
-
-    const forkedMessages = testStorage.messages.get(result.branchId) ?? []
-    expect(forkedMessages).toHaveLength(2) // msg-0 and msg-1
-    expect(forkedMessages[1]?._tag).toBe("interjection")
-    expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
-  })
-
-  test("forkBranch rolls back copied messages when publishing fails", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const msgs = seedMessages(testStorage, 2)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext(
-      { sessionId: SESSION_ID, branchId: BRANCH_ID },
-      {
-        ...deps,
-        sessionMutations: failingSessionMutations(),
-      },
-    )
-
-    await expect(
-      Effect.runPromise(ctx.session.forkBranch({ atMessageId: msgs[1]!.id, name: "fork" })),
-    ).rejects.toThrow("publish failed")
-
-    expect(testStorage.branches.size).toBe(1)
-    expect(testStorage.messages.size).toBe(1)
-    expect(testStorage.messages.get(BRANCH_ID)).toHaveLength(2)
-  })
-
-  test("switchBranch updates session activeBranchId", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps, published } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    // Create a second branch to switch to
-    const newBranch = new Branch({
-      id: BranchId.make("branch-2"),
-      sessionId: SESSION_ID,
-      createdAt: new Date(),
-    })
-    testStorage.branches.set(newBranch.id, newBranch)
-
-    await Effect.runPromise(ctx.session.switchBranch({ toBranchId: newBranch.id }))
-
-    const updated = testStorage.sessions.get(SESSION_ID)!
-    expect(updated.activeBranchId).toBe(BranchId.make("branch-2"))
-    expect(published.some((e) => e._tag === "BranchSwitched")).toBe(true)
-  })
-
-  test("createChildSession creates session with parent pointer", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps, published } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    const result = await Effect.runPromise(
-      ctx.session.createChildSession({ name: "child", cwd: "/tmp/child" }),
-    )
-    expect(result.sessionId).toBeDefined()
-    expect(result.branchId).toBeDefined()
-
-    const child = testStorage.sessions.get(result.sessionId)!
-    expect(child.parentSessionId).toBe(SESSION_ID)
-    expect(child.parentBranchId).toBe(BRANCH_ID)
-    expect(child.cwd).toBe("/tmp/child")
-    expect(published.some((e) => e._tag === "SessionStarted")).toBe(true)
-  })
-
-  test("createChildSession rolls back session and branch when publishing fails", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext(
-      { sessionId: SESSION_ID, branchId: BRANCH_ID },
-      {
-        ...deps,
-        sessionMutations: failingSessionMutations(),
-      },
-    )
-
-    await expect(
-      Effect.runPromise(ctx.session.createChildSession({ name: "child", cwd: "/tmp/child" })),
-    ).rejects.toThrow("publish failed")
-
-    expect(testStorage.sessions.size).toBe(1)
-    expect(testStorage.branches.size).toBe(1)
-  })
-
-  test("getChildSessions returns children of current session", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    // Create a child session
-    await Effect.runPromise(ctx.session.createChildSession({ name: "child-1" }))
-
-    const children = await Effect.runPromise(ctx.session.getChildSessions())
-    expect(children).toHaveLength(1)
-    expect(children[0]!.parentSessionId).toBe(SESSION_ID)
-  })
-
-  test("deleteSession deletes a non-current session", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    // Create and delete a child session
-    const { sessionId: childId } = await Effect.runPromise(
-      ctx.session.createChildSession({ name: "to-delete" }),
-    )
-    expect(testStorage.sessions.has(childId)).toBe(true)
-
-    await Effect.runPromise(ctx.session.deleteSession(childId))
-    expect(testStorage.sessions.has(childId)).toBe(false)
-  })
-
-  test("deleteSession propagates command facade failure without storage fallback", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const childContext = makeExtensionHostContext(
-      { sessionId: SESSION_ID, branchId: BRANCH_ID },
-      deps,
-    )
-    const { sessionId: childId } = await Effect.runPromise(
-      childContext.session.createChildSession({ name: "delete failure should surface" }),
-    )
-    expect(testStorage.sessions.has(childId)).toBe(true)
-
-    const ctx = makeExtensionHostContext(
-      { sessionId: SESSION_ID, branchId: BRANCH_ID },
-      {
-        ...deps,
-        sessionMutations: {
-          ...deps.sessionMutations,
-          deleteSession: () => Effect.fail(new EventStoreError({ message: "delete failed" })),
+  it.live("listBranches returns branches for current session", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const branches = yield* ctx.session.listBranches()
+      expect(branches).toHaveLength(1)
+      expect(branches[0]!.id).toBe(BRANCH_ID)
+    }),
+  )
+  it.live("createBranch creates a branch and publishes event", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps, published } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const result = yield* ctx.session.createBranch({ name: "feature" })
+      expect(result.branchId).toBeDefined()
+      expect(testStorage.branches.get(result.branchId)?.name).toBe("feature")
+      expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
+    }),
+  )
+  it.live("forkBranch copies messages up to target", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const msgs = seedMessages(testStorage, 4)
+      msgs[1] = Message.Interjection.make({
+        id: msgs[1]!.id,
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+        role: "user",
+        parts: [new TextPart({ type: "text", text: "steer" })],
+        createdAt: msgs[1]!.createdAt,
+      })
+      testStorage.messages.set(BRANCH_ID, msgs)
+      const { deps, published } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const result = yield* ctx.session.forkBranch({ atMessageId: msgs[1]!.id, name: "fork" })
+      expect(result.branchId).toBeDefined()
+      const forkedMessages = testStorage.messages.get(result.branchId) ?? []
+      expect(forkedMessages).toHaveLength(2) // msg-0 and msg-1
+      expect(forkedMessages[1]?._tag).toBe("interjection")
+      expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
+    }),
+  )
+  it.live("forkBranch rolls back copied messages when publishing fails", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const msgs = seedMessages(testStorage, 2)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext(
+        { sessionId: SESSION_ID, branchId: BRANCH_ID },
+        {
+          ...deps,
+          sessionMutations: failingSessionMutations(),
         },
-      },
-    )
-
-    await expect(Effect.runPromise(ctx.session.deleteSession(childId))).rejects.toThrow(
-      "delete failed",
-    )
-    expect(testStorage.sessions.has(childId)).toBe(true)
-  })
-
-  test("deleteSession routes through command facade", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    const { sessionId: childId } = await Effect.runPromise(
-      ctx.session.createChildSession({ name: "to-delete-fallback" }),
-    )
-    expect(testStorage.sessions.has(childId)).toBe(true)
-
-    await Effect.runPromise(ctx.session.deleteSession(childId))
-    expect(testStorage.sessions.has(childId)).toBe(false)
-  })
-
-  test("deleteSession guards against deleting current session", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    await expect(Effect.runPromise(ctx.session.deleteSession(SESSION_ID))).rejects.toThrow(
-      "Cannot delete the current session",
-    )
-  })
-
-  test("deleteBranch deletes a non-current branch", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    // Create then delete a branch
-    const { branchId } = await Effect.runPromise(ctx.session.createBranch({ name: "to-delete" }))
-    expect(testStorage.branches.has(branchId)).toBe(true)
-
-    await Effect.runPromise(ctx.session.deleteBranch(branchId))
-    expect(testStorage.branches.has(branchId)).toBe(false)
-  })
-
-  test("deleteBranch guards against deleting current branch", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    await expect(Effect.runPromise(ctx.session.deleteBranch(BRANCH_ID))).rejects.toThrow(
-      "Cannot delete the current branch",
-    )
-  })
-
-  test("deleteMessages removes messages after cursor", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    seedMessages(testStorage, 4)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    await Effect.runPromise(ctx.session.deleteMessages({ afterMessageId: MessageId.make("msg-1") }))
-
-    const remaining = testStorage.messages.get(BRANCH_ID) ?? []
-    expect(remaining).toHaveLength(2) // msg-0 and msg-1
-  })
-
-  test("deleteMessages without cursor removes all messages", async () => {
-    const testStorage = createTestStorage()
-    seedSession(testStorage)
-    seedMessages(testStorage, 4)
-    const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    await Effect.runPromise(ctx.session.deleteMessages({}))
-
-    const remaining = testStorage.messages.get(BRANCH_ID)
-    expect(remaining).toBeUndefined()
-  })
+      )
+      const exit = yield* Effect.exit(
+        ctx.session.forkBranch({ atMessageId: msgs[1]!.id, name: "fork" }),
+      )
+      expect(String(exit)).toContain("publish failed")
+      expect(testStorage.branches.size).toBe(1)
+      expect(testStorage.messages.size).toBe(1)
+      expect(testStorage.messages.get(BRANCH_ID)).toHaveLength(2)
+    }),
+  )
+  it.live("switchBranch updates session activeBranchId", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps, published } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      // Create a second branch to switch to
+      const newBranch = new Branch({
+        id: BranchId.make("branch-2"),
+        sessionId: SESSION_ID,
+        createdAt: new Date(),
+      })
+      testStorage.branches.set(newBranch.id, newBranch)
+      yield* ctx.session.switchBranch({ toBranchId: newBranch.id })
+      const updated = testStorage.sessions.get(SESSION_ID)!
+      expect(updated.activeBranchId).toBe(BranchId.make("branch-2"))
+      expect(published.some((e) => e._tag === "BranchSwitched")).toBe(true)
+    }),
+  )
+  it.live("createChildSession creates session with parent pointer", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps, published } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const result = yield* ctx.session.createChildSession({ name: "child", cwd: "/tmp/child" })
+      expect(result.sessionId).toBeDefined()
+      expect(result.branchId).toBeDefined()
+      const child = testStorage.sessions.get(result.sessionId)!
+      expect(child.parentSessionId).toBe(SESSION_ID)
+      expect(child.parentBranchId).toBe(BRANCH_ID)
+      expect(child.cwd).toBe("/tmp/child")
+      expect(published.some((e) => e._tag === "SessionStarted")).toBe(true)
+    }),
+  )
+  it.live("createChildSession rolls back session and branch when publishing fails", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext(
+        { sessionId: SESSION_ID, branchId: BRANCH_ID },
+        {
+          ...deps,
+          sessionMutations: failingSessionMutations(),
+        },
+      )
+      const exit = yield* Effect.exit(
+        ctx.session.createChildSession({ name: "child", cwd: "/tmp/child" }),
+      )
+      expect(String(exit)).toContain("publish failed")
+      expect(testStorage.sessions.size).toBe(1)
+      expect(testStorage.branches.size).toBe(1)
+    }),
+  )
+  it.live("getChildSessions returns children of current session", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      // Create a child session
+      yield* ctx.session.createChildSession({ name: "child-1" })
+      const children = yield* ctx.session.getChildSessions()
+      expect(children).toHaveLength(1)
+      expect(children[0]!.parentSessionId).toBe(SESSION_ID)
+    }),
+  )
+  it.live("deleteSession deletes a non-current session", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      // Create and delete a child session
+      const { sessionId: childId } = yield* ctx.session.createChildSession({ name: "to-delete" })
+      expect(testStorage.sessions.has(childId)).toBe(true)
+      yield* ctx.session.deleteSession(childId)
+      expect(testStorage.sessions.has(childId)).toBe(false)
+    }),
+  )
+  it.live("deleteSession propagates command facade failure without storage fallback", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const childContext = makeExtensionHostContext(
+        { sessionId: SESSION_ID, branchId: BRANCH_ID },
+        deps,
+      )
+      const { sessionId: childId } = yield* childContext.session.createChildSession({
+        name: "delete failure should surface",
+      })
+      expect(testStorage.sessions.has(childId)).toBe(true)
+      const ctx = makeExtensionHostContext(
+        { sessionId: SESSION_ID, branchId: BRANCH_ID },
+        {
+          ...deps,
+          sessionMutations: {
+            ...deps.sessionMutations,
+            deleteSession: () => Effect.fail(new EventStoreError({ message: "delete failed" })),
+          },
+        },
+      )
+      const exit = yield* Effect.exit(ctx.session.deleteSession(childId))
+      expect(String(exit)).toContain("delete failed")
+      expect(testStorage.sessions.has(childId)).toBe(true)
+    }),
+  )
+  it.live("deleteSession routes through command facade", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const { sessionId: childId } = yield* ctx.session.createChildSession({
+        name: "to-delete-fallback",
+      })
+      expect(testStorage.sessions.has(childId)).toBe(true)
+      yield* ctx.session.deleteSession(childId)
+      expect(testStorage.sessions.has(childId)).toBe(false)
+    }),
+  )
+  it.live("deleteSession guards against deleting current session", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const exit = yield* Effect.exit(ctx.session.deleteSession(SESSION_ID))
+      expect(String(exit)).toContain("Cannot delete the current session")
+    }),
+  )
+  it.live("deleteBranch deletes a non-current branch", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      // Create then delete a branch
+      const { branchId } = yield* ctx.session.createBranch({ name: "to-delete" })
+      expect(testStorage.branches.has(branchId)).toBe(true)
+      yield* ctx.session.deleteBranch(branchId)
+      expect(testStorage.branches.has(branchId)).toBe(false)
+    }),
+  )
+  it.live("deleteBranch guards against deleting current branch", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const exit = yield* Effect.exit(ctx.session.deleteBranch(BRANCH_ID))
+      expect(String(exit)).toContain("Cannot delete the current branch")
+    }),
+  )
+  it.live("deleteMessages removes messages after cursor", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      seedMessages(testStorage, 4)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      yield* ctx.session.deleteMessages({ afterMessageId: MessageId.make("msg-1") })
+      const remaining = testStorage.messages.get(BRANCH_ID) ?? []
+      expect(remaining).toHaveLength(2) // msg-0 and msg-1
+    }),
+  )
+  it.live("deleteMessages without cursor removes all messages", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      seedMessages(testStorage, 4)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      yield* ctx.session.deleteMessages({})
+      const remaining = testStorage.messages.get(BRANCH_ID)
+      expect(remaining).toBeUndefined()
+    }),
+  )
 })

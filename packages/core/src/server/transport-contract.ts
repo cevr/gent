@@ -8,7 +8,6 @@ import {
   ListAuthProvidersPayload,
 } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
-import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
@@ -347,20 +346,6 @@ export type CallbackAuthInput = typeof CallbackAuthInput.Type
 export { AuthProviderInfo, AuthProviderQuery, ListAuthProvidersPayload }
 export { EventEnvelope }
 export { QueueSnapshot }
-
-export const SendExtensionMessageInput = Schema.Struct({
-  sessionId: SessionId,
-  message: ExtensionMessageEnvelope,
-  branchId: Schema.optional(BranchId),
-})
-export type SendExtensionMessageInput = typeof SendExtensionMessageInput.Type
-
-export const AskExtensionMessageInput = Schema.Struct({
-  sessionId: SessionId,
-  message: ExtensionMessageEnvelope,
-  branchId: Schema.optional(BranchId),
-})
-export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
 
 /** Input shape for transport capability RPCs.
  *  `extensionId` + `capabilityId` route to the registered capability;

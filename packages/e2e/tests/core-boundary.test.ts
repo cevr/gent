@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { transportCases } from "./transport-harness"
+import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   Effect.gen(function* () {
@@ -18,7 +19,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
       Effect.forkScoped,
     )
 
-    yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+    yield* waitDeferred(ready).pipe(Effect.timeout("5 seconds"))
     return { values, closed }
   })
 
@@ -28,8 +29,8 @@ describe("session RPC boundary", () => {
 
     test(
       `${transport.name} closes session event streams when a session is deleted`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session.create({ cwd: process.cwd() })
@@ -42,7 +43,7 @@ describe("session RPC boundary", () => {
               yield* client.session
                 .delete({ sessionId: created.sessionId })
                 .pipe(Effect.mapError((error) => new Error(String(error))))
-              yield* Deferred.await(events.closed).pipe(Effect.timeout("15 seconds"))
+              yield* waitDeferred(events.closed).pipe(Effect.timeout("15 seconds"))
 
               const sessions = yield* client.session
                 .list()
@@ -55,8 +56,7 @@ describe("session RPC boundary", () => {
               expect(deleted).toBeNull()
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
   }

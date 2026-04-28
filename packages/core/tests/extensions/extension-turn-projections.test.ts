@@ -13,7 +13,7 @@ import { type Behavior, ServiceKey } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core/domain/ids"
-import { ProjectionError, type ProjectionTurnContext } from "@gent/core/extensions/api"
+import { behavior, ProjectionError, type ProjectionTurnContext } from "@gent/core/extensions/api"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine.js"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import {
@@ -169,7 +169,7 @@ describe("turn projection reactions", () => {
         manifest: { id: ExtensionId.make("actor-view-ext") },
         scope: "builtin",
         sourcePath: "/test/actor-view-ext",
-        contributions: { actorRoute: ViewKey },
+        contributions: { actors: [behavior(viewBehavior)] },
       }
 
       const compiled = compile([
@@ -257,7 +257,7 @@ describe("turn projection reactions", () => {
         manifest: { id: ExtensionId.make("actor-view-failing-ext") },
         scope: "builtin",
         sourcePath: "/test/actor-view-failing-ext",
-        contributions: { actorRoute: ViewKey },
+        contributions: { actors: [behavior(viewBehavior)] },
       }
 
       const compiled = compile([extension])
@@ -289,7 +289,15 @@ describe("turn projection reactions", () => {
         manifest: { id: ExtensionId.make("actor-view-failing-find-ext") },
         scope: "builtin",
         sourcePath: "/test/actor-view-failing-find-ext",
-        contributions: { actorRoute: ViewKey },
+        contributions: {
+          actors: [
+            behavior({
+              initialState: {},
+              receive: () => Effect.succeed({}),
+              serviceKey: ViewKey,
+            }),
+          ],
+        },
       }
 
       const compiled = compile([extension])

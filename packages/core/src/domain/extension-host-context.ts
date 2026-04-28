@@ -4,12 +4,6 @@ import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
-import type {
-  AnyExtensionCommandMessage,
-  AnyExtensionRequestMessage,
-  ExtensionProtocolError,
-  ExtractExtensionReply,
-} from "./extension-protocol"
 import { BranchId, SessionId, type MessageId } from "./ids"
 import type {
   ApprovalDecision,
@@ -67,16 +61,6 @@ export interface ExtensionHostContext {
 
 export declare namespace ExtensionHostContext {
   interface Extension {
-    readonly send: (
-      message: AnyExtensionCommandMessage,
-      branchId?: BranchId,
-    ) => Effect.Effect<void, ExtensionProtocolError>
-
-    readonly ask: <M extends AnyExtensionRequestMessage>(
-      message: M,
-      branchId?: BranchId,
-    ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
-
     /** Typed capability RPC into another extension. Routes by
      *  `(extensionId, capabilityId)`, decodes via `ref.input`, validates
      *  output via `ref.output`, and gates dispatch on `ref.intent`. */

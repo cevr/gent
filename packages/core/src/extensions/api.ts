@@ -53,13 +53,11 @@ import type {
   ExtensionContributions,
   ExtensionReactions,
 } from "../domain/contribution.js"
-import type { ServiceKey as ServiceKeyType } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionToken } from "../domain/capability/action.js"
 import type { RequestToken } from "../domain/capability/request.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
-import type { ExtensionProtocol } from "../domain/extension-protocol.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AgentEvent } from "../domain/event.js"
 
@@ -115,23 +113,6 @@ export {
   type MessageInputInput,
   type MessageOutputInput,
 } from "../domain/extension.js"
-export {
-  ExtensionMessage,
-  ExtensionMessageEnvelope,
-  getExtensionMessageMetadata,
-  getExtensionReplySchema,
-  isExtensionRequestDefinition,
-  isExtensionRequestMessage,
-  listExtensionProtocolDefinitions,
-  type ExtensionProtocol,
-  type ExtensionCommandDefinition,
-  type ExtensionCommandMessage,
-  type ExtensionRequestDefinition,
-  type ExtensionRequestMessage,
-  type AnyExtensionCommandMessage,
-  type AnyExtensionRequestMessage,
-  type ExtractExtensionReply,
-} from "../domain/extension-protocol.js"
 export type { PromptSection } from "../domain/prompt.js"
 export {
   sectionStartMarker,
@@ -327,32 +308,6 @@ export interface DefineExtensionInput {
   readonly rpc?: FieldSpec<RequestToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly actors?: FieldSpec<AnyBehavior>
-  /**
-   * ExtensionMessage protocol definitions owned by this extension.
-   * Mirrors the `actor.protocols` shape on the FSM path; sourced
-   * separately here because actor-only extensions have no FSM `actor:`
-   * field to attach the protocol record to. The runtime registers
-   * entries from BOTH this bucket and `Resource.actor.protocols`, so
-   * dispatch decoding finds a definition regardless of which primitive
-   * owns the state-holder.
-   */
-  readonly protocols?: ExtensionProtocol
-  /**
-   * Service key under which this extension's protocol-handling actor
-   * registers with the Receptionist. Set when the actor is spawned
-   * outside the static `actors:` bucket — e.g. inside `Resource.start`
-   * where R contains services the actor's `receive` needs to capture
-   * via closure. The route collector reads this directly so dispatch
-   * can resolve the live `ActorRef` via `Receptionist.find` even though
-   * the host never saw the behavior at build time.
-   *
-   * When the actor IS declared in `actors:`, the route collector picks
-   * the serviceKey off the behavior — `actorRoute` is then redundant
-   * and must be omitted (declaring both is a contribution-shape
-   * conflict; the loader rejects it).
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: ServiceKey is contravariant in M; `any` opts out of variance checking so authors can pass any narrowly-typed key without an identity widener
-  readonly actorRoute?: ServiceKeyType<any>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
@@ -579,8 +534,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(rpc.length > 0 ? { rpc } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(actors.length > 0 ? { actors } : {}),
-          ...(params.protocols !== undefined ? { protocols: params.protocols } : {}),
-          ...(params.actorRoute !== undefined ? { actorRoute: params.actorRoute } : {}),
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),

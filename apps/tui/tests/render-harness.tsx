@@ -173,19 +173,23 @@ const toInitialSession = (session: SessionInfo | Session | undefined): Session |
   }
 }
 
-const getServices = async () => {
-  if (sharedServices !== undefined) return sharedServices
-  sharedScope = await Effect.runPromise(Scope.make())
-  const context = await Effect.runPromise(Layer.buildWithScope(BunServices.layer, sharedScope))
-  sharedServices = Context.add(
-    context,
-    Scope.Scope,
-    sharedScope,
-  ) as unknown as Context.Context<unknown>
-  return sharedServices
+const getServices = (): Promise<Context.Context<unknown>> => {
+  if (sharedServices !== undefined) return Promise.resolve(sharedServices)
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      sharedScope = yield* Scope.make()
+      const context = yield* Layer.buildWithScope(BunServices.layer, sharedScope)
+      sharedServices = Context.add(
+        context,
+        Scope.Scope,
+        sharedScope,
+      ) as unknown as Context.Context<unknown>
+      return sharedServices
+    }),
+  )
 }
 
-export const renderWithProviders = async (
+export const renderWithProviders = (
   node: () => JSX.Element,
   options?: {
     client?: GentNamespacedClient
@@ -202,58 +206,62 @@ export const renderWithProviders = async (
      */
     services?: Context.Context<unknown>
   },
-) => {
-  const services = options?.services ?? (await getServices())
-  const client = options?.client ?? createMockClient()
-  const runtime = options?.runtime ?? createMockRuntime()
+): Promise<TestRenderSetup> =>
+  (options?.services === undefined ? getServices() : Promise.resolve(options.services)).then(
+    (services) => {
+      const client = options?.client ?? createMockClient()
+      const runtime = options?.runtime ?? createMockRuntime()
 
-  currentSetup = await testRender(
-    () => (
-      <RegistryProvider services={services}>
-        <KeyboardScopeProvider>
-          <ThemeProvider mode="dark">
-            <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
-              <CommandProvider>
-                <RouterProvider
-                  initialRoute={
-                    options?.initialRoute ??
-                    Route.session(SessionId.make("test-session"), BranchId.make("test-branch"))
-                  }
-                >
-                  <WorkspaceProvider
-                    cwd={options?.cwd ?? defaultWorkspaceCwd}
-                    home="/tmp"
-                    services={services}
-                  >
-                    <ClientProvider
-                      client={client}
-                      runtime={runtime}
-                      services={services}
-                      log={noopLog}
-                      initialSession={toInitialSession(options?.initialSession)}
-                      initialAgent={options?.initialAgent}
+      return testRender(
+        () => (
+          <RegistryProvider services={services}>
+            <KeyboardScopeProvider>
+              <ThemeProvider mode="dark">
+                <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
+                  <CommandProvider>
+                    <RouterProvider
+                      initialRoute={
+                        options?.initialRoute ??
+                        Route.session(SessionId.make("test-session"), BranchId.make("test-branch"))
+                      }
                     >
-                      <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                    </ClientProvider>
-                  </WorkspaceProvider>
-                </RouterProvider>
-              </CommandProvider>
-            </EnvProvider>
-          </ThemeProvider>
-        </KeyboardScopeProvider>
-      </RegistryProvider>
-    ),
-    {
-      width: options?.width ?? 80,
-      height: options?.height ?? 24,
+                      <WorkspaceProvider
+                        cwd={options?.cwd ?? defaultWorkspaceCwd}
+                        home="/tmp"
+                        services={services}
+                      >
+                        <ClientProvider
+                          client={client}
+                          runtime={runtime}
+                          services={services}
+                          log={noopLog}
+                          initialSession={toInitialSession(options?.initialSession)}
+                          initialAgent={options?.initialAgent}
+                        >
+                          <ExtensionUIProvider>{node()}</ExtensionUIProvider>
+                        </ClientProvider>
+                      </WorkspaceProvider>
+                    </RouterProvider>
+                  </CommandProvider>
+                </EnvProvider>
+              </ThemeProvider>
+            </KeyboardScopeProvider>
+          </RegistryProvider>
+        ),
+        {
+          width: options?.width ?? 80,
+          height: options?.height ?? 24,
+        },
+      ).then((setup) => {
+        currentSetup = setup
+        return setup
+          .renderOnce()
+          .then(() => Promise.resolve())
+          .then(() => setup.renderOnce())
+          .then(() => setup)
+      })
     },
   )
-
-  await currentSetup.renderOnce()
-  await Promise.resolve()
-  await currentSetup.renderOnce()
-  return currentSetup
-}
 
 export const renderFrame = (setup: TestRenderSetup) =>
   setup.captureCharFrame().replaceAll("\u00a0", " ")

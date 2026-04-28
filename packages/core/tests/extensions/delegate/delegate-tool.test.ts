@@ -40,8 +40,6 @@ const makeCtx = (overrides: {
         ] as const),
     },
     extension: {
-      send: () => Effect.void,
-      ask: () => Effect.die("extension.ask not expected in DelegateTool test"),
       request: () => Effect.succeed({} as never),
     },
   })

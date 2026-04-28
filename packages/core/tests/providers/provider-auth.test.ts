@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SessionId, ExtensionId } from "@gent/core/domain/ids"
 import { AuthMethod } from "@gent/core/domain/auth-method"
@@ -10,9 +10,7 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-
 const pendingCallbacks = new Map<string, (code?: string) => string>()
-
 const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
@@ -21,14 +19,15 @@ const oauthProvider: ModelDriverContribution = {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
       Effect.tryPromise({
-        try: async () => {
-          pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
-          return {
-            url: "http://example.com/auth",
-            method: "code" as const,
-            instructions: "Paste code",
-          }
-        },
+        try: () =>
+          Promise.resolve().then(() => {
+            pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
+            return {
+              url: "http://example.com/auth",
+              method: "code" as const,
+              instructions: "Paste code",
+            }
+          }),
         catch: (e) => ({ _tag: "AuthError" as const, cause: e }),
       }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
     callback: (ctx) =>
@@ -40,7 +39,6 @@ const oauthProvider: ModelDriverContribution = {
       }),
   },
 }
-
 const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
@@ -49,7 +47,6 @@ const noopProvider: ModelDriverContribution = {
     methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
 }
-
 const persistDuringAuthorizeProvider: ModelDriverContribution = {
   id: "persisting",
   name: "Persisting",
@@ -66,7 +63,6 @@ const persistDuringAuthorizeProvider: ModelDriverContribution = {
       }),
   },
 }
-
 const testResolved = resolveExtensions([
   {
     manifest: { id: ExtensionId.make("test") },
@@ -80,7 +76,6 @@ const testDriverRegistry = DriverRegistry.fromResolved({
   modelDrivers: testResolved.modelDrivers,
   externalDrivers: testResolved.externalDrivers,
 })
-
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
   AuthStore.of({
@@ -91,24 +86,20 @@ const failingAuthStoreLayer = Layer.succeed(
     listInfo: () => Effect.succeed({}),
   }),
 )
-
 describe("ProviderAuth", () => {
-  it("extension authorize + callback stores credentials", async () => {
-    pendingCallbacks.clear()
-    const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const layer = Layer.provideMerge(
-      ProviderAuth.Live,
-      Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
-    )
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.live("extension authorize + callback stores credentials", () =>
+    Effect.gen(function* () {
+      pendingCallbacks.clear()
+      const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const layer = Layer.provideMerge(
+        ProviderAuth.Live,
+        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+      )
+      const result = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         const store = yield* AuthStore
-
         const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
         if (authResult === undefined) return { ok: false as const }
-
         yield* auth.callback(
           SessionId.make("s1"),
           "openai",
@@ -117,64 +108,54 @@ describe("ProviderAuth", () => {
           "sk-test-key",
         )
         const stored = yield* store.get("openai")
-
         return { ok: true as const, stored }
-      }).pipe(Effect.provide(layer)),
-    )
-
-    if (!result.ok) throw new Error("auth setup failed")
-    expect(result.stored?.type).toBe("api")
-    expect((result.stored as AuthApi | undefined)?.key).toBe("sk-test-key")
-  })
-
-  it("listMethods returns methods from extension providers", async () => {
-    const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const layer = Layer.provideMerge(
-      ProviderAuth.Live,
-      Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
-    )
-
-    const methods = await Effect.runPromise(
-      Effect.gen(function* () {
+      }).pipe(Effect.provide(layer))
+      if (!result.ok) throw new Error("auth setup failed")
+      expect(result.stored?.type).toBe("api")
+      expect((result.stored as AuthApi | undefined)?.key).toBe("sk-test-key")
+    }),
+  )
+  it.live("listMethods returns methods from extension providers", () =>
+    Effect.gen(function* () {
+      const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const layer = Layer.provideMerge(
+        ProviderAuth.Live,
+        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+      )
+      const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         return yield* auth.listMethods()
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(Object.keys(methods)).toContain("openai")
-    expect(Object.keys(methods)).toContain("anthropic")
-    expect(Object.keys(methods)).toContain("persisting")
-    expect(methods["openai"]?.length).toBe(1)
-  })
-
-  it("authorize surfaces credential persistence failures", async () => {
-    const layer = Layer.provideMerge(
-      ProviderAuth.Live,
-      Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
-    )
-
-    const exit = await Effect.runPromise(
-      Effect.gen(function* () {
+      }).pipe(Effect.provide(layer))
+      expect(Object.keys(methods)).toContain("openai")
+      expect(Object.keys(methods)).toContain("anthropic")
+      expect(Object.keys(methods)).toContain("persisting")
+      expect(methods["openai"]?.length).toBe(1)
+    }),
+  )
+  it.live("authorize surfaces credential persistence failures", () =>
+    Effect.gen(function* () {
+      const layer = Layer.provideMerge(
+        ProviderAuth.Live,
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+      )
+      const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         return yield* Effect.exit(auth.authorize(SessionId.make("s1"), "persisting", 0))
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      expect(exit.cause.toString()).toContain("Failed to persist auth")
-    }
-  })
-
-  it("callback surfaces credential persistence failures", async () => {
-    pendingCallbacks.clear()
-    const layer = Layer.provideMerge(
-      ProviderAuth.Live,
-      Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
-    )
-
-    const exit = await Effect.runPromise(
-      Effect.gen(function* () {
+      }).pipe(Effect.provide(layer))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(exit.cause.toString()).toContain("Failed to persist auth")
+      }
+    }),
+  )
+  it.live("callback surfaces credential persistence failures", () =>
+    Effect.gen(function* () {
+      pendingCallbacks.clear()
+      const layer = Layer.provideMerge(
+        ProviderAuth.Live,
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+      )
+      const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
         if (authResult === undefined) return yield* Effect.die("auth setup failed")
@@ -187,12 +168,11 @@ describe("ProviderAuth", () => {
             "sk-test-key",
           ),
         )
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      expect(exit.cause.toString()).toContain("Failed to persist auth")
-    }
-  })
+      }).pipe(Effect.provide(layer))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(exit.cause.toString()).toContain("Failed to persist auth")
+      }
+    }),
+  )
 })

@@ -117,11 +117,6 @@ const collectActorRoutes = (
 ): ReadonlyArray<RegisteredActorRoute> => {
   const routes: RegisteredActorRoute[] = []
   for (const ext of sortExtensions(extensions)) {
-    const explicit = ext.contributions.actorRoute
-    if (explicit !== undefined) {
-      routes.push({ extensionId: ext.manifest.id, serviceKey: explicit })
-      continue
-    }
     for (const behavior of ext.contributions.actors ?? []) {
       if (behavior.serviceKey === undefined) continue
       routes.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })

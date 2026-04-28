@@ -17,47 +17,12 @@
  */
 
 import { beforeAll, describe, expect, test } from "bun:test"
-import { resolve as pathResolve } from "node:path"
-
-interface Diagnostic {
-  readonly code?: string
-  readonly rule_id?: string
-  readonly message: string
-  readonly filename?: string
-}
-
-interface OxlintReport {
-  readonly diagnostics: ReadonlyArray<Diagnostic>
-  readonly number_of_files: number
-}
-
-interface OxlintRun {
-  readonly report: OxlintReport
-  readonly exitCode: number | null
-  readonly stderr: string
-}
-
-const FIXTURES_DIR = pathResolve(import.meta.dir, "..", "fixtures")
-const FIXTURES_CONFIG = pathResolve(FIXTURES_DIR, ".oxlintrc.json")
-
-const runOxlint = async (fixtureFiles: ReadonlyArray<string>): Promise<OxlintRun> => {
-  const proc = Bun.spawn(
-    ["bunx", "oxlint", "-c", FIXTURES_CONFIG, "--format=json", ...fixtureFiles],
-    {
-      cwd: FIXTURES_DIR,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  )
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
-  const exitCode = await proc.exited
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  const report = JSON.parse(stdout) as OxlintReport
-  return { report, exitCode, stderr }
-}
+import {
+  runOxlint,
+  type Diagnostic,
+  type OxlintReport,
+  type OxlintRun,
+} from "../src/fixture-runner"
 
 const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
   report.diagnostics.filter((d) => d.filename === fixtureFile)
@@ -147,13 +112,16 @@ describe("custom lint rules", () => {
   let invalidRun: OxlintRun
   let validRun: OxlintRun
 
-  beforeAll(async () => {
+  beforeAll(() => {
     // One spawn per fixture set instead of N. Each per-rule test then
     // filters the shared report by filename.
-    ;[invalidRun, validRun] = await Promise.all([
+    return Promise.all([
       runOxlint(CASES.map((c) => c.invalid)),
       runOxlint(CASES.map((c) => c.valid)),
-    ])
+    ]).then(([invalid, valid]) => {
+      invalidRun = invalid
+      validRun = valid
+    })
   })
 
   for (const c of CASES) {

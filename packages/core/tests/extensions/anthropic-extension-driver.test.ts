@@ -26,7 +26,7 @@
  * test-owned Refs and applies the right keychain transforms (or
  * doesn't, on the API-key branch).
  */
-import { describe, test, expect } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect, Ref } from "effect"
 import { buildAnthropicModelDriver } from "@gent/extensions/anthropic"
 import {
@@ -41,19 +41,16 @@ import {
   oneGenerate,
   type FakeFetchState,
 } from "@gent/core/test-utils/fake-fetch"
-
 const makeOAuthInfo = (): ProviderAuthInfo => ({
   type: "oauth",
   access: "test-access",
   refresh: "test-refresh",
   expires: Date.now() + 10 * 60 * 60 * 1000,
 })
-
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",
   key,
 })
-
 /**
  * Anthropic's `BetaMessage` happy-path response. `LanguageModel.generateText`
  * parses this into a successful result so tests stay on the success branch
@@ -80,194 +77,186 @@ const anthropicHappyResponse = () => ({
     },
   }),
 })
-
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
   Effect.runPromise(oneGenerate(layer, state, anthropicHappyResponse))
-
 const parsePayload = (body: string | undefined): Record<string, unknown> => {
   expect(body).toBeDefined()
   return JSON.parse(body!) as Record<string, unknown>
 }
-
 describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", () => {
-  test("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-
-    // Pre-seed the cred Ref directly (test owns it). If
-    // `makeOauthAnthropicLayer` regressed to allocating its own internal
-    // Ref via `AnthropicCredentialService.layer(authInfo)`, the
-    // production credential service would NOT see this seeded creds —
-    // the IO path would try to read keychain, fail/refresh, etc. We
-    // assert the captured Authorization header reflects the seed, so
-    // any regression that ignores the external Ref breaks the test.
-    Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: {
-          accessToken: "seeded-bearer-token",
-          refreshToken: "r",
-          expiresAt: Date.now() + 60 * 60 * 1000,
-        },
-        at: Date.now(),
+  it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
+    Effect.gen(function* () {
+      initAnthropicKeychainEnv({})
+      const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      // Pre-seed the cred Ref directly (test owns it). If
+      // `makeOauthAnthropicLayer` regressed to allocating its own internal
+      // Ref via `AnthropicCredentialService.layer(authInfo)`, the
+      // production credential service would NOT see this seeded creds —
+      // the IO path would try to read keychain, fail/refresh, etc. We
+      // assert the captured Authorization header reflects the seed, so
+      // any regression that ignores the external Ref breaks the test.
+      Effect.runSync(
+        Ref.set(credentialCellRef, {
+          creds: {
+            accessToken: "seeded-bearer-token",
+            refreshToken: "r",
+            expiresAt: Date.now() + 60 * 60 * 1000,
+          },
+          at: Date.now(),
+        }),
+      )
+      const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const fetchState = makeFakeFetchState()
+      yield* Effect.promise(() => runOne(layer, fetchState))
+      expect(fetchState.captured.length).toBeGreaterThan(0)
+      const lastReq = fetchState.captured[fetchState.captured.length - 1]!
+      expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
+    }),
+  )
+  it.live(
+    "OAuth resolveModel layer applies keychainClient transforms (system identity prefix)",
+    () =>
+      Effect.gen(function* () {
+        initAnthropicKeychainEnv({})
+        const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+        Effect.runSync(
+          Ref.set(credentialCellRef, {
+            creds: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 60 * 60 * 1000 },
+            at: Date.now(),
+          }),
+        )
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+        const fetchState = makeFakeFetchState()
+        yield* Effect.promise(() => runOne(layer, fetchState))
+        const payload = parsePayload(fetchState.captured.at(-1)?.body)
+        // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
+        // OAuth path stops being wrapped, the system block disappears.
+        const systemBlocks = payload["system"]
+        expect(Array.isArray(systemBlocks)).toBe(true)
+        expect(JSON.stringify(systemBlocks)).toContain(SYSTEM_IDENTITY_PREFIX)
       }),
-    )
-
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    expect(fetchState.captured.length).toBeGreaterThan(0)
-    const lastReq = fetchState.captured[fetchState.captured.length - 1]!
-    expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
-  })
-
-  test("OAuth resolveModel layer applies keychainClient transforms (system identity prefix)", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 60 * 60 * 1000 },
-        at: Date.now(),
+  )
+  it.live(
+    "two OAuth resolveModel calls share the credentialCellRef — second sees first call's invalidation",
+    () =>
+      Effect.gen(function* () {
+        initAnthropicKeychainEnv({})
+        const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+        Effect.runSync(
+          Ref.set(credentialCellRef, {
+            creds: {
+              accessToken: "first-token",
+              refreshToken: "r",
+              expiresAt: Date.now() + 60000000,
+            },
+            at: Date.now(),
+          }),
+        )
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const layer1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
+        const fetchState1 = makeFakeFetchState()
+        yield* Effect.promise(() => runOne(layer1, fetchState1))
+        expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
+        // Mutate the test-owned Ref between calls. If the second
+        // `resolveModel` allocated a fresh internal Ref (the C3 regression),
+        // the second request would still use "first-token" — instead of
+        // observing this update through the shared Ref. Asserting the second
+        // request uses "second-token" pins the Ref-sharing semantics.
+        Effect.runSync(
+          Ref.set(credentialCellRef, {
+            creds: {
+              accessToken: "second-token",
+              refreshToken: "r",
+              expiresAt: Date.now() + 60000000,
+            },
+            at: Date.now(),
+          }),
+        )
+        const layer2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
+        const fetchState2 = makeFakeFetchState()
+        yield* Effect.promise(() => runOne(layer2, fetchState2))
+        expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
-    )
-
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    const payload = parsePayload(fetchState.captured.at(-1)?.body)
-    // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
-    // OAuth path stops being wrapped, the system block disappears.
-    const systemBlocks = payload["system"]
-    expect(Array.isArray(systemBlocks)).toBe(true)
-    expect(JSON.stringify(systemBlocks)).toContain(SYSTEM_IDENTITY_PREFIX)
-  })
-
-  test("two OAuth resolveModel calls share the credentialCellRef — second sees first call's invalidation", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-
-    Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: {
-          accessToken: "first-token",
-          refreshToken: "r",
-          expiresAt: Date.now() + 60_000_000,
-        },
-        at: Date.now(),
-      }),
-    )
-
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-
-    const layer1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
-    const fetchState1 = makeFakeFetchState()
-    await runOne(layer1, fetchState1)
-    expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
-
-    // Mutate the test-owned Ref between calls. If the second
-    // `resolveModel` allocated a fresh internal Ref (the C3 regression),
-    // the second request would still use "first-token" — instead of
-    // observing this update through the shared Ref. Asserting the second
-    // request uses "second-token" pins the Ref-sharing semantics.
-    Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: {
-          accessToken: "second-token",
-          refreshToken: "r",
-          expiresAt: Date.now() + 60_000_000,
-        },
-        at: Date.now(),
-      }),
-    )
-
-    const layer2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
-    const fetchState2 = makeFakeFetchState()
-    await runOne(layer2, fetchState2)
-    expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
-  })
-
-  test("OAuth resolveModel layer reads beta exclusions from betaCellRef the test owns", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 60_000_000 },
-        at: Date.now(),
-      }),
-    )
-
-    // Pre-seed beta exclusions so the model's default 1M-context beta
-    // is NOT sent. If the production beta cache used a fresh internal
-    // Ref, this seeded exclusion wouldn't apply and the header would
-    // include `context-1m-2025-08-07`.
-    Effect.runSync(
-      Ref.set(betaCellRef, {
-        map: new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
-        lastBetaFlags: undefined,
-        lastModelId: "claude-opus-4-6",
-      }),
-    )
-
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
-    expect(sentBeta).not.toContain("context-1m-2025-08-07")
-  })
+  )
+  it.live("OAuth resolveModel layer reads beta exclusions from betaCellRef the test owns", () =>
+    Effect.gen(function* () {
+      initAnthropicKeychainEnv({})
+      const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+      Effect.runSync(
+        Ref.set(credentialCellRef, {
+          creds: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 60000000 },
+          at: Date.now(),
+        }),
+      )
+      // Pre-seed beta exclusions so the model's default 1M-context beta
+      // is NOT sent. If the production beta cache used a fresh internal
+      // Ref, this seeded exclusion wouldn't apply and the header would
+      // include `context-1m-2025-08-07`.
+      Effect.runSync(
+        Ref.set(betaCellRef, {
+          map: new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
+          lastBetaFlags: undefined,
+          lastModelId: "claude-opus-4-6",
+        }),
+      )
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const fetchState = makeFakeFetchState()
+      yield* Effect.promise(() => runOne(layer, fetchState))
+      const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
+      expect(sentBeta).not.toContain("context-1m-2025-08-07")
+    }),
+  )
 })
-
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
-  test("API-key resolveModel layer sends x-api-key (no Bearer)", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    const headers = fetchState.captured.at(-1)!.headers
-    expect(headers["x-api-key"]).toBe("sk-test-1234")
-    expect(headers["authorization"]).toBeUndefined()
-  })
-
-  test("API-key resolveModel does NOT inject keychainClient transforms (no SYSTEM_IDENTITY_PREFIX)", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    const payload = parsePayload(fetchState.captured.at(-1)?.body)
-    // No keychainClient wrapper → no system block, no identity prefix
-    // injection. The API-key branch must not wrap.
-    expect(JSON.stringify(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
-  })
-
-  test("API-key path does not touch the OAuth cache Refs", async () => {
-    initAnthropicKeychainEnv({})
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
-    const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-
-    const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState = makeFakeFetchState()
-    await runOne(layer, fetchState)
-
-    expect(Ref.getUnsafe(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
-    expect(Ref.getUnsafe(betaCellRef)).toBe(EMPTY_BETA_CELL)
-  })
+  it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
+    Effect.gen(function* () {
+      initAnthropicKeychainEnv({})
+      const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const fetchState = makeFakeFetchState()
+      yield* Effect.promise(() => runOne(layer, fetchState))
+      const headers = fetchState.captured.at(-1)!.headers
+      expect(headers["x-api-key"]).toBe("sk-test-1234")
+      expect(headers["authorization"]).toBeUndefined()
+    }),
+  )
+  it.live(
+    "API-key resolveModel does NOT inject keychainClient transforms (no SYSTEM_IDENTITY_PREFIX)",
+    () =>
+      Effect.gen(function* () {
+        initAnthropicKeychainEnv({})
+        const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+        const fetchState = makeFakeFetchState()
+        yield* Effect.promise(() => runOne(layer, fetchState))
+        const payload = parsePayload(fetchState.captured.at(-1)?.body)
+        // No keychainClient wrapper → no system block, no identity prefix
+        // injection. The API-key branch must not wrap.
+        expect(JSON.stringify(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
+      }),
+  )
+  it.live("API-key path does not touch the OAuth cache Refs", () =>
+    Effect.gen(function* () {
+      initAnthropicKeychainEnv({})
+      const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const fetchState = makeFakeFetchState()
+      yield* Effect.promise(() => runOne(layer, fetchState))
+      expect(Ref.getUnsafe(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
+      expect(Ref.getUnsafe(betaCellRef)).toBe(EMPTY_BETA_CELL)
+    }),
+  )
 })

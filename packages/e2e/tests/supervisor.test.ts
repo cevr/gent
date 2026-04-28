@@ -7,6 +7,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
+import { sleepMillis, waitDeferred } from "../src/effect-test-adapters"
 import * as path from "node:path"
 import { extractText } from "@gent/sdk"
 import { type WorkerLifecycleState, WorkerSupervisorInternal } from "@gent/sdk/supervisor"
@@ -22,37 +23,40 @@ const repoRoot = path.resolve(import.meta.dir, "../../..")
 const tuiDir = path.join(repoRoot, "apps", "tui")
 const makeTempDir = createTempDirFixture("gent-worker-")
 
-const waitForRunning = async (
+const waitForRunning = (
   worker: {
     getState: () => WorkerLifecycleState
     subscribe: (listener: (state: WorkerLifecycleState) => void) => () => void
   },
   expectedRestartCount: number,
   timeoutMs = 15_000,
-): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      unsubscribe()
-      const state = worker.getState()
-      reject(
-        new Error(
-          `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
-        ),
-      )
-    }, timeoutMs)
-    const unsubscribe = worker.subscribe((state) => {
-      if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
-      clearTimeout(timeout)
-      unsubscribe()
-      resolve()
-    })
-  })
+): Effect.Effect<void> =>
+  Effect.promise(
+    () =>
+      new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          unsubscribe()
+          const state = worker.getState()
+          reject(
+            new Error(
+              `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
+            ),
+          )
+        }, timeoutMs)
+        const unsubscribe = worker.subscribe((state) => {
+          if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
+          clearTimeout(timeout)
+          unsubscribe()
+          resolve()
+        })
+      }),
+  )
 
 describe("worker supervisor", () => {
-  test("headless cli can attach via --connect", async () => {
+  test("headless cli can attach via --connect", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -96,22 +100,22 @@ describe("worker supervisor", () => {
     )
   }, 20_000)
 
-  test("compiled binary launch resolves bun runtime and on-disk server entry", async () => {
-    const launch = await WorkerSupervisorInternal.resolveWorkerLaunch({
+  test("compiled binary launch resolves bun runtime and on-disk server entry", () => {
+    return WorkerSupervisorInternal.resolveWorkerLaunch({
       sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",
       execPath: "/repo/apps/tui/bin/gent",
-      sourceExists: async (candidate) => candidate === "/repo/apps/server/src/main.ts",
+      sourceExists: (candidate) => Promise.resolve(candidate === "/repo/apps/server/src/main.ts"),
       which: () => "/usr/local/bin/bun",
+    }).then((launch) => {
+      expect(launch.runtimePath).toBe("/usr/local/bin/bun")
+      expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
     })
-
-    expect(launch.runtimePath).toBe("/usr/local/bin/bun")
-    expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
   })
 
-  test("restarts the worker on the same transport url", async () => {
+  test("restarts the worker on the same transport url", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -139,10 +143,10 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
-  test("auto-restarts after worker death and keeps serving the same session state", async () => {
+  test("auto-restarts after worker death and keeps serving the same session state", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -159,7 +163,7 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1))
+          yield* waitForRunning(worker, 1)
           yield* waitForRpcReady(worker.client)
 
           expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
@@ -171,10 +175,10 @@ describe("worker supervisor", () => {
     )
   })
 
-  test("watchRuntime can resubscribe after worker restart", async () => {
+  test("watchRuntime can resubscribe after worker restart", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -191,7 +195,7 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1, 20_000))
+          yield* waitForRunning(worker, 1, 20_000)
           yield* waitForRpcReady(worker.client)
 
           const states = yield* Deferred.make<string>()
@@ -215,7 +219,7 @@ describe("worker supervisor", () => {
             }),
           ).pipe(Effect.forkScoped)
 
-          const sessionId = yield* Deferred.await(states).pipe(
+          const sessionId = yield* waitDeferred(states).pipe(
             Effect.timeoutOption("10 seconds"),
             Effect.flatMap(
               Option.match({
@@ -232,10 +236,10 @@ describe("worker supervisor", () => {
     )
   }, 30_000)
 
-  test("persists file-backed auth visibility through worker restart", async () => {
+  test("persists file-backed auth visibility through worker restart", () => {
     const root = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -271,10 +275,10 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
-  test("restart with steer and follow-up queued converges to steer before follow-up", async () => {
+  test("restart with steer and follow-up queued converges to steer before follow-up", () => {
     const root = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const logFile = `${root}/worker.log`
@@ -341,7 +345,7 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1, 30_000))
+          yield* waitForRunning(worker, 1, 30_000)
           yield* waitForRpcReady(worker.client)
 
           yield* waitFor(
@@ -394,10 +398,10 @@ describe("worker supervisor", () => {
     )
   }, 60_000)
 
-  test("streamEvents with latest cursor delivers future events after worker restart", async () => {
+  test("streamEvents with latest cursor delivers future events after worker restart", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -439,7 +443,7 @@ describe("worker supervisor", () => {
             name: "after-restart-live",
           })
 
-          const tag = yield* Deferred.await(firstLiveEvent).pipe(
+          const tag = yield* waitDeferred(firstLiveEvent).pipe(
             Effect.timeoutOption("5 seconds"),
             Effect.flatMap(
               Option.match({
@@ -456,10 +460,10 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
-  test("stop tears down the spawned worker process", async () => {
+  test("stop tears down the spawned worker process", () => {
     const dataDir = makeTempDir()
 
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
@@ -479,25 +483,27 @@ describe("worker supervisor", () => {
     )
   })
 
-  test("scope close cleans up worker — no orphan processes", async () => {
+  test("scope close cleans up worker — no orphan processes", () => {
     const dataDir = makeTempDir()
     let capturedPid: number | null = null
 
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            env: { GENT_DATA_DIR: dataDir },
-          })
-          capturedPid = worker.pid()
-          expect(capturedPid).not.toBeNull()
-        }),
-      ),
-    )
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const worker = yield* startWorkerWithSupervisor({
+              cwd: repoRoot,
+              env: { GENT_DATA_DIR: dataDir },
+            })
+            capturedPid = worker.pid()
+            expect(capturedPid).not.toBeNull()
+          }),
+        )
 
-    expect(capturedPid).not.toBeNull()
-    await Bun.sleep(500)
-    expect(() => process.kill(capturedPid!, 0)).toThrow()
+        expect(capturedPid).not.toBeNull()
+        yield* sleepMillis(500)
+        expect(() => process.kill(capturedPid!, 0)).toThrow()
+      }),
+    )
   })
 })

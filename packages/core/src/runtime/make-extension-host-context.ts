@@ -311,14 +311,6 @@ export const makeExtensionHostContext = (
     home: deps.platform.home,
 
     extension: {
-      send: (message, branchId) =>
-        deps.extensionStateRuntime.send(runInfo.sessionId, message, branchId ?? runInfo.branchId),
-      ask: (message, branchId) =>
-        deps.extensionStateRuntime.execute(
-          runInfo.sessionId,
-          message,
-          branchId ?? runInfo.branchId,
-        ),
       request: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
         const rpcRegistry = deps.extensionRegistry.getResolved().rpcRegistry
         const e = rpcRegistry.run(ref.extensionId, ref.capabilityId, input, hostCtx, {

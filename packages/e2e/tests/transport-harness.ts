@@ -12,6 +12,7 @@ import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 import { createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
+import { ignoreSyncDefect } from "../src/effect-test-adapters"
 export { waitFor } from "./seam-fixture"
 
 const defaultConfig: InProcessLayerConfig = {
@@ -69,12 +70,15 @@ const WORKER_TIMEOUT = "25 seconds"
 
 const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
   name: "worker-http",
-  run: async (assertion) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gent-worker-http-"))
-    try {
-      return await Effect.runPromise(
-        Effect.scoped(
-          startWorkerWithClient({
+  run: (assertion) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = yield* Effect.acquireRelease(
+            Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "gent-worker-http-"))),
+            (dir) => ignoreSyncDefect(() => fs.rmSync(dir, { recursive: true, force: true })),
+          )
+          return yield* startWorkerWithClient({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode }),
           }).pipe(
@@ -85,17 +89,10 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
               orElse: () =>
                 Effect.fail(new Error("worker-http assertion timed out (scope cleanup)")),
             }),
-          ),
-        ),
-      )
-    } finally {
-      try {
-        fs.rmSync(root, { recursive: true, force: true })
-      } catch {
-        /* */
-      }
-    }
-  },
+          )
+        }),
+      ),
+    ),
 })
 
 const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [

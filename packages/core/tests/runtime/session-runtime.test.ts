@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
@@ -58,10 +58,8 @@ import {
 } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import type { AgentLoopCheckpointRecord } from "../../src/runtime/agent/agent-loop.checkpoint"
-
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-
 const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
   const cowork = AgentDefinition.make({
     name: "cowork" as never,
@@ -71,7 +69,6 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
     name: "memory:reflect" as never,
     model: "test/override" as never,
   })
-
   return resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
@@ -84,7 +81,6 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
     },
   ])
 }
-
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: ReadonlyArray<ToolToken> = [],
@@ -129,7 +125,6 @@ const makeRuntimeLayer = (
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
 }
-
 const makeRuntimeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
   eventPublisherLayer: Layer.Layer<EventPublisher, never, Storage>,
@@ -169,14 +164,11 @@ const makeRuntimeLayerWithEventPublisher = (
     Layer.mergeAll(baseDeps, providedEventPublisherLayer, sessionMutationsLayer),
   )
 }
-
 const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
-
 const checkpointStorageLayer = (options: { failUpsertOn?: number; failRemoveOn?: number }) => {
   let upsertCount = 0
   let removeCount = 0
   const records = new Map<string, AgentLoopCheckpointRecord>()
-
   return Layer.succeed(CheckpointStorage, {
     upsert: (record) =>
       Effect.gen(function* () {
@@ -199,7 +191,6 @@ const checkpointStorageLayer = (options: { failUpsertOn?: number; failRemoveOn?:
       }),
   })
 }
-
 const makeRuntimeLayerWithCheckpointFailure = (options: {
   failUpsertOn?: number
   failRemoveOn?: number
@@ -238,7 +229,6 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
     Layer.merge(baseDeps, eventPublisherLayer),
   )
 }
-
 const makePublisherFailingFirstMatchingDelivery = (
   matches: (event: AgentEvent) => boolean,
   delivered: string[],
@@ -276,7 +266,6 @@ const makePublisherFailingFirstMatchingDelivery = (
       })
     }),
   )
-
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: ReadonlyArray<ToolToken>,
@@ -312,7 +301,6 @@ const makeLiveToolRuntimeLayer = (
     Layer.merge(deps, eventPublisherLayer),
   )
 }
-
 const createSessionBranch = Effect.gen(function* () {
   const storage = yield* Storage
   const sessionId = SessionId.make("runtime-session")
@@ -329,7 +317,6 @@ const createSessionBranch = Effect.gen(function* () {
   yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
-
 const createCwdSessionBranch = Effect.gen(function* () {
   const storage = yield* Storage
   const sessionId = SessionId.make("runtime-session-with-cwd")
@@ -347,12 +334,19 @@ const createCwdSessionBranch = Effect.gen(function* () {
   yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
-
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
-
+    .map(
+      (call) =>
+        (
+          call.args as
+            | {
+                _tag?: string
+              }
+            | undefined
+        )?._tag,
+    )
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reads opaque RawInput as Prompt
 const latestUserText = (request: { readonly prompt: unknown }) =>
   [...Prompt.make(request.prompt as Prompt.RawInput).content]
@@ -361,7 +355,6 @@ const latestUserText = (request: { readonly prompt: unknown }) =>
     ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n") ?? ""
-
 const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
   tool({
     id: "interaction-tool",
@@ -382,7 +375,6 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
         return { resolved: true, value: params.value }
       }),
   })
-
 const makeInteractionProviderLayer = () => {
   let streamCall = 0
   return Layer.succeed(Provider, {
@@ -410,21 +402,18 @@ const makeInteractionProviderLayer = () => {
     generate: () => Effect.succeed("test"),
   })
 }
-
 describe("SessionRuntime", () => {
-  test("control-plane dispatch checks session existence without resolving profiles", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    const profileCacheLayer = Layer.succeed(SessionProfileCache, {
-      resolve: () => Effect.die("control-plane dispatch must not resolve session profiles"),
-    })
-    const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
-
-    await Effect.runPromise(
-      narrowR(
+  it.live("control-plane dispatch checks session existence without resolving profiles", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const profileCacheLayer = Layer.succeed(SessionProfileCache, {
+        resolve: () => Effect.die("control-plane dispatch must not resolve session profiles"),
+      })
+      const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createCwdSessionBranch
-
           yield* sessionRuntime.dispatch(
             applySteerCommand(
               interruptPayloadToSteerCommand({
@@ -442,20 +431,17 @@ describe("SessionRuntime", () => {
             }),
           )
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("dispatch SendUserMessage fails when saving the running checkpoint fails", async () => {
-    const layer = makeRuntimeLayerWithCheckpointFailure({ failUpsertOn: 1 })
-
-    await Effect.runPromise(
-      narrowR(
+      )
+    }),
+  )
+  it.live("dispatch SendUserMessage fails when saving the running checkpoint fails", () =>
+    Effect.gen(function* () {
+      const layer = makeRuntimeLayerWithCheckpointFailure({ failUpsertOn: 1 })
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
-
           const exit = yield* Effect.exit(
             sessionRuntime.dispatch(
               sendUserMessageCommand({
@@ -465,7 +451,6 @@ describe("SessionRuntime", () => {
               }),
             ),
           )
-
           expect(exit._tag).toBe("Failure")
           if (exit._tag === "Failure") {
             const error = Cause.findErrorOption(exit.cause)
@@ -476,99 +461,87 @@ describe("SessionRuntime", () => {
             }
             expect(Cause.pretty(exit.cause)).toContain("checkpoint upsert failed")
           }
-
           expect(eventTags(yield* recorder.getCalls())).toContain("ErrorOccurred")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
-        {
-          ...textStep("override reply"),
-          assertRequest: (request) => {
-            expect(request.model).toBe("test/override")
+      )
+    }),
+  )
+  it.live(
+    "sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+          {
+            ...textStep("override reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("test/override")
+            },
           },
-        },
-        {
-          ...textStep("default reply"),
-          assertRequest: (request) => {
-            expect(request.model).toBe("test/default")
+          {
+            ...textStep("default reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("test/default")
+            },
           },
-        },
-      ]),
-    )
-
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+        ])
+        const layer = makeRuntimeLayer(providerLayer)
+        yield* narrowR(
+          Effect.gen(function* () {
+            const sessionRuntime = yield* SessionRuntime
+            const storage = yield* Storage
+            const recorder = yield* SequenceRecorder
+            const { sessionId, branchId } = yield* createSessionBranch
+            yield* sessionRuntime.dispatch(
+              sendUserMessageCommand({
+                sessionId,
+                branchId,
+                content: "first",
+                agentOverride: AgentName.make("memory:reflect"),
+              }),
+            )
+            yield* sessionRuntime.dispatch(
+              sendUserMessageCommand({
+                sessionId,
+                branchId,
+                content: "second",
+              }),
+            )
+            const messages = yield* waitFor(
+              storage.listMessages(branchId),
+              (current) => current.filter((message) => message.role === "assistant").length === 2,
+              5000,
+              "two assistant replies",
+            )
+            expect(messages.map((message) => message.role)).toEqual([
+              "user",
+              "assistant",
+              "user",
+              "assistant",
+            ])
+            const state = yield* waitFor(
+              sessionRuntime.getState({ sessionId, branchId }),
+              (current) => current._tag === "Idle",
+              5000,
+              "idle runtime state",
+            )
+            expect(state.agent).toBe(AgentName.make("cowork"))
+            const calls = yield* recorder.getCalls()
+            expect(eventTags(calls)).not.toContain("AgentSwitched")
+            yield* controls.assertDone()
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+        )
+      }),
+  )
+  it.live("invokeTool persists assistant and tool messages without queueing a follow-up turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
-
-          yield* sessionRuntime.dispatch(
-            sendUserMessageCommand({
-              sessionId,
-              branchId,
-              content: "first",
-              agentOverride: AgentName.make("memory:reflect"),
-            }),
-          )
-          yield* sessionRuntime.dispatch(
-            sendUserMessageCommand({
-              sessionId,
-              branchId,
-              content: "second",
-            }),
-          )
-
-          const messages = yield* waitFor(
-            storage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 2,
-            5_000,
-            "two assistant replies",
-          )
-
-          expect(messages.map((message) => message.role)).toEqual([
-            "user",
-            "assistant",
-            "user",
-            "assistant",
-          ])
-
-          const state = yield* waitFor(
-            sessionRuntime.getState({ sessionId, branchId }),
-            (current) => current._tag === "Idle",
-            5_000,
-            "idle runtime state",
-          )
-          expect(state.agent).toBe(AgentName.make("cowork"))
-
-          const calls = yield* recorder.getCalls()
-          expect(eventTags(calls)).not.toContain("AgentSwitched")
-          yield* controls.assertDone()
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("invokeTool persists assistant and tool messages without queueing a follow-up turn", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
-          const recorder = yield* SequenceRecorder
-          const { sessionId, branchId } = yield* createSessionBranch
-
           yield* sessionRuntime.dispatch(
             invokeToolCommand({
               sessionId,
@@ -577,16 +550,14 @@ describe("SessionRuntime", () => {
               input: {},
             }),
           )
-
           const messages = yield* waitFor(
             storage.listMessages(branchId),
             (current) => current.length === 2,
-            5_000,
+            5000,
             "invokeTool messages",
           )
           const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
           const calls = yield* recorder.getCalls()
-
           expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
           expect(messages[0]?.parts[0]?.type).toBe("tool-call")
           expect(messages[1]?.parts[0]?.type).toBe("tool-result")
@@ -594,33 +565,30 @@ describe("SessionRuntime", () => {
           expect(eventTags(calls)).toContain("ToolCallStarted")
           expect(eventTags(calls)).toContain("ToolCallSucceeded")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("recordToolResult rolls back the tool message when durable event append fails", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    const failingPublisherLayer = Layer.succeed(EventPublisher, {
-      append: (event: AgentEvent) =>
-        event._tag === "ToolCallSucceeded"
-          ? Effect.fail(new EventStoreError({ message: "append failed" }))
-          : Effect.succeed(
-              EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
-            ),
-      deliver: () => Effect.void,
-      publish: () => Effect.void,
-      terminateSession: () => Effect.void,
-    })
-    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      )
+    }),
+  )
+  it.live("recordToolResult rolls back the tool message when durable event append fails", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const failingPublisherLayer = Layer.succeed(EventPublisher, {
+        append: (event: AgentEvent) =>
+          event._tag === "ToolCallSucceeded"
+            ? Effect.fail(new EventStoreError({ message: "append failed" }))
+            : Effect.succeed(
+                EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
+              ),
+        deliver: () => Effect.void,
+        publish: () => Effect.void,
+        terminateSession: () => Effect.void,
+      })
+      const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const { sessionId, branchId } = yield* createSessionBranch
           const commandId = ActorCommandId.make("record-tool-atomicity")
-
           const exit = yield* Effect.exit(
             sessionRuntime.dispatch(
               recordToolResultCommand({
@@ -634,20 +602,17 @@ describe("SessionRuntime", () => {
             ),
           )
           const message = yield* storage.getMessage(MessageId.make(`${commandId}:tool-result`))
-
           expect(exit._tag).toBe("Failure")
           expect(message).toBeUndefined()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("recordToolResult retry does not duplicate the durable event", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      )
+    }),
+  )
+  it.live("recordToolResult retry does not duplicate the durable event", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
@@ -662,113 +627,105 @@ describe("SessionRuntime", () => {
             toolName: "read",
             output: { ok: true },
           })
-
           yield* sessionRuntime.dispatch(command)
           yield* sessionRuntime.dispatch(command)
-
           const messages = yield* storage.listMessages(branchId)
           const calls = yield* recorder.getCalls()
           const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
-
           expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
           expect(toolSucceeded).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("recordToolResult retries committed event delivery without duplicating the durable event", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    const delivered: string[] = []
-    const eventPublisherLayer = makePublisherFailingFirstMatchingDelivery(
-      (event) => event._tag === "ToolCallSucceeded",
-      delivered,
-    )
-    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
-
-    await Effect.runPromise(
-      narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
-          const { sessionId, branchId } = yield* createSessionBranch
-          const commandId = ActorCommandId.make("record-tool-delivery-retry")
-          const command = recordToolResultCommand({
-            commandId,
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("tool-call-delivery-retry"),
-            toolName: "read",
-            output: { ok: true },
-          })
-
-          const firstExit = yield* Effect.exit(sessionRuntime.dispatch(command))
-          yield* sessionRuntime.dispatch(command)
-
-          const messages = yield* storage.listMessages(branchId)
-          const events = yield* storage.listEvents({ sessionId, branchId })
-          const toolSucceeded = events.filter(
-            (envelope) => envelope.event._tag === "ToolCallSucceeded",
-          )
-
-          expect(firstExit._tag).toBe("Failure")
-          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
-          expect(toolSucceeded).toHaveLength(1)
-          expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("recordToolResult commands are serialized per session", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
-    let releaseFirstDelivery: () => void = () => {}
-    let markFirstDeliveryStarted: () => void = () => {}
-    const firstDeliveryStarted = new Promise<void>((resolve) => {
-      markFirstDeliveryStarted = resolve
-    })
-    const releaseDelivery = new Promise<void>((resolve) => {
-      releaseFirstDelivery = resolve
-    })
-    let deliveredToolResults = 0
-
-    const eventPublisherLayer = Layer.effect(
-      EventPublisher,
+      )
+    }),
+  )
+  it.live(
+    "recordToolResult retries committed event delivery without duplicating the durable event",
+    () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        const append = (event: AgentEvent) =>
-          storage
-            .appendEvent(event)
-            .pipe(
-              Effect.mapError(
-                (error) => new EventStoreError({ message: error.message, cause: error }),
-              ),
+        const { layer: providerLayer } = yield* Provider.Sequence([])
+        const delivered: string[] = []
+        const eventPublisherLayer = makePublisherFailingFirstMatchingDelivery(
+          (event) => event._tag === "ToolCallSucceeded",
+          delivered,
+        )
+        const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
+        yield* narrowR(
+          Effect.gen(function* () {
+            const sessionRuntime = yield* SessionRuntime
+            const storage = yield* Storage
+            const { sessionId, branchId } = yield* createSessionBranch
+            const commandId = ActorCommandId.make("record-tool-delivery-retry")
+            const command = recordToolResultCommand({
+              commandId,
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("tool-call-delivery-retry"),
+              toolName: "read",
+              output: { ok: true },
+            })
+            const firstExit = yield* Effect.exit(sessionRuntime.dispatch(command))
+            yield* sessionRuntime.dispatch(command)
+            const messages = yield* storage.listMessages(branchId)
+            const events = yield* storage.listEvents({ sessionId, branchId })
+            const toolSucceeded = events.filter(
+              (envelope) => envelope.event._tag === "ToolCallSucceeded",
             )
-        const deliver = (envelope: EventEnvelope) =>
-          Effect.promise(async () => {
-            if (envelope.event._tag !== "ToolCallSucceeded") return
-            deliveredToolResults++
-            if (deliveredToolResults === 1) {
-              markFirstDeliveryStarted()
-              await releaseDelivery
-            }
-          })
-        return EventPublisher.of({
-          append,
-          deliver,
-          publish: (event) =>
-            Effect.gen(function* () {
-              const envelope = yield* append(event)
-              yield* deliver(envelope)
-            }),
-          terminateSession: () => Effect.void,
-        })
+            expect(firstExit._tag).toBe("Failure")
+            expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+            expect(toolSucceeded).toHaveLength(1)
+            expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+        )
       }),
-    )
-    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
-
-    await Effect.runPromise(
-      narrowR(
+  )
+  it.live("recordToolResult commands are serialized per session", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      let releaseFirstDelivery: () => void = () => {}
+      let markFirstDeliveryStarted: () => void = () => {}
+      const firstDeliveryStarted = new Promise<void>((resolve) => {
+        markFirstDeliveryStarted = resolve
+      })
+      const releaseDelivery = new Promise<void>((resolve) => {
+        releaseFirstDelivery = resolve
+      })
+      let deliveredToolResults = 0
+      const eventPublisherLayer = Layer.effect(
+        EventPublisher,
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const append = (event: AgentEvent) =>
+            storage
+              .appendEvent(event)
+              .pipe(
+                Effect.mapError(
+                  (error) => new EventStoreError({ message: error.message, cause: error }),
+                ),
+              )
+          const deliver = (envelope: EventEnvelope) =>
+            Effect.promise(() => {
+              if (envelope.event._tag !== "ToolCallSucceeded") return Promise.resolve()
+              deliveredToolResults++
+              if (deliveredToolResults === 1) {
+                markFirstDeliveryStarted()
+                return releaseDelivery
+              }
+              return Promise.resolve()
+            })
+          return EventPublisher.of({
+            append,
+            deliver,
+            publish: (event) =>
+              Effect.gen(function* () {
+                const envelope = yield* append(event)
+                yield* deliver(envelope)
+              }),
+            terminateSession: () => Effect.void,
+          })
+        }),
+      )
+      const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createSessionBranch
@@ -788,58 +745,51 @@ describe("SessionRuntime", () => {
             toolName: "read",
             output: { value: "b" },
           })
-
           const firstFiber = yield* Effect.forkChild(sessionRuntime.dispatch(first))
           yield* Effect.promise(() => firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
-
           const secondFiber = yield* Effect.forkChild(sessionRuntime.dispatch(second))
           const earlySecond = yield* Fiber.join(secondFiber).pipe(
             Effect.timeoutOption("200 millis"),
           )
-
           expect(earlySecond._tag).toBe("None")
           expect(deliveredToolResults).toBe(1)
-
           releaseFirstDelivery()
           yield* Fiber.join(firstFiber)
           yield* Fiber.join(secondFiber)
-
           expect(deliveredToolResults).toBe(2)
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("recordToolResult waits for the active turn mutation owner", async () => {
-    let markStreamStarted: () => void = () => {}
-    let releaseStream: () => void = () => {}
-    const streamStarted = new Promise<void>((resolve) => {
-      markStreamStarted = resolve
-    })
-    const streamReleased = new Promise<void>((resolve) => {
-      releaseStream = resolve
-    })
-    const providerLayer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.promise(async () => {
-          markStreamStarted()
-          await streamReleased
-          return Stream.fromIterable([
-            textDeltaPart("done"),
-            finishPart({ finishReason: "stop" }),
-          ] satisfies ProviderStreamPart[])
-        }),
-      generate: () => Effect.succeed("test"),
-    })
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      )
+    }),
+  )
+  it.live("recordToolResult waits for the active turn mutation owner", () =>
+    Effect.gen(function* () {
+      let markStreamStarted: () => void = () => {}
+      let releaseStream: () => void = () => {}
+      const streamStarted = new Promise<void>((resolve) => {
+        markStreamStarted = resolve
+      })
+      const streamReleased = new Promise<void>((resolve) => {
+        releaseStream = resolve
+      })
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.promise(() => {
+            markStreamStarted()
+            return streamReleased.then(() =>
+              Stream.fromIterable([
+                textDeltaPart("done"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies ProviderStreamPart[]),
+            )
+          }),
+        generate: () => Effect.succeed("test"),
+      })
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const { sessionId, branchId } = yield* createSessionBranch
-
           const submitFiber = yield* Effect.forkChild(
             sessionRuntime.dispatch(
               sendUserMessageCommand({
@@ -850,7 +800,6 @@ describe("SessionRuntime", () => {
             ),
           )
           yield* Effect.promise(() => streamStarted).pipe(Effect.timeout("5 seconds"))
-
           const recordFiber = yield* Effect.forkChild(
             sessionRuntime.dispatch(
               recordToolResultCommand({
@@ -867,18 +816,15 @@ describe("SessionRuntime", () => {
             Effect.timeoutOption("200 millis"),
           )
           const messagesBeforeRelease = yield* storage.listMessages(branchId)
-
           expect(earlyRecord._tag).toBe("None")
           expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
-
           releaseStream()
           yield* Fiber.join(submitFiber)
           yield* Fiber.join(recordFiber)
-
           const messagesAfterRelease = yield* waitFor(
             storage.listMessages(branchId),
             (messages) => messages.some((message) => message.role === "tool"),
-            5_000,
+            5000,
             "tool result after active turn releases ownership",
           )
           expect(messagesAfterRelease.map((message) => message.role)).toEqual([
@@ -887,13 +833,12 @@ describe("SessionRuntime", () => {
             "tool",
           ])
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("dispatch ApplySteer interjects ahead of queued follow-ups", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
+      )
+    }),
+  )
+  it.live("dispatch ApplySteer interjects ahead of queued follow-ups", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -914,18 +859,13 @@ describe("SessionRuntime", () => {
             expect(latestUserText(request)).toBe("queued")
           },
         },
-      ]),
-    )
-
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const { sessionId, branchId } = yield* createSessionBranch
-
           yield* sessionRuntime.dispatch(
             sendUserMessageCommand({ sessionId, branchId, content: "first" }),
           )
@@ -943,7 +883,6 @@ describe("SessionRuntime", () => {
               }),
             ),
           )
-
           const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
           expect(queue.steering).toEqual([
             expect.objectContaining({ _tag: "steering", content: "steer now" }),
@@ -951,26 +890,22 @@ describe("SessionRuntime", () => {
           expect(queue.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "queued" }),
           ])
-
           yield* controls.emitAll(0)
-
           const messages = yield* waitFor(
             storage.listMessages(branchId),
             (current) => current.filter((message) => message.role === "assistant").length === 3,
-            5_000,
+            5000,
             "interjected turn completion",
           )
-
           expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
           yield* controls.assertDone()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("dispatch SendUserMessage concurrent with turn completion runs the follow-up once", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
+      )
+    }),
+  )
+  it.live("dispatch SendUserMessage concurrent with turn completion runs the follow-up once", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -984,22 +919,17 @@ describe("SessionRuntime", () => {
             expect(latestUserText(request)).toBe("second")
           },
         },
-      ]),
-    )
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const { sessionId, branchId } = yield* createSessionBranch
-
           yield* sessionRuntime.dispatch(
             sendUserMessageCommand({ sessionId, branchId, content: "first" }),
           )
           yield* controls.waitForCall(0)
-
           const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
           const followUpFiber = yield* Effect.forkChild(
             sessionRuntime.dispatch(
@@ -1008,11 +938,10 @@ describe("SessionRuntime", () => {
           )
           yield* Fiber.join(emitFiber)
           yield* Fiber.join(followUpFiber)
-
           const messages = yield* waitFor(
             storage.listMessages(branchId),
             (current) => current.filter((message) => message.role === "assistant").length === 2,
-            5_000,
+            5000,
             "concurrent follow-up completion",
           )
           expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
@@ -1020,13 +949,12 @@ describe("SessionRuntime", () => {
           expect(yield* controls.callCount).toBe(2)
           yield* controls.assertDone()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("drainQueuedMessages atomically clears follow-ups during an active turn", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
+      )
+    }),
+  )
+  it.live("drainQueuedMessages atomically clears follow-ups during an active turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -1035,17 +963,13 @@ describe("SessionRuntime", () => {
           },
         },
         textStep("should not run"),
-      ]),
-    )
-    const layer = makeRuntimeLayer(providerLayer)
-
-    await Effect.runPromise(
-      narrowR(
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const storage = yield* Storage
           const { sessionId, branchId } = yield* createSessionBranch
-
           yield* sessionRuntime.dispatch(
             sendUserMessageCommand({ sessionId, branchId, content: "first" }),
           )
@@ -1053,7 +977,6 @@ describe("SessionRuntime", () => {
           yield* sessionRuntime.dispatch(
             sendUserMessageCommand({ sessionId, branchId, content: "drain me" }),
           )
-
           const drained = yield* sessionRuntime.drainQueuedMessages({ sessionId, branchId })
           expect(drained.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
@@ -1062,12 +985,11 @@ describe("SessionRuntime", () => {
             steering: [],
             followUp: [],
           } satisfies QueueSnapshot)
-
           yield* controls.emitAll(0)
           yield* waitFor(
             sessionRuntime.getState({ sessionId, branchId }),
             (state) => state._tag === "Idle",
-            5_000,
+            5000,
             "idle after drained follow-up",
           )
           expect(yield* controls.callCount).toBe(1)
@@ -1075,22 +997,19 @@ describe("SessionRuntime", () => {
             (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
           ).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("dispatch RespondInteraction resumes a waiting interaction through the live loop", async () => {
-    const callCount = Ref.makeUnsafe(0)
-    const resolution = Deferred.makeUnsafe<void>()
-    const toolDef = makeInteractionTool(callCount, resolution)
-    const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
-
-    await Effect.runPromise(
-      narrowR(
+      )
+    }),
+  )
+  it.live("dispatch RespondInteraction resumes a waiting interaction through the live loop", () =>
+    Effect.gen(function* () {
+      const callCount = Ref.makeUnsafe(0)
+      const resolution = Deferred.makeUnsafe<void>()
+      const toolDef = makeInteractionTool(callCount, resolution)
+      const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
+      yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createSessionBranch
-
           yield* sessionRuntime.dispatch(
             sendUserMessageCommand({
               sessionId,
@@ -1098,14 +1017,12 @@ describe("SessionRuntime", () => {
               content: "trigger interaction",
             }),
           )
-
           yield* waitFor(
             sessionRuntime.getState({ sessionId, branchId }),
             (current) => current._tag === "WaitingForInteraction",
-            5_000,
+            5000,
             "waiting interaction state",
           )
-
           yield* sessionRuntime.dispatch(
             respondInteractionCommand({
               sessionId,
@@ -1113,19 +1030,17 @@ describe("SessionRuntime", () => {
               requestId: "req-test-1",
             }),
           )
-
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           const state = yield* waitFor(
             sessionRuntime.getState({ sessionId, branchId }),
             (current) => current._tag === "Idle",
-            5_000,
+            5000,
             "idle after interaction response",
           )
-
           expect(state._tag).toBe("Idle")
           expect(Ref.getUnsafe(callCount)).toBe(2)
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      ),
-    )
-  })
+      )
+    }),
+  )
 })

@@ -87,8 +87,6 @@ export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient 
       clear: flat["driver.clear"],
     },
     extension: {
-      send: flat["extension.send"],
-      ask: flat["extension.ask"],
       request: flat["extension.request"],
       listStatus: flat["extension.listStatus"],
       listCommands: flat["extension.listCommands"],

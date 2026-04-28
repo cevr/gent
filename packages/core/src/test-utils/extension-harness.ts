@@ -322,8 +322,6 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   cwd: "/tmp",
   home: "/tmp",
   extension: {
-    send: dieStub("extension.send"),
-    ask: dieStub("extension.ask"),
     request: dieStub("extension.request"),
   },
   actors: {

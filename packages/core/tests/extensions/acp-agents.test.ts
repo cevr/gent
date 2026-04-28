@@ -4,7 +4,7 @@
  * Tests the ACP SessionNotification → TurnEvent mapping and the
  * codemode proxy dispatch/rejection behavior.
  */
-import { describe, test, expect } from "bun:test"
+import { describe, test, expect, it } from "effect-bun-test"
 import { Context, Effect, Schema } from "effect"
 import {
   ReasoningDelta,
@@ -24,12 +24,9 @@ import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
 import { makeAcpRunTool } from "../../../extensions/src/acp-agents/executor-boundary.js"
-
 // ── ACP → TurnEvent mapping ──
-
 const makeNotification = (update: unknown) =>
   Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
-
 describe("mapAcpUpdateToTurnEvent", () => {
   test("maps agent_message_chunk with text content to text-delta", () => {
     const event = mapAcpUpdateToTurnEvent(
@@ -41,7 +38,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toEqual({ _tag: "text-delta", text: "hello world" })
     expect(event).toBeInstanceOf(TextDelta)
   })
-
   test("maps agent_thought_chunk with text content to reasoning-delta", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -52,7 +48,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toEqual({ _tag: "reasoning-delta", text: "thinking..." })
     expect(event).toBeInstanceOf(ReasoningDelta)
   })
-
   test("maps tool_call to tool-started", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -68,7 +63,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     })
     expect(event).toBeInstanceOf(ToolStarted)
   })
-
   test("maps tool_call_update completed to tool-completed", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -80,7 +74,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toEqual({ _tag: "tool-completed", toolCallId: ToolCallId.make("tc-1") })
     expect(event).toBeInstanceOf(ToolCompleted)
   })
-
   test("maps tool_call_update failed to tool-failed", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -97,7 +90,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     })
     expect(event).toBeInstanceOf(ToolFailed)
   })
-
   test("captures text content blocks into tool-completed output", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -117,7 +109,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     })
     expect(event).toBeInstanceOf(ToolCompleted)
   })
-
   test("preserves a single non-text content block as structured output", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -138,7 +129,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
       output: { type: "image", data: "base64...", mimeType: "image/png" },
     })
   })
-
   test("normalizes mixed text and non-text blocks into a structured array", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -163,7 +153,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
       ],
     })
   })
-
   test("emits tool-completed with no output when content array is absent", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -175,7 +164,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toEqual({ _tag: "tool-completed", toolCallId: ToolCallId.make("tc-out-3") })
     expect(event).toBeInstanceOf(ToolCompleted)
   })
-
   test("returns undefined for non-text content in message chunk", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -185,7 +173,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toBeUndefined()
   })
-
   test("returns undefined for unknown session update type", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -195,12 +182,10 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toBeUndefined()
   })
-
   test("returns undefined for null update", () => {
     const event = mapAcpUpdateToTurnEvent(makeNotification(null))
     expect(event).toBeUndefined()
   })
-
   test("tool_call without toolCallId returns undefined", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -210,7 +195,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     )
     expect(event).toBeUndefined()
   })
-
   test("tool_call uses 'unknown' when title is missing", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -225,7 +209,6 @@ describe("mapAcpUpdateToTurnEvent", () => {
     })
     expect(event).toBeInstanceOf(ToolStarted)
   })
-
   test("tool_call_update with in-progress status returns undefined", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({
@@ -237,106 +220,106 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toBeUndefined()
   })
 })
-
 // ── Codemode proxy ──
-
 /** Parse SSE response to extract JSON-RPC result */
-const parseSseResult = async (response: Response): Promise<unknown> => {
-  const text = await response.text()
-  for (const line of text.split("\n")) {
-    if (line.startsWith("data: ")) {
-      const json = JSON.parse(line.slice(6)) as Record<string, unknown>
-      if ("result" in json) return json["result"]
+const parseSseResult = (response: Response) =>
+  Effect.gen(function* () {
+    const text = yield* Effect.promise(() => response.text())
+    for (const line of text.split("\n")) {
+      if (line.startsWith("data: ")) {
+        const json = JSON.parse(line.slice(6)) as Record<string, unknown>
+        if ("result" in json) return json["result"]
+      }
     }
-  }
-  return undefined
-}
-
+    return undefined
+  })
 const mcpHeaders = {
   "Content-Type": "application/json",
   Accept: "application/json, text/event-stream",
 }
-
 describe("codemode proxy", () => {
-  test("dispatches known tool to runTool", async () => {
-    const calls: Array<{ toolName: string; args: unknown }> = []
-
-    const mockTool: ToolToken = tool({
-      id: "echo",
-      description: "echo tool",
-      params: Schema.Struct({ text: Schema.String }),
-      execute: () => Effect.succeed({ echoed: true }),
-    })
-
-    const server = await Effect.runPromise(
-      startCodemodeServer({
+  it.live("dispatches known tool to runTool", () =>
+    Effect.gen(function* () {
+      const calls: Array<{
+        toolName: string
+        args: unknown
+      }> = []
+      const mockTool: ToolToken = tool({
+        id: "echo",
+        description: "echo tool",
+        params: Schema.Struct({ text: Schema.String }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({
         tools: [mockTool],
-        runTool: async (toolName, args) => {
-          calls.push({ toolName, args })
-          return { result: "ok" }
-        },
-      }),
-    )
-
-    try {
-      const response = await fetch(`${server.url}/mcp`, {
-        method: "POST",
-        headers: mcpHeaders,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: "execute",
-            arguments: { code: 'return await gent.echo({ text: "hello" })' },
-          },
-        }),
+        runTool: (toolName, args) =>
+          Promise.resolve().then(() => {
+            calls.push({ toolName, args })
+            return { result: "ok" }
+          }),
       })
-
-      const result = await parseSseResult(response)
-
-      expect(calls.length).toBe(1)
-      expect(calls[0]!.toolName).toBe("echo")
-      expect(calls[0]!.args).toEqual({ text: "hello" })
-      expect(result).toBeDefined()
-    } finally {
-      server.stop()
-    }
-  })
-
-  test("rejects unknown tool in proxy", async () => {
-    const server = await Effect.runPromise(
-      startCodemodeServer({
+      yield* Effect.acquireUseRelease(
+        Effect.succeed(server),
+        (server) =>
+          Effect.gen(function* () {
+            const response = yield* Effect.promise(() =>
+              fetch(`${server.url}/mcp`, {
+                method: "POST",
+                headers: mcpHeaders,
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "tools/call",
+                  params: {
+                    name: "execute",
+                    arguments: { code: 'return gent.echo({ text: "hello" })' },
+                  },
+                }),
+              }),
+            )
+            const result = yield* parseSseResult(response)
+            expect(calls.length).toBe(1)
+            expect(calls[0]!.toolName).toBe("echo")
+            expect(calls[0]!.args).toEqual({ text: "hello" })
+            expect(result).toBeDefined()
+          }),
+        (server) => Effect.sync(() => server.stop()),
+      )
+    }),
+  )
+  it.live("rejects unknown tool in proxy", () =>
+    Effect.gen(function* () {
+      const server = yield* startCodemodeServer({
         tools: [],
-        runTool: async () => {
-          throw new Error("should not be called")
-        },
-      }),
-    )
-
-    try {
-      const response = await fetch(`${server.url}/mcp`, {
-        method: "POST",
-        headers: mcpHeaders,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: "execute",
-            arguments: { code: 'return await gent.nonexistent({ foo: "bar" })' },
-          },
-        }),
+        runTool: () => Promise.reject(new Error("should not be called")),
       })
-
-      const result = (await parseSseResult(response)) as Record<string, unknown> | undefined
-      expect(result?.["isError"]).toBe(true)
-    } finally {
-      server.stop()
-    }
-  })
+      yield* Effect.acquireUseRelease(
+        Effect.succeed(server),
+        (server) =>
+          Effect.gen(function* () {
+            const response = yield* Effect.promise(() =>
+              fetch(`${server.url}/mcp`, {
+                method: "POST",
+                headers: mcpHeaders,
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "tools/call",
+                  params: {
+                    name: "execute",
+                    arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
+                  },
+                }),
+              }),
+            )
+            const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
+            expect(result?.["isError"]).toBe(true)
+          }),
+        (server) => Effect.sync(() => server.stop()),
+      )
+    }),
+  )
 })
-
 // ── Codemode proxy via real makeAcpRunTool boundary ──
 //
 // The previous block stubs `runTool` directly. This block drives the same
@@ -345,7 +328,6 @@ describe("codemode proxy", () => {
 // Effect-runtime crossing (e.g. forgetting to thread services into
 // `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
-
 const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   sessionId: SessionId.make("ses-acp-boundary-test"),
   branchId: BranchId.make("br-acp-boundary-test"),
@@ -362,115 +344,119 @@ const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   actors: {} as ExtensionHostContext["actors"],
 })
-
 describe("codemode proxy via makeAcpRunTool", () => {
-  test("runs through the boundary helper and reaches ToolRunner", async () => {
-    const calls: Array<{ toolCallId: ToolCallId; toolName: string; input: unknown }> = []
-
-    const recordingToolRunner = ToolRunner.of({
-      run: (toolCall) => {
-        calls.push({
-          toolCallId: toolCall.toolCallId,
-          toolName: toolCall.toolName,
-          input: toolCall.input,
-        })
-        return Effect.succeed(
-          new ToolResultPart({
-            type: "tool-result",
+  it.live("runs through the boundary helper and reaches ToolRunner", () =>
+    Effect.gen(function* () {
+      const calls: Array<{
+        toolCallId: ToolCallId
+        toolName: string
+        input: unknown
+      }> = []
+      const recordingToolRunner = ToolRunner.of({
+        run: (toolCall) => {
+          calls.push({
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
-            output: { type: "json", value: { boundary: "ok" } },
+            input: toolCall.input,
+          })
+          return Effect.succeed(
+            new ToolResultPart({
+              type: "tool-result",
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              output: { type: "json", value: { boundary: "ok" } },
+            }),
+          )
+        },
+      })
+      const services = Context.make(
+        ToolRunner,
+        recordingToolRunner,
+      ) as unknown as Context.Context<never>
+      const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
+      const mockTool: ToolToken = tool({
+        id: "echo",
+        description: "echo tool",
+        params: Schema.Struct({ text: Schema.String }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
+      yield* Effect.acquireUseRelease(
+        Effect.succeed(server),
+        (server) =>
+          Effect.gen(function* () {
+            const response = yield* Effect.promise(() =>
+              fetch(`${server.url}/mcp`, {
+                method: "POST",
+                headers: mcpHeaders,
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "tools/call",
+                  params: {
+                    name: "execute",
+                    arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
+                  },
+                }),
+              }),
+            )
+            const result = yield* parseSseResult(response)
+            expect(calls.length).toBe(1)
+            expect(calls[0]!.toolName).toBe("echo")
+            expect(calls[0]!.input).toEqual({ text: "via-boundary" })
+            // Each invocation generates a fresh toolCallId via crypto.randomUUID().
+            expect(typeof calls[0]!.toolCallId).toBe("string")
+            expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
+            expect(result).toBeDefined()
           }),
-        )
-      },
-    })
-
-    const services = Context.make(
-      ToolRunner,
-      recordingToolRunner,
-    ) as unknown as Context.Context<never>
-    const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
-
-    const mockTool: ToolToken = tool({
-      id: "echo",
-      description: "echo tool",
-      params: Schema.Struct({ text: Schema.String }),
-      execute: () => Effect.succeed({ echoed: true }),
-    })
-
-    const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
-
-    try {
-      const response = await fetch(`${server.url}/mcp`, {
-        method: "POST",
-        headers: mcpHeaders,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: "execute",
-            arguments: { code: 'return await gent.echo({ text: "via-boundary" })' },
-          },
-        }),
+        (server) => Effect.sync(() => server.stop()),
+      )
+    }),
+  )
+  it.live("propagates ToolRunner errors back through the SDK boundary", () =>
+    Effect.gen(function* () {
+      const failingToolRunner = ToolRunner.of({
+        run: () => Effect.die(new Error("tool runner exploded")),
       })
-
-      const result = await parseSseResult(response)
-
-      expect(calls.length).toBe(1)
-      expect(calls[0]!.toolName).toBe("echo")
-      expect(calls[0]!.input).toEqual({ text: "via-boundary" })
-      // Each invocation generates a fresh toolCallId via crypto.randomUUID().
-      expect(typeof calls[0]!.toolCallId).toBe("string")
-      expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
-      expect(result).toBeDefined()
-    } finally {
-      server.stop()
-    }
-  })
-
-  test("propagates ToolRunner errors back through the SDK boundary", async () => {
-    const failingToolRunner = ToolRunner.of({
-      run: () => Effect.die(new Error("tool runner exploded")),
-    })
-
-    const services = Context.make(
-      ToolRunner,
-      failingToolRunner,
-    ) as unknown as Context.Context<never>
-    const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
-
-    const mockTool: ToolToken = tool({
-      id: "echo",
-      description: "echo",
-      params: Schema.Struct({ text: Schema.String }),
-      execute: () => Effect.succeed({ echoed: true }),
-    })
-
-    const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
-
-    try {
-      const response = await fetch(`${server.url}/mcp`, {
-        method: "POST",
-        headers: mcpHeaders,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: "execute",
-            arguments: { code: 'return await gent.echo({ text: "fail" })' },
-          },
-        }),
+      const services = Context.make(
+        ToolRunner,
+        failingToolRunner,
+      ) as unknown as Context.Context<never>
+      const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
+      const mockTool: ToolToken = tool({
+        id: "echo",
+        description: "echo",
+        params: Schema.Struct({ text: Schema.String }),
+        execute: () => Effect.succeed({ echoed: true }),
       })
-
-      // Failure surfaces through the codemode SSE response as an error
-      // payload, not a thrown native Error — the boundary must not let
-      // the Effect die-cause crash the codemode server.
-      const result = (await parseSseResult(response)) as Record<string, unknown> | undefined
-      expect(result?.["isError"]).toBe(true)
-    } finally {
-      server.stop()
-    }
-  })
+      const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
+      yield* Effect.acquireUseRelease(
+        Effect.succeed(server),
+        (server) =>
+          Effect.gen(function* () {
+            const response = yield* Effect.promise(() =>
+              fetch(`${server.url}/mcp`, {
+                method: "POST",
+                headers: mcpHeaders,
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "tools/call",
+                  params: {
+                    name: "execute",
+                    arguments: { code: 'return gent.echo({ text: "fail" })' },
+                  },
+                }),
+              }),
+            )
+            // Failure surfaces through the codemode SSE response as an error
+            // payload, not a thrown native Error — the boundary must not let
+            // the Effect die-cause crash the codemode server.
+            const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
+            expect(result?.["isError"]).toBe(true)
+          }),
+        (server) => Effect.sync(() => server.stop()),
+      )
+    }),
+  )
 })

@@ -3,6 +3,7 @@ import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
+import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectSnapshots = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -22,7 +23,7 @@ const collectSnapshots = <A, E>(
     // Resolve once the first value has been written into `values`.
     // watchRuntime emits the current snapshot on subscribe, so this typically
     // resolves in <1ms. Cap at 50ms as a safety net.
-    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 
@@ -32,8 +33,8 @@ describe("runtime watch contracts", () => {
 
     test(
       `${transport.name} watchRuntime emits current runtime and later updates`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -97,8 +98,7 @@ describe("runtime watch contracts", () => {
               ).toBe(true)
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
   }
@@ -111,8 +111,8 @@ describe("runtime watch contracts", () => {
   const timeoutMs = 20_000
   test(
     `${directSignalCase.name} watchRuntime emits queued follow-up snapshots`,
-    async () => {
-      await directSignalCase.run("done.", ({ client }, controls) =>
+    () =>
+      directSignalCase.run("done.", ({ client }, controls) =>
         Effect.scoped(
           Effect.gen(function* () {
             const created = yield* client.session
@@ -171,8 +171,7 @@ describe("runtime watch contracts", () => {
             yield* controls.emitAll()
           }),
         ),
-      )
-    },
+      ),
     timeoutMs,
   )
 })

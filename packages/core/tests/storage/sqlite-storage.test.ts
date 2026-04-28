@@ -1,7 +1,6 @@
-import { describe, it, expect } from "effect-bun-test"
+import { describe, it, expect, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
-import { test } from "bun:test"
 import { Effect, Exit, Layer, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -18,12 +17,10 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message"
-
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { messageToInfo } from "../../src/server/session-utils"
-
 describe("Storage", () => {
   describe("Sessions", () => {
     it.live("creates and retrieves a session", () =>
@@ -35,20 +32,16 @@ describe("Storage", () => {
           createdAt: new Date(),
           updatedAt: new Date(),
         })
-
         yield* storage.createSession(session)
         const retrieved = yield* storage.getSession(SessionId.make("test-session"))
-
         expect(retrieved).toBeDefined()
         expect(retrieved?.id).toBe(SessionId.make("test-session"))
         expect(retrieved?.name).toBe("Test Session")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("lists sessions", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("s1"),
@@ -65,17 +58,14 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         const sessions = yield* storage.listSessions()
         expect(sessions.length).toBe(2)
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("lists first branch per session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = Date.now()
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("s1"),
@@ -90,7 +80,6 @@ describe("Storage", () => {
             updatedAt: new Date(now + 1),
           }),
         )
-
         yield* storage.createBranch(
           new Branch({
             id: BranchId.make("s1-b1"),
@@ -112,15 +101,12 @@ describe("Storage", () => {
             createdAt: new Date(now + 5),
           }),
         )
-
         const firstBranches = yield* storage.listFirstBranches()
         const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-
         expect(map.get(SessionId.make("s1"))).toBe(BranchId.make("s1-b0"))
         expect(map.get(SessionId.make("s2"))).toBe(BranchId.make("s2-b1"))
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("updates a session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -130,15 +116,12 @@ describe("Storage", () => {
           createdAt: new Date(),
           updatedAt: new Date(),
         })
-
         yield* storage.createSession(session)
         yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
-
         const retrieved = yield* storage.getSession(SessionId.make("update-test"))
         expect(retrieved?.name).toBe("Updated")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("deletes a session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -149,34 +132,29 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         yield* storage.deleteSession(SessionId.make("delete-test"))
         const retrieved = yield* storage.getSession(SessionId.make("delete-test"))
-
         expect(retrieved).toBeUndefined()
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("enables sqlite foreign key enforcement", () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
-        const rows = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
-
+        const rows = yield* sql<{
+          foreign_keys: number
+        }>`PRAGMA foreign_keys`
         expect(rows[0]?.foreign_keys).toBe(1)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("rejects orphan branch, message, and event rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const now = Date.now()
-
         const branchExit = yield* Effect.exit(
           sql`INSERT INTO branches (id, session_id, name, created_at) VALUES (${"orphan-branch"}, ${"missing-session"}, ${null}, ${now})`,
         )
         expect(branchExit._tag).toBe("Failure")
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("fk-session"),
@@ -184,25 +162,21 @@ describe("Storage", () => {
             updatedAt: new Date(now),
           }),
         )
-
         const messageExit = yield* Effect.exit(
           sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"orphan-message"}, ${"fk-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${now}, ${null})`,
         )
         expect(messageExit._tag).toBe("Failure")
-
         const eventExit = yield* Effect.exit(
           sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${"missing-session"}, NULL, ${"SessionStarted"}, ${"{}"}, ${now})`,
         )
         expect(eventExit._tag).toBe("Failure")
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("rejects invalid session parent and active branch relationships", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-
         yield* storage.createSession(
           new Session({ id: SessionId.make("parent-a"), createdAt: now, updatedAt: now }),
         )
@@ -223,39 +197,32 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-
         const orphanParentExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"orphan-child"}, ${"missing-parent"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(orphanParentExit._tag).toBe("Failure")
-
         const wrongParentBranchExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"wrong-parent-branch"}, ${"parent-a"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(wrongParentBranchExit._tag).toBe("Failure")
-
         const danglingParentBranchExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, parent_branch_id, created_at, updated_at) VALUES (${"dangling-parent-branch"}, ${"parent-a-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(danglingParentBranchExit._tag).toBe("Failure")
-
         const missingActiveBranchExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"missing-active"}, ${"missing-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(missingActiveBranchExit._tag).toBe("Failure")
-
         const wrongActiveBranchExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"wrong-active"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(wrongActiveBranchExit._tag).toBe("Failure")
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("rejects parent branch without parent session through storage service", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
-
         const exit = yield* Effect.exit(
           storage.createSession(
             new Session({
@@ -266,20 +233,17 @@ describe("Storage", () => {
             }),
           ),
         )
-
         expect(exit._tag).toBe("Failure")
         expect(
           yield* storage.getSession(SessionId.make("storage-dangling-parent-branch")),
         ).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("rejects branch creation with a parent branch outside the same session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-
         yield* storage.createSession(
           new Session({ id: SessionId.make("branch-parent-a"), createdAt: now, updatedAt: now }),
         )
@@ -293,7 +257,6 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-
         const exit = yield* Effect.exit(
           storage.createBranch(
             new Branch({
@@ -304,23 +267,19 @@ describe("Storage", () => {
             }),
           ),
         )
-
         expect(exit._tag).toBe("Failure")
         expect(yield* storage.getBranch(BranchId.make("branch-parent-b-child"))).toBeUndefined()
-
         const directInsertExit = yield* Effect.exit(
           sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
         )
         expect(directInsertExit._tag).toBe("Failure")
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("rejects deleting branches that own child branches or child sessions", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("delete-parent-session"),
@@ -343,19 +302,16 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-
         const childBranchExit = yield* Effect.exit(
           storage.deleteBranch(BranchId.make("delete-parent-root")),
         )
         expect(childBranchExit._tag).toBe("Failure")
         expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
-
         const directChildBranchExit = yield* Effect.exit(
           sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
         )
         expect(directChildBranchExit._tag).toBe("Failure")
         expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("delete-child-session"),
@@ -372,14 +328,12 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-
         const childSessionExit = yield* Effect.exit(
           storage.deleteBranch(BranchId.make("delete-parent-child")),
         )
         expect(childSessionExit._tag).toBe("Failure")
         expect(yield* storage.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
         expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
-
         const directChildSessionExit = yield* Effect.exit(
           sql`DELETE FROM branches WHERE id = ${"delete-parent-child"}`,
         )
@@ -388,7 +342,6 @@ describe("Storage", () => {
         expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("deletes session children and storage projections", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -398,7 +351,6 @@ describe("Storage", () => {
         const branchId = BranchId.make("cascade-branch")
         const childSessionId = SessionId.make("cascade-child-session")
         const childBranchId = BranchId.make("cascade-child-branch")
-
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -457,17 +409,28 @@ describe("Storage", () => {
             toAgent: "deepwork",
           }),
         )
-
         const cascadedIds = yield* storage.deleteSession(sessionId)
-
-        const sessions = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM sessions`
-        const branches = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM branches`
-        const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
-        const events = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM events`
-        const refs = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
-        const chunks = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM content_chunks`
-        const fts = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages_fts`
-
+        const sessions = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM sessions`
+        const branches = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM branches`
+        const messages = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM messages`
+        const events = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM events`
+        const refs = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM message_chunks`
+        const chunks = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM content_chunks`
+        const fts = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM messages_fts`
         expect(sessions[0]?.count).toBe(0)
         expect(branches[0]?.count).toBe(0)
         expect(messages[0]?.count).toBe(0)
@@ -478,7 +441,6 @@ describe("Storage", () => {
         expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -486,7 +448,6 @@ describe("Storage", () => {
         expect(cascadedIds).toEqual([])
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     // Observable post-state contract (sqlite-storage.ts:1204-1209):
     // when `deleteSession(parent)` races with concurrent
     // `createSession(child of parent)`, the durable state must satisfy:
@@ -516,7 +477,6 @@ describe("Storage", () => {
         yield* storage.createBranch(
           new Branch({ id: parentBranchId, sessionId: parentId, createdAt: now }),
         )
-
         // Pre-create K children before the race so the cascade has a
         // non-vacuous set to return. These MUST appear in cascadedIds
         // (they exist when the delete tx's SELECT runs).
@@ -535,10 +495,8 @@ describe("Storage", () => {
             }),
           )
         }
-
         const N = 24
         const childIds = Array.from({ length: N }, (_, i) => SessionId.make(`race-child-${i}`))
-
         // Race the delete against N concurrent child creates. Each child
         // create may either:
         //   (a) commit before the delete tx's SELECT — gets cascaded;
@@ -559,7 +517,6 @@ describe("Storage", () => {
               }),
             ),
           )
-
         const [cascadedIds, childExits] = yield* Effect.all(
           [
             storage.deleteSession(parentId),
@@ -567,14 +524,12 @@ describe("Storage", () => {
           ],
           { concurrency: "unbounded" },
         )
-
         // Invariant 1+2: parent is gone, and parent is in the returned set.
         const parentRows = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${parentId}`
         expect(parentRows[0]?.count).toBe(0)
         expect(cascadedIds).toContain(parentId)
-
         // Invariant 2b: every pre-existing child must be in cascadedIds.
         // These rows existed when the delete tx began, so the recursive
         // descendant SELECT must have seen them. A partial-cascade bug
@@ -584,7 +539,6 @@ describe("Storage", () => {
         for (const id of preChildIds) {
           expect(cascadedIds).toContain(id)
         }
-
         // Invariant 3: no child row points at the removed parent. Children
         // that landed before the delete were cascaded; children that tried
         // to land after were rejected by the FK or cascaded together.
@@ -592,7 +546,6 @@ describe("Storage", () => {
           count: number
         }>`SELECT COUNT(*) as count FROM sessions WHERE parent_session_id = ${parentId}`
         expect(orphanRows[0]?.count).toBe(0)
-
         // Invariant 4: every id the storage layer reports as cascaded is
         // gone from the DB. The caller uses this set to clean runtime
         // state (loops, streams, cwd-registry) — a divergence here would
@@ -603,7 +556,6 @@ describe("Storage", () => {
           }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${id}`
           expect(rows[0]?.count).toBe(0)
         }
-
         // Invariant 5: every child create that *succeeded* is either in
         // `cascadedIds` (the storage layer reported it as cascaded) or
         // still present in the DB. A partial-cascade bug that silently
@@ -625,13 +577,16 @@ describe("Storage", () => {
         }
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
     )
-
-    test("migrates legacy storage tables to enforced foreign keys", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "gent-fk-migration-"))
-      const dbPath = join(dir, "gent.db")
-      try {
-        const db = new Database(dbPath)
-        db.run(`
+    it.live("migrates legacy storage tables to enforced foreign keys", () =>
+      Effect.gen(function* () {
+        const dir = mkdtempSync(join(tmpdir(), "gent-fk-migration-"))
+        const dbPath = join(dir, "gent.db")
+        yield* Effect.acquireUseRelease(
+          Effect.void,
+          () =>
+            Effect.gen(function* () {
+              const db = new Database(dbPath)
+              db.run(`
           CREATE TABLE sessions (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -645,7 +600,7 @@ describe("Storage", () => {
             updated_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE branches (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -655,7 +610,7 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -666,14 +621,14 @@ describe("Storage", () => {
             turn_duration_ms INTEGER
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE content_chunks (
             id TEXT PRIMARY KEY,
             part_type TEXT NOT NULL,
             part_json TEXT NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE message_chunks (
             message_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
@@ -681,7 +636,7 @@ describe("Storage", () => {
             PRIMARY KEY (message_id, ordinal)
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE events (
             id INTEGER PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -691,7 +646,7 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE actor_inbox (
             command_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -707,7 +662,7 @@ describe("Storage", () => {
             last_error TEXT
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE agent_loop_checkpoints (
             session_id TEXT NOT NULL,
             branch_id TEXT NOT NULL,
@@ -718,7 +673,7 @@ describe("Storage", () => {
             PRIMARY KEY (session_id, branch_id)
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE interaction_requests (
             request_id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -729,291 +684,315 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(
-          `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["legacy-session", "legacy", "missing-active", "missing-parent", "missing-branch", 0, 0],
-        )
-        db.run(
-          `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["other-session", "other", null, null, null, 0, 0],
-        )
-        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
-          "valid-branch",
-          "legacy-session",
-          "main",
-          0,
-        ])
-        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
-          "other-branch",
-          "other-session",
-          "other",
-          0,
-        ])
-        db.run(
-          `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
-          ["missing-parent-child", "legacy-session", "missing-parent-branch", "child", 0],
-        )
-        db.run(
-          `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
-          ["cross-session-child", "legacy-session", "other-branch", "cross", 0],
-        )
-        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
-          "orphan-branch",
-          "missing-session",
-          "orphan",
-          0,
-        ])
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "valid-message",
-            "legacy-session",
-            "valid-branch",
-            "user",
-            JSON.stringify([{ type: "text", text: "survives migration" }]),
-            1,
-            null,
-          ],
-        )
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["orphan-message", "legacy-session", "missing-branch", "user", "[]", 2, null],
-        )
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["mismatched-message", "other-session", "valid-branch", "user", "[]", 3, null],
-        )
-        db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
-          "orphan-chunk",
-          "text",
-          JSON.stringify({ type: "text", text: "orphan" }),
-        ])
-        db.run(`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`, [
-          "missing-message",
-          0,
-          "orphan-chunk",
-        ])
-        db.run(
-          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-          ["legacy-session", "valid-branch", "AgentSwitched", "{}", 4],
-        )
-        db.run(
-          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-          ["missing-session", null, "AgentSwitched", "{}", 5],
-        )
-        db.run(
-          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-          ["legacy-session", "missing-branch", "AgentSwitched", "{}", 6],
-        )
-        db.run(
-          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ["valid-command", "legacy-session", "valid-branch", "test", "{}", "pending", 0, 7, 7],
-        )
-        db.run(
-          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "missing-branch-command",
-            "legacy-session",
-            "missing-branch",
-            "test",
-            "{}",
-            "pending",
-            0,
-            8,
-            8,
-          ],
-        )
-        db.run(
-          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "mismatched-command",
-            "legacy-session",
-            "other-branch",
-            "test",
-            "{}",
-            "pending",
-            0,
-            9,
-            9,
-          ],
-        )
-        db.run(
-          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ["legacy-session", "valid-branch", 1, "Idle", "{}", 10],
-        )
-        db.run(
-          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ["legacy-session", "missing-branch", 1, "Idle", "{}", 11],
-        )
-        db.run(
-          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ["other-session", "valid-branch", 1, "Idle", "{}", 12],
-        )
-        db.run(
-          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["valid-request", "approval", "legacy-session", "valid-branch", "{}", "pending", 13],
-        )
-        db.run(
-          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "missing-branch-request",
-            "approval",
-            "legacy-session",
-            "missing-branch",
-            "{}",
-            "pending",
-            14,
-          ],
-        )
-        db.run(
-          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          ["mismatched-request", "approval", "legacy-session", "other-branch", "{}", "pending", 15],
-        )
-        db.close()
-
-        const layer = Storage.LiveWithSql(dbPath).pipe(
-          Layer.provide(BunFileSystem.layer),
-          Layer.provide(BunServices.layer),
-        )
-
-        await Effect.runPromise(
-          Effect.gen(function* () {
-            const storage = yield* Storage
-            const sql = yield* SqlClient.SqlClient
-
-            const session = yield* storage.getSession(SessionId.make("legacy-session"))
-            expect(session?.activeBranchId).toBeUndefined()
-            expect(session?.parentSessionId).toBeUndefined()
-            expect(session?.parentBranchId).toBeUndefined()
-
-            const repairedBranches = yield* storage.listBranches(SessionId.make("legacy-session"))
-            expect(
-              repairedBranches.find((branch) => branch.id === "missing-parent-child")
-                ?.parentBranchId,
-            ).toBeUndefined()
-            expect(
-              repairedBranches.find((branch) => branch.id === "cross-session-child")
-                ?.parentBranchId,
-            ).toBeUndefined()
-
-            const message = yield* storage.getMessage(MessageId.make("valid-message"))
-            expect(message?.parts).toEqual([
-              new TextPart({ type: "text", text: "survives migration" }),
-            ])
-
-            const fkCheck = yield* sql<{
-              table: string
-              rowid: number | null
-              parent: string
-              fkid: number
-            }>`PRAGMA foreign_key_check`
-            expect(fkCheck).toEqual([])
-
-            const branchParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(branches)`
-            const messageParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(messages)`
-            const eventParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(events)`
-            const sessionParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(sessions)`
-            const sessionSchema = yield* sql<{ sql: string | null }>`
+              db.run(
+                `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "legacy-session",
+                  "legacy",
+                  "missing-active",
+                  "missing-parent",
+                  "missing-branch",
+                  0,
+                  0,
+                ],
+              )
+              db.run(
+                `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                ["other-session", "other", null, null, null, 0, 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`,
+                ["valid-branch", "legacy-session", "main", 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`,
+                ["other-branch", "other-session", "other", 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+                ["missing-parent-child", "legacy-session", "missing-parent-branch", "child", 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+                ["cross-session-child", "legacy-session", "other-branch", "cross", 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`,
+                ["orphan-branch", "missing-session", "orphan", 0],
+              )
+              db.run(
+                `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "valid-message",
+                  "legacy-session",
+                  "valid-branch",
+                  "user",
+                  JSON.stringify([{ type: "text", text: "survives migration" }]),
+                  1,
+                  null,
+                ],
+              )
+              db.run(
+                `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                ["orphan-message", "legacy-session", "missing-branch", "user", "[]", 2, null],
+              )
+              db.run(
+                `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                ["mismatched-message", "other-session", "valid-branch", "user", "[]", 3, null],
+              )
+              db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
+                "orphan-chunk",
+                "text",
+                JSON.stringify({ type: "text", text: "orphan" }),
+              ])
+              db.run(
+                `INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`,
+                ["missing-message", 0, "orphan-chunk"],
+              )
+              db.run(
+                `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+                ["legacy-session", "valid-branch", "AgentSwitched", "{}", 4],
+              )
+              db.run(
+                `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+                ["missing-session", null, "AgentSwitched", "{}", 5],
+              )
+              db.run(
+                `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+                ["legacy-session", "missing-branch", "AgentSwitched", "{}", 6],
+              )
+              db.run(
+                `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "valid-command",
+                  "legacy-session",
+                  "valid-branch",
+                  "test",
+                  "{}",
+                  "pending",
+                  0,
+                  7,
+                  7,
+                ],
+              )
+              db.run(
+                `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "missing-branch-command",
+                  "legacy-session",
+                  "missing-branch",
+                  "test",
+                  "{}",
+                  "pending",
+                  0,
+                  8,
+                  8,
+                ],
+              )
+              db.run(
+                `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "mismatched-command",
+                  "legacy-session",
+                  "other-branch",
+                  "test",
+                  "{}",
+                  "pending",
+                  0,
+                  9,
+                  9,
+                ],
+              )
+              db.run(
+                `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                ["legacy-session", "valid-branch", 1, "Idle", "{}", 10],
+              )
+              db.run(
+                `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                ["legacy-session", "missing-branch", 1, "Idle", "{}", 11],
+              )
+              db.run(
+                `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                ["other-session", "valid-branch", 1, "Idle", "{}", 12],
+              )
+              db.run(
+                `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "valid-request",
+                  "approval",
+                  "legacy-session",
+                  "valid-branch",
+                  "{}",
+                  "pending",
+                  13,
+                ],
+              )
+              db.run(
+                `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "missing-branch-request",
+                  "approval",
+                  "legacy-session",
+                  "missing-branch",
+                  "{}",
+                  "pending",
+                  14,
+                ],
+              )
+              db.run(
+                `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "mismatched-request",
+                  "approval",
+                  "legacy-session",
+                  "other-branch",
+                  "{}",
+                  "pending",
+                  15,
+                ],
+              )
+              db.close()
+              const layer = Storage.LiveWithSql(dbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              yield* Effect.gen(function* () {
+                const storage = yield* Storage
+                const sql = yield* SqlClient.SqlClient
+                const session = yield* storage.getSession(SessionId.make("legacy-session"))
+                expect(session?.activeBranchId).toBeUndefined()
+                expect(session?.parentSessionId).toBeUndefined()
+                expect(session?.parentBranchId).toBeUndefined()
+                const repairedBranches = yield* storage.listBranches(
+                  SessionId.make("legacy-session"),
+                )
+                expect(
+                  repairedBranches.find((branch) => branch.id === "missing-parent-child")
+                    ?.parentBranchId,
+                ).toBeUndefined()
+                expect(
+                  repairedBranches.find((branch) => branch.id === "cross-session-child")
+                    ?.parentBranchId,
+                ).toBeUndefined()
+                const message = yield* storage.getMessage(MessageId.make("valid-message"))
+                expect(message?.parts).toEqual([
+                  new TextPart({ type: "text", text: "survives migration" }),
+                ])
+                const fkCheck = yield* sql<{
+                  table: string
+                  rowid: number | null
+                  parent: string
+                  fkid: number
+                }>`PRAGMA foreign_key_check`
+                expect(fkCheck).toEqual([])
+                const branchParents = yield* sql<{
+                  table: string
+                }>`PRAGMA foreign_key_list(branches)`
+                const messageParents = yield* sql<{
+                  table: string
+                }>`PRAGMA foreign_key_list(messages)`
+                const eventParents = yield* sql<{
+                  table: string
+                }>`PRAGMA foreign_key_list(events)`
+                const sessionParents = yield* sql<{
+                  table: string
+                }>`PRAGMA foreign_key_list(sessions)`
+                const sessionSchema = yield* sql<{
+                  sql: string | null
+                }>`
               SELECT sql FROM sqlite_schema WHERE type = ${"table"} AND name = ${"sessions"}
             `
-            expect(sessionParents.map((row) => row.table)).toEqual(
-              expect.arrayContaining(["branches", "sessions"]),
-            )
-            expect(sessionSchema[0]?.sql ?? "").toContain(
-              "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)",
-            )
-            expect(branchParents.map((row) => row.table)).toContain("sessions")
-            expect(branchParents.map((row) => row.table)).toContain("branches")
-            expect(messageParents.map((row) => row.table)).toEqual(
-              expect.arrayContaining(["branches", "sessions"]),
-            )
-            expect(eventParents.map((row) => row.table)).toEqual(
-              expect.arrayContaining(["branches", "sessions"]),
-            )
-
-            const orphanBranches = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM branches WHERE id = ${"orphan-branch"}`
-            const orphanMessages = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM messages WHERE id IN (${"orphan-message"}, ${"mismatched-message"})`
-            const orphanChunks = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM content_chunks WHERE id = ${"orphan-chunk"}`
-            const orphanEvents = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM events WHERE created_at IN (${5}, ${6})`
-            const orphanActorInbox = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM actor_inbox WHERE command_id IN (${"missing-branch-command"}, ${"mismatched-command"})`
-            const orphanCheckpoints = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM agent_loop_checkpoints WHERE updated_at IN (${11}, ${12})`
-            const orphanInteractions = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM interaction_requests WHERE request_id IN (${"missing-branch-request"}, ${"mismatched-request"})`
-            expect(orphanBranches[0]?.count).toBe(0)
-            expect(orphanMessages[0]?.count).toBe(0)
-            expect(orphanChunks[0]?.count).toBe(0)
-            expect(orphanEvents[0]?.count).toBe(0)
-            expect(orphanActorInbox[0]?.count).toBe(0)
-            expect(orphanCheckpoints[0]?.count).toBe(0)
-            expect(orphanInteractions[0]?.count).toBe(0)
-
-            const rejected = yield* Effect.exit(
-              sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
-            )
-            expect(rejected._tag).toBe("Failure")
-
-            const invalidSession = yield* Effect.exit(
-              sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
-            )
-            expect(invalidSession._tag).toBe("Failure")
-
-            const danglingParentBranch = yield* Effect.exit(
-              sql`INSERT INTO sessions (id, parent_branch_id, created_at, updated_at) VALUES (${"new-dangling-parent-branch"}, ${"valid-branch"}, ${8}, ${8})`,
-            )
-            expect(danglingParentBranch._tag).toBe("Failure")
-
-            const invalidBranch = yield* Effect.exit(
-              sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"new-invalid-branch"}, ${"legacy-session"}, ${"other-branch"}, ${8})`,
-            )
-            expect(invalidBranch._tag).toBe("Failure")
-
-            yield* sql.withTransaction(
-              Effect.gen(function* () {
-                yield* sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"new-valid-session"}, ${"new-valid-branch"}, ${9}, ${9})`
-                yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"new-valid-branch"}, ${"new-valid-session"}, ${9})`
-              }),
-            )
-
-            const validSession = yield* storage.getSession(SessionId.make("new-valid-session"))
-            expect(validSession?.activeBranchId).toBe(BranchId.make("new-valid-branch"))
-          }).pipe(Effect.provide(layer)),
+                expect(sessionParents.map((row) => row.table)).toEqual(
+                  expect.arrayContaining(["branches", "sessions"]),
+                )
+                expect(sessionSchema[0]?.sql ?? "").toContain(
+                  "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)",
+                )
+                expect(branchParents.map((row) => row.table)).toContain("sessions")
+                expect(branchParents.map((row) => row.table)).toContain("branches")
+                expect(messageParents.map((row) => row.table)).toEqual(
+                  expect.arrayContaining(["branches", "sessions"]),
+                )
+                expect(eventParents.map((row) => row.table)).toEqual(
+                  expect.arrayContaining(["branches", "sessions"]),
+                )
+                const orphanBranches = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM branches WHERE id = ${"orphan-branch"}`
+                const orphanMessages = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM messages WHERE id IN (${"orphan-message"}, ${"mismatched-message"})`
+                const orphanChunks = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM content_chunks WHERE id = ${"orphan-chunk"}`
+                const orphanEvents = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM events WHERE created_at IN (${5}, ${6})`
+                const orphanActorInbox = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM actor_inbox WHERE command_id IN (${"missing-branch-command"}, ${"mismatched-command"})`
+                const orphanCheckpoints = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM agent_loop_checkpoints WHERE updated_at IN (${11}, ${12})`
+                const orphanInteractions = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM interaction_requests WHERE request_id IN (${"missing-branch-request"}, ${"mismatched-request"})`
+                expect(orphanBranches[0]?.count).toBe(0)
+                expect(orphanMessages[0]?.count).toBe(0)
+                expect(orphanChunks[0]?.count).toBe(0)
+                expect(orphanEvents[0]?.count).toBe(0)
+                expect(orphanActorInbox[0]?.count).toBe(0)
+                expect(orphanCheckpoints[0]?.count).toBe(0)
+                expect(orphanInteractions[0]?.count).toBe(0)
+                const rejected = yield* Effect.exit(
+                  sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
+                )
+                expect(rejected._tag).toBe("Failure")
+                const invalidSession = yield* Effect.exit(
+                  sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
+                )
+                expect(invalidSession._tag).toBe("Failure")
+                const danglingParentBranch = yield* Effect.exit(
+                  sql`INSERT INTO sessions (id, parent_branch_id, created_at, updated_at) VALUES (${"new-dangling-parent-branch"}, ${"valid-branch"}, ${8}, ${8})`,
+                )
+                expect(danglingParentBranch._tag).toBe("Failure")
+                const invalidBranch = yield* Effect.exit(
+                  sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"new-invalid-branch"}, ${"legacy-session"}, ${"other-branch"}, ${8})`,
+                )
+                expect(invalidBranch._tag).toBe("Failure")
+                yield* sql.withTransaction(
+                  Effect.gen(function* () {
+                    yield* sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"new-valid-session"}, ${"new-valid-branch"}, ${9}, ${9})`
+                    yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"new-valid-branch"}, ${"new-valid-session"}, ${9})`
+                  }),
+                )
+                const validSession = yield* storage.getSession(SessionId.make("new-valid-session"))
+                expect(validSession?.activeBranchId).toBe(BranchId.make("new-valid-branch"))
+              }).pipe(Effect.provide(layer))
+            }),
+          () =>
+            Effect.sync(() => {
+              rmSync(dir, { recursive: true, force: true })
+            }),
         )
-      } finally {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    })
-
+      }),
+    )
     it.live("deletes cyclic legacy child sessions without recursive CTE loops", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         yield* sql`PRAGMA foreign_keys = OFF`
         yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-a"}, ${"cycle-b"}, ${0}, ${0})`
         yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-b"}, ${"cycle-a"}, ${0}, ${0})`
         yield* sql`PRAGMA foreign_keys = ON`
-
         yield* storage.deleteSession(SessionId.make("cycle-a")).pipe(Effect.timeout("1 second"))
-
-        const remaining = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM sessions`
+        const remaining = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM sessions`
         expect(remaining[0]?.count).toBe(0)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
   })
-
   describe("Events", () => {
     it.live("getLatestEvent returns latest event by tag", () =>
       Effect.gen(function* () {
@@ -1028,10 +1007,8 @@ describe("Storage", () => {
           sessionId: SessionId.make("event-session"),
           createdAt: new Date(),
         })
-
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
-
         yield* storage.appendEvent(
           AgentSwitched.make({
             sessionId: session.id,
@@ -1040,7 +1017,6 @@ describe("Storage", () => {
             toAgent: "deepwork",
           }),
         )
-
         yield* storage.appendEvent(
           AgentSwitched.make({
             sessionId: session.id,
@@ -1049,13 +1025,11 @@ describe("Storage", () => {
             toAgent: "cowork",
           }),
         )
-
         const latest = yield* storage.getLatestEvent({
           sessionId: session.id,
           branchId: branch.id,
           tags: ["AgentSwitched"],
         })
-
         expect(latest?._tag).toBe("AgentSwitched")
         if (latest && latest._tag === "AgentSwitched") {
           expect(latest.toAgent).toBe(AgentName.make("cowork"))
@@ -1063,12 +1037,10 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.Test())),
     )
   })
-
   describe("Branches", () => {
     it.live("creates and retrieves a branch", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("branch-session"),
@@ -1076,25 +1048,20 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         const branch = new Branch({
           id: BranchId.make("test-branch"),
           sessionId: SessionId.make("branch-session"),
           createdAt: new Date(),
         })
-
         yield* storage.createBranch(branch)
         const retrieved = yield* storage.getBranch(BranchId.make("test-branch"))
-
         expect(retrieved).toBeDefined()
         expect(retrieved?.sessionId).toBe(SessionId.make("branch-session"))
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("lists branches for a session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("multi-branch"),
@@ -1102,7 +1069,6 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         yield* storage.createBranch(
           new Branch({
             id: BranchId.make("b1"),
@@ -1118,16 +1084,13 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const branches = yield* storage.listBranches(SessionId.make("multi-branch"))
         expect(branches.length).toBe(2)
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("updates branch summary", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("summary-session"),
@@ -1135,7 +1098,6 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         yield* storage.createBranch(
           new Branch({
             id: BranchId.make("summary-branch"),
@@ -1143,20 +1105,16 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
-
         const retrieved = yield* storage.getBranch(BranchId.make("summary-branch"))
         expect(retrieved?.summary).toBe("Short summary")
       }).pipe(Effect.provide(Storage.Test())),
     )
   })
-
   describe("Messages", () => {
     it.live("creates and retrieves messages", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("msg-session"),
@@ -1171,7 +1129,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const message = Message.Regular.make({
           id: "msg-1",
           sessionId: SessionId.make("msg-session"),
@@ -1180,21 +1137,17 @@ describe("Storage", () => {
           parts: [new TextPart({ type: "text", text: "Hello" })],
           createdAt: new Date(),
         })
-
         yield* storage.createMessage(message)
         const retrieved = yield* storage.getMessage(MessageId.make("msg-1"))
-
         expect(retrieved).toBeDefined()
         expect(retrieved?.role).toBe("user")
         expect(retrieved?.parts[0]?.type).toBe("text")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("round-trips all persisted transcript part types", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const toolCallId = ToolCallId.make("all-parts-tc")
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("all-parts-session"),
@@ -1209,7 +1162,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "all-parts-msg",
@@ -1240,7 +1192,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const retrieved = yield* storage.getMessage(MessageId.make("all-parts-msg"))
         expect(retrieved?.parts.map((part) => part.type)).toEqual([
           "text",
@@ -1274,13 +1225,11 @@ describe("Storage", () => {
         )
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("stores message parts in shared content chunks", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const sharedPart = new TextPart({ type: "text", text: "dedupe me" })
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("chunk-s"),
@@ -1315,29 +1264,32 @@ describe("Storage", () => {
             createdAt: new Date(2000),
           }),
         )
-
         const chunkRows = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM content_chunks`
-        const refRows = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
+        const refRows = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM message_chunks`
         const legacyRows = yield* sql<{
           parts: string
         }>`SELECT parts FROM messages WHERE id = ${"chunk-a"}`
         const messages = yield* storage.listMessages(BranchId.make("chunk-b"))
-
         expect(chunkRows[0]?.count).toBe(1)
         expect(refRows[0]?.count).toBe(2)
         expect(legacyRows[0]?.parts).toBe("[]")
         expect(messages.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
-    test("backfills legacy message blobs into content chunks on startup", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "gent-content-chunks-"))
-      const dbPath = join(dir, "gent.db")
-      try {
-        const db = new Database(dbPath)
-        db.run(`
+    it.live("backfills legacy message blobs into content chunks on startup", () =>
+      Effect.gen(function* () {
+        const dir = mkdtempSync(join(tmpdir(), "gent-content-chunks-"))
+        const dbPath = join(dir, "gent.db")
+        yield* Effect.acquireUseRelease(
+          Effect.void,
+          () =>
+            Effect.gen(function* () {
+              const db = new Database(dbPath)
+              db.run(`
           CREATE TABLE sessions (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -1348,7 +1300,7 @@ describe("Storage", () => {
             updated_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE branches (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -1358,7 +1310,7 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -1369,14 +1321,14 @@ describe("Storage", () => {
             turn_duration_ms INTEGER
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE content_chunks (
             id TEXT PRIMARY KEY,
             part_type TEXT NOT NULL,
             part_json TEXT NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE message_chunks (
             message_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
@@ -1384,84 +1336,81 @@ describe("Storage", () => {
             PRIMARY KEY (message_id, ordinal)
           )
         `)
-        db.run(`INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, [
-          "legacy-s",
-          "legacy",
-          0,
-          0,
-        ])
-        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
-          "legacy-b",
-          "legacy-s",
-          "main",
-          0,
-        ])
-        const firstLegacyPart = { type: "text", text: "legacy searchable content" }
-        const secondLegacyPart = { type: "text", text: "second recovered content" }
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "legacy-m",
-            "legacy-s",
-            "legacy-b",
-            "user",
-            JSON.stringify([firstLegacyPart, secondLegacyPart]),
-            1000,
-            null,
-          ],
+              db.run(
+                `INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+                ["legacy-s", "legacy", 0, 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`,
+                ["legacy-b", "legacy-s", "main", 0],
+              )
+              const firstLegacyPart = { type: "text", text: "legacy searchable content" }
+              const secondLegacyPart = { type: "text", text: "second recovered content" }
+              db.run(
+                `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "legacy-m",
+                  "legacy-s",
+                  "legacy-b",
+                  "user",
+                  JSON.stringify([firstLegacyPart, secondLegacyPart]),
+                  1000,
+                  null,
+                ],
+              )
+              db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
+                "partial-chunk",
+                "text",
+                JSON.stringify(firstLegacyPart),
+              ])
+              db.run(
+                `INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`,
+                ["legacy-m", 0, "partial-chunk"],
+              )
+              db.close()
+              const layer = Storage.LiveWithSql(dbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              yield* Effect.gen(function* () {
+                const storage = yield* Storage
+                const sql = yield* SqlClient.SqlClient
+                const message = yield* storage.getMessage(MessageId.make("legacy-m"))
+                expect(message?.parts).toEqual([
+                  new TextPart({ type: "text", text: "legacy searchable content" }),
+                  new TextPart({ type: "text", text: "second recovered content" }),
+                ])
+                const chunkRows = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM content_chunks`
+                const ftsRows = yield* sql<{
+                  count: number
+                }>`SELECT COUNT(*) as count FROM messages_fts WHERE messages_fts MATCH ${"recovered"}`
+                const legacyRows = yield* sql<{
+                  parts: string
+                }>`SELECT parts FROM messages WHERE id = ${"legacy-m"}`
+                expect(chunkRows[0]?.count).toBe(2)
+                expect(ftsRows[0]?.count).toBe(1)
+                expect(legacyRows[0]?.parts).toBe("[]")
+              }).pipe(Effect.provide(layer))
+            }),
+          () =>
+            Effect.sync(() => {
+              rmSync(dir, { recursive: true, force: true })
+            }),
         )
-        db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
-          "partial-chunk",
-          "text",
-          JSON.stringify(firstLegacyPart),
-        ])
-        db.run(`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`, [
-          "legacy-m",
-          0,
-          "partial-chunk",
-        ])
-        db.close()
-
-        const layer = Storage.LiveWithSql(dbPath).pipe(
-          Layer.provide(BunFileSystem.layer),
-          Layer.provide(BunServices.layer),
-        )
-
-        await Effect.runPromise(
-          Effect.gen(function* () {
-            const storage = yield* Storage
-            const sql = yield* SqlClient.SqlClient
-
-            const message = yield* storage.getMessage(MessageId.make("legacy-m"))
-            expect(message?.parts).toEqual([
-              new TextPart({ type: "text", text: "legacy searchable content" }),
-              new TextPart({ type: "text", text: "second recovered content" }),
-            ])
-            const chunkRows = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM content_chunks`
-            const ftsRows = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count FROM messages_fts WHERE messages_fts MATCH ${"recovered"}`
-            const legacyRows = yield* sql<{
-              parts: string
-            }>`SELECT parts FROM messages WHERE id = ${"legacy-m"}`
-            expect(chunkRows[0]?.count).toBe(2)
-            expect(ftsRows[0]?.count).toBe(1)
-            expect(legacyRows[0]?.parts).toBe("[]")
-          }).pipe(Effect.provide(layer)),
-        )
-      } finally {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    })
-
-    test("backfills legacy MessageReceived events from stored message variants on startup", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "gent-message-received-events-"))
-      const dbPath = join(dir, "gent.db")
-      try {
-        const db = new Database(dbPath)
-        db.run(`
+      }),
+    )
+    it.live("backfills legacy MessageReceived events from stored message variants on startup", () =>
+      Effect.gen(function* () {
+        const dir = mkdtempSync(join(tmpdir(), "gent-message-received-events-"))
+        const dbPath = join(dir, "gent.db")
+        yield* Effect.acquireUseRelease(
+          Effect.void,
+          () =>
+            Effect.gen(function* () {
+              const db = new Database(dbPath)
+              db.run(`
           CREATE TABLE sessions (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -1472,7 +1421,7 @@ describe("Storage", () => {
             updated_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE branches (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -1482,7 +1431,7 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -1494,7 +1443,7 @@ describe("Storage", () => {
             turn_duration_ms INTEGER
           )
         `)
-        db.run(`
+              db.run(`
           CREATE TABLE events (
             id INTEGER PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -1504,79 +1453,72 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
-        db.run(`INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, [
-          "legacy-event-s",
-          "legacy-event",
-          0,
-          0,
-        ])
-        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
-          "legacy-event-b",
-          "legacy-event-s",
-          "main",
-          0,
-        ])
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            "legacy-event-m",
-            "legacy-event-s",
-            "legacy-event-b",
-            "interjection",
-            "user",
-            JSON.stringify([{ type: "text", text: "interrupt" }]),
-            1000,
-            null,
-          ],
-        )
-        db.run(
-          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-          [
-            "legacy-event-s",
-            null,
-            "MessageReceived",
-            JSON.stringify({
-              _tag: "MessageReceived",
-              sessionId: SessionId.make("legacy-event-s"),
-              branchId: BranchId.make("legacy-event-b"),
-              messageId: MessageId.make("legacy-event-m"),
-              role: "user",
+              db.run(
+                `INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+                ["legacy-event-s", "legacy-event", 0, 0],
+              )
+              db.run(
+                `INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`,
+                ["legacy-event-b", "legacy-event-s", "main", 0],
+              )
+              db.run(
+                `INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  "legacy-event-m",
+                  "legacy-event-s",
+                  "legacy-event-b",
+                  "interjection",
+                  "user",
+                  JSON.stringify([{ type: "text", text: "interrupt" }]),
+                  1000,
+                  null,
+                ],
+              )
+              db.run(
+                `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+                [
+                  "legacy-event-s",
+                  null,
+                  "MessageReceived",
+                  JSON.stringify({
+                    _tag: "MessageReceived",
+                    sessionId: SessionId.make("legacy-event-s"),
+                    branchId: BranchId.make("legacy-event-b"),
+                    messageId: MessageId.make("legacy-event-m"),
+                    role: "user",
+                  }),
+                  1001,
+                ],
+              )
+              db.close()
+              const layer = Storage.LiveWithSql(dbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              yield* Effect.gen(function* () {
+                const storage = yield* Storage
+                const events = yield* storage.listEvents({
+                  sessionId: SessionId.make("legacy-event-s"),
+                  branchId: BranchId.make("legacy-event-b"),
+                })
+                expect(events).toHaveLength(1)
+                const event = events[0]?.event
+                expect(event?._tag).toBe("MessageReceived")
+                if (event?._tag !== "MessageReceived") return
+                expect(event.message._tag).toBe("interjection")
+                expect(event.message.id).toBe(MessageId.make("legacy-event-m"))
+              }).pipe(Effect.provide(layer))
             }),
-            1001,
-          ],
+          () =>
+            Effect.sync(() => {
+              rmSync(dir, { recursive: true, force: true })
+            }),
         )
-        db.close()
-
-        const layer = Storage.LiveWithSql(dbPath).pipe(
-          Layer.provide(BunFileSystem.layer),
-          Layer.provide(BunServices.layer),
-        )
-
-        await Effect.runPromise(
-          Effect.gen(function* () {
-            const storage = yield* Storage
-            const events = yield* storage.listEvents({
-              sessionId: SessionId.make("legacy-event-s"),
-              branchId: BranchId.make("legacy-event-b"),
-            })
-
-            expect(events).toHaveLength(1)
-            const event = events[0]?.event
-            expect(event?._tag).toBe("MessageReceived")
-            if (event?._tag !== "MessageReceived") return
-            expect(event.message._tag).toBe("interjection")
-            expect(event.message.id).toBe(MessageId.make("legacy-event-m"))
-          }).pipe(Effect.provide(layer)),
-        )
-      } finally {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    })
-
+      }),
+    )
     it.live("counts messages in a branch", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("count-session"),
@@ -1591,7 +1533,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "count-msg-1",
@@ -1612,16 +1553,13 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const count = yield* storage.countMessages(BranchId.make("count-branch"))
         expect(count).toBe(2)
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("lists messages for a branch", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("list-msg-session"),
@@ -1636,7 +1574,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "lm1",
@@ -1657,19 +1594,16 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const messages = yield* storage.listMessages(BranchId.make("list-msg-branch"))
         expect(messages.length).toBe(2)
         expect(messages[0]?.role).toBe("user")
         expect(messages[1]?.role).toBe("assistant")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("deletes message chunk refs and search projection rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("delete-projection-session"),
@@ -1704,26 +1638,30 @@ describe("Storage", () => {
             createdAt: new Date(2000),
           }),
         )
-
         yield* storage.deleteMessages(BranchId.make("delete-projection-branch"))
-
-        const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
-        const refs = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
-        const chunks = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM content_chunks`
-        const fts = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages_fts`
+        const messages = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM messages`
+        const refs = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM message_chunks`
+        const chunks = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM content_chunks`
+        const fts = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM messages_fts`
         expect(messages[0]?.count).toBe(0)
         expect(refs[0]?.count).toBe(0)
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("updates session updatedAt when creating message", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const start = new Date(0)
         const messageTime = new Date(1000)
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("session-updated-at"),
@@ -1738,7 +1676,6 @@ describe("Storage", () => {
             createdAt: start,
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "msg-updated-at",
@@ -1749,19 +1686,16 @@ describe("Storage", () => {
             createdAt: messageTime,
           }),
         )
-
         const session = yield* storage.getSession(SessionId.make("session-updated-at"))
         expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("rolls back message insert when session timestamp update fails", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
         const start = new Date(0)
         const messageTime = new Date(1000)
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("tx-message-session"),
@@ -1784,7 +1718,6 @@ describe("Storage", () => {
             SELECT RAISE(ABORT, 'forced session update failure');
           END
         `)
-
         const error = yield* Effect.flip(
           storage.createMessage(
             Message.Regular.make({
@@ -1797,21 +1730,18 @@ describe("Storage", () => {
             }),
           ),
         )
-
         expect(error._tag).toBe("StorageError")
         expect(yield* storage.getMessage(MessageId.make("tx-message"))).toBeUndefined()
         const session = yield* storage.getSession(SessionId.make("tx-message-session"))
         expect(session?.updatedAt.getTime()).toBe(start.getTime())
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     it.live("createMessageIfAbsent leaves session timestamp unchanged when insert is ignored", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const start = new Date(0)
         const firstTime = new Date(1000)
         const duplicateTime = new Date(2000)
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("if-absent-session"),
@@ -1826,7 +1756,6 @@ describe("Storage", () => {
             createdAt: start,
           }),
         )
-
         yield* storage.createMessageIfAbsent(
           Message.Regular.make({
             id: "if-absent-message",
@@ -1847,19 +1776,16 @@ describe("Storage", () => {
             createdAt: duplicateTime,
           }),
         )
-
         const session = yield* storage.getSession(SessionId.make("if-absent-session"))
         expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
         const message = yield* storage.getMessage(MessageId.make("if-absent-message"))
         expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("orders messages by createdAt then id", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const timestamp = new Date()
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("order-session"),
@@ -1874,7 +1800,6 @@ describe("Storage", () => {
             createdAt: timestamp,
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "b",
@@ -1895,14 +1820,12 @@ describe("Storage", () => {
             createdAt: timestamp,
           }),
         )
-
         const messages = yield* storage.listMessages(BranchId.make("order-branch"))
         expect(messages[0]?.id).toBe(MessageId.make("a"))
         expect(messages[1]?.id).toBe(MessageId.make("b"))
       }).pipe(Effect.provide(Storage.Test())),
     )
   })
-
   describe("Message Metadata", () => {
     it.live("metadata round-trips through storage", () =>
       Effect.gen(function* () {
@@ -1921,7 +1844,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const message = Message.Regular.make({
           id: "meta-msg-1",
           sessionId: SessionId.make("meta-s"),
@@ -1937,7 +1859,6 @@ describe("Storage", () => {
           },
         })
         yield* storage.createMessage(message)
-
         const messages = yield* storage.listMessages(BranchId.make("meta-b"))
         expect(messages.length).toBe(1)
         const m = messages[0]!
@@ -1945,10 +1866,15 @@ describe("Storage", () => {
         expect(m.metadata!.customType).toBe("review-status")
         expect(m.metadata!.extensionId).toBe("review-loop")
         expect(m.metadata!.hidden).toBe(true)
-        expect((m.metadata!.details as { iteration: number }).iteration).toBe(3)
+        expect(
+          (
+            m.metadata!.details as {
+              iteration: number
+            }
+          ).iteration,
+        ).toBe(3)
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("createMessageIfAbsent preserves metadata", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -1966,7 +1892,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const message = Message.Regular.make({
           id: "upsert-msg",
           sessionId: SessionId.make("upsert-s"),
@@ -1977,7 +1902,6 @@ describe("Storage", () => {
           metadata: { hidden: true, extensionId: ExtensionId.make("review-loop") },
         })
         yield* storage.createMessageIfAbsent(message)
-
         const messages = yield* storage.listMessages(BranchId.make("upsert-b"))
         expect(messages.length).toBe(1)
         expect(messages[0]!.metadata).toBeDefined()
@@ -1985,7 +1909,6 @@ describe("Storage", () => {
         expect(messages[0]!.metadata!.extensionId).toBe("review-loop")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("messages without metadata have undefined metadata", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -2003,7 +1926,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.createMessage(
           Message.Regular.make({
             id: "no-meta-msg",
@@ -2014,17 +1936,14 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const messages = yield* storage.listMessages(BranchId.make("no-meta-b"))
         expect(messages[0]!.metadata).toBeUndefined()
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     it.live("invalid stored metadata decodes to undefined across read surfaces", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         yield* storage.createSession(
           new Session({
             id: SessionId.make("bad-meta-s"),
@@ -2039,23 +1958,18 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${JSON.stringify([{ type: "text", text: "hello" }])}, ${Date.now()}, ${null}, ${'{"customType":1}'})`
-
         const messages = yield* storage.listMessages(BranchId.make("bad-meta-b"))
         expect(messages).toHaveLength(1)
         expect(messages[0]!.metadata).toBeUndefined()
-
         const message = yield* storage.getMessage(MessageId.make("bad-meta-msg"))
         expect(message?.metadata).toBeUndefined()
-
         const detail = yield* storage.getSessionDetail(SessionId.make("bad-meta-s"))
         expect(detail.branches).toHaveLength(1)
         expect(detail.branches[0]!.messages).toHaveLength(1)
         expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-
     test("messageToInfo preserves metadata for transport", () => {
       const message = Message.Regular.make({
         id: "info-msg",
@@ -2066,13 +1980,11 @@ describe("Storage", () => {
         createdAt: new Date(),
         metadata: { customType: "review-status", hidden: true },
       })
-
       const info = messageToInfo(message)
       expect(info.metadata).toBeDefined()
       expect(info.metadata!.customType).toBe("review-status")
       expect(info.metadata!.hidden).toBe(true)
     })
-
     it.live("interjection messages round-trip as explicit variants", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -2090,7 +2002,6 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         yield* storage.createMessage(
           Message.Interjection.make({
             id: "interjection-msg",
@@ -2101,17 +2012,14 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-
         const stored = yield* storage.getMessage(MessageId.make("interjection-msg"))
         if (stored === undefined) throw new Error("expected interjection message")
         expect(stored._tag).toBe("interjection")
-
         const info = messageToInfo(stored)
         expect(info._tag).toBe("interjection")
         expect(info.role).toBe("user")
       }).pipe(Effect.provide(Storage.Test())),
     )
-
     test("messageToInfo omits metadata when absent", () => {
       const message = Message.Regular.make({
         id: "plain-msg",
@@ -2121,20 +2029,16 @@ describe("Storage", () => {
         parts: [new TextPart({ type: "text", text: "hi" })],
         createdAt: new Date(),
       })
-
       const info = messageToInfo(message)
       expect(info.metadata).toBeUndefined()
     })
   })
-
   describe("Event backward compatibility", () => {
     const layer = Storage.TestWithSql()
-
     it.live("listEvents skips events with unknown _tag instead of crashing", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-session")
         const branchId = BranchId.make("compat-branch")
         yield* storage.createSession(
@@ -2146,25 +2050,19 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
-
         // Simulate old DB row with a deleted event type
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'ToolCallCompleted', ${JSON.stringify({ _tag: "ToolCallCompleted", sessionId, branchId, toolCallId: ToolCallId.make("tc-1"), toolName: "bash" })}, ${Date.now()})`
-
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
-
         const events = yield* storage.listEvents({ sessionId, branchId })
         expect(events.length).toBe(2)
         expect(events.every((e) => e.event._tag === "SessionStarted")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
-
     it.live("getLatestEvent returns undefined for undecodable events", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-latest")
         const branchId = BranchId.make("compat-latest-b")
         yield* storage.createSession(
@@ -2176,9 +2074,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentCompleted', ${JSON.stringify({ _tag: "SubagentCompleted", sessionId, branchId })}, ${Date.now()})`
-
         const latest = yield* storage.getLatestEvent({
           sessionId,
           branchId,
@@ -2187,12 +2083,10 @@ describe("Storage", () => {
         expect(latest).toBeUndefined()
       }).pipe(Effect.provide(layer)),
     )
-
     it.live("listEvents rewrites legacy subagent rows to AgentRun events", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-agent-run")
         const branchId = BranchId.make("compat-agent-run-b")
         const childSessionId = SessionId.make("compat-agent-run-child")
@@ -2205,20 +2099,16 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSpawned', ${JSON.stringify({ _tag: "SubagentSpawned", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer"), prompt: "inspect", branchId })}, ${Date.now()})`
-
         const events = yield* storage.listEvents({ sessionId, branchId })
         expect(events).toHaveLength(1)
         expect(events[0]?.event._tag).toBe("AgentRunSpawned")
       }).pipe(Effect.provide(layer)),
     )
-
     it.live("getLatestEvent resolves legacy subagent tags when queried by AgentRun tag", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-agent-run-latest")
         const branchId = BranchId.make("compat-agent-run-latest-b")
         const childSessionId = SessionId.make("compat-agent-run-latest-child")
@@ -2231,9 +2121,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer"), branchId })}, ${Date.now()})`
-
         const latest = yield* storage.getLatestEvent({
           sessionId,
           branchId,
@@ -2242,12 +2130,10 @@ describe("Storage", () => {
         expect(latest?._tag).toBe("AgentRunSucceeded")
       }).pipe(Effect.provide(layer)),
     )
-
     it.live("getLatestEventTag includes branchless legacy subagent rows for branch queries", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-agent-run-tagless")
         const branchId = BranchId.make("compat-agent-run-tagless-b")
         const childSessionId = SessionId.make("compat-agent-run-tagless-child")
@@ -2259,9 +2145,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer") })}, ${Date.now()})`
-
         const latestTag = yield* storage.getLatestEventTag({
           sessionId,
           branchId,
@@ -2270,12 +2154,10 @@ describe("Storage", () => {
         expect(latestTag).toBe("AgentRunSucceeded")
       }).pipe(Effect.provide(layer)),
     )
-
     it.live("getLatestEvent includes branchless legacy subagent rows for branch queries", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
-
         const sessionId = SessionId.make("compat-agent-run-branchless")
         const branchId = BranchId.make("compat-agent-run-branchless-b")
         const childSessionId = SessionId.make("compat-agent-run-branchless-child")
@@ -2287,9 +2169,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentFailed', ${JSON.stringify({ _tag: "SubagentFailed", parentSessionId: sessionId, childSessionId, agentName: AgentName.make("reviewer") })}, ${Date.now()})`
-
         const latest = yield* storage.getLatestEvent({
           sessionId,
           branchId,
@@ -2299,7 +2179,6 @@ describe("Storage", () => {
       }).pipe(Effect.provide(layer)),
     )
   })
-
   describe("Concurrent writes", () => {
     // The storage layer adds no in-memory locking on top of the SQL
     // client; the contract under test is that N concurrent calls through
@@ -2331,7 +2210,6 @@ describe("Storage", () => {
         () => body,
         () => Ref.update(active, (n) => n - 1),
       )
-
     it.live("createSession with N concurrent fibers produces N independent rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -2351,7 +2229,6 @@ describe("Storage", () => {
             ),
           { concurrency: "unbounded" },
         )
-
         const sessions = yield* storage.listSessions()
         const seen = new Set(sessions.map((s) => s.id))
         for (const id of ids) {
@@ -2361,7 +2238,6 @@ describe("Storage", () => {
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
     )
-
     it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -2371,7 +2247,6 @@ describe("Storage", () => {
           new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         const N = 32
         const active = yield* Ref.make(0)
         const peak = yield* Ref.make(0)
@@ -2385,7 +2260,6 @@ describe("Storage", () => {
             ),
           { concurrency: "unbounded" },
         )
-
         expect(envelopes.length).toBe(N)
         const idSet = new Set(envelopes.map((e) => e.id))
         expect(idSet.size).toBe(N)
@@ -2394,7 +2268,6 @@ describe("Storage", () => {
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
     )
-
     it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -2404,7 +2277,6 @@ describe("Storage", () => {
           new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-
         const N = 24
         const ids = Array.from({ length: N }, (_, i) => MessageId.make(`cm-${i}`))
         const active = yield* Ref.make(0)
@@ -2428,7 +2300,6 @@ describe("Storage", () => {
             ),
           { concurrency: "unbounded" },
         )
-
         const persisted = yield* storage.listMessages(branchId)
         expect(persisted.length).toBe(N)
         const seen = new Set(persisted.map((m) => m.id))

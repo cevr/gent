@@ -79,80 +79,82 @@ describe("expandFileRefs", () => {
   const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
     Effect.runPromise(effect.pipe(Effect.provide(BunFileSystem.layer)))
 
-  beforeAll(async () => {
-    testDir = await mkdtemp(join(tmpdir(), "file-refs-test-"))
-    await mkdir(join(testDir, "src"), { recursive: true })
+  beforeAll(() =>
+    mkdtemp(join(tmpdir(), "file-refs-test-")).then((dir) => {
+      testDir = dir
+      return mkdir(join(testDir, "src"), { recursive: true })
+        .then(() =>
+          writeFile(join(testDir, "src", "foo.ts"), "line1\nline2\nline3\nline4\nline5\n"),
+        )
+        .then(() => writeFile(join(testDir, "src", "bar.ts"), "export const bar = 1\n"))
+        .then(() => writeFile(join(testDir, "README.md"), "# Title\n\nDescription here.\n"))
+    }),
+  )
 
-    // Create test files
-    await writeFile(join(testDir, "src", "foo.ts"), "line1\nline2\nline3\nline4\nline5\n")
-    await writeFile(join(testDir, "src", "bar.ts"), "export const bar = 1\n")
-    await writeFile(join(testDir, "README.md"), "# Title\n\nDescription here.\n")
-  })
+  afterAll(() => rm(testDir, { recursive: true, force: true }))
 
-  afterAll(async () => {
-    await rm(testDir, { recursive: true, force: true })
-  })
+  test("expands simple file reference", () =>
+    run(expandFileRefs("check @src/bar.ts", testDir)).then((result) => {
+      expect(result).toContain("```src/bar.ts")
+      expect(result).toContain("export const bar = 1")
+      expect(result).toContain("```")
+      expect(result).not.toContain("@src/bar.ts")
+    }))
 
-  test("expands simple file reference", async () => {
-    const result = await run(expandFileRefs("check @src/bar.ts", testDir))
-    expect(result).toContain("```src/bar.ts")
-    expect(result).toContain("export const bar = 1")
-    expect(result).toContain("```")
-    expect(result).not.toContain("@src/bar.ts")
-  })
+  test("expands reference with line range", () =>
+    run(expandFileRefs("see @src/foo.ts#2-4", testDir)).then((result) => {
+      expect(result).toContain("```src/foo.ts:2-4")
+      expect(result).toContain("line2")
+      expect(result).toContain("line3")
+      expect(result).toContain("line4")
+      expect(result).not.toContain("line1")
+      expect(result).not.toContain("line5")
+    }))
 
-  test("expands reference with line range", async () => {
-    const result = await run(expandFileRefs("see @src/foo.ts#2-4", testDir))
-    expect(result).toContain("```src/foo.ts:2-4")
-    expect(result).toContain("line2")
-    expect(result).toContain("line3")
-    expect(result).toContain("line4")
-    expect(result).not.toContain("line1")
-    expect(result).not.toContain("line5")
-  })
+  test("expands reference with single line", () =>
+    run(expandFileRefs("@src/foo.ts#3 is important", testDir)).then((result) => {
+      expect(result).toContain("```src/foo.ts:3")
+      expect(result).toContain("line3")
+    }))
 
-  test("expands reference with single line", async () => {
-    const result = await run(expandFileRefs("@src/foo.ts#3 is important", testDir))
-    expect(result).toContain("```src/foo.ts:3")
-    expect(result).toContain("line3")
-  })
+  test("expands multiple references", () =>
+    run(expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir)).then((result) => {
+      expect(result).toContain("```src/foo.ts:1")
+      expect(result).toContain("```src/bar.ts")
+      expect(result).toContain("line1")
+      expect(result).toContain("export const bar")
+    }))
 
-  test("expands multiple references", async () => {
-    const result = await run(expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir))
-    expect(result).toContain("```src/foo.ts:1")
-    expect(result).toContain("```src/bar.ts")
-    expect(result).toContain("line1")
-    expect(result).toContain("export const bar")
-  })
-
-  test("returns original text when no references", async () => {
+  test("returns original text when no references", () => {
     const text = "no file references here"
-    const result = await run(expandFileRefs(text, testDir))
-    expect(result).toBe(text)
+    return run(expandFileRefs(text, testDir)).then((result) => {
+      expect(result).toBe(text)
+    })
   })
 
-  test("preserves non-reference text around expansions", async () => {
-    const result = await run(expandFileRefs("Before @src/bar.ts after", testDir))
-    expect(result.startsWith("Before ")).toBe(true)
-    expect(result.endsWith(" after")).toBe(true)
-  })
+  test("preserves non-reference text around expansions", () =>
+    run(expandFileRefs("Before @src/bar.ts after", testDir)).then((result) => {
+      expect(result.startsWith("Before ")).toBe(true)
+      expect(result.endsWith(" after")).toBe(true)
+    }))
 
-  test("leaves reference as-is when file not found", async () => {
+  test("leaves reference as-is when file not found", () => {
     const text = "check @nonexistent/file.ts"
-    const result = await run(expandFileRefs(text, testDir))
-    expect(result).toBe(text)
+    return run(expandFileRefs(text, testDir)).then((result) => {
+      expect(result).toBe(text)
+    })
   })
 
-  test("handles out-of-range line numbers gracefully", async () => {
+  test("handles out-of-range line numbers gracefully", () =>
     // File has 5 lines, requesting lines 10-20
-    const result = await run(expandFileRefs("@src/foo.ts#10-20", testDir))
-    // Should expand but content will be empty or partial
-    expect(result).toContain("```src/foo.ts:10-20")
-  })
+    run(expandFileRefs("@src/foo.ts#10-20", testDir)).then((result) => {
+      // Should expand but content will be empty or partial
+      expect(result).toContain("```src/foo.ts:10-20")
+    }))
 
-  test("handles root-level files", async () => {
-    const result = await run(expandFileRefs("see @README.md for docs", testDir))
-    expect(result).toContain("```README.md")
-    expect(result).toContain("# Title")
-  })
+  test("handles root-level files", () =>
+    run(expandFileRefs("see @README.md for docs", testDir)).then((result) => {
+      expect(result).toContain("```README.md")
+      expect(result).toContain("# Title")
+    }))
 })

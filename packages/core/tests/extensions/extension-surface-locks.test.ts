@@ -3,7 +3,7 @@
  *
  * One intentional lock pack for the public extension authoring surface:
  * 1. capability factory shapes stay honest
- * 2. Promise/async handlers stay out of Effect-returning seams
+ * 2. Promise handlers stay out of Effect-returning seams
  * 3. read-only branding remains available for request/reaction service seams
  *
  * `scope-brands.test.ts` stays separate because it proves actor/runtime
@@ -256,13 +256,13 @@ describe("Capability factory-shape locks (compile-time)", () => {
 })
 
 describe("Effect-purity locks (compile-time)", () => {
-  test("tool.execute MUST return Effect — async handler rejected", () => {
+  test("tool.execute MUST return Effect — Promise handler rejected", () => {
     tool({
       id: "ok",
       description: "ok",
       params: Schema.Struct({}),
-      // @ts-expect-error — async handler must not be assignable to Effect-returning execute
-      execute: async () => "result",
+      // @ts-expect-error — Promise handler must not be assignable to Effect-returning execute
+      execute: () => Promise.resolve("result"),
     })
     expect(true).toBe(true)
   })
@@ -351,12 +351,12 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("reactions.systemPrompt MUST return Effect — async handler rejected", () => {
+  test("reactions.systemPrompt MUST return Effect — Promise handler rejected", () => {
     defineExtension({
       id: "bad-prompt-reaction",
       reactions: {
-        // @ts-expect-error — async handler must not be assignable to Effect-returning systemPrompt
-        systemPrompt: async (input) => `${input.basePrompt}x`,
+        // @ts-expect-error — Promise handler must not be assignable to Effect-returning systemPrompt
+        systemPrompt: (input) => Promise.resolve(`${input.basePrompt}x`),
       },
     })
     expect(true).toBe(true)
@@ -368,8 +368,8 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         turnAfter: {
           failureMode: "isolate",
-          // @ts-expect-error — async handler must not be assignable to Effect-returning extension reaction
-          handler: async () => undefined,
+          // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension reaction
+          handler: () => Promise.resolve(undefined),
         },
       },
     })

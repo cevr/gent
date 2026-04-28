@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
+import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -21,7 +22,7 @@ const collectLiveEvents = <A, E>(
     // Resolve once the first value has been written into `values`. Cap at 50ms
     // because events-after-cursor only emits when new events are appended —
     // downstream waitFor() polls absorb any remaining race.
-    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 
@@ -31,8 +32,8 @@ describe("live event contracts", () => {
 
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
-      async () => {
-        await transport.run(({ client }) =>
+      () =>
+        transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const created = yield* client.session
@@ -82,8 +83,7 @@ describe("live event contracts", () => {
               )
             }),
           ),
-        )
-      },
+        ),
       timeoutMs,
     )
   }
@@ -95,8 +95,8 @@ describe("live event contracts", () => {
   const timeoutMs = 15_000
   test(
     `${directSignalCase.name} streamEvents keeps streamed chunks across replay-to-live handoff`,
-    async () => {
-      await directSignalCase.run("handoff payload.", ({ client }, controls) =>
+    () =>
+      directSignalCase.run("handoff payload.", ({ client }, controls) =>
         Effect.scoped(
           Effect.gen(function* () {
             const created = yield* client.session
@@ -140,8 +140,7 @@ describe("live event contracts", () => {
             expect(received.some((envelope) => envelope.event._tag === "StreamChunk")).toBe(true)
           }),
         ),
-      )
-    },
+      ),
     timeoutMs,
   )
 })

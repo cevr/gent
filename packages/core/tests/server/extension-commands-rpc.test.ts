@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -32,24 +32,23 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
-import { action, behavior, request, tool } from "@gent/core/extensions/api"
+import { action, request, tool } from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
-import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { ConfigService } from "../../src/runtime/config-service"
-
 class ProfileToken extends Context.Service<
   ProfileToken,
-  { readonly read: () => Effect.Effect<string> }
+  {
+    readonly read: () => Effect.Effect<string>
+  }
 >()("@test/ProfileToken") {}
-
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-
 describe("extension command RPCs", () => {
-  const invoked: Array<{ args: string; sessionId: string; cwd: string }> = []
-
+  const invoked: Array<{
+    args: string
+    sessionId: string
+    cwd: string
+  }> = []
   // Server-visible slash commands are slash-decorated RPC requests. Local
   // human-only commands stay in the `commands:` bucket and are not listed by
   // the transport API.
@@ -85,11 +84,9 @@ describe("extension command RPCs", () => {
         ],
       }),
   }
-
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
     Layer.provideMerge(ApprovalService.Test()),
   )
-
   const setupCommandsExt = Effect.provide(
     setupExtension(
       { extension: TestCommandsExtension, scope: "builtin", sourcePath: "builtin" },
@@ -98,14 +95,12 @@ describe("extension command RPCs", () => {
     ),
     BunServices.layer,
   )
-
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
     addRule: () => Effect.void,
     removeRule: () => Effect.void,
     getRules: () => Effect.succeed([]),
   }
-
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {
       const resolved = resolveExtensions(extensions)
@@ -125,7 +120,6 @@ describe("extension command RPCs", () => {
         instructions: "",
       } satisfies SessionProfile
     })
-
   const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
     manifest: { id: ExtensionId.make(extensionId) },
     scope: "builtin",
@@ -144,146 +138,94 @@ describe("extension command RPCs", () => {
       ],
     },
   })
-
-  const boundaryReceived: Array<{ kind: "send" | "ask"; label: string }> = []
-  const BoundaryProtocol = {
-    Touch: ExtensionMessage.command("@test/transport-boundary", "Touch", {
-      label: Schema.String,
-    }),
-    Ping: ExtensionMessage.reply(
-      "@test/transport-boundary",
-      "Ping",
-      { label: Schema.String },
-      Schema.Struct({ ok: Schema.Boolean }),
-    ),
-  }
-  const BoundaryReply = Schema.Struct({ ok: Schema.Boolean })
-  type BoundaryReply = typeof BoundaryReply.Type
-  const BoundaryMsg = TaggedEnumClass("BoundaryMsg", {
-    Touch: { label: Schema.String },
-    Ping: TaggedEnumClass.askVariant<BoundaryReply>()({ label: Schema.String }),
-  })
-  type BoundaryMsg = Schema.Schema.Type<typeof BoundaryMsg>
-  const BoundaryService = ServiceKey<BoundaryMsg>("@test/transport-boundary/service")
-  const boundaryBehavior: Behavior<BoundaryMsg, Record<string, never>, never> = {
-    initialState: {},
-    serviceKey: BoundaryService,
-    receive: (msg, state, ctx) =>
-      Effect.gen(function* () {
-        if (msg._tag === "Touch") {
-          boundaryReceived.push({ kind: "send", label: msg.label })
-          return state
-        }
-        boundaryReceived.push({ kind: "ask", label: msg.label })
-        yield* ctx.reply({ ok: true })
-        return state
-      }),
-  }
-  const boundaryExtension: LoadedExtension = {
-    manifest: { id: ExtensionId.make("@test/transport-boundary") },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      actors: [behavior(boundaryBehavior)],
-      protocols: BoundaryProtocol,
-    },
-  }
-
-  test("listCommands returns registered commands", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
+  it.live("listCommands returns registered commands", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
         const cmds = listSlashCommands(registry.getResolved().extensions)
         const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
         expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
-      }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>,
-    )
-  })
-
-  test("RPC listCommands + request round-trip through the transport boundary", async () => {
-    invoked.length = 0
-    let createdSessionId = ""
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const ext = yield* setupCommandsExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({
-            cwd: "/tmp/gent-extension-request-session",
-          })
-          createdSessionId = sessionId
-
-          const commands = yield* client.extension.listCommands({ sessionId })
-          expect(commands[0]).toBeInstanceOf(CommandInfo)
-          expect(commands.map((command) => command.name)).toEqual(["greet"])
-          const greet = commands.find((command) => command.name === "greet")
-          expect(greet?.description).toBe("Say hello")
-          expect(greet?.extensionId).toBe(ExtensionId.make("@test/commands"))
-          expect(greet?.capabilityId).toBe("greet")
-          expect(greet?.intent).toBe("write")
-
-          yield* client.extension.request({
-            sessionId,
-            extensionId: greet!.extensionId,
-            capabilityId: greet!.capabilityId,
-            intent: greet!.intent,
-            input: "rpc-world",
-            branchId,
-          })
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-
-    expect(invoked).toEqual([
-      {
-        args: "rpc-world",
-        sessionId: createdSessionId,
-        cwd: "/tmp/gent-extension-request-session",
-      },
-    ])
-  })
-
-  test("RPC request rejects missing sessions instead of using launch cwd", async () => {
-    invoked.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const ext = yield* setupCommandsExt
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-
-          const result = yield* Effect.result(
-            client.extension.request({
-              sessionId: SessionId.make("missing-extension-request-session"),
-              extensionId: ExtensionId.make("@test/commands"),
-              capabilityId: "greet",
-              intent: "write",
-              input: "should-not-run",
-              branchId: BranchId.make("missing-extension-request-branch"),
-            }),
-          )
-
-          expect(result._tag).toBe("Failure")
-          expect(invoked).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC request rejects branches outside the requested session", async () => {
-    invoked.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
+      }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>
+    }),
+  )
+  it.live("RPC listCommands + request round-trip through the transport boundary", () =>
+    Effect.gen(function* () {
+      invoked.length = 0
+      let createdSessionId = ""
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const ext = yield* setupCommandsExt
+            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { client } = yield* Gent.test(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({
+              cwd: "/tmp/gent-extension-request-session",
+            })
+            createdSessionId = sessionId
+            const commands = yield* client.extension.listCommands({ sessionId })
+            expect(commands[0]).toBeInstanceOf(CommandInfo)
+            expect(commands.map((command) => command.name)).toEqual(["greet"])
+            const greet = commands.find((command) => command.name === "greet")
+            expect(greet?.description).toBe("Say hello")
+            expect(greet?.extensionId).toBe(ExtensionId.make("@test/commands"))
+            expect(greet?.capabilityId).toBe("greet")
+            expect(greet?.intent).toBe("write")
+            yield* client.extension.request({
+              sessionId,
+              extensionId: greet!.extensionId,
+              capabilityId: greet!.capabilityId,
+              intent: greet!.intent,
+              input: "rpc-world",
+              branchId,
+            })
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+      expect(invoked).toEqual([
+        {
+          args: "rpc-world",
+          sessionId: createdSessionId,
+          cwd: "/tmp/gent-extension-request-session",
+        },
+      ])
+    }),
+  )
+  it.live("RPC request rejects missing sessions instead of using launch cwd", () =>
+    Effect.gen(function* () {
+      invoked.length = 0
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const ext = yield* setupCommandsExt
+            const { client } = yield* Gent.test(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+            )
+            const result = yield* Effect.result(
+              client.extension.request({
+                sessionId: SessionId.make("missing-extension-request-session"),
+                extensionId: ExtensionId.make("@test/commands"),
+                capabilityId: "greet",
+                intent: "write",
+                input: "should-not-run",
+                branchId: BranchId.make("missing-extension-request-branch"),
+              }),
+            )
+            expect(result._tag).toBe("Failure")
+            expect(invoked).toEqual([])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("RPC request rejects branches outside the requested session", () =>
+    Effect.gen(function* () {
+      invoked.length = 0
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const ext = yield* setupCommandsExt
@@ -294,7 +236,6 @@ describe("extension command RPCs", () => {
           const second = yield* client.session.create({
             cwd: "/tmp/gent-extension-request-second",
           })
-
           const result = yield* Effect.result(
             client.extension.request({
               sessionId: first.sessionId,
@@ -305,173 +246,46 @@ describe("extension command RPCs", () => {
               branchId: second.branchId,
             }),
           )
-
           expect(result._tag).toBe("Failure")
           expect(invoked).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC send rejects missing sessions before actor dispatch", async () => {
-    boundaryReceived.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [boundaryExtension],
-            }),
-          )
-
-          const result = yield* Effect.result(
-            client.extension.send({
-              sessionId: SessionId.make("missing-extension-send-session"),
-              branchId: BranchId.make("missing-extension-send-branch"),
-              message: BoundaryProtocol.Touch.make({ label: "should-not-run" }),
-            }),
-          )
-
-          expect(result._tag).toBe("Failure")
-          expect(boundaryReceived).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC send rejects branches outside the requested session", async () => {
-    boundaryReceived.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [boundaryExtension],
-            }),
-          )
-          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-send-first" })
-          const second = yield* client.session.create({ cwd: "/tmp/gent-extension-send-second" })
-
-          const result = yield* Effect.result(
-            client.extension.send({
-              sessionId: first.sessionId,
-              branchId: second.branchId,
-              message: BoundaryProtocol.Touch.make({ label: "wrong-branch" }),
-            }),
-          )
-
-          expect(result._tag).toBe("Failure")
-          expect(boundaryReceived).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC ask rejects missing sessions before actor dispatch", async () => {
-    boundaryReceived.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [boundaryExtension],
-            }),
-          )
-
-          const result = yield* Effect.result(
-            client.extension.ask({
-              sessionId: SessionId.make("missing-extension-ask-session"),
-              branchId: BranchId.make("missing-extension-ask-branch"),
-              message: BoundaryProtocol.Ping.make({ label: "should-not-run" }),
-            }),
-          )
-
-          expect(result._tag).toBe("Failure")
-          expect(boundaryReceived).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC ask rejects branches outside the requested session", async () => {
-    boundaryReceived.length = 0
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [boundaryExtension],
-            }),
-          )
-          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-ask-first" })
-          const second = yield* client.session.create({ cwd: "/tmp/gent-extension-ask-second" })
-
-          const result = yield* Effect.result(
-            client.extension.ask({
-              sessionId: first.sessionId,
-              branchId: second.branchId,
-              message: BoundaryProtocol.Ping.make({ label: "wrong-branch" }),
-            }),
-          )
-
-          expect(result._tag).toBe("Failure")
-          expect(boundaryReceived).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC request provides profile resource services to public capabilities", async () => {
-    const profileCwd = "/tmp/gent-extension-request-profile-service"
-    const ext: LoadedExtension = {
-      manifest: { id: ExtensionId.make("@test/profile-service-request") },
-      scope: "builtin",
-      sourcePath: "test",
-      contributions: {
-        resources: [
-          defineResource({
-            tag: ProfileToken,
-            scope: "process",
-            layer: Layer.succeed(ProfileToken, {
-              read: () => Effect.succeed("profile-token"),
-            }),
-          }),
-        ],
-        rpc: [
-          request({
-            id: "read-profile-token",
-            extensionId: ExtensionId.make("@test/profile-service-request") as ExtensionId,
-            intent: "write",
-            input: Schema.String,
-            output: Schema.String,
-            execute: () =>
-              Effect.gen(function* () {
-                const token = yield* ProfileToken
-                return yield* token.read()
+      )
+    }),
+  )
+  it.live("RPC request provides profile resource services to public capabilities", () =>
+    Effect.gen(function* () {
+      const profileCwd = "/tmp/gent-extension-request-profile-service"
+      const ext: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/profile-service-request") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          resources: [
+            defineResource({
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.succeed(ProfileToken, {
+                read: () => Effect.succeed("profile-token"),
               }),
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      narrowR(
+            }),
+          ],
+          rpc: [
+            request({
+              id: "read-profile-token",
+              extensionId: ExtensionId.make("@test/profile-service-request") as ExtensionId,
+              intent: "write",
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const token = yield* ProfileToken
+                  return yield* token.read()
+                }),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
             const profile = yield* makeProfile(profileCwd, [ext])
@@ -488,7 +302,6 @@ describe("extension command RPCs", () => {
               }),
             )
             const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
-
             const result = yield* client.extension.request({
               sessionId,
               extensionId: ExtensionId.make("@test/profile-service-request"),
@@ -497,228 +310,157 @@ describe("extension command RPCs", () => {
               input: "token",
               branchId,
             })
-
             expect(result).toBe("profile-token")
           }).pipe(Effect.timeout("4 seconds")),
         ),
-      ),
-    )
-  })
-
-  test("RPC request resolves resources from SessionProfileCache.Live", async () => {
-    const home = mkdtempSync(join(tmpdir(), "gent-live-profile-home-"))
-    const profileCwd = mkdtempSync(join(tmpdir(), "gent-live-profile-cwd-"))
-    const ext: GentExtension = {
-      manifest: { id: ExtensionId.make("@test/live-profile-service-request") },
-      setup: (ctx) =>
-        Effect.succeed({
-          resources: [
-            defineResource({
-              tag: ProfileToken,
-              scope: "process",
-              layer: Layer.succeed(ProfileToken, {
-                read: () => Effect.succeed(`live:${ctx.cwd}`),
-              }),
-            }),
-          ],
-          rpc: [
-            request({
-              id: "read-live-profile-token",
-              extensionId: ExtensionId.make("@test/live-profile-service-request") as ExtensionId,
-              intent: "write",
-              input: Schema.String,
-              output: Schema.String,
-              execute: () =>
-                Effect.gen(function* () {
-                  const token = yield* ProfileToken
-                  return yield* token.read()
+      )
+    }),
+  )
+  it.live("RPC request resolves resources from SessionProfileCache.Live", () =>
+    Effect.gen(function* () {
+      const home = mkdtempSync(join(tmpdir(), "gent-live-profile-home-"))
+      const profileCwd = mkdtempSync(join(tmpdir(), "gent-live-profile-cwd-"))
+      const ext: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/live-profile-service-request") },
+        setup: (ctx) =>
+          Effect.succeed({
+            resources: [
+              defineResource({
+                tag: ProfileToken,
+                scope: "process",
+                layer: Layer.succeed(ProfileToken, {
+                  read: () => Effect.succeed(`live:${ctx.cwd}`),
                 }),
+              }),
+            ],
+            rpc: [
+              request({
+                id: "read-live-profile-token",
+                extensionId: ExtensionId.make("@test/live-profile-service-request") as ExtensionId,
+                intent: "write",
+                input: Schema.String,
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const token = yield* ProfileToken
+                    return yield* token.read()
+                  }),
+              }),
+            ],
+          }),
+      }
+      yield* Effect.acquireUseRelease(
+        Effect.void,
+        () =>
+          Effect.gen(function* () {
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const sessionProfileCacheLayer = SessionProfileCache.Live({
+                  home,
+                  platform: "test",
+                  extensions: [ext],
+                }).pipe(
+                  Layer.provide(
+                    Layer.mergeAll(
+                      BunServices.layer,
+                      ConfigService.Test(),
+                      Storage.MemoryWithSql(),
+                    ),
+                  ),
+                ) as Layer.Layer<SessionProfileCache>
+                const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+                const { client } = yield* Gent.test(
+                  createE2ELayer({
+                    ...e2ePreset,
+                    providerLayer,
+                    extensions: [],
+                    sessionProfileCacheLayer,
+                  }),
+                )
+                const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+                const result = yield* client.extension.request({
+                  sessionId,
+                  extensionId: ExtensionId.make("@test/live-profile-service-request"),
+                  capabilityId: "read-live-profile-token",
+                  intent: "write",
+                  input: "token",
+                  branchId,
+                })
+                expect(result).toBe(`live:${profileCwd}`)
+              }).pipe(Effect.timeout("4 seconds")),
+            )
+          }),
+        () =>
+          Effect.sync(() => {
+            rmSync(profileCwd, { recursive: true, force: true })
+            rmSync(home, { recursive: true, force: true })
+          }),
+      )
+    }),
+  )
+  it.live("RPC listStatus returns structurally tagged extension health", () =>
+    Effect.gen(function* () {
+      const failingExtension: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/failing-status") },
+        setup: () =>
+          Effect.fail(
+            new ExtensionLoadError({
+              extensionId: ExtensionId.make("@test/failing-status"),
+              message: "setup boom",
             }),
-          ],
-        }),
-    }
-
-    try {
-      await Effect.runPromise(
+          ),
+      }
+      yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const sessionProfileCacheLayer = SessionProfileCache.Live({
-              home,
-              platform: "test",
-              extensions: [ext],
-            }).pipe(
-              Layer.provide(
-                Layer.mergeAll(BunServices.layer, ConfigService.Test(), Storage.MemoryWithSql()),
-              ),
-            ) as Layer.Layer<SessionProfileCache>
             const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer,
-                extensions: [],
-                sessionProfileCacheLayer,
+                extensionInputs: [failingExtension],
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
-
-            const result = yield* client.extension.request({
-              sessionId,
-              extensionId: ExtensionId.make("@test/live-profile-service-request"),
-              capabilityId: "read-live-profile-token",
-              intent: "write",
-              input: "token",
-              branchId,
-            })
-
-            expect(result).toBe(`live:${profileCwd}`)
+            const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+            const status = yield* client.extension.listStatus({ sessionId })
+            expect(status._tag).toBe("degraded")
+            if (status._tag !== "degraded") return
+            expect(status.healthyExtensions).toEqual([])
+            expect(status.degradedExtensions).toHaveLength(1)
+            expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
+            expect(status.degradedExtensions[0]?.issues).toEqual([
+              {
+                _tag: "activation-failed",
+                phase: "setup",
+                error: "setup boom",
+              },
+            ])
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )
-    } finally {
-      rmSync(profileCwd, { recursive: true, force: true })
-      rmSync(home, { recursive: true, force: true })
-    }
-  })
-
-  test("RPC request gives write handlers the wide host context (ctx.extension.send)", async () => {
-    // Regression: public write RPC handlers can call `ctx.extension.send(...)`.
-    // Pre-fix, `extension.request` passed a narrow 4-key ctx so the guard threw
-    // on `ctx.extension` and the transport path silently no-op'd (the exact bug
-    // behind `/executor-start` / `/executor-stop`).
-    boundaryReceived.length = 0
-
-    const wideExtension: GentExtension = {
-      manifest: { id: ExtensionId.make("@test/wide-ctx-action") },
-      setup: () =>
-        Effect.succeed({
-          rpc: [
-            request({
-              id: "touch",
-              extensionId: ExtensionId.make("@test/wide-ctx-action"),
-              intent: "write",
-              slash: { name: "touch", description: "Touch the boundary" },
-              description: "Touch the boundary",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: (label, ctx) =>
-                ctx.extension.send(BoundaryProtocol.Touch.make({ label })).pipe(Effect.orDie),
+    }),
+  )
+  it.live("model tool execution receives live session mutation capabilities", () =>
+    Effect.gen(function* () {
+      const ext: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/session-mutations") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          tools: [
+            tool({
+              id: "create-branch",
+              description: "Create a branch through the extension host session API.",
+              params: Schema.Struct({}),
+              execute: (_input, ctx) =>
+                ctx.session
+                  .createBranch({ name: "from extension rpc" })
+                  .pipe(Effect.map(({ branchId }) => branchId)),
             }),
           ],
-        }),
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const wideExt = yield* Effect.provide(
-            setupExtension(
-              { extension: wideExtension, scope: "builtin", sourcePath: "builtin" },
-              "/test/cwd",
-              "/test/home",
-            ),
-            BunServices.layer,
-          )
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [boundaryExtension, wideExt],
-            }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({
-            cwd: "/tmp/gent-wide-ctx-action",
-          })
-
-          yield* client.extension.request({
-            sessionId,
-            extensionId: ExtensionId.make("@test/wide-ctx-action"),
-            capabilityId: "touch",
-            intent: "write",
-            input: "wide-ctx-ok",
-            branchId,
-          })
-
-          yield* waitFor(
-            Effect.sync(() => boundaryReceived.length),
-            (count) => count > 0,
-            5_000,
-            "boundary to receive send",
-          )
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-
-    expect(boundaryReceived).toEqual([{ kind: "send", label: "wide-ctx-ok" }])
-  })
-
-  test("RPC listStatus returns structurally tagged extension health", async () => {
-    const failingExtension: GentExtension = {
-      manifest: { id: ExtensionId.make("@test/failing-status") },
-      setup: () =>
-        Effect.fail(
-          new ExtensionLoadError({
-            extensionId: ExtensionId.make("@test/failing-status"),
-            message: "setup boom",
-          }),
-        ),
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensionInputs: [failingExtension],
-            }),
-          )
-          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-
-          const status = yield* client.extension.listStatus({ sessionId })
-
-          expect(status._tag).toBe("degraded")
-          if (status._tag !== "degraded") return
-          expect(status.healthyExtensions).toEqual([])
-          expect(status.degradedExtensions).toHaveLength(1)
-          expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
-          expect(status.degradedExtensions[0]?.issues).toEqual([
-            {
-              _tag: "activation-failed",
-              phase: "setup",
-              error: "setup boom",
-            },
-          ])
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("model tool execution receives live session mutation capabilities", async () => {
-    const ext: LoadedExtension = {
-      manifest: { id: ExtensionId.make("@test/session-mutations") },
-      scope: "builtin",
-      sourcePath: "test",
-      contributions: {
-        tools: [
-          tool({
-            id: "create-branch",
-            description: "Create a branch through the extension host session API.",
-            params: Schema.Struct({}),
-            execute: (_input, ctx) =>
-              ctx.session
-                .createBranch({ name: "from extension rpc" })
-                .pipe(Effect.map(({ branchId }) => branchId)),
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
+        },
+      }
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([
             toolCallStep("create-branch", {}),
@@ -728,13 +470,11 @@ describe("extension command RPCs", () => {
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-
           yield* client.message.send({
             sessionId,
             branchId,
             content: "create a branch",
           })
-
           const snapshot = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
@@ -746,7 +486,7 @@ describe("extension command RPCs", () => {
                     part.output.type === "json",
                 ),
               ),
-            5_000,
+            5000,
             "create-branch tool result",
           )
           const createdBranchPart = snapshot.messages
@@ -756,104 +496,97 @@ describe("extension command RPCs", () => {
             createdBranchPart && createdBranchPart.type === "tool-result"
               ? createdBranchPart.output.value
               : undefined
-
           expect(typeof createdBranchId).toBe("string")
           expect(createdBranchId).not.toBe(branchId)
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC listCommands omits human-slash actions and lists slash requests", async () => {
-    const extensionId = ExtensionId.make("@test/public-filter")
-    const ext: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "builtin",
-      sourcePath: "test",
-      contributions: {
-        rpc: [
-          request({
-            id: "visible",
-            extensionId,
-            intent: "write",
-            slash: { name: "visible", description: "visible" },
-            input: Schema.String,
-            output: Schema.Void,
-            execute: () => Effect.void,
-          }),
-        ],
-        commands: [
-          action({
-            id: "hidden",
-            name: "hidden",
-            description: "hidden",
-            surface: "slash",
-            input: Schema.String,
-            output: Schema.Void,
-            execute: () => Effect.void,
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
+      )
+    }),
+  )
+  it.live("RPC listCommands omits human-slash actions and lists slash requests", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-filter")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          rpc: [
+            request({
+              id: "visible",
+              extensionId,
+              intent: "write",
+              slash: { name: "visible", description: "visible" },
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+          commands: [
+            action({
+              id: "hidden",
+              name: "hidden",
+              description: "hidden",
+              surface: "slash",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-
           const commands = yield* client.extension.listCommands({ sessionId })
-
           expect(commands.map((command) => command.name)).toEqual(["visible"])
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC request cannot invoke lower-scope slash request shadowed by project command", async () => {
-    const extensionId = ExtensionId.make("@test/public-shadow")
-    const builtinExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "builtin",
-      sourcePath: "builtin",
-      contributions: {
-        rpc: [
-          request({
-            id: "shadowed",
-            extensionId,
-            intent: "write",
-            slash: { name: "shadowed", description: "shadowed" },
-            input: Schema.Struct({ value: Schema.String }),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: () => Effect.succeed({ value: "builtin" }),
-          }),
-        ],
-      },
-    }
-    const projectExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "project",
-      sourcePath: "project",
-      contributions: {
-        commands: [
-          action({
-            id: "shadowed",
-            name: "shadowed private",
-            description: "shadowed private",
-            surface: "slash",
-            input: Schema.Struct({ value: Schema.String }),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: (input) => Effect.succeed({ value: input.value }),
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
+      )
+    }),
+  )
+  it.live("RPC request cannot invoke lower-scope slash request shadowed by project command", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-shadow")
+      const builtinExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          rpc: [
+            request({
+              id: "shadowed",
+              extensionId,
+              intent: "write",
+              slash: { name: "shadowed", description: "shadowed" },
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.succeed({ value: "builtin" }),
+            }),
+          ],
+        },
+      }
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          commands: [
+            action({
+              id: "shadowed",
+              name: "shadowed private",
+              description: "shadowed private",
+              surface: "slash",
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: (input) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
@@ -864,10 +597,8 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-
           const commands = yield* client.extension.listCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
-
           const result = yield* client.extension
             .request({
               sessionId,
@@ -878,53 +609,50 @@ describe("extension command RPCs", () => {
               input: { value: "hi" },
             })
             .pipe(Effect.flip)
-
           expect(result._tag).toBe("ExtensionProtocolError")
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC listCommands omits lower-scope slash request shadowed by project request", async () => {
-    const extensionId = ExtensionId.make("@test/public-rpc-shadow")
-    const builtinExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "builtin",
-      sourcePath: "builtin",
-      contributions: {
-        rpc: [
-          request({
-            id: "shadowed",
-            extensionId,
-            intent: "write",
-            slash: { name: "shadowed", description: "shadowed" },
-            input: Schema.Struct({ value: Schema.String }),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: () => Effect.succeed({ value: "builtin" }),
-          }),
-        ],
-      },
-    }
-    const projectExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "project",
-      sourcePath: "project",
-      contributions: {
-        rpc: [
-          request({
-            id: "shadowed",
-            extensionId,
-            intent: "write",
-            input: Schema.Struct({ value: Schema.String }),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: (input) => Effect.succeed({ value: input.value }),
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
+      )
+    }),
+  )
+  it.live("RPC listCommands omits lower-scope slash request shadowed by project request", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-rpc-shadow")
+      const builtinExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          rpc: [
+            request({
+              id: "shadowed",
+              extensionId,
+              intent: "write",
+              slash: { name: "shadowed", description: "shadowed" },
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.succeed({ value: "builtin" }),
+            }),
+          ],
+        },
+      }
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          rpc: [
+            request({
+              id: "shadowed",
+              extensionId,
+              intent: "write",
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: (input) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
@@ -935,52 +663,49 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-
           const commands = yield* client.extension.listCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC listCommands omits lower-scope slash request shadowed by project tool", async () => {
-    const extensionId = ExtensionId.make("@test/public-tool-shadow")
-    const builtinExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "builtin",
-      sourcePath: "builtin",
-      contributions: {
-        rpc: [
-          request({
-            id: "shadowed",
-            extensionId,
-            intent: "write",
-            slash: { name: "shadowed", description: "shadowed" },
-            input: Schema.Struct({ value: Schema.String }),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: () => Effect.succeed({ value: "builtin" }),
-          }),
-        ],
-      },
-    }
-    const projectExt: LoadedExtension = {
-      manifest: { id: extensionId },
-      scope: "project",
-      sourcePath: "project",
-      contributions: {
-        tools: [
-          tool({
-            id: "shadowed",
-            description: "shadowed tool",
-            params: Schema.Struct({ value: Schema.String }),
-            execute: (input) => Effect.succeed({ value: input.value }),
-          }),
-        ],
-      },
-    }
-
-    await Effect.runPromise(
-      Effect.scoped(
+      )
+    }),
+  )
+  it.live("RPC listCommands omits lower-scope slash request shadowed by project tool", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-tool-shadow")
+      const builtinExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          rpc: [
+            request({
+              id: "shadowed",
+              extensionId,
+              intent: "write",
+              slash: { name: "shadowed", description: "shadowed" },
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.succeed({ value: "builtin" }),
+            }),
+          ],
+        },
+      }
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          tools: [
+            tool({
+              id: "shadowed",
+              description: "shadowed tool",
+              params: Schema.Struct({ value: Schema.String }),
+              execute: (input) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
@@ -991,22 +716,19 @@ describe("extension command RPCs", () => {
             }),
           )
           const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
-
           const commands = yield* client.extension.listCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
-      ),
-    )
-  })
-
-  test("RPC listCommands resolves commands from the requested session profile", async () => {
-    const alphaCwd = "/tmp/gent-alpha-profile"
-    const betaCwd = "/tmp/gent-beta-profile"
-    const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
-    const betaExt = makeCommandExtension("@test/beta-profile", "beta")
-
-    await Effect.runPromise(
-      Effect.scoped(
+      )
+    }),
+  )
+  it.live("RPC listCommands resolves commands from the requested session profile", () =>
+    Effect.gen(function* () {
+      const alphaCwd = "/tmp/gent-alpha-profile"
+      const betaCwd = "/tmp/gent-beta-profile"
+      const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
+      const betaExt = makeCommandExtension("@test/beta-profile", "beta")
+      yield* Effect.scoped(
         narrowR(
           Effect.gen(function* () {
             const alphaProfile = yield* makeProfile(alphaCwd, [alphaExt])
@@ -1028,19 +750,17 @@ describe("extension command RPCs", () => {
             )
             const alpha = yield* client.session.create({ cwd: alphaCwd })
             const beta = yield* client.session.create({ cwd: betaCwd })
-
             const alphaCommands = yield* client.extension.listCommands({
               sessionId: alpha.sessionId,
             })
             const betaCommands = yield* client.extension.listCommands({
               sessionId: beta.sessionId,
             })
-
             expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])
             expect(betaCommands.map((command) => command.name)).toEqual(["beta"])
           }).pipe(Effect.timeout("4 seconds")),
         ),
-      ),
-    )
-  })
+      )
+    }),
+  )
 })

@@ -1,5 +1,6 @@
 import { Effect } from "effect"
-import { BranchId, ExtensionId, RpcId, SessionId } from "../../domain/ids.js"
+import { BranchId, RpcId, SessionId } from "../../domain/ids.js"
+import type { ExtensionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
@@ -10,11 +11,9 @@ import {
 import { buildExtensionHealthSnapshot } from "../extension-health.js"
 import { CommandInfo } from "../transport-contract.js"
 import type {
-  AskExtensionMessageInput,
   ListExtensionCommandsInput,
   ListExtensionStatusInput,
   RequestCapabilityInput,
-  SendExtensionMessageInput,
 } from "../transport-contract.js"
 import type { RpcHandlerDeps } from "./shared.js"
 
@@ -106,56 +105,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       const { registry } = yield* deps.resolveSessionServices(sessionId)
       const activationStatuses = yield* registry.listExtensionStatuses()
       return buildExtensionHealthSnapshot(activationStatuses)
-    }),
-
-  "extension.send": ({ sessionId, message, branchId }: SendExtensionMessageInput) =>
-    Effect.gen(function* () {
-      const scope = yield* resolveExtensionSession(deps, {
-        extensionId: ExtensionId.make(message.extensionId),
-        tag: message._tag,
-        phase: "command",
-        sessionId,
-        branchId,
-      })
-      yield* Effect.logDebug("rpc.extension.send.received").pipe(
-        Effect.annotateLogs({
-          sessionId,
-          extensionId: message.extensionId,
-          tag: message._tag,
-          branchId,
-        }),
-      )
-      const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
-      yield* stateRuntime.send(scope.sessionId, message, scope.branchId)
-    }),
-
-  "extension.ask": ({ sessionId, message, branchId }: AskExtensionMessageInput) =>
-    Effect.gen(function* () {
-      const scope = yield* resolveExtensionSession(deps, {
-        extensionId: ExtensionId.make(message.extensionId),
-        tag: message._tag,
-        phase: "request",
-        sessionId,
-        branchId,
-      })
-      yield* Effect.logDebug("rpc.extension.ask.received").pipe(
-        Effect.annotateLogs({
-          sessionId,
-          extensionId: message.extensionId,
-          tag: message._tag,
-          branchId,
-        }),
-      )
-      const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
-      const reply = yield* stateRuntime.execute(scope.sessionId, message, scope.branchId)
-      yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
-        Effect.annotateLogs({
-          sessionId,
-          extensionId: message.extensionId,
-          tag: message._tag,
-        }),
-      )
-      return reply
     }),
 
   "extension.request": ({

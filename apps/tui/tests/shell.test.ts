@@ -13,88 +13,87 @@ describe("executeShell", () => {
   const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
     Effect.runPromise(effect.pipe(Effect.provide(platformLayer)))
 
-  beforeAll(async () => {
-    testDir = await mkdtemp(join(tmpdir(), "shell-test-"))
-  })
+  beforeAll(() =>
+    mkdtemp(join(tmpdir(), "shell-test-")).then((dir) => {
+      testDir = dir
+    }),
+  )
 
-  afterAll(async () => {
-    await rm(testDir, { recursive: true, force: true })
-  })
+  afterAll(() => rm(testDir, { recursive: true, force: true }))
 
-  test("executes simple command", async () => {
-    const result = await run(executeShell("echo hello", testDir))
-    expect(result.output).toBe("hello")
-    expect(result.truncated).toBe(false)
-    expect(result.savedPath).toBeUndefined()
-  })
+  test("executes simple command", () =>
+    run(executeShell("echo hello", testDir)).then((result) => {
+      expect(result.output).toBe("hello")
+      expect(result.truncated).toBe(false)
+      expect(result.savedPath).toBeUndefined()
+    }))
 
-  test("captures stderr", async () => {
-    const result = await run(executeShell("echo error >&2", testDir))
-    expect(result.output).toContain("error")
-    expect(result.truncated).toBe(false)
-  })
+  test("captures stderr", () =>
+    run(executeShell("echo error >&2", testDir)).then((result) => {
+      expect(result.output).toContain("error")
+      expect(result.truncated).toBe(false)
+    }))
 
-  test("respects cwd", async () => {
-    const result = await run(executeShell("pwd", testDir))
-    // macOS may resolve /var to /private/var
-    expect(result.output.endsWith(testDir.split("/").pop()!)).toBe(true)
-    expect(result.truncated).toBe(false)
-  })
+  test("respects cwd", () =>
+    run(executeShell("pwd", testDir)).then((result) => {
+      // macOS may resolve /var to /private/var
+      expect(result.output.endsWith(testDir.split("/").pop()!)).toBe(true)
+      expect(result.truncated).toBe(false)
+    }))
 
-  test("handles multi-line output", async () => {
-    const result = await run(executeShell("echo -e 'line1\\nline2\\nline3'", testDir))
-    expect(result.output).toContain("line1")
-    expect(result.output).toContain("line2")
-    expect(result.output).toContain("line3")
-    expect(result.truncated).toBe(false)
-  })
+  test("handles multi-line output", () =>
+    run(executeShell("echo -e 'line1\\nline2\\nline3'", testDir)).then((result) => {
+      expect(result.output).toContain("line1")
+      expect(result.output).toContain("line2")
+      expect(result.output).toContain("line3")
+      expect(result.truncated).toBe(false)
+    }))
 
-  test("handles empty output", async () => {
-    const result = await run(executeShell("true", testDir))
-    expect(result.output).toBe("")
-    expect(result.truncated).toBe(false)
-  })
+  test("handles empty output", () =>
+    run(executeShell("true", testDir)).then((result) => {
+      expect(result.output).toBe("")
+      expect(result.truncated).toBe(false)
+    }))
 
-  test("handles command with arguments", async () => {
-    const result = await run(executeShell("echo -n test", testDir))
-    expect(result.output).toBe("test")
-  })
+  test("handles command with arguments", () =>
+    run(executeShell("echo -n test", testDir)).then((result) => {
+      expect(result.output).toBe("test")
+    }))
 
-  test("handles pipes", async () => {
-    const result = await run(executeShell("echo hello | tr 'h' 'H'", testDir))
-    expect(result.output).toBe("Hello")
-  })
+  test("handles pipes", () =>
+    run(executeShell("echo hello | tr 'h' 'H'", testDir)).then((result) => {
+      expect(result.output).toBe("Hello")
+    }))
 
-  test("handles file operations", async () => {
+  test("handles file operations", () => {
     const testFile = join(testDir, "test.txt")
-    await writeFile(testFile, "file content")
-
-    const result = await run(executeShell(`cat ${testFile}`, testDir))
-    expect(result.output).toBe("file content")
+    return writeFile(testFile, "file content")
+      .then(() => run(executeShell(`cat ${testFile}`, testDir)))
+      .then((result) => {
+        expect(result.output).toBe("file content")
+      })
   })
 
-  test("truncates output over line limit", async () => {
+  test("truncates output over line limit", () =>
     // Generate output with more than 2000 lines
-    const result = await run(executeShell("seq 1 2500", testDir))
+    run(executeShell("seq 1 2500", testDir)).then((result) => {
+      expect(result.truncated).toBe(true)
+      expect(result.savedPath).toBeDefined()
 
-    expect(result.truncated).toBe(true)
-    expect(result.savedPath).toBeDefined()
+      // Output should be truncated to ~2000 lines
+      const lineCount = result.output.split("\n").length
+      expect(lineCount).toBeLessThanOrEqual(2001)
+    }))
 
-    // Output should be truncated to ~2000 lines
-    const lineCount = result.output.split("\n").length
-    expect(lineCount).toBeLessThanOrEqual(2001)
-  })
-
-  test("truncates output over byte limit", async () => {
+  test("truncates output over byte limit", () =>
     // Generate output over 50KB (each 'x' repeated 100 times per line, 600 lines = 60KB)
-    const result = await run(
+    run(
       executeShell("for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done", testDir),
-    )
+    ).then((result) => {
+      expect(result.truncated).toBe(true)
+      expect(result.savedPath).toBeDefined()
 
-    expect(result.truncated).toBe(true)
-    expect(result.savedPath).toBeDefined()
-
-    // Output should be under 50KB
-    expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
-  })
+      // Output should be under 50KB
+      expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
+    }))
 })

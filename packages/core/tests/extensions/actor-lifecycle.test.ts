@@ -1,203 +1,34 @@
 /**
- * Actor lifecycle canary — exercises real extension actors through per-request
- * RPC scopes. This is the test that would have caught the ambient scope bug
- * (actors dying when the RPC request scope closed).
- *
- * Each `client.*` call goes through RpcServer, which allocates a fresh Scope
- * per request and closes it on exit. Pre-fix, actors spawned under that scope
- * died between requests.
+ * Actor lifecycle canary — exercises the public session actor over fresh RPC
+ * scopes. This locks the scope boundary without reviving the deleted
+ * extension message transport.
  */
-import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
-import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-import { ServiceKey, type Behavior } from "@gent/core/domain/actor"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { describe, expect, it } from "effect-bun-test"
+import { Effect } from "effect"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import { behavior } from "@gent/core/extensions/api"
-import type { LoadedExtension } from "../../src/domain/extension.js"
 import { Gent } from "@gent/sdk"
-import { ExtensionId } from "@gent/core/domain/ids"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "./helpers/test-preset"
 
-// ============================================================================
-// Counter extension — stateful actor with request support + protocol
-// ============================================================================
-
-const EXTENSION_ID = ExtensionId.make("lifecycle-counter")
-
-interface CounterState {
-  readonly count: number
-}
-
-const CounterReply = Schema.Struct({ count: Schema.Number })
-type CounterReply = typeof CounterReply.Type
-
-// `_tag` strings are shared with `CounterProtocol.*` ExtensionMessage envelopes
-// so the actor-route fallback forwards envelopes directly into the actor mailbox.
-const CounterMsg = TaggedEnumClass("CounterMsg", {
-  Increment: TaggedEnumClass.askVariant<CounterReply>()({ delta: Schema.Number }),
-  GetCount: TaggedEnumClass.askVariant<CounterReply>()({}),
-  TurnCompleted: {},
-})
-type CounterMsg = Schema.Schema.Type<typeof CounterMsg>
-
-const CounterService = ServiceKey<CounterMsg>("lifecycle-counter/service")
-
-const CounterProtocol = {
-  Increment: ExtensionMessage.reply(
-    EXTENSION_ID,
-    "Increment",
-    { delta: Schema.Number },
-    CounterReply,
-  ),
-  GetCount: ExtensionMessage.reply(EXTENSION_ID, "GetCount", {}, CounterReply),
-}
-
-const counterBehavior: Behavior<CounterMsg, CounterState, never> = {
-  initialState: { count: 0 },
-  serviceKey: CounterService,
-  receive: (msg, state, ctx) =>
-    Effect.gen(function* () {
-      switch (msg._tag) {
-        case "Increment": {
-          const next = { count: state.count + msg.delta }
-          yield* ctx.reply(next)
-          return next
-        }
-        case "GetCount": {
-          yield* ctx.reply({ count: state.count })
-          return state
-        }
-        case "TurnCompleted":
-          return { count: state.count + 100 }
-      }
-    }),
-}
-
-const counterExtension: LoadedExtension = {
-  manifest: { id: EXTENSION_ID },
-  scope: "builtin",
-  sourcePath: "builtin",
-  contributions: {
-    actors: [behavior(counterBehavior)],
-    protocols: CounterProtocol,
-  },
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 describe("Actor lifecycle across RPC boundaries", () => {
   it.live(
-    "actor survives RPC request boundaries",
+    "session actor survives RPC request boundaries",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
-          )
+          const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          // First RPC call — spawns actor under request scope
-          const r1 = yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.Increment.make({ delta: 1 }),
-          })
-          expect(r1).toEqual({ count: 1 })
-
-          // Second RPC call — first request scope has closed.
-          // Pre-fix: actor is dead. Post-fix: actor is alive.
-          const r2 = yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.GetCount.make(),
-          })
-          expect(r2).toEqual({ count: 1 })
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "actor state accumulates across requests",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
-          )
-
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-
-          yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.Increment.make({ delta: 3 }),
-          })
-
-          yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.Increment.make({ delta: 7 }),
-          })
-
-          const r = yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.GetCount.make(),
-          })
-          expect(r).toEqual({ count: 10 })
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "actor survives event publishing from message.send",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([
-            textStep("session reply"),
-            textStep("message reply"),
-          ])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
-          )
-
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-
-          // Increment via ask to establish baseline
-          yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.Increment.make({ delta: 1 }),
-          })
-
-          // message.send triggers agent loop → events → actor.publish
-          // The agent loop runs asynchronously; we don't wait for TurnCompleted.
-          // The key assertion: actor survives the event publishing path.
+          const before = yield* client.actor.getMetrics({ sessionId, branchId })
           yield* client.message.send({ sessionId, branchId, content: "hello" })
+          const after = yield* client.actor.getMetrics({ sessionId, branchId })
 
-          // Actor must still be alive and respond after message.send's
-          // event publishing ran through ActorRouter.publish
-          const r = yield* client.extension.ask({
-            sessionId,
-            branchId,
-            message: CounterProtocol.GetCount.make(),
-          })
-          // Count is at least 1 from the Increment; may be higher if TurnCompleted
-          // published before this ask. The assertion proves liveness, not exact timing.
-          expect((r as { count: number }).count).toBeGreaterThanOrEqual(1)
-        }).pipe(Effect.timeout("13 seconds")),
+          expect(after.turns).toBeGreaterThanOrEqual(before.turns)
+        }).pipe(Effect.timeout("8 seconds")),
       ),
-    15_000,
+    10_000,
   )
 })

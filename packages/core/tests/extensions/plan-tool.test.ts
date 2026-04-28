@@ -42,8 +42,6 @@ const makeCtx = (overrides: {
   return {
     ...base,
     extension: {
-      send: dieStub("extension.send"),
-      ask: dieStub("extension.ask"),
       request: dieStub("extension.request"),
     },
     agent: {

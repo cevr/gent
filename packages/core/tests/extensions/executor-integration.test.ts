@@ -1,3 +1,4 @@
+import { describe, expect, it } from "effect-bun-test"
 /**
  * Executor integration tests — tool execution with mocked services,
  * and actor lifecycle through the actor primitive (W10-1c).
@@ -9,9 +10,6 @@
  * discovery is exercised end-to-end here via typed Executor RPC/controller
  * services, while the actor remains the source of truth for connection state.
  */
-
-import { describe, test, expect } from "bun:test"
-import { it } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -50,65 +48,51 @@ import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
-
 // Tool .effect inherits R=any from the AnyCapabilityContribution cast in tool().
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-
 // ── Tool test helpers ──
-
 const readySnapshot: ExecutorSnapshotReply = {
   status: "ready",
   baseUrl: "http://127.0.0.1:4788",
 }
-
 const notReadySnapshot: ExecutorSnapshotReply = {
   status: "idle",
 }
-
 const makeToolCtx = (snapshot: ExecutorSnapshotReply | undefined) =>
   testToolContext({
     extension: {
-      send: () => Effect.void,
-      ask: () => Effect.succeed(snapshot as never),
       request: () => Effect.succeed(snapshot as never),
     },
   })
-
 const successResult: ExecutorMcpToolResult = {
   text: "Hello from Executor",
   structuredContent: { answer: 42 },
   isError: false,
 }
-
 const errorResult: ExecutorMcpToolResult = {
   text: "Tool not found: nonexistent",
   structuredContent: null,
   isError: true,
 }
-
 const waitingResult: ExecutorMcpToolResult = {
   text: "Waiting for approval",
   structuredContent: null,
   isError: false,
   executionId: "exec-abc-123",
 }
-
 // ── Actor lifecycle helpers ──
-
 const mockEndpoint = {
   mode: "local" as const,
   baseUrl: "http://127.0.0.1:4788",
   ownedByGent: true,
   scope: { id: "scope-1", name: "test", dir: "/test" },
 }
-
 const mockInspection = {
   instructions: "Use tools.search to discover APIs",
   tools: [{ name: "execute" }],
 }
-
 /**
  * Build a `LoadedExtension` carrying:
  *   - `actors: [executorActor]` — Behavior spawned by ActorHost.
@@ -120,30 +104,28 @@ const makeExecutorExtension = (overrides?: {
   sidecar?: Parameters<typeof ExecutorSidecar.Test>[0]
   bridge?: Parameters<typeof ExecutorMcpBridge.Test>[0]
   settings?: Partial<ResolvedExecutorSettings>
-}): { extension: LoadedExtension; layer: Layer.Layer<never> } => {
+}): {
+  extension: LoadedExtension
+  layer: Layer.Layer<never>
+} => {
   const settings: ResolvedExecutorSettings = {
     ...ExecutorSettingsDefaults,
     ...overrides?.settings,
   }
-
   const sidecarLayer = ExecutorSidecar.Test({
     resolveEndpoint: () => Effect.succeed(mockEndpoint),
     resolveSettings: () => Effect.succeed(settings),
     ...overrides?.sidecar,
   })
-
   const bridgeLayer = ExecutorMcpBridge.Test({
     inspect: () => Effect.succeed(mockInspection),
     ...overrides?.bridge,
   })
-
   const sidecarBridgeLayer = Layer.merge(sidecarLayer, bridgeLayer)
-
   // Connection runner layer — its R channel is closed by providing the
   // sidecar+bridge here so the resource's residual R is `ActorEngine |
   // Receptionist`, which the runtime supplies.
   const runnerLayer = ExecutorConnectionRunnerLayer("/test").pipe(Layer.provide(sidecarBridgeLayer))
-
   const extension: LoadedExtension = {
     manifest: { id: EXECUTOR_EXTENSION_ID },
     scope: "builtin",
@@ -170,16 +152,13 @@ const makeExecutorExtension = (overrides?: {
       ],
     },
   }
-
   return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
 }
-
 const makeRuntimeLayer = (extension: LoadedExtension) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActorHost only walks `extensions`
   const resolved = { extensions: [extension] } as unknown as ResolvedExtensions
-
   // Build the actor runtime stack: `ActorEngine.Live` provides engine +
   // Receptionist; `ActorHost.fromResolved` spawns contributed behaviors;
   // both stay in the output set so the runner layer can pull them. The
@@ -190,7 +169,6 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
     Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),
   )
-
   // Pull every `scope: "process"` resource layer from the extension and
   // chain them onto `machine` via `Layer.provideMerge` so the runner's
   // `ActorEngine | Receptionist` requirements resolve to the same
@@ -202,7 +180,6 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture: closed-R typed elsewhere
         r.layer as Layer.Layer<any, never, any>,
     )
-
   // Stack the resource layers on top of `machine + storage` so each
   // resource's `ActorEngine | Receptionist | Storage | …` deps are
   // satisfied by the underlying stack. `provideMerge` keeps the
@@ -215,7 +192,6 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,
   )
-
   const seededMachine = Layer.effect(
     ActorRouter,
     Effect.gen(function* () {
@@ -237,15 +213,12 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
       } satisfies typeof runtime
     }),
   ).pipe(Layer.provideMerge(machineWithResources))
-
   return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl)
 }
-
 const executorSnapshot = Effect.gen(function* () {
   const executor = yield* ExecutorRead
   return yield* executor.snapshot()
 })
-
 const waitForExecutorStatus = (status: ExecutorSnapshotReply["status"]) =>
   Effect.gen(function* () {
     const executor = yield* ExecutorRead
@@ -256,85 +229,79 @@ const waitForExecutorStatus = (status: ExecutorSnapshotReply["status"]) =>
           Effect.catchEager(() => Effect.succeed(undefined as ExecutorSnapshotReply | undefined)),
         ),
       (snap) => snap?.status === status,
-      3_000,
+      3000,
       `executor status = ${status}`,
     ).pipe(Effect.catchEager(() => Effect.succeed(undefined as never)))
   })
-
 // ── Tool tests ──
-
 describe("Executor tools", () => {
-  test("execute calls MCP bridge and returns result text", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      execute: (_baseUrl, _code) => Effect.succeed(successResult),
-    })
-    const ctx = makeToolCtx(readySnapshot)
-
-    const result = await Effect.runPromise(
-      narrowR(
+  it.live("execute calls MCP bridge and returns result text", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        execute: (_baseUrl, _code) => Effect.succeed(successResult),
+      })
+      const ctx = makeToolCtx(readySnapshot)
+      const result = yield* narrowR(
         ExecuteTool.effect({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
           Effect.provide(bridgeLayer),
         ),
-      ),
-    )
-
-    expect(result.text).toBe("Hello from Executor")
-    expect(result.structuredContent).toEqual({ answer: 42 })
-  })
-
-  test("execute Effect.fails when MCP returns isError: true", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      execute: () => Effect.succeed(errorResult),
-    })
-    const ctx = makeToolCtx(readySnapshot)
-
-    const exit = await Effect.runPromiseExit(
-      narrowR(ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer))),
-    )
-
-    expect(exit._tag).toBe("Failure")
-  })
-
-  test("execute fails when actor not Ready", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      execute: () => Effect.succeed(successResult),
-    })
-    const ctx = makeToolCtx(notReadySnapshot)
-
-    const exit = await Effect.runPromiseExit(
-      narrowR(ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
-    )
-
-    expect(exit._tag).toBe("Failure")
-  })
-
-  test("execute returns executionId when waiting_for_interaction", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      execute: () => Effect.succeed(waitingResult),
-    })
-    const ctx = makeToolCtx(readySnapshot)
-
-    const result = await Effect.runPromise(
-      narrowR(ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer))),
-    )
-
-    expect(result.executionId).toBe("exec-abc-123")
-    expect(result.text).toBe("Waiting for approval")
-  })
-
-  test("resume calls MCP bridge with parsed content", async () => {
-    const captured: { executionId: string; action: string; content?: Record<string, unknown> }[] =
-      []
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      resume: (_baseUrl, executionId, action, content) => {
-        captured.push({ executionId, action, content })
-        return Effect.succeed(successResult)
-      },
-    })
-    const ctx = makeToolCtx(readySnapshot)
-
-    await Effect.runPromise(
-      narrowR(
+      )
+      expect(result.text).toBe("Hello from Executor")
+      expect(result.structuredContent).toEqual({ answer: 42 })
+    }),
+  )
+  it.live("execute Effect.fails when MCP returns isError: true", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        execute: () => Effect.succeed(errorResult),
+      })
+      const ctx = makeToolCtx(readySnapshot)
+      const exit = yield* Effect.exit(
+        narrowR(ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer))),
+      )
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
+  it.live("execute fails when actor not Ready", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        execute: () => Effect.succeed(successResult),
+      })
+      const ctx = makeToolCtx(notReadySnapshot)
+      const exit = yield* Effect.exit(
+        narrowR(ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
+      )
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
+  it.live("execute returns executionId when waiting_for_interaction", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        execute: () => Effect.succeed(waitingResult),
+      })
+      const ctx = makeToolCtx(readySnapshot)
+      const result = yield* narrowR(
+        ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      )
+      expect(result.executionId).toBe("exec-abc-123")
+      expect(result.text).toBe("Waiting for approval")
+    }),
+  )
+  it.live("resume calls MCP bridge with parsed content", () =>
+    Effect.gen(function* () {
+      const captured: {
+        executionId: string
+        action: string
+        content?: Record<string, unknown>
+      }[] = []
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        resume: (_baseUrl, executionId, action, content) => {
+          captured.push({ executionId, action, content })
+          return Effect.succeed(successResult)
+        },
+      })
+      const ctx = makeToolCtx(readySnapshot)
+      yield* narrowR(
         ResumeTool.effect(
           {
             executionId: "exec-1",
@@ -343,59 +310,55 @@ describe("Executor tools", () => {
           },
           ctx,
         ).pipe(Effect.provide(bridgeLayer)),
-      ),
-    )
-
-    expect(captured).toHaveLength(1)
-    expect(captured[0]!.executionId).toBe("exec-1")
-    expect(captured[0]!.action).toBe("accept")
-    expect(captured[0]!.content).toEqual({ approved: true })
-  })
-
-  test("resume fails with invalid JSON content", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      resume: () => Effect.succeed(successResult),
-    })
-    const ctx = makeToolCtx(readySnapshot)
-
-    const exit = await Effect.runPromiseExit(
-      narrowR(
-        ResumeTool.effect(
-          {
-            executionId: "exec-1",
-            action: "accept" as "accept" | "decline" | "cancel",
-            content: "not valid json{{{",
-          },
-          ctx,
-        ).pipe(Effect.provide(bridgeLayer)),
-      ),
-    )
-
-    expect(exit._tag).toBe("Failure")
-  })
-
-  test("resume fails when actor not Ready", async () => {
-    const bridgeLayer = ExecutorMcpBridge.Test({
-      resume: () => Effect.succeed(successResult),
-    })
-    const ctx = makeToolCtx(notReadySnapshot)
-
-    const exit = await Effect.runPromiseExit(
-      narrowR(
-        ResumeTool.effect(
-          {
-            executionId: "exec-1",
-            action: "decline" as "accept" | "decline" | "cancel",
-          },
-          ctx,
-        ).pipe(Effect.provide(bridgeLayer)),
-      ),
-    )
-
-    expect(exit._tag).toBe("Failure")
-  })
+      )
+      expect(captured).toHaveLength(1)
+      expect(captured[0]!.executionId).toBe("exec-1")
+      expect(captured[0]!.action).toBe("accept")
+      expect(captured[0]!.content).toEqual({ approved: true })
+    }),
+  )
+  it.live("resume fails with invalid JSON content", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        resume: () => Effect.succeed(successResult),
+      })
+      const ctx = makeToolCtx(readySnapshot)
+      const exit = yield* Effect.exit(
+        narrowR(
+          ResumeTool.effect(
+            {
+              executionId: "exec-1",
+              action: "accept" as "accept" | "decline" | "cancel",
+              content: "not valid json{{{",
+            },
+            ctx,
+          ).pipe(Effect.provide(bridgeLayer)),
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
+  it.live("resume fails when actor not Ready", () =>
+    Effect.gen(function* () {
+      const bridgeLayer = ExecutorMcpBridge.Test({
+        resume: () => Effect.succeed(successResult),
+      })
+      const ctx = makeToolCtx(notReadySnapshot)
+      const exit = yield* Effect.exit(
+        narrowR(
+          ResumeTool.effect(
+            {
+              executionId: "exec-1",
+              action: "decline" as "accept" | "decline" | "cancel",
+            },
+            ctx,
+          ).pipe(Effect.provide(bridgeLayer)),
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
 })
-
 // ── Actor lifecycle ──
 //
 // The runner observes the actor's state via `engine.subscribeState` and
@@ -403,7 +366,6 @@ describe("Executor tools", () => {
 // route through `ExecutorRead.snapshot()` and `ExecutorWrite` commands,
 // exercising end-to-end cross-extension Receptionist discovery without
 // the retired actor-route protocol shim.
-
 describe("Executor actor lifecycle", () => {
   it.live(
     "autoStart=true → Idle → Connecting → Ready",
@@ -412,7 +374,6 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           yield* waitForExecutorStatus("ready")
-
           const reply = yield* executorSnapshot
           expect(reply.status).toBe("ready")
           expect(reply.baseUrl).toBe("http://127.0.0.1:4788")
@@ -421,9 +382,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "autoStart=false → stays Idle",
     () => {
@@ -433,7 +393,6 @@ describe("Executor actor lifecycle", () => {
           // autoStart=false means the runner does not tell `Connect` —
           // actor stays Idle.
           yield* waitForExecutorStatus("idle")
-
           const reply = yield* executorSnapshot
           expect(reply.status).toBe("idle")
         })
@@ -441,9 +400,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "sidecar failure → Connecting → Error",
     () => {
@@ -456,7 +414,6 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           yield* waitForExecutorStatus("error")
-
           const reply = yield* executorSnapshot
           expect(reply.status).toBe("error")
           expect(reply.errorMessage).toBeDefined()
@@ -465,9 +422,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "/executor-start command → Connecting → Ready",
     () => {
@@ -475,16 +431,11 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           const executor = yield* ExecutorWrite
-
           yield* waitForExecutorStatus("idle")
-
           const before = yield* executorSnapshot
           expect(before.status).toBe("idle")
-
           yield* executor.connect("/test")
-
           yield* waitForExecutorStatus("ready")
-
           const after = yield* executorSnapshot
           expect(after.status).toBe("ready")
         })
@@ -492,9 +443,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "/executor-stop from Ready → Idle",
     () => {
@@ -502,16 +452,11 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           const executor = yield* ExecutorWrite
-
           yield* waitForExecutorStatus("ready")
-
           const before = yield* executorSnapshot
           expect(before.status).toBe("ready")
-
           yield* executor.disconnect()
-
           yield* waitForExecutorStatus("idle")
-
           const after = yield* executorSnapshot
           expect(after.status).toBe("idle")
         })
@@ -519,9 +464,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "public executor commands list and dispatch through extension.request",
     () => {
@@ -537,13 +481,11 @@ describe("Executor actor lifecycle", () => {
               yield* client.session.create({
                 cwd: "/tmp/gent-executor-public-command",
               })
-
             const commands = yield* client.extension.listCommands({ sessionId: createdSessionId })
             expect(commands.map((command) => command.name).sort()).toEqual([
               "executor-start",
               "executor-stop",
             ])
-
             yield* client.extension.request({
               sessionId: createdSessionId,
               branchId: createdBranchId,
@@ -552,7 +494,6 @@ describe("Executor actor lifecycle", () => {
               intent: "write",
               input: "",
             })
-
             const ready = (yield* waitFor(
               client.extension.request({
                 sessionId: createdSessionId,
@@ -563,11 +504,10 @@ describe("Executor actor lifecycle", () => {
                 input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "ready",
-              3_000,
+              3000,
               "executor public command ready",
             )) as ExecutorSnapshotReply
             expect(ready.status).toBe("ready")
-
             yield* client.extension.request({
               sessionId: createdSessionId,
               branchId: createdBranchId,
@@ -576,7 +516,6 @@ describe("Executor actor lifecycle", () => {
               intent: "write",
               input: "",
             })
-
             const idle = (yield* waitFor(
               client.extension.request({
                 sessionId: createdSessionId,
@@ -587,7 +526,7 @@ describe("Executor actor lifecycle", () => {
                 input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "idle",
-              3_000,
+              3000,
               "executor public command idle",
             )) as ExecutorSnapshotReply
             expect(idle.status).toBe("idle")
@@ -595,9 +534,8 @@ describe("Executor actor lifecycle", () => {
         ),
       )
     },
-    10_000,
+    10000,
   )
-
   it.live(
     "/executor-start from Error → Connecting → Ready (retry)",
     () => {
@@ -616,18 +554,13 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           const executor = yield* ExecutorWrite
-
           // First boot → autoStart Connect → resolveEndpoint fails → Error
           yield* waitForExecutorStatus("error")
-
           const mid = yield* executorSnapshot
           expect(mid.status).toBe("error")
-
           // Retry via command — second resolveEndpoint succeeds.
           yield* executor.connect("/test")
-
           yield* waitForExecutorStatus("ready")
-
           const after = yield* executorSnapshot
           expect(after.status).toBe("ready")
         })
@@ -635,16 +568,14 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   // No persistence test: connection state is volatile per process. A
   // restored `Ready{baseUrl}` would point at a sidecar URL that no
   // longer exists; the actor ships without `persistence` and re-bootstraps
   // from `Idle` via autoStart. Cross-process persistence is covered by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state`
   // for actors that DO opt in.
-
   // Regression for W10-1c B2: Disconnect mid-handshake must cancel
   // the in-flight `runConnection` fork. Without the cancel, the
   // sidecar resolve eventually `tell`s `Connected` and pushes the
@@ -682,9 +613,8 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
-
   // Regression for W10-1c B1: production composer must cross-wire
   // `ActorEngine | Receptionist` into the resource layer's R channel.
   // `Layer.mergeAll(baseLayers, resourceLayer)` does NOT cross-wire,
@@ -711,6 +641,6 @@ describe("Executor actor lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
-    10_000,
+    10000,
   )
 })

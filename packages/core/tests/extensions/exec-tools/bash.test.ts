@@ -85,8 +85,6 @@ const stubCtx: ToolContext = {
   cwd: process.cwd(),
   home: "/tmp",
   extension: {
-    send: dieStub("send"),
-    ask: dieStub("ask"),
     request: dieStub("request"),
   },
   actors: {

@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { ExtensionId } from "@gent/core/domain/ids"
@@ -27,7 +27,6 @@ import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control.js"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
-
 const makeTestExtensions = () => {
   const cowork = AgentDefinition.make({
     name: AgentName.make("cowork"),
@@ -37,7 +36,6 @@ const makeTestExtensions = () => {
     name: AgentName.make("memory:reflect"),
     model: ModelId.make("test/override"),
   })
-
   return resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
@@ -47,7 +45,6 @@ const makeTestExtensions = () => {
     },
   ])
 }
-
 const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
@@ -90,16 +87,23 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer, sessionRuntimeLayer),
   )
 }
-
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
-
+    .map(
+      (call) =>
+        (
+          call.args as
+            | {
+                _tag?: string
+              }
+            | undefined
+        )?._tag,
+    )
 describe("agent override behavior", () => {
-  test("sendMessage keeps agentOverride turn-scoped and does not switch the session agent", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
+  it.live("sendMessage keeps agentOverride turn-scoped and does not switch the session agent", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         {
           ...textStep("override reply"),
           assertRequest: (request) => {
@@ -112,16 +116,12 @@ describe("agent override behavior", () => {
             expect(request.model).toBe("test/default")
           },
         },
-      ]),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      ])
+      yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
         const storage = yield* Storage
         const recorder = yield* SequenceRecorder
         const session = yield* commands.createSession({ name: "Agent Override Test" })
-
         yield* commands.sendMessage({
           sessionId: session.sessionId,
           branchId: session.branchId,
@@ -133,15 +133,13 @@ describe("agent override behavior", () => {
           branchId: session.branchId,
           content: "without override",
         })
-
         const messages = yield* waitFor(
           storage.listMessages(session.branchId),
           (current) => current.filter((message) => message.role === "assistant").length === 2,
-          5_000,
+          5000,
           "two assistant replies",
         )
         const calls = yield* recorder.getCalls()
-
         expect(messages.map((message) => message.role)).toEqual([
           "user",
           "assistant",
@@ -150,67 +148,58 @@ describe("agent override behavior", () => {
         ])
         expect(eventTags(calls)).not.toContain("AgentSwitched")
         yield* controls.assertDone()
-      }).pipe(Effect.provide(makeCommandsLayer(providerLayer))),
-    )
-  })
-
-  test("createSession with initialPrompt uses the override for the first turn without persisting an agent switch", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(
-      Provider.Sequence([
-        {
-          ...textStep("seeded reply"),
-          assertRequest: (request) => {
-            expect(request.model).toBe("test/override")
+      }).pipe(Effect.provide(makeCommandsLayer(providerLayer)))
+    }),
+  )
+  it.live(
+    "createSession with initialPrompt uses the override for the first turn without persisting an agent switch",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+          {
+            ...textStep("seeded reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("test/override")
+            },
           },
-        },
-      ]),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
+        ])
+        yield* Effect.gen(function* () {
+          const commands = yield* SessionCommands
+          const storage = yield* Storage
+          const recorder = yield* SequenceRecorder
+          const session = yield* commands.createSession({
+            name: "Initial Prompt Override",
+            initialPrompt: "seed the session",
+            agentOverride: AgentName.make("memory:reflect"),
+          })
+          const messages = yield* waitFor(
+            storage.listMessages(session.branchId),
+            (current) => current.filter((message) => message.role === "assistant").length === 1,
+            5000,
+            "initial prompt assistant reply",
+          )
+          const calls = yield* recorder.getCalls()
+          expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
+          expect(eventTags(calls)).not.toContain("AgentSwitched")
+          yield* controls.assertDone()
+        }).pipe(Effect.provide(makeCommandsLayer(providerLayer)))
+      }),
+  )
+  it.live("createSession skips dispatch when initialPrompt is missing or empty", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([])
+      yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
         const storage = yield* Storage
-        const recorder = yield* SequenceRecorder
-
-        const session = yield* commands.createSession({
-          name: "Initial Prompt Override",
-          initialPrompt: "seed the session",
-          agentOverride: AgentName.make("memory:reflect"),
-        })
-
-        const messages = yield* waitFor(
-          storage.listMessages(session.branchId),
-          (current) => current.filter((message) => message.role === "assistant").length === 1,
-          5_000,
-          "initial prompt assistant reply",
-        )
-        const calls = yield* recorder.getCalls()
-
-        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
-        expect(eventTags(calls)).not.toContain("AgentSwitched")
-        yield* controls.assertDone()
-      }).pipe(Effect.provide(makeCommandsLayer(providerLayer))),
-    )
-  })
-
-  test("createSession skips dispatch when initialPrompt is missing or empty", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(Provider.Sequence([]))
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const storage = yield* Storage
-
         const noPrompt = yield* commands.createSession({ name: "No Prompt Test" })
         const emptyPrompt = yield* commands.createSession({
           name: "Empty Prompt Test",
           initialPrompt: "",
         })
-
         expect(yield* storage.listMessages(noPrompt.branchId)).toEqual([])
         expect(yield* storage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone()
-      }).pipe(Effect.provide(makeCommandsLayer(providerLayer))),
-    )
-  })
+      }).pipe(Effect.provide(makeCommandsLayer(providerLayer)))
+    }),
+  )
 })

@@ -113,7 +113,9 @@ const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => 
 }
 
 const isTestFilename = (filename: string): boolean =>
-  /\/tests\//.test(filename) || /\.test\.tsx?$/.test(filename)
+  /\/tests\//.test(filename) ||
+  /\/batch12-modules\/(?:tests|integration)\//.test(filename) ||
+  /\.test\.tsx?$/.test(filename)
 
 /** Return the call's function name (Identifier or MemberExpression property). */
 const calleeName = (node: AstNode): string | undefined => {
@@ -864,309 +866,17 @@ const plugin: Plugin = {
      * `FileSystem.FileSystem.makeTempDirectoryScoped()` with the platform
      * filesystem layer. For custom resources, use `Effect.acquireRelease`.
      *
-     * Existing offenders are counted here as a burn-down baseline: the rule
-     * fails on any newly introduced `try/finally`, including additions to an
-     * already-listed file.
+     * This rule is zero-tolerance: test files must not use Promise control
+     * flow for setup, teardown, or assertions.
      */
     "no-promise-control-flow-in-tests": {
       create(context) {
         const filename = context.filename
         if (!isTestFilename(filename)) return {}
 
-        const LEGACY_COUNTS = new Map<
-          string,
-          { readonly finalizers: number; readonly asyncs: number; readonly awaits: number }
-        >([
-          [
-            "packages/core/tests/domain/auth-storage.test.ts",
-            { finalizers: 1, asyncs: 4, awaits: 4 },
-          ],
-          [
-            "packages/core/tests/domain/interaction-request.test.ts",
-            { finalizers: 0, asyncs: 7, awaits: 7 },
-          ],
-          [
-            "packages/core/tests/domain/schema-tagged-enum-class.test.ts",
-            { finalizers: 0, asyncs: 1, awaits: 1 },
-          ],
-          [
-            "packages/core/tests/drivers/driver-registry.test.ts",
-            { finalizers: 0, asyncs: 9, awaits: 9 },
-          ],
-          [
-            "packages/core/tests/extensions/acp-agents.test.ts",
-            { finalizers: 4, asyncs: 7, awaits: 17 },
-          ],
-          [
-            "packages/core/tests/extensions/acp-invalidation.test.ts",
-            { finalizers: 0, asyncs: 6, awaits: 10 },
-          ],
-          [
-            "packages/core/tests/extensions/acp-system-prompt-slot.test.ts",
-            { finalizers: 0, asyncs: 11, awaits: 11 },
-          ],
-          [
-            "packages/core/tests/extensions/actor-host.test.ts",
-            { finalizers: 0, asyncs: 13, awaits: 15 },
-          ],
-          [
-            "packages/core/tests/extensions/actor-route.test.ts",
-            { finalizers: 0, asyncs: 3, awaits: 7 },
-          ],
-          [
-            "packages/core/tests/extensions/anthropic-beta-cache.test.ts",
-            { finalizers: 0, asyncs: 8, awaits: 8 },
-          ],
-          [
-            "packages/core/tests/extensions/anthropic-credential-service.test.ts",
-            { finalizers: 0, asyncs: 7, awaits: 7 },
-          ],
-          [
-            "packages/core/tests/extensions/anthropic-extension-driver.test.ts",
-            { finalizers: 0, asyncs: 7, awaits: 8 },
-          ],
-          [
-            "packages/core/tests/extensions/anthropic-keychain-transform.test.ts",
-            { finalizers: 0, asyncs: 22, awaits: 62 },
-          ],
-          [
-            "packages/core/tests/extensions/auto-journal-decode.test.ts",
-            { finalizers: 1, asyncs: 2, awaits: 7 },
-          ],
-          [
-            "packages/core/tests/extensions/claude-sdk-lifecycle.test.ts",
-            { finalizers: 0, asyncs: 9, awaits: 20 },
-          ],
-          [
-            "packages/core/tests/extensions/executor-integration.test.ts",
-            { finalizers: 0, asyncs: 7, awaits: 8 },
-          ],
-          [
-            "packages/core/tests/extensions/extension-surface-locks.test.ts",
-            { finalizers: 0, asyncs: 9, awaits: 0 },
-          ],
-          [
-            "packages/core/tests/extensions/fs-tools/edit.test.ts",
-            { finalizers: 5, asyncs: 5, awaits: 5 },
-          ],
-          [
-            "packages/core/tests/extensions/librarian/git-reader.test.ts",
-            { finalizers: 0, asyncs: 2, awaits: 13 },
-          ],
-          [
-            "packages/core/tests/extensions/memory/agent-override.test.ts",
-            { finalizers: 0, asyncs: 3, awaits: 6 },
-          ],
-          [
-            "packages/core/tests/extensions/memory/projection.test.ts",
-            { finalizers: 0, asyncs: 5, awaits: 5 },
-          ],
-          [
-            "packages/core/tests/extensions/memory/tools.test.ts",
-            { finalizers: 0, asyncs: 4, awaits: 4 },
-          ],
-          [
-            "packages/core/tests/extensions/memory/vault.test.ts",
-            { finalizers: 0, asyncs: 8, awaits: 8 },
-          ],
-          [
-            "packages/core/tests/extensions/openai-codex-transform.test.ts",
-            { finalizers: 0, asyncs: 29, awaits: 57 },
-          ],
-          [
-            "packages/core/tests/extensions/openai-credential-service.test.ts",
-            { finalizers: 0, asyncs: 14, awaits: 14 },
-          ],
-          [
-            "packages/core/tests/extensions/openai-extension-driver.test.ts",
-            { finalizers: 0, asyncs: 8, awaits: 9 },
-          ],
-          [
-            "packages/core/tests/extensions/registry.test.ts",
-            { finalizers: 0, asyncs: 15, awaits: 34 },
-          ],
-          [
-            "packages/core/tests/extensions/session-mutations.test.ts",
-            { finalizers: 0, asyncs: 16, awaits: 21 },
-          ],
-          [
-            "packages/core/tests/extensions/session-tools.test.ts",
-            { finalizers: 0, asyncs: 2, awaits: 4 },
-          ],
-          [
-            "packages/core/tests/extensions/storage.test.ts",
-            { finalizers: 0, asyncs: 11, awaits: 24 },
-          ],
-          [
-            "packages/core/tests/extensions/turn-executor.test.ts",
-            { finalizers: 0, asyncs: 2, awaits: 2 },
-          ],
-          [
-            "packages/core/tests/providers/provider-auth.test.ts",
-            { finalizers: 0, asyncs: 5, awaits: 4 },
-          ],
-          [
-            "packages/core/tests/providers/provider-resolution.test.ts",
-            { finalizers: 0, asyncs: 14, awaits: 15 },
-          ],
-          [
-            "packages/core/tests/runtime/actor-engine.test.ts",
-            { finalizers: 0, asyncs: 17, awaits: 24 },
-          ],
-          [
-            "packages/core/tests/runtime/actor-persistence.test.ts",
-            { finalizers: 0, asyncs: 10, awaits: 11 },
-          ],
-          [
-            "packages/core/tests/runtime/agent-loop.test.ts",
-            { finalizers: 4, asyncs: 28, awaits: 78 },
-          ],
-          [
-            "packages/core/tests/runtime/agent-runner.test.ts",
-            { finalizers: 0, asyncs: 18, awaits: 20 },
-          ],
-          [
-            "packages/core/tests/runtime/external-turn.test.ts",
-            { finalizers: 0, asyncs: 13, awaits: 26 },
-          ],
-          [
-            "packages/core/tests/runtime/model-registry.test.ts",
-            { finalizers: 0, asyncs: 0, awaits: 2 },
-          ],
-          [
-            "packages/core/tests/runtime/receptionist.test.ts",
-            { finalizers: 0, asyncs: 8, awaits: 8 },
-          ],
-          [
-            "packages/core/tests/runtime/resource-manager.test.ts",
-            { finalizers: 0, asyncs: 4, awaits: 9 },
-          ],
-          ["packages/core/tests/runtime/retry.test.ts", { finalizers: 0, asyncs: 1, awaits: 1 }],
-          [
-            "packages/core/tests/runtime/session-metrics.test.ts",
-            { finalizers: 0, asyncs: 3, awaits: 6 },
-          ],
-          [
-            "packages/core/tests/runtime/session-runtime-context.test.ts",
-            { finalizers: 3, asyncs: 7, awaits: 7 },
-          ],
-          [
-            "packages/core/tests/runtime/session-runtime.test.ts",
-            { finalizers: 0, asyncs: 15, awaits: 26 },
-          ],
-          [
-            "packages/core/tests/runtime/tool-runner.test.ts",
-            { finalizers: 0, asyncs: 5, awaits: 5 },
-          ],
-          [
-            "packages/core/tests/server/actor-rpc-handlers.test.ts",
-            { finalizers: 0, asyncs: 2, awaits: 2 },
-          ],
-          ["packages/core/tests/server/auth-rpc.test.ts", { finalizers: 1, asyncs: 0, awaits: 0 }],
-          [
-            "packages/core/tests/server/event-publisher.test.ts",
-            { finalizers: 0, asyncs: 3, awaits: 4 },
-          ],
-          [
-            "packages/core/tests/server/extension-commands-rpc.test.ts",
-            { finalizers: 1, asyncs: 18, awaits: 18 },
-          ],
-          [
-            "packages/core/tests/server/session-commands.test.ts",
-            { finalizers: 0, asyncs: 0, awaits: 11 },
-          ],
-          [
-            "packages/core/tests/server/session-queries.test.ts",
-            { finalizers: 0, asyncs: 0, awaits: 1 },
-          ],
-          [
-            "packages/core/tests/storage/sqlite-storage.test.ts",
-            { finalizers: 3, asyncs: 3, awaits: 3 },
-          ],
-          [
-            "packages/core/tests/utils/run-process.test.ts",
-            { finalizers: 0, asyncs: 8, awaits: 8 },
-          ],
-          ["packages/e2e/tests/core-boundary.test.ts", { finalizers: 0, asyncs: 1, awaits: 3 }],
-          ["packages/e2e/tests/e2e.test.ts", { finalizers: 0, asyncs: 22, awaits: 66 }],
-          ["packages/e2e/tests/event-stream.test.ts", { finalizers: 0, asyncs: 4, awaits: 5 }],
-          ["packages/e2e/tests/live-event.test.ts", { finalizers: 0, asyncs: 2, awaits: 3 }],
-          ["packages/e2e/tests/queue-contract.test.ts", { finalizers: 0, asyncs: 2, awaits: 3 }],
-          ["packages/e2e/tests/server-lifecycle.test.ts", { finalizers: 3, asyncs: 8, awaits: 27 }],
-          ["packages/e2e/tests/supervisor.test.ts", { finalizers: 0, asyncs: 12, awaits: 13 }],
-          [
-            "packages/e2e/tests/transport-contract.test.ts",
-            { finalizers: 1, asyncs: 3, awaits: 3 },
-          ],
-          ["packages/e2e/tests/watch-state.test.ts", { finalizers: 0, asyncs: 2, awaits: 3 }],
-          ["packages/sdk/tests/server-registry.test.ts", { finalizers: 4, asyncs: 12, awaits: 14 }],
-          ["packages/sdk/tests/supervisor.test.ts", { finalizers: 0, asyncs: 9, awaits: 16 }],
-          ["packages/tooling/tests/fixtures.test.ts", { finalizers: 0, asyncs: 2, awaits: 3 }],
-          ["apps/tui/integration/app-bootstrap.test.tsx", { finalizers: 0, asyncs: 3, awaits: 3 }],
-          [
-            "apps/tui/integration/session-feed-boundary.test.tsx",
-            { finalizers: 0, asyncs: 4, awaits: 4 },
-          ],
-          [
-            "apps/tui/integration/session-lifecycle.test.tsx",
-            { finalizers: 0, asyncs: 2, awaits: 2 },
-          ],
-          ["apps/tui/tests/app-auth.test.tsx", { finalizers: 0, asyncs: 11, awaits: 47 }],
-          ["apps/tui/tests/app-bootstrap.test.ts", { finalizers: 0, asyncs: 4, awaits: 4 }],
-          ["apps/tui/tests/atom-solid.test.ts", { finalizers: 0, asyncs: 3, awaits: 3 }],
-          ["apps/tui/tests/auth-route.test.tsx", { finalizers: 0, asyncs: 8, awaits: 50 }],
-          [
-            "apps/tui/tests/autocomplete-effect-items.test.ts",
-            { finalizers: 0, asyncs: 6, awaits: 12 },
-          ],
-          [
-            "apps/tui/tests/client-session-state.test.tsx",
-            { finalizers: 0, asyncs: 8, awaits: 16 },
-          ],
-          [
-            "apps/tui/tests/command-palette-render.test.tsx",
-            { finalizers: 0, asyncs: 3, awaits: 12 },
-          ],
-          ["apps/tui/tests/composer-render.test.tsx", { finalizers: 0, asyncs: 3, awaits: 7 }],
-          [
-            "apps/tui/tests/extension-effect-setup.test.ts",
-            { finalizers: 0, asyncs: 2, awaits: 2 },
-          ],
-          [
-            "apps/tui/tests/extension-integration.test.ts",
-            { finalizers: 1, asyncs: 9, awaits: 10 },
-          ],
-          ["apps/tui/tests/extension-lifecycle.test.ts", { finalizers: 9, asyncs: 11, awaits: 60 }],
-          ["apps/tui/tests/external-editor.test.ts", { finalizers: 0, asyncs: 4, awaits: 7 }],
-          ["apps/tui/tests/file-refs.test.ts", { finalizers: 0, asyncs: 11, awaits: 15 }],
-          ["apps/tui/tests/headless-cli-exit.test.ts", { finalizers: 0, asyncs: 3, awaits: 4 }],
-          ["apps/tui/tests/headless-runner.test.ts", { finalizers: 0, asyncs: 3, awaits: 3 }],
-          ["apps/tui/tests/helpers.ts", { finalizers: 0, asyncs: 1, awaits: 2 }],
-          [
-            "apps/tui/tests/interaction-renderers.test.tsx",
-            { finalizers: 0, asyncs: 4, awaits: 8 },
-          ],
-          ["apps/tui/tests/prompt-search-render.test.tsx", { finalizers: 0, asyncs: 2, awaits: 2 }],
-          ["apps/tui/tests/render-harness.tsx", { finalizers: 0, asyncs: 2, awaits: 7 }],
-          ["apps/tui/tests/session-subscription.test.ts", { finalizers: 0, asyncs: 1, awaits: 1 }],
-          ["apps/tui/tests/shell.test.ts", { finalizers: 0, asyncs: 12, awaits: 13 }],
-          ["apps/tui/tests/widgets-render.test.tsx", { finalizers: 0, asyncs: 10, awaits: 25 }],
-          ["packages/e2e/tests/transport-harness.ts", { finalizers: 1, asyncs: 1, awaits: 1 }],
-        ])
-        const allowed = [...LEGACY_COUNTS].find(([suffix]) => filename.endsWith(suffix))?.[1] ?? {
-          finalizers: 0,
-          asyncs: 0,
-          awaits: 0,
-        }
-        let finalizers = 0
-        let asyncs = 0
-        let awaits = 0
-
         return {
           TryStatement(node) {
             if (node.finalizer == null) return
-            finalizers += 1
-            if (finalizers <= allowed.finalizers) return
             context.report({
               message:
                 "Do not use `try/finally` cleanup in tests. Put resource lifetime in the Effect scope instead: `Effect.scoped`, `FileSystem.makeTempDirectoryScoped()`, or `Effect.acquireRelease`.",
@@ -1175,8 +885,6 @@ const plugin: Plugin = {
           },
           FunctionDeclaration(node) {
             if (node.async !== true) return
-            asyncs += 1
-            if (asyncs <= allowed.asyncs) return
             context.report({
               message:
                 "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
@@ -1185,8 +893,6 @@ const plugin: Plugin = {
           },
           FunctionExpression(node) {
             if (node.async !== true) return
-            asyncs += 1
-            if (asyncs <= allowed.asyncs) return
             context.report({
               message:
                 "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
@@ -1195,8 +901,6 @@ const plugin: Plugin = {
           },
           ArrowFunctionExpression(node) {
             if (node.async !== true) return
-            asyncs += 1
-            if (asyncs <= allowed.asyncs) return
             context.report({
               message:
                 "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
@@ -1204,8 +908,6 @@ const plugin: Plugin = {
             })
           },
           AwaitExpression(node) {
-            awaits += 1
-            if (awaits <= allowed.awaits) return
             context.report({
               message:
                 "Do not use `await` in tests. Stay in Effect with `yield*`, `it.live`, and scoped resources instead of Promise control flow.",

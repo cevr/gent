@@ -12,7 +12,7 @@ type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
  * Effect-based frame polling for integration tests.
  *
  * Double-flushes renderOnce + microtask between polls to catch
- * async Solid state updates from Effect fibers.
+ * deferred Solid state updates from Effect fibers.
  */
 export const waitForFrame = (
   setup: TestSetup,

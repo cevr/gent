@@ -6,9 +6,9 @@
  * falls back to global storage, where the vault projection's project
  * section never finds them. These tests lock the auto-derive contract.
  */
-import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
+import { beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
-
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import * as Fs from "node:fs"
@@ -19,19 +19,14 @@ import { Test as MemoryVaultTest, projectKey as projectKeyOf } from "@gent/exten
 import type { ToolContext } from "@gent/core/domain/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-
 let tmpDir: string
-
 beforeEach(() => {
   tmpDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), "gent-memtool-test-"))
 })
-
 afterEach(() => {
   Fs.rmSync(tmpDir, { recursive: true, force: true })
 })
-
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-
 const makeCtx = (cwd: string): ToolContext =>
   testToolContext({
     sessionId: SessionId.make("019d97c0-0000-7000-0000-000000000000"),
@@ -40,8 +35,6 @@ const makeCtx = (cwd: string): ToolContext =>
     cwd,
     home: tmpDir,
     extension: {
-      send: dieStub("send"),
-      ask: dieStub("ask"),
       request: dieStub("request"),
     },
     agent: {
@@ -76,13 +69,12 @@ const makeCtx = (cwd: string): ToolContext =>
       review: dieStub("review"),
     },
   })
-
 describe("MemoryRememberTool — auto-derived projectKey", () => {
-  test("project scope without project_key writes under derived key", async () => {
-    const cwd = "/some/active/repo"
-    const expectedKey = projectKeyOf(cwd)
-    await Effect.runPromise(
-      narrowR(
+  it.live("project scope without project_key writes under derived key", () =>
+    Effect.gen(function* () {
+      const cwd = "/some/active/repo"
+      const expectedKey = projectKeyOf(cwd)
+      yield* narrowR(
         MemoryRememberTool.effect(
           {
             title: "Auto Key",
@@ -91,18 +83,17 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
           },
           makeCtx(cwd),
         ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
-      ),
-    )
-    const expectedPath = Path.join(tmpDir, "project", expectedKey, "auto-key.md")
-    expect(Fs.existsSync(expectedPath)).toBe(true)
-    const content = Fs.readFileSync(expectedPath, "utf-8")
-    expect(content).toContain("Auto Key")
-    expect(content).toContain("should land in project dir")
-  })
-
-  test("project scope with explicit project_key honors the param", async () => {
-    await Effect.runPromise(
-      narrowR(
+      )
+      const expectedPath = Path.join(tmpDir, "project", expectedKey, "auto-key.md")
+      expect(Fs.existsSync(expectedPath)).toBe(true)
+      const content = Fs.readFileSync(expectedPath, "utf-8")
+      expect(content).toContain("Auto Key")
+      expect(content).toContain("should land in project dir")
+    }),
+  )
+  it.live("project scope with explicit project_key honors the param", () =>
+    Effect.gen(function* () {
+      yield* narrowR(
         MemoryRememberTool.effect(
           {
             title: "Explicit Key",
@@ -112,16 +103,15 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
           },
           makeCtx("/any/cwd"),
         ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
-      ),
-    )
-    expect(Fs.existsSync(Path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md"))).toBe(
-      true,
-    )
-  })
-
-  test("global scope ignores cwd and writes to global/", async () => {
-    await Effect.runPromise(
-      narrowR(
+      )
+      expect(
+        Fs.existsSync(Path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md")),
+      ).toBe(true)
+    }),
+  )
+  it.live("global scope ignores cwd and writes to global/", () =>
+    Effect.gen(function* () {
+      yield* narrowR(
         MemoryRememberTool.effect(
           {
             title: "Global Note",
@@ -130,33 +120,31 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
           },
           makeCtx("/any/repo"),
         ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
-      ),
-    )
-    expect(Fs.existsSync(Path.join(tmpDir, "global", "global-note.md"))).toBe(true)
-  })
+      )
+      expect(Fs.existsSync(Path.join(tmpDir, "global", "global-note.md"))).toBe(true)
+    }),
+  )
 })
-
 describe("MemoryForgetTool — auto-derived projectKey", () => {
-  test("project scope without project_key removes from derived key dir", async () => {
-    const cwd = "/yet/another/repo"
-    const key = projectKeyOf(cwd)
-    // Pre-create file under derived key
-    const dir = Path.join(tmpDir, "project", key)
-    Fs.mkdirSync(dir, { recursive: true })
-    const file = Path.join(dir, "to-remove.md")
-    Fs.writeFileSync(
-      file,
-      "---\nscope: project\ntags: []\ncreated: 2026\nupdated: 2026\nsource: agent\n---\n\n# To Remove\n\nbye.",
-    )
-    expect(Fs.existsSync(file)).toBe(true)
-
-    await Effect.runPromise(
-      narrowR(
+  it.live("project scope without project_key removes from derived key dir", () =>
+    Effect.gen(function* () {
+      const cwd = "/yet/another/repo"
+      const key = projectKeyOf(cwd)
+      // Pre-create file under derived key
+      const dir = Path.join(tmpDir, "project", key)
+      Fs.mkdirSync(dir, { recursive: true })
+      const file = Path.join(dir, "to-remove.md")
+      Fs.writeFileSync(
+        file,
+        "---\nscope: project\ntags: []\ncreated: 2026\nupdated: 2026\nsource: agent\n---\n\n# To Remove\n\nbye.",
+      )
+      expect(Fs.existsSync(file)).toBe(true)
+      yield* narrowR(
         MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
           Effect.provide(MemoryVaultTest(tmpDir)),
         ),
-      ),
-    )
-    expect(Fs.existsSync(file)).toBe(false)
-  })
+      )
+      expect(Fs.existsSync(file)).toBe(false)
+    }),
+  )
 })

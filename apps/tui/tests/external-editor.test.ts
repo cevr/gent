@@ -62,31 +62,30 @@ describe("content roundtrip", () => {
     tmpPath = join(tmpdir(), `gent-test-${Date.now()}.md`)
   })
 
-  afterEach(async () => {
-    try {
-      await unlink(tmpPath)
-    } catch {
-      // Already cleaned up
-    }
-  })
+  afterEach(() => unlink(tmpPath).catch(() => undefined))
 
-  test("write and read back preserves content", async () => {
+  test("write and read back preserves content", () => {
     const content = "line 1\nline 2\nline 3\n"
-    await Bun.write(tmpPath, content)
-    const readBack = await Bun.file(tmpPath).text()
-    expect(readBack).toBe(content)
+    return Bun.write(tmpPath, content)
+      .then(() => Bun.file(tmpPath).text())
+      .then((readBack) => {
+        expect(readBack).toBe(content)
+      })
   })
 
-  test("empty content roundtrips", async () => {
-    await Bun.write(tmpPath, "")
-    const readBack = await Bun.file(tmpPath).text()
-    expect(readBack).toBe("")
-  })
+  test("empty content roundtrips", () =>
+    Bun.write(tmpPath, "")
+      .then(() => Bun.file(tmpPath).text())
+      .then((readBack) => {
+        expect(readBack).toBe("")
+      }))
 
-  test("multiline with special characters roundtrips", async () => {
+  test("multiline with special characters roundtrips", () => {
     const content = "function foo() {\n  return `hello ${'world'}`\n}\n"
-    await Bun.write(tmpPath, content)
-    const readBack = await Bun.file(tmpPath).text()
-    expect(readBack).toBe(content)
+    return Bun.write(tmpPath, content)
+      .then(() => Bun.file(tmpPath).text())
+      .then((readBack) => {
+        expect(readBack).toBe(content)
+      })
   })
 })

@@ -13,7 +13,6 @@
  */
 
 import { Context, Layer } from "effect"
-import type { AnyExtensionCommandMessage } from "@gent/core/domain/extension-protocol.js"
 import type { OverlayId, ComposerState } from "./client-facets.js"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
@@ -34,8 +33,6 @@ export const makeClientWorkspaceLayer = (
 // ── ClientShell ──────────────────────────────────────────────────────────
 
 export interface ClientShellShape {
-  /** Fire an extension protocol message at the active session (no reply). */
-  readonly send: (message: AnyExtensionCommandMessage) => void
   /** Send a chat message into the active session. */
   readonly sendMessage: (content: string) => void
   /** Open a registered overlay by id. */

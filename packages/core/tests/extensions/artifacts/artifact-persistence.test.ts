@@ -102,9 +102,7 @@ describe("PlanTool artifact persistence", () => {
     const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -137,9 +135,7 @@ describe("PlanTool artifact persistence", () => {
     const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -175,9 +171,7 @@ describe("PlanTool artifact persistence", () => {
     const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -207,9 +201,7 @@ describe("PlanTool artifact persistence", () => {
     const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -236,9 +228,7 @@ describe("AuditTool artifact persistence", () => {
     const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -287,9 +277,7 @@ describe("ReviewTool artifact persistence", () => {
 
     const ctx = testToolContext({
       extension: {
-        send: () => Effect.die("send not wired"),
         request: spy.request as never,
-        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
