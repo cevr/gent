@@ -101,6 +101,38 @@ describe("runtime slots", () => {
       )
   })
 
+  it.live("systemPrompt composes projection and reaction rewrites in shared scope order", () => {
+    const extensions = [
+      makeExt("builtin", "builtin", {
+        reactions: {
+          systemPrompt: (input) => Effect.succeed(`${input.basePrompt}[builtin-reaction]`),
+        },
+      }),
+      makeExt("project", "project", {
+        projections: [
+          {
+            id: "project-prompt",
+            query: () => Effect.succeed("[project-projection]"),
+            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+          },
+        ],
+      }),
+    ]
+
+    const slots = compileExtensionReactions(extensions)
+
+    return slots
+      .resolveSystemPrompt(
+        { basePrompt: "base", agent: Agents["cowork"]! } satisfies SystemPromptInput,
+        { projection: stubProjectionCtx, host: stubHostCtx },
+      )
+      .pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => expect(result).toBe("base[builtin-reaction][project-projection]")),
+        ),
+      )
+  })
+
   it.live("contextMessages applies explicit projection rewrites in sequence", () => {
     const baseMessage = Message.Regular.make({
       id: MessageId.make("m1"),

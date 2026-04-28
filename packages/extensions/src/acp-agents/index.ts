@@ -25,9 +25,9 @@ import {
   defineExtension,
   defineResource,
   ExternalDriverRef,
-  type ProjectionContribution,
   resource,
   sectionPatternFor,
+  type ToolToken,
 } from "@gent/core/extensions/api"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
@@ -149,35 +149,37 @@ const stripNativeToolSections = (compiled: string): { stripped: string; anyStrip
 const looksLikeNativeToolSurface = (s: string): boolean =>
   s.includes("## Available Tools") || s.includes("## Tool Guidelines")
 
-const CodemodePromptProjection: ProjectionContribution<true> = {
-  id: "acp-codemode-prompt",
-  query: () => Effect.succeed(true),
-  systemPrompt: (_value, input) =>
-    Effect.gen(function* () {
-      if (input.driverToolSurface !== "codemode") return input.basePrompt
-      const tools = input.tools ?? []
-      if (tools.length === 0) return input.basePrompt
-      const codemode = codemodeInstructions(generateToolDescription(tools))
-      const { stripped } = stripNativeToolSections(input.basePrompt)
-      if (looksLikeNativeToolSurface(stripped)) {
-        yield* Effect.logWarning(
-          "acp.codemode.native-tool-surface-leak — " +
-            "prompt still contains '## Available Tools' / '## Tool Guidelines' " +
-            "after marker stripping. The model will see contradictory tool " +
-            "surfaces (codemode block + native section). Wrap native tool " +
-            "section content with `withSectionMarkers(id, content)` from " +
-            "`@gent/core/extensions/api`, or remove the upstream native " +
-            "section entirely.",
-        )
-      }
-      return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
-    }),
-}
+const rewriteCodemodeSystemPrompt = (input: {
+  readonly basePrompt: string
+  readonly driverToolSurface?: "native" | "codemode"
+  readonly tools?: ReadonlyArray<ToolToken>
+}) =>
+  Effect.gen(function* () {
+    if (input.driverToolSurface !== "codemode") return input.basePrompt
+    const tools = input.tools ?? []
+    if (tools.length === 0) return input.basePrompt
+    const codemode = codemodeInstructions(generateToolDescription(tools))
+    const { stripped } = stripNativeToolSections(input.basePrompt)
+    if (looksLikeNativeToolSurface(stripped)) {
+      yield* Effect.logWarning(
+        "acp.codemode.native-tool-surface-leak — " +
+          "prompt still contains '## Available Tools' / '## Tool Guidelines' " +
+          "after marker stripping. The model will see contradictory tool " +
+          "surfaces (codemode block + native section). Wrap native tool " +
+          "section content with `withSectionMarkers(id, content)` from " +
+          "`@gent/core/extensions/api`, or remove the upstream native " +
+          "section entirely.",
+      )
+    }
+    return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
+  })
 
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
   agents: [claudeCodeAgent, ...protocolAgents],
-  projections: [CodemodePromptProjection],
+  reactions: {
+    systemPrompt: rewriteCodemodeSystemPrompt,
+  },
   externalDrivers: ({ ctx }) => {
     const acpManager = getAcpManager(ctx.spawner)
     const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`

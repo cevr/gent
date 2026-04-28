@@ -256,6 +256,15 @@ export interface ExtensionReaction<Input, E = never, R = never> {
  * is closed at the declaration site (e.g. `Effect.provide(Layer)`).
  */
 export interface ExtensionReactions<E = never, R = never> {
+  /**
+   * System-prompt rewrite. Receives the prompt string after static sections
+   * and turn projections have been compiled, and returns the prompt to send
+   * to the driver.
+   */
+  readonly systemPrompt?: (
+    input: SystemPromptInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<string, E, R>
   readonly turnBefore?: ExtensionReaction<TurnBeforeInput, E, R>
   readonly turnAfter?: ExtensionReaction<TurnAfterInput, E, R>
   readonly messageOutput?: ExtensionReaction<MessageOutputInput, E, R>
