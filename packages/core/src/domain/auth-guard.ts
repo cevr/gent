@@ -4,7 +4,7 @@ import { ProviderId } from "./model"
 import { AgentName, DriverRef } from "./agent.js"
 import { SessionId } from "./ids.js"
 
-export const AuthSource = Schema.Literal("stored")
+export const AuthSource = Schema.Literals(["none", "stored"])
 export type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({

@@ -1708,68 +1708,13 @@ const makeStorageImpl = Effect.gen(function* () {
   } satisfies StorageService
 })
 
-/** Run schema migration then build the storage service. Used by file-backed
- * `Memory(path)` for cold DBs. In-memory factories use the cached blob
- * (`memorySqliteClientLayer`) and call `makeStorageImpl` directly to skip
- * schema application — saves ~1-3ms per layer build × hundreds of test cases. */
 const makeStorage = Effect.gen(function* () {
   yield* Effect.orDie(initSchema)
   return yield* makeStorageImpl
 })
 
-/**
- * Lazy, process-local cache of the migrated schema as a serialized SQLite
- * snapshot. First caller pays the migration cost; subsequent callers
- * `Database.deserialize(blob)` in ~0.05ms.
- *
- * Cache is per-worker (each parallel test worker has its own module
- * instance). Invalidating is automatic on bun:sqlite version bumps —
- * blobs are version-locked.
- */
-let memorySchemaBlob: Promise<Uint8Array> | undefined
-
-const buildMigratedSchemaBlob = (): Promise<Uint8Array> => {
-  const program = Effect.scoped(
-    Effect.gen(function* () {
-      // Module-init boundary: build the SqliteClient layer locally and
-      // serialize the migrated DB. Layer.build returns the Context;
-      // outer Effect.scoped closes it.
-      const ctx = yield* Layer.build(Layer.orDie(SqliteClient.layer({ filename: ":memory:" })))
-      const sql = Context.get(ctx, SqlClient.SqlClient)
-      const client = Context.get(ctx, SqliteClient.SqliteClient)
-      yield* Effect.orDie(initSchema).pipe(Effect.provideService(SqlClient.SqlClient, sql))
-      return yield* Effect.orDie(client.export)
-    }),
-  )
-  // Module-init boundary: builds the process-wide schema cache exactly once. Result is memoized as a Promise<Uint8Array> consumed lazily by the in-memory layer factories.
-  // eslint-disable-next-line gent/no-runpromise-outside-boundary -- module-init schema cache build
-  return Effect.runPromise(program)
-}
-
-const getMemorySchemaBlob = (): Promise<Uint8Array> => {
-  if (memorySchemaBlob === undefined) memorySchemaBlob = buildMigratedSchemaBlob()
-  return memorySchemaBlob
-}
-
-/**
- * SqliteClient layer over an in-memory DB initialized from the cached
- * migrated schema blob. Each Layer.scoped acquisition deserializes a
- * fresh DB from the shared blob — isolated per test, but skips schema
- * application.
- */
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
-  Layer.unwrap(
-    Effect.map(
-      Effect.promise(() => getMemorySchemaBlob()),
-      (blob) =>
-        Layer.orDie(
-          // bun:sqlite Database constructor accepts Uint8Array at runtime;
-          // SqliteClientConfig types `filename` as string, hence the cast.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- bridges bun:sqlite runtime accepting blob with SqliteClientConfig string-only type
-          SqliteClient.layer({ filename: blob as unknown as string }),
-        ),
-    ),
-  )
+  Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
 
 /**
  * Build focused sub-Tag layers from a layer that provides Storage.
@@ -1907,7 +1852,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
   }
 
   static Memory = (): Layer.Layer<Storage> =>
-    Layer.effect(Storage, makeStorageImpl).pipe(Layer.provide(Layer.orDie(memorySqliteClientLayer)))
+    Layer.effect(Storage, makeStorage).pipe(Layer.provide(memorySqliteClientLayer))
 
   /** Memory layer that also exposes SqlClient and focused storage services */
   static MemoryWithSql = (): Layer.Layer<
@@ -1923,8 +1868,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | RelationshipStorage
     | ActorPersistenceStorage
   > => {
-    const base = Layer.effect(Storage, makeStorageImpl).pipe(
-      Layer.provideMerge(Layer.orDie(memorySqliteClientLayer)),
+    const base = Layer.effect(Storage, makeStorage).pipe(
+      Layer.provideMerge(memorySqliteClientLayer),
     )
     const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(

@@ -1,17 +1,16 @@
 import { Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import {
+  SessionInfo as SessionInfoSchema,
+  SessionTreeNodeSchema,
+} from "@gent/core/server/transport-contract"
 import type { SessionInfo, SessionTreeNode } from "../client/index"
-import type { PromptSearchEvent, PromptSearchState } from "../components/prompt-search-state"
-import { PromptSearchState as PromptSearchStateFactory } from "../components/prompt-search-state"
+import type { PromptSearchState } from "../components/prompt-search-state"
+import {
+  PromptSearchEvent as PromptSearchEventSchema,
+  PromptSearchState as PromptSearchStateFactory,
+} from "../components/prompt-search-state"
 import { transitionPromptSearchRoute } from "./prompt-search-flow"
-
-// Schema.Any cast for types lacking canonical schemas
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const SessionTreeNodeSchema = Schema.Any as unknown as Schema.Schema<SessionTreeNode>
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const SessionInfoSchema = Schema.Any as unknown as Schema.Schema<SessionInfo>
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const PromptSearchEventSchema = Schema.Any as unknown as Schema.Schema<PromptSearchEvent>
 
 interface PromptSearchOverlayState {
   readonly _tag: "prompt-search"

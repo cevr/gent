@@ -7,15 +7,16 @@
 
 import { Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
+import {
+  InteractionPresented,
+  type ActiveInteraction,
+  type ApprovalResult,
+} from "@gent/core/domain/event.js"
 
-// `ActiveInteraction` and `ApprovalResult` are TypeScript types with no
-// canonical Schema. Widen via `Schema.Any` so the static binding stays
-// precise on the type aliases below.
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const ActiveInteractionSchema = Schema.Any as unknown as Schema.Schema<ActiveInteraction>
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const ApprovalResultSchema = Schema.Any as unknown as Schema.Schema<ApprovalResult>
+const ApprovalResultSchema = Schema.Struct({
+  approved: Schema.Boolean,
+  notes: Schema.optional(Schema.String),
+})
 
 export type ComposerState =
   | { readonly _tag: "idle" }
@@ -26,7 +27,7 @@ export const ComposerState = {
 } as const
 
 export const ComposerEvent = TaggedEnumClass("ComposerEvent", {
-  EnterInteraction: { interaction: ActiveInteractionSchema },
+  EnterInteraction: { interaction: InteractionPresented },
   ResolveInteraction: { result: ApprovalResultSchema },
   CancelInteraction: {},
   DismissInteraction: { requestId: Schema.String },

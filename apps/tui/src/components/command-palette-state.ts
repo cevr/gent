@@ -30,8 +30,17 @@ export interface CommandPaletteState {
   readonly searchQuery: string
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const PaletteLevelSchema = Schema.Any as unknown as Schema.Schema<PaletteLevel>
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const PaletteLevelSchema = Schema.declare<PaletteLevel>(
+  (value): value is PaletteLevel =>
+    isRecord(value) &&
+    typeof value["id"] === "string" &&
+    typeof value["title"] === "string" &&
+    typeof value["source"] === "function" &&
+    (value["onEnter"] === undefined || typeof value["onEnter"] === "function"),
+)
 
 export const CommandPaletteEvent = TaggedEnumClass("CommandPaletteEvent", {
   Open: { rootLevel: PaletteLevelSchema },

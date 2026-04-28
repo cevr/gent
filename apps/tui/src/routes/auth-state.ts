@@ -1,14 +1,9 @@
 import { Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method"
-import type { AuthProviderInfo } from "@gent/core/domain/auth-guard"
+import { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method"
+import { AuthProviderInfo as AuthProviderInfoSchema } from "@gent/core/domain/auth-guard"
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const AuthProviderInfoSchema = Schema.Any as unknown as Schema.Schema<AuthProviderInfo>
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const AuthMethodSchema = Schema.Any as unknown as Schema.Schema<AuthMethod>
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-const AuthAuthorizationSchema = Schema.Any as unknown as Schema.Schema<AuthAuthorization>
+type AuthProviderInfo = typeof AuthProviderInfoSchema.Type
 
 type AuthCatalog = {
   readonly providers: readonly AuthProviderInfo[]
@@ -52,7 +47,7 @@ export const AuthEvent = TaggedEnumClass("AuthEvent", {
   LoadStarted: {},
   Loaded: {
     providers: Schema.Array(AuthProviderInfoSchema),
-    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
   LoadFailed: { error: Schema.String },
   SelectProvider: { index: Schema.Number },
@@ -61,8 +56,8 @@ export const AuthEvent = TaggedEnumClass("AuthEvent", {
   StartKey: {},
   StartOAuthAuthorization: {},
   StartOAuth: {
-    authorization: AuthAuthorizationSchema,
-    method: AuthMethodSchema,
+    authorization: AuthAuthorization,
+    method: AuthMethod,
     providerIndex: Schema.Number,
     methodIndex: Schema.Number,
   },
