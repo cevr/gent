@@ -3,7 +3,7 @@
  * every composition root that needs to *discover* extensions.
  *
  * Three callers build the same `{ registry, state-runtime }`
- * shape via the same `buildExtensionLayers` substrate:
+ * shape via `buildExtensionLayers`:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
  *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
@@ -17,7 +17,7 @@
  * drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
- * construction paths into a single substrate; downstream code becomes obvious.
+ * construction paths into one layer builder; downstream code becomes obvious.
  *
  * @module
  */

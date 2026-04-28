@@ -2,10 +2,9 @@
 
 ## Overview
 
-Extensions add capabilities to gent: tools for the LLM, typed RPCs between
-extensions, UI actions (slash commands / palette), read-only projections,
-long-lived resources (with optional state machines, schedules, subscriptions),
-agents, and LLM drivers.
+Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
+extensions, UI actions (slash commands / palette), scoped resources, actors,
+turn reactions, agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
 typed array of values built with small factories. gent is a library used
@@ -36,7 +35,7 @@ That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
 ## Named Concepts
 
-You need at most 8 concepts to write a complete extension:
+You need at most 9 concepts to write a complete extension:
 
 | #   | Concept           | What it is                                       |
 | --- | ----------------- | ------------------------------------------------ |
@@ -44,10 +43,11 @@ You need at most 8 concepts to write a complete extension:
 | 2   | `tool`            | LLM-callable tool (params + execute)             |
 | 3   | `request`         | Extension-to-extension typed RPC (read or write) |
 | 4   | `action`          | Human-triggered UI affordance (slash / palette)  |
-| 5   | `defineResource`  | Long-lived state with explicit scope             |
-| 6   | `projection`      | Read-only view for prompt sections / tool policy |
-| 7   | `defineAgent`     | Spawnable subagent                               |
-| 8   | `PermissionRule`  | Allow/deny rule for tool patterns                |
+| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration    |
+| 6   | `behavior`        | Actor behavior for long-lived state              |
+| 7   | `reactions`       | Turn/message/tool-result hooks                   |
+| 8   | `defineAgent`     | Spawnable subagent                               |
+| 9   | `PermissionRule`  | Allow/deny rule for tool patterns                |
 
 All imports come from one path: `@gent/core/extensions/api`.
 
@@ -82,9 +82,10 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 
 ## Capabilities
 
-Three typed factories replace the old `audiences[] + intent` flag matrix.
-The `audience` concept is gone from authoring entirely — the factory choice
-determines dispatch routing.
+Three typed factories replace the old audience routing flag. The
+`audience` concept is gone from authoring entirely — the factory choice
+determines dispatch routing. RPCs still declare `intent: "read" | "write"` for
+read-only fencing and host dispatch.
 
 ### tool — LLM-callable
 
@@ -111,8 +112,8 @@ export default defineExtension({
 - `description` — sent to the LLM as the tool description
 - `params` — `Schema.Schema` (must be context-free for sync JSON decode)
 - `execute(params, ctx)` — returns `Effect`
-- Optional: `idempotent`, `interactive`, `permissionRules`, `prompt`,
-  `promptSnippet`, `promptGuidelines`, `resources`
+- Optional: `intent`, `needs`, `interactive`, `permissionRules`, `prompt`,
+  `promptSnippet`, `promptGuidelines`
 
 ### request — extension-to-extension RPC
 
@@ -146,9 +147,9 @@ export default defineExtension({
 })
 ```
 
-`intent: "read"` capabilities have a **ReadOnly-branded R channel** — the
-handler can only yield read-only services (`MachineExecute`,
-`TaskStorageReadOnly`, etc.). Write-tagged services fail to compile.
+`intent: "read"` RPCs have a **ReadOnly-branded R channel** — the handler can
+only yield read-only services (`TaskStorageReadOnly`, `MemoryVaultReadOnly`,
+etc.). Write-tagged services fail to compile.
 
 ### action — human-triggered UI affordance
 
@@ -172,32 +173,32 @@ export default defineExtension({
 })
 ```
 
-## Projection (read-only derivation)
+## Reactions (turn-time derivation)
 
-Use projections for prompt shaping, policy derivation, and read-only state views.
+Use `reactions.turnProjection` for prompt shaping and tool-policy derivation.
+Handlers should depend on read-only service Tags when they only inspect state.
 
 ```ts
-import { defineExtension, type ProjectionContribution } from "@gent/core/extensions/api"
-import { Effect, Schema } from "effect"
-
-const StatusProjection: ProjectionContribution<string> = {
-  id: "status",
-  query: () => Effect.succeed("ready"),
-  prompt: (value) => [{ id: "status", title: "Status", content: value, priority: 0 }],
-}
+import { defineExtension } from "@gent/core/extensions/api"
+import { Effect } from "effect"
 
 export default defineExtension({
   id: "status-ext",
-  projections: [StatusProjection],
+  reactions: {
+    turnProjection: () =>
+      Effect.succeed({
+        promptSections: [{ id: "status", content: "ready", priority: 0 }],
+        toolPolicy: { include: ["status"] },
+      }),
+  },
 })
 ```
 
-Read-only rule: projections are fenced. Their `R` channel may not yield write-capable services.
-
 ## Resource (long-lived state)
 
-A Resource declares its scope (lifetime) and carries an optional service
-Layer, state machine, schedule, subscriptions, and lifecycle hooks.
+A Resource declares its scope (lifetime) and carries a service Layer plus
+optional schedule and lifecycle hooks. Stateful actors live in the `actors:`
+bucket, not in Resource fields.
 
 | Scope     | Lifetime                |
 | --------- | ----------------------- |
@@ -225,38 +226,22 @@ export default defineExtension({
 })
 ```
 
-### Resource.machine
+### Actors
 
-Attach an `effect-machine` state machine to a Resource:
-
-```ts
-defineResource({
-  tag: MyService,
-  scope: "process",
-  layer: MyService.Live,
-  machine: myMachine,
-})
-```
-
-Use `subscriptions` on a Resource for turn reactions and side effects:
+Declare long-lived state as actors:
 
 ```ts
-import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import { behavior, defineExtension } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
+const Counter = behavior({
+  initialState: { count: 0 },
+  receive: (_msg, state) => Effect.succeed(state),
+})
+
 export default defineExtension({
-  id: "turn-logger",
-  resources: [
-    defineResource({
-      scope: "process",
-      subscriptions: [
-        {
-          pattern: "agent:TurnCompleted",
-          handler: (event) => Effect.logInfo(`Observed ${event.channel}`),
-        },
-      ],
-    }),
-  ],
+  id: "counter",
+  actors: [Counter],
 })
 ```
 
@@ -282,9 +267,8 @@ export default defineExtension({
 
 The framework validates all loaded extensions before creating the registry:
 
-- **At most one** Resource with `machine` per extension
 - **Duplicate IDs** in same scope degrade the conflicting extension
-- **Model-audience tools** require a non-empty `description`
+- **Model-callable tools** require a non-empty `description`
 - Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides
@@ -292,18 +276,18 @@ builtin).
 
 ## In-tree Examples
 
-| Extension                               | Demonstrates                                    |
-| --------------------------------------- | ----------------------------------------------- |
-| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration     |
-| `packages/extensions/src/task-tools`    | `tool` + `request` + `defineResource` + machine |
-| `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`            |
-| `packages/extensions/src/auto.ts`       | `defineResource` with actor view                |
+| Extension                               | Demonstrates                                 |
+| --------------------------------------- | -------------------------------------------- |
+| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
+| `packages/extensions/src/task-tools`    | `tool` + `request` + scoped storage resource |
+| `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
+| `packages/extensions/src/auto.ts`       | `actors:` + `reactions:` + scoped resources  |
 
 ## Migration Notes
 
 - `query(...)` / `mutation(...)` -> `request(...)`
 - `command(...)` -> `action(...)`
-- projection constructor folklore -> typed `ProjectionContribution` object literals in `projections: [...]`
+- projection constructor folklore -> `reactions.turnProjection(ctx)`
 - generic middleware APIs are gone from the authoring model
 - `_kind` contribution unions are gone; the bucket name is the discriminator
 

@@ -7,11 +7,11 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 `gent` is organized around six nouns:
 
 - `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
-- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, projections, resources, capabilities.
+- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, reactions, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
-- `Capability` — the only callable primitive.
-- `Resource` — long-lived services, schedules, subscriptions, lifecycle. Stateful actors live in the `actors:` bucket as Behaviors.
-- `Projection` — pure derived views for prompt, policy, runtime, and client state.
+- `Tool` / `Request` / `Action` — independent callable leaves for model tools, extension RPC, and human UI actions.
+- `Resource` — long-lived services, schedules, and lifecycle. Stateful actors live in the `actors:` bucket as Behaviors.
+- `Reaction` — turn/message/tool-result hooks for prompt, policy, runtime, and client state derivation.
 
 Everything else is adapter code around those nouns.
 
@@ -126,7 +126,7 @@ It is the composition boundary. Not the domain boundary.
 
 ### RuntimeProfileResolver
 
-`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently (and drift, e.g. dropping pub/sub subscriptions on the per-cwd path); now both go through the resolver paired with `buildExtensionLayers`:
+`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently and drift; now both go through the resolver paired with `buildExtensionLayers`:
 
 - **Server startup** (`server/dependencies.ts`) — resolves once at boot, builds the registry/state/event-bus layer via `buildExtensionLayers`, publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
 - **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, builds the same layer shape via `buildExtensionLayers` inside the captured server scope.
@@ -323,19 +323,19 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?, projections?, modelDrivers?, externalDrivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches a Projection placed in `tools`, `commands`, or `rpc` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?, actors?, reactions?, modelDrivers?, externalDrivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `commands`, or `rpc` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC callable from transport-public or agent-protocol surfaces; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, transport, and slash registries.
-- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/extension-reactions.ts`.
+- **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
+- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
 
 - Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
-- Prompt shaping, input normalization, permission policy, and turn reactions are explicit runtime slots compiled from Resources and Projections, not generic middleware buckets.
+- Prompt shaping, input normalization, permission policy, and turn reactions are explicit runtime slots compiled from extension reactions and typed leaves, not generic middleware buckets.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
@@ -367,7 +367,7 @@ Other notes:
 
 ### Extension Actor Substrate
 
-After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `actors:` bucket) into one, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and event-backed client widgets subscribe to the normal session event stream.
+After W10-PhaseB collapsed the old FSM resource slot and the new `actors:` bucket into one path, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and event-backed client widgets subscribe to the normal session event stream.
 
 **ActorHost** (`runtime/extensions/resource-host/actor-host.ts`):
 

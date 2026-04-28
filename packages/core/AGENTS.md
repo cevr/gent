@@ -20,9 +20,9 @@
 
 ## Extension Boundary
 
-- Author with `tool(...)`, `request(...)`, `action(...)`, `defineResource(...)`, typed `ProjectionContribution` objects, and `defineAgent(...)`
+- Author with `tool(...)`, `request(...)`, `action(...)`, `defineResource(...)`, `behavior(...)`, `reactions`, and `defineAgent(...)`
 - Do not reintroduce `query(...)`, `mutation(...)`, generic `_kind` contribution unions, or flat `Contribution[]`
-- Prompt shaping, policy, and turn reactions belong to projections/resources and explicit runtime slots, not generic middleware APIs
+- Prompt shaping, policy, and turn reactions belong to `reactions.turnProjection` and explicit runtime slots, not generic middleware APIs
 
 ## Provider Boundary
 

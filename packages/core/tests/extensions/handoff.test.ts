@@ -101,8 +101,8 @@ describe("HandoffTool", () => {
 // ============================================================================
 // Cooldown actor (C8b regression lock — re-pinned to actor primitive in W10-1a)
 //
-// Pin the cooldown semantics that the legacy `Resource.machine` exposed via
-// `getUiSnapshot`: `Suppress(n)` SETS the counter to N (overwrite, not add);
+// Pin the cooldown semantics from the old FSM implementation:
+// `Suppress(n)` SETS the counter to N (overwrite, not add);
 // `GetCooldown` reads it; every `TurnCompleted` decrements until zero.
 // ============================================================================
 

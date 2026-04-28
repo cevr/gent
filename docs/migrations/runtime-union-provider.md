@@ -114,7 +114,7 @@ Old callable vocabulary:
 - `query(...)`
 - `mutation(...)`
 - `command(...)`
-- audience/intent flag matrices
+- audience flag matrices
 
 New callable vocabulary:
 
@@ -148,23 +148,22 @@ const GetStatus = request({
 
 Generic middleware APIs are not the extension model anymore. Migrate as follows:
 
-- prompt shaping -> typed `ProjectionContribution` objects and prompt slots
+- prompt shaping -> `reactions.turnProjection` and prompt slots
 - permission policy -> explicit policy slots / capability policy
-- turn reactions -> `defineResource({ subscriptions: [...] })`
+- turn reactions -> `reactions.turnBefore` / `turnAfter` / `messageOutput`
 - long-lived state / lifecycle -> `defineResource(...)`
 
-Projection authoring is a typed object literal, not a constructor:
+Turn projection authoring is a reaction handler:
 
 ```ts
-const StatusProjection: ProjectionContribution<string> = {
-  id: "status",
-  query: () => Effect.succeed("ready"),
-  prompt: (value) => [{ id: "status", title: "Status", content: value, priority: 0 }],
-}
-
 export default defineExtension({
   id: "status-ext",
-  projections: [StatusProjection],
+  reactions: {
+    turnProjection: () =>
+      Effect.succeed({
+        promptSections: [{ id: "status", content: "ready", priority: 0 }],
+      }),
+  },
 })
 ```
 

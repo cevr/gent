@@ -2531,7 +2531,7 @@ describe("recovery", () => {
 // ============================================================================
 //
 // Verifies the two genuine FSM-justified behaviors are preserved by the
-// post-W8 substrate (plain Effect fiber + Phase Ref + checkpoint):
+// post-W8 runtime (plain Effect fiber + Phase Ref + checkpoint):
 //   1. Durable suspension across scope teardown (process death simulation):
 //      a session in `WaitingForInteraction` survives a scope tear-down,
 //      and `respondInteraction` against a fresh scope re-executes the
@@ -2540,7 +2540,7 @@ describe("recovery", () => {
 //      calls enqueue and drain in submission order after `TurnDone`.
 //
 // Cites: `make-impossible-states-unrepresentable` (phase-tag invariants),
-//        `redesign-from-first-principles` (post-W8 substrate carries the
+//        `redesign-from-first-principles` (post-W8 runtime carries the
 //        same correctness load as the FSM did).
 describe("W8 regression: durable suspension and queue drain", () => {
   // ── Suspension test ──
@@ -2719,7 +2719,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
                   expect(finalState._tag).toBe("Idle")
                   // The resumed turn must have driven the provider through
                   // its second response (text + stop), so streamCallRef
-                  // advanced to 2 — proves the post-W8 substrate runs the
+                  // advanced to 2 — proves the post-W8 runtime runs the
                   // full inner loop on resume, not just a result hand-back.
                   expect(yield* Ref.get(streamCallRef)).toBe(2)
                 }).pipe(
