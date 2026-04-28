@@ -134,8 +134,6 @@ export interface ExtensionContributions {
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
 
-export type ExtensionCapabilityLeaf = ToolToken | ActionToken | RequestToken
-
 // ── Bucket readers ──
 
 /**

@@ -3,9 +3,16 @@ import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
-import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
+import {
+  action,
+  request,
+  tool,
+  ToolNeeds,
+  type ActionToken,
+  type RequestToken,
+  type ToolToken,
+} from "@gent/core/extensions/api"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -48,63 +55,75 @@ const promptSectionAsToolContribution = (section: PromptSection): ToolToken =>
     execute: () => Effect.void,
   })
 
-// Routes raw capability shapes into the typed bucket that matches their
-// audiences. Bucket name IS the audience discrimination — tests that need
-// resolveExtensions/listSlashCommands behavior author leaves directly without
-// going through `tool()/action()/request()` factories (token brand bypassed
-// via `as ReadonlyArray<never>` at the bucket boundary).
-const routeByAudience = (
-  caps: ReadonlyArray<AnyCapabilityContribution>,
-): {
-  tools: ReadonlyArray<AnyCapabilityContribution>
-  commands: ReadonlyArray<AnyCapabilityContribution>
-  rpc: ReadonlyArray<AnyCapabilityContribution>
-} => {
-  const tools: Array<AnyCapabilityContribution> = []
-  const commands: Array<AnyCapabilityContribution> = []
-  const rpc: Array<AnyCapabilityContribution> = []
-  for (const cap of caps) {
-    const audiences = cap.audiences ?? []
-    if (audiences.includes("model")) tools.push(cap)
-    else if (audiences.includes("human-slash") || audiences.includes("human-palette"))
-      commands.push(cap)
-    else rpc.push(cap)
-  }
-  return { tools, commands, rpc }
-}
-
 const makeExt = (
   id: string,
   scope: "builtin" | "user" | "project",
   opts?: {
     tools?: ToolToken[]
+    commands?: ActionToken[]
+    rpc?: RequestToken[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
-    capabilities?: AnyCapabilityContribution[]
   },
 ): LoadedExtension => {
-  const all = [
+  const tools = [
     ...(opts?.tools ?? []),
     ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
-    ...(opts?.capabilities ?? []),
   ]
-  const { tools, commands, rpc } = routeByAudience(all)
   return {
     manifest: { id: ExtensionId.make(id) },
     scope,
     sourcePath: `/test/${id}`,
     contributions: {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(tools.length > 0 ? { tools: tools as ReadonlyArray<never> } : {}),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(commands.length > 0 ? { commands: commands as ReadonlyArray<never> } : {}),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts token-shaped values to bypass the typed-bucket brand
-      ...(rpc.length > 0 ? { rpc: rpc as ReadonlyArray<never> } : {}),
+      ...(tools.length > 0 ? { tools } : {}),
+      ...(opts?.commands !== undefined ? { commands: opts.commands } : {}),
+      ...(opts?.rpc !== undefined ? { rpc: opts.rpc } : {}),
       agents: opts?.agents,
       modelDrivers: opts?.modelDrivers,
     },
   }
+}
+
+const makeCommand = (id: string, options?: Partial<Parameters<typeof action>[0]>): ActionToken =>
+  action({
+    id,
+    name: id,
+    description: options?.description ?? `${id} command`,
+    surface: options?.surface ?? "slash",
+    input: options?.input ?? Schema.String,
+    output: options?.output ?? Schema.Void,
+    execute: () => Effect.void,
+    ...options,
+  })
+
+const makeRequest = (
+  id: string,
+  options?: {
+    readonly intent?: "read" | "write"
+    readonly extensionId?: ExtensionId
+  },
+): RequestToken => {
+  const intent = options?.intent ?? "read"
+  const extensionId = options?.extensionId ?? ExtensionId.make("@test/rpc")
+  if (intent === "read") {
+    return request({
+      id,
+      extensionId,
+      intent: "read",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      execute: () => Effect.succeed(undefined),
+    })
+  }
+  return request({
+    id,
+    extensionId,
+    intent: "write",
+    input: Schema.Unknown,
+    output: Schema.Unknown,
+    execute: () => Effect.succeed(undefined),
+  })
 }
 
 const runCtx: RunContext = {
@@ -581,158 +600,78 @@ describe("ExtensionRegistry", () => {
 })
 
 // Slash-command discovery — identity-first scope shadowing followed by
-// audience/intent authorization. These lock the C4.3 scenarios after
-// command contributions were collapsed into capabilities.
-describe("resolveExtensions — slash command discovery (C4.3)", () => {
-  test('Capability(audiences:["human-slash"], intent:"write") appears in commands', () => {
-    const cap: AnyCapabilityContribution = {
-      id: "echo",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
+// bucket/surface authorization.
+describe("resolveExtensions — slash command discovery", () => {
+  test("slash action appears in commands", () => {
+    const cap = makeCommand("echo", {
+      description: "Echo the args back.",
       promptSnippet: "Echo the args back.",
-      effect: () => Effect.void,
-    }
-    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
+    })
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { commands: [cap] })])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
 
-  test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
-    // Builtin exposes a slash command via human-slash capability.
-    const builtinCap: AnyCapabilityContribution = {
-      id: "act",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
-    // Project overrides the same name with a capability that explicitly
-    // narrows audiences to palette-only — must shadow + remove from slash list,
-    // NOT fall through to the builtin command.
-    const projectCap: AnyCapabilityContribution = {
-      id: "act",
-      audiences: ["human-palette"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+  test("project palette command shadows builtin slash command", () => {
+    const builtinCap = makeCommand("act")
+    const builtin = makeExt("@test/shadow", "builtin", { commands: [builtinCap] })
+    const projectCap = makeCommand("act", { surface: "palette" })
+    const project = makeExt("@test/shadow", "project", { commands: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
 
-  test("palette-only capability does not appear in the slash-backed command list", () => {
-    const cap: AnyCapabilityContribution = {
-      id: "palette-only",
-      audiences: ["human-palette"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const resolved = resolveExtensions([
-      makeExt("@test/palette", "builtin", { capabilities: [cap] }),
-    ])
+  test("palette-only command does not appear in the slash-backed command list", () => {
+    const cap = makeCommand("palette-only", { surface: "palette" })
+    const resolved = resolveExtensions([makeExt("@test/palette", "builtin", { commands: [cap] })])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).not.toContain("palette-only")
   })
 
-  test('project capability with intent:"read" SHADOWS builtin slash command', () => {
-    const builtinCap: AnyCapabilityContribution = {
-      id: "look",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
-    const projectCap: AnyCapabilityContribution = {
-      id: "look",
-      audiences: ["human-slash"],
-      intent: "read",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: () => Effect.void,
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
-
-    const resolved = resolveExtensions([builtin, project])
-    // project shadows builtin; intent: "read" — read capabilities ARE allowed as commands
-    // (the filter is audiences:["human-slash"], not intent:"write")
-    const commands = listSlashCommands(resolved.extensions)
-    expect(commands.map((c) => c.name)).toContain("look")
-  })
-
   // ── Model capability surface ────────────────────────────────────────
 
-  test('Capability(audiences:["model"]) appears as a model capability', () => {
-    const cap: AnyCapabilityContribution = {
+  test("tool appears as a model capability", () => {
+    const cap = tool({
       id: "echo",
       description: "Echo input back as output.",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
-    }
-    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
+      params: Schema.String,
+      execute: () => Effect.succeed(undefined),
+    })
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { tools: [cap] })])
     expect(resolved.modelCapabilities.has("echo")).toBe(true)
     expect(resolved.modelCapabilities.get("echo")?.description).toBe("Echo input back as output.")
   })
 
-  test('project capability with audiences:["agent-protocol"] SHADOWS builtin tool', () => {
+  test("project rpc shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("act")] })
-    const projectCap: AnyCapabilityContribution = {
-      id: "act",
-      audiences: ["agent-protocol"],
-      intent: "write",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+    const projectCap = makeRequest("act", { intent: "write" })
+    const project = makeExt("@test/shadow", "project", { rpc: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("act")).toBe(false)
   })
 
-  test('project capability with audiences:["transport-public"] SHADOWS builtin tool', () => {
+  test("project public command shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
-    const projectCap: AnyCapabilityContribution = {
-      id: "look",
-      audiences: ["transport-public"],
-      intent: "read",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+    const projectCap = makeCommand("look", { public: true })
+    const project = makeExt("@test/shadow", "project", { commands: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("look")).toBe(false)
   })
 
-  test("project capability with audiences including model OVERRIDES builtin tool", () => {
+  test("project tool overrides builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("run")] })
-    const projectCap: AnyCapabilityContribution = {
+    const projectCap = tool({
       id: "run",
       description: "project run override",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
-    }
-    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+      params: Schema.Unknown,
+      execute: () => Effect.succeed(undefined),
+    })
+    const project = makeExt("@test/shadow", "project", { tools: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("run")).toBe(true)
@@ -740,39 +679,29 @@ describe("resolveExtensions — slash command discovery (C4.3)", () => {
   })
 
   test("model capability preserves all ModelAudienceFields", () => {
-    const cap: AnyCapabilityContribution = {
+    const cap = tool({
       id: "rich",
       description: "rich tool",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
+      params: Schema.Unknown,
       needs: [ToolNeeds.write("fs"), ToolNeeds.read("network")],
       promptSnippet: "Snippet here.",
       promptGuidelines: ["use carefully", "log result"],
       interactive: true,
-      effect: () => Effect.succeed(undefined),
-    }
-    const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { capabilities: [cap] })])
-    const tool = resolved.modelCapabilities.get("rich")
-    expect(tool).toBeDefined()
-    expect(tool?.description).toBe("rich tool")
-    expect(tool?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
-    expect(tool?.promptSnippet).toBe("Snippet here.")
-    expect(tool?.promptGuidelines).toEqual(["use carefully", "log result"])
-    expect(tool?.interactive).toBe(true)
+      execute: () => Effect.succeed(undefined),
+    })
+    const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { tools: [cap] })])
+    const resolvedTool = resolved.modelCapabilities.get("rich")
+    expect(resolvedTool).toBeDefined()
+    expect(resolvedTool?.description).toBe("rich tool")
+    expect(resolvedTool?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
+    expect(resolvedTool?.promptSnippet).toBe("Snippet here.")
+    expect(resolvedTool?.promptGuidelines).toEqual(["use carefully", "log result"])
+    expect(resolvedTool?.interactive).toBe(true)
   })
 
-  test("non-model capability does NOT appear as a tool", () => {
-    const cap: AnyCapabilityContribution = {
-      id: "rpc-only",
-      audiences: ["agent-protocol"],
-      intent: "read",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
-    }
-    const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { capabilities: [cap] })])
+  test("rpc does not appear as a tool", () => {
+    const cap = makeRequest("rpc-only")
+    const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { rpc: [cap] })])
     expect(resolved.modelCapabilities.has("rpc-only")).toBe(false)
   })
 })
