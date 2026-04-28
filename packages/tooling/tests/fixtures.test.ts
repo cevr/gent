@@ -95,6 +95,12 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: "no-promise-control-flow-in-tests.valid.test.ts",
     expectedCount: 4,
   },
+  {
+    rule: "gent/no-promise-control-flow-in-tests",
+    invalid: "batch12-modules/tests/no-promise-control-flow-in-tests.invalid.module.ts",
+    valid: "batch12-modules/tests/no-promise-control-flow-in-tests.valid.module.ts",
+    expectedCount: 4,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {

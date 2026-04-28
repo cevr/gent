@@ -329,7 +329,7 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC callable from transport-public or agent-protocol surfaces; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, transport, and slash registries.
-- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/extension-reactions.ts`.
+- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
@@ -378,23 +378,18 @@ After W10-PhaseB collapsed the dual substrate (FSM `Resource.machine` + new `act
 **Receptionist + ActorEngine** (`runtime/extensions/receptionist.ts`, `runtime/extensions/actor-engine.ts`):
 
 - `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
-- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` (registers) and `ActorRouter` (routes) share the same actor map.
+- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` and direct actor callers share the same actor map.
 
 **ActorRouter** (`runtime/extensions/resource-host/actor-router.ts`):
 
-- A thin actor-router over `ActorEngine` + `Receptionist`. Decodes the `ExtensionMessage` envelope, looks up the target Behavior's `ServiceKey`, and dispatches via `tell` (commands) or `ask` (requests).
-- Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`/`handoff.ts`).
-- `getActorStatuses` returns `[]` and `terminateAll` is a no-op — kept on the interface for surface compat. Behaviors are process-scoped, not per-session.
+- Runtime marker for the extension actor host. It has no public send/ask surface; extension code that needs actors uses `ExtensionHostContext.actors` with explicit `ServiceKey`s.
+- Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`).
 
 **Event-backed client invalidation**:
 
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
 - TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/task-tools` is the canonical event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
-
-**MachineExecute** (`runtime/extensions/machine-execute.ts`):
-
-- Read-only surface for projections and `request`-intent capabilities. Exposes only `execute<M>`; write operations (`send`/`publish`) are structurally absent. The `R` type of every `ProjectionContribution` is fenced to `ReadOnly`-branded tags — `MachineExecute` carries that brand, `MachineEngine` does not. Projection and read-intent capability authors receive `MachineExecute`; resource `start`/`stop` and write-intent capabilities receive `MachineEngine` from the ephemeral layer.
 
 **Compositor `withOverrides`**:
 
@@ -459,7 +454,7 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 ## Artifacts Extension
 
-`@gent/artifacts` — generic artifact store with typed protocol. Any tool/extension can persist artifacts via `ctx.extension.ask(ArtifactProtocol.Save(...))`.
+`@gent/artifacts` — generic artifact store exposed through typed extension RPC. Any tool/extension can persist artifacts through `ctx.extension.request(...)`.
 
 Actor state: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 

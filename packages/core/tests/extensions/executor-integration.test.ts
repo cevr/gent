@@ -13,7 +13,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
-import { ensureStorageParents } from "@gent/core/test-utils"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Provider } from "@gent/core/providers/provider"
 import { Gent } from "@gent/sdk"
@@ -192,28 +191,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,
   )
-  const seededMachine = Layer.effect(
-    ActorRouter,
-    Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      const storageSvc = yield* Storage
-      return {
-        send: (targetSessionId, message, targetBranchId) =>
-          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
-            Effect.provideService(Storage, storageSvc),
-            Effect.orDie,
-            Effect.flatMap(() => runtime.send(targetSessionId, message, targetBranchId)),
-          ),
-        execute: (targetSessionId, message, targetBranchId) =>
-          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
-            Effect.provideService(Storage, storageSvc),
-            Effect.orDie,
-            Effect.flatMap(() => runtime.execute(targetSessionId, message, targetBranchId)),
-          ),
-      } satisfies typeof runtime
-    }),
-  ).pipe(Layer.provideMerge(machineWithResources))
-  return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl)
+  return Layer.mergeAll(machineWithResources, EventStore.Memory, turnControl)
 }
 const executorSnapshot = Effect.gen(function* () {
   const executor = yield* ExecutorRead

@@ -148,9 +148,8 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       const { registry, stateRuntime, actorEngine, receptionist, capabilityContext } =
         yield* deps.resolveSessionServices(sessionId)
       // Public write request handlers may ask for the wide host surface
-      // (`extension.send/ask`, `session.*`, `agent.*`, etc.). Build the full
-      // ExtensionHostContext here so handlers like `executor-start` /
-      // `executor-stop` can steer their sidecar actors over `ctx.extension.send`.
+      // (`session.*`, `agent.*`, typed extension RPC, etc.). Build the full
+      // ExtensionHostContext here so handlers use the same boundary as tools.
       // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
       // dispatch where handlers author against `CapabilityCoreContext`.
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({

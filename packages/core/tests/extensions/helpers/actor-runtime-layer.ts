@@ -4,7 +4,7 @@
  * Consolidates the near-identical makeRuntimeLayer / makeLayer / makeSkillsRuntimeLayer
  * helpers across actor.test, plan.test, skills-actor.test, persistence.test.
  */
-import { Effect, Layer } from "effect"
+import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
@@ -12,7 +12,6 @@ import { ActorRouter } from "../../../src/runtime/extensions/resource-host/actor
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { ensureStorageParents } from "@gent/core/test-utils"
 
 export const makeActorRuntimeLayer = (config: {
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -25,38 +24,13 @@ export const makeActorRuntimeLayer = (config: {
     Layer.provideMerge(turnControl),
     Layer.provideMerge(ActorEngine.Live),
   )
-  const machineWithSeededParents =
-    config.withStorage === true
-      ? Layer.effect(
-          ActorRouter,
-          Effect.gen(function* () {
-            const runtime = yield* ActorRouter
-            const store = yield* Storage
-            return {
-              send: (sessionId, message, branchId) =>
-                ensureStorageParents({ sessionId, branchId }).pipe(
-                  Effect.orDie,
-                  Effect.flatMap(() => runtime.send(sessionId, message, branchId)),
-                  Effect.provideService(Storage, store),
-                ),
-              execute: (sessionId, message, branchId) =>
-                ensureStorageParents({ sessionId, branchId }).pipe(
-                  Effect.orDie,
-                  Effect.flatMap(() => runtime.execute(sessionId, message, branchId)),
-                  Effect.provideService(Storage, store),
-                ),
-            } satisfies typeof runtime
-          }),
-        ).pipe(Layer.provide(Layer.merge(machine, storage)))
-      : machine
-
   // Build the process-scope Resource layer so `Resource.start` lifecycle
   // hooks fire (e.g. spawning actors that capture services into closure
   // via `ActorEngine`). When the caller passes `extensionLayers`
   // explicitly, fall back to merging only those — used by tests that
   // intentionally bypass setup.
   const baseInfra = Layer.mergeAll(
-    machineWithSeededParents,
+    machine,
     EventStore.Memory,
     turnControl,
     ...(config.withStorage ? [storage] : []),

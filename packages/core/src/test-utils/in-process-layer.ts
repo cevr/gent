@@ -18,7 +18,6 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -68,11 +67,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const extensionRuntimeLive = ActorRouter.Test().pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
-  // Mirror profile.ts / e2e-layer.ts so projections under `extraLayers`
-  // resolve their `MachineExecute` dependency instead of silently defecting
-  // through projection failure isolation.
-  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
-
   const memoryStorage = Storage.MemoryWithSql()
   const baseDeps = Layer.mergeAll(
     memoryStorage,
@@ -80,7 +74,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     providerLive,
     extensionRegistryLive,
     extensionRuntimeLive,
-    machineExecuteLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),

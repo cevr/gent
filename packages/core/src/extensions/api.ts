@@ -96,8 +96,6 @@ export {
 } from "../domain/agent.js"
 export {
   type GentExtension,
-  type ExtensionEffect,
-  ExtensionEffectSchema,
   type ProjectionTurnContext,
   type TurnProjection,
   type ReduceResult,

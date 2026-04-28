@@ -35,7 +35,6 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { ActorRouter } from "./extensions/resource-host/actor-router.js"
-import { MachineExecute } from "./extensions/machine-execute.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { buildResourceLayer } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
@@ -339,10 +338,8 @@ export const buildExtensionLayers = (
   // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
   // before spawn and forks a periodic writer. Absent → in-memory mode.
   //
-  // Order matters: built before `extensionRuntimeLive` so ActorRouter
-  // can pick up `ActorEngine` from the same provideMerge chain — the
-  // engine's actor-route fallback (W10-1b.0) needs Receptionist + tell/ask
-  // to dispatch ExtensionMessages to actor-only extensions.
+  // Order matters: ActorHost owns actor spawn/hydration, and the lightweight
+  // ActorRouter marker is merged alongside the same ActorEngine context.
   const actorRuntimeLive =
     options?.actorPersistence !== undefined
       ? ActorHost.fromResolvedWithPersistence(resolved, {
@@ -355,11 +352,6 @@ export const buildExtensionLayers = (
     Layer.provideMerge(ExtensionTurnControl.Live),
     Layer.provideMerge(actorRuntimeLive),
   )
-  // Project `ActorRouter` onto the read-only `MachineExecute` surface
-  // for projection consumers. `MachineExecute` carries the `ReadOnly`
-  // brand so projections can't accidentally yield write-capable Tags.
-  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
-
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
     DriverRegistry.fromResolved({
@@ -367,7 +359,6 @@ export const buildExtensionLayers = (
       externalDrivers: resolved.externalDrivers,
     }),
     extensionRuntimeLive,
-    machineExecuteLive,
   )
 
   // Resource layers may declare `R` deps on services from `baseLayers`

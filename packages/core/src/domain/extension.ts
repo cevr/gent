@@ -9,7 +9,6 @@ import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
-import type { AnyExtensionCommandMessage } from "./extension-protocol.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 
 // Extension Manifest — authored by extension author
@@ -336,17 +335,8 @@ export const ExtensionEffectBusEmit = Schema.TaggedStruct("BusEmit", {
   channel: Schema.String,
   payload: Schema.Unknown,
 })
-// `AnyExtensionCommandMessage` is a structural protocol shape with no
-// canonical Schema. `Schema.Any` is widened to the static TS binding
-// via the cast so the type alias below remains precise.
-const ExtensionCommandMessageSchema =
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-  Schema.Any as unknown as Schema.Schema<AnyExtensionCommandMessage>
-export const ExtensionEffectSend = Schema.TaggedStruct("Send", {
-  message: ExtensionCommandMessageSchema,
-})
-export const ExtensionEffectSchema = Schema.Union([ExtensionEffectBusEmit, ExtensionEffectSend])
-export type ExtensionEffect = typeof ExtensionEffectSchema.Type
+export const ExtensionEffectSchema = ExtensionEffectBusEmit
+export type ExtensionEffect = typeof ExtensionEffectBusEmit.Type
 
 /** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {

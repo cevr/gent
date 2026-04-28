@@ -8,7 +8,7 @@
  *   - Layer: TaskStorage.Live + TaskService.Live
  *
  * The extension has NO actor. The legacy `TaskProtocol` actor (which was a
- * pure RPC dispatcher mapping ExtensionMessage.reply requests to TaskService
+ * pure RPC dispatcher mapping typed extension RPC requests to TaskService
  * calls) has been replaced with typed request capabilities consumed
  * via `ctx.extension.request(ref, input)`.
  *

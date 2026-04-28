@@ -34,7 +34,6 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { ActorRouter } from "../runtime/extensions/resource-host/actor-router.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
@@ -225,10 +224,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         Layer.provideMerge(ExtensionTurnControl.Live),
         Layer.provideMerge(actorRuntimeLive),
       )
-      // Read-only call surface — must mirror profile.ts so read-intent
-      // capabilities that require `MachineExecute` resolve in tests.
-      const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
-
       // Base services — everything that doesn't depend on reducing event store
       const baseDepsCore = Layer.mergeAll(
         BunServices.layer,
@@ -238,7 +233,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRegistryLive,
         driverRegistryLive,
         extensionRuntimeLive,
-        machineExecuteLive,
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),

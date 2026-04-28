@@ -9,13 +9,10 @@
  * always express user intent).
  *
  * The handler context is `ModelCapabilityContext` (the wide host
- * surface), not the narrow `CapabilityCoreContext`. This matches the
- * existing executor slash commands which need `extension.send` to
- * steer their actor sidecar — without the wide context, `action()`
- * couldn't honestly absorb those capabilities and a fourth factory
- * would be required. Handlers asking for `CapabilityCoreContext` get
- * a structurally-narrower view by virtue of the inheritance chain
- * (`ModelCapabilityContext extends CapabilityCoreContext`).
+ * surface), not the narrow `CapabilityCoreContext`, so human actions can
+ * use session, agent, storage, and typed extension RPC helpers directly.
+ * Handlers asking for `CapabilityCoreContext` get a structurally-narrower
+ * view by virtue of the inheritance chain.
  *
  * @module
  */
@@ -76,8 +73,8 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   /** Schema for output. */
   readonly output: Schema.Schema<Output>
   /** Action handler. Always called from human input. Receives the wide
-   *  `ModelCapabilityContext` so handlers can use `extension.send/ask`
-   *  to steer extension actors (see executor-start/executor-stop). */
+   *  `ModelCapabilityContext` for session, agent, storage, and typed RPC
+   *  helpers. */
   readonly execute: (
     input: Input,
     ctx: ModelCapabilityContext,

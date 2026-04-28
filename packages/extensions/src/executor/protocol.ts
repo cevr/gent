@@ -57,13 +57,3 @@ export const ExecutorRpc = {
     }),
   }),
 }
-
-/**
- * Back-compat export for callers that imported the old protocol subpath.
- * Values are RPC capability tokens now, not actor-route ExtensionMessages.
- */
-export const ExecutorProtocol = {
-  Connect: ExecutorRpc.Start,
-  Disconnect: ExecutorRpc.Stop,
-  GetSnapshot: ExecutorRpc.GetSnapshot,
-}

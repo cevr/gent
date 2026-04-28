@@ -6,11 +6,8 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
 import { type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
-import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
-import {
-  ActorRouter,
-  type ActorRouterService,
-} from "../../src/runtime/extensions/resource-host/actor-router"
+import { testSetupCtx } from "@gent/core/test-utils"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
@@ -48,38 +45,12 @@ const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = [])
     Layer.provideMerge(ActorHost.fromResolved(resolved)),
     Layer.provideMerge(ActorEngine.Live),
   )
-  const seededMachine = Layer.effect(
-    ActorRouter,
-    Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      const storageSvc = yield* Storage
-      return {
-        send: (targetSessionId, message, targetBranchId) =>
-          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
-            Effect.provideService(Storage, storageSvc),
-            Effect.orDie,
-            Effect.flatMap(() => runtime.send(targetSessionId, message, targetBranchId)),
-          ),
-        execute: (targetSessionId, message, targetBranchId) =>
-          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
-            Effect.provideService(Storage, storageSvc),
-            Effect.orDie,
-            Effect.flatMap(() => runtime.execute(targetSessionId, message, targetBranchId)),
-          ),
-      } satisfies typeof runtime
-    }),
-    // Use `provideMerge` so `ActorEngine` and `Receptionist` (composed
-    // into `machine` above) remain in the output set — tests drive the
-    // actor directly through them, which is the established pattern for
-    // actor-only extensions (see handoff.test.ts).
-  ).pipe(Layer.provideMerge(Layer.mergeAll(machine, storage, ...extraLayers)))
-
-  return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl, storage, ...extraLayers)
+  return Layer.mergeAll(machine, EventStore.Memory, turnControl, storage, ...extraLayers)
 }
 
 const makeLayer = () => seededMachineLayer()
 
-const getSnapshot = (_runtime: ActorRouterService) =>
+const getSnapshot = () =>
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     const ref = yield* findAutoActor
@@ -87,7 +58,7 @@ const getSnapshot = (_runtime: ActorRouterService) =>
     return { model } as { readonly model: AutoSnapshotReply }
   })
 
-const sendAuto = (_runtime: ActorRouterService, intent: AutoIntent) => {
+const sendAuto = (intent: AutoIntent) => {
   switch (intent._tag) {
     case "StartAuto":
       return Effect.gen(function* () {
@@ -157,14 +128,10 @@ describe("Auto runtime integration", () => {
 
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
       // Start auto
-      yield* sendAuto(
-        runtime,
-        AutoIntent.StartAuto.make({ goal: "fix all bugs", maxIterations: 3 }),
-      )
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "fix all bugs", maxIterations: 3 }))
 
-      const snap1 = yield* getSnapshot(runtime)
+      const snap1 = yield* getSnapshot()
       const ui1 = snap1!.model as AutoSnapshotReply
       expect(ui1.active).toBe(true)
       expect(ui1.phase).toBe("working")
@@ -179,7 +146,7 @@ describe("Auto runtime integration", () => {
         }),
       )
 
-      const snap2 = yield* getSnapshot(runtime)
+      const snap2 = yield* getSnapshot()
       const ui2 = snap2!.model as AutoSnapshotReply
       expect(ui2.phase).toBe("awaiting-review")
       // TODO(c2): replaced learningsCount with learnings array length.
@@ -190,7 +157,7 @@ describe("Auto runtime integration", () => {
       // Counsel → Working (iteration 2)
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
-      const snap3 = yield* getSnapshot(runtime)
+      const snap3 = yield* getSnapshot()
       const ui3 = snap3!.model as AutoSnapshotReply
       expect(ui3.phase).toBe("working")
       expect(ui3.iteration).toBe(2)
@@ -198,7 +165,7 @@ describe("Auto runtime integration", () => {
       // Complete
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "complete", summary: "All fixed" }))
 
-      const snap4 = yield* getSnapshot(runtime)
+      const snap4 = yield* getSnapshot()
       const ui4 = snap4!.model as AutoSnapshotReply
       expect(ui4.active).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
@@ -206,13 +173,12 @@ describe("Auto runtime integration", () => {
 
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test" }))
 
       // TurnCompleted should not change UI iteration
       yield* tellAuto(AutoMsg.TurnCompleted.make({}))
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.iteration).toBe(1)
     }).pipe(Effect.provide(makeLayer())),
@@ -220,40 +186,37 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test" }))
+      expect((yield* getSnapshot())!.model).toMatchObject({ active: true })
 
-      yield* sendAuto(runtime, AutoIntent.CancelAuto.make({}))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
+      yield* sendAuto(AutoIntent.CancelAuto.make({}))
+      expect((yield* getSnapshot())!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
 
   it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test" }))
 
       // Move to AwaitingReview
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "x" }))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+      expect((yield* getSnapshot())!.model).toMatchObject({ phase: "awaiting-review" })
 
-      yield* sendAuto(runtime, AutoIntent.CancelAuto.make({}))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
+      yield* sendAuto(AutoIntent.CancelAuto.make({}))
+      expect((yield* getSnapshot())!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
 
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test" }))
 
       // 5 turns without checkpoint
       for (let i = 0; i < 5; i++) {
         yield* tellAuto(AutoMsg.TurnCompleted.make({}))
       }
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.active).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
@@ -268,13 +231,12 @@ describe("Auto runtime integration", () => {
 
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
       // Auto starts Inactive — drive a checkpoint, review, and turn
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "x" }))
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
       yield* tellAuto(AutoMsg.TurnCompleted.make({}))
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.active).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
@@ -282,8 +244,7 @@ describe("Auto runtime integration", () => {
 
   it.live("unrelated tool does not advance the loop", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test" }))
 
       // An unrelated tool call has no actor message — `tellAutoFromTool`
       // (the slot-handler bridge) only translates `auto_checkpoint` and
@@ -291,7 +252,7 @@ describe("Auto runtime integration", () => {
       // there is no AutoMsg corresponding to "bash"; the assertion is
       // simply that nothing else advanced the loop.
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.phase).toBe("working")
       expect(ui.iteration).toBe(1)
@@ -300,13 +261,12 @@ describe("Auto runtime integration", () => {
 
   it.live("review while Working is ignored (must checkpoint first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // Review fired without a preceding checkpoint — must not advance
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.phase).toBe("working")
       expect(ui.iteration).toBe(1)
@@ -315,16 +275,15 @@ describe("Auto runtime integration", () => {
 
   it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "first" }))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+      expect((yield* getSnapshot())!.model).toMatchObject({ phase: "awaiting-review" })
 
       // Second checkpoint without review — must not advance back to Working
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "second" }))
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.phase).toBe("awaiting-review")
       expect(ui.iteration).toBe(1)
@@ -333,19 +292,18 @@ describe("Auto runtime integration", () => {
 
   it.live("complete checkpoint while AwaitingReview is ignored (review gate)", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "first" }))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+      expect((yield* getSnapshot())!.model).toMatchObject({ phase: "awaiting-review" })
 
       // A `complete` AutoSignal arriving while AwaitingReview must NOT
       // bypass the review gate and short-circuit to Inactive. The contract
       // is: AwaitingReview accepts ReviewSignal only — every other status
       // (continue/complete/abandon) is dropped until review acknowledges.
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "complete", summary: "skip review" }))
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.phase).toBe("awaiting-review")
       expect(ui.active).toBe(true)
@@ -354,17 +312,16 @@ describe("Auto runtime integration", () => {
 
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 1 }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "test", maxIterations: 1 }))
 
       // Checkpoint continue at iteration 1/1
       yield* tellAuto(AutoMsg.AutoSignal.make({ status: "continue", summary: "done" }))
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+      expect((yield* getSnapshot())!.model).toMatchObject({ phase: "awaiting-review" })
 
       // Counsel at max → should go Inactive, not Working
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
 
-      const snap = yield* getSnapshot(runtime)
+      const snap = yield* getSnapshot()
       const ui = snap!.model as AutoSnapshotReply
       expect(ui.active).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
@@ -379,8 +336,7 @@ describe("Auto runtime integration", () => {
 
   it.live("auto behavior.view injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "research caching strategies" }))
+      yield* sendAuto(AutoIntent.StartAuto.make({ goal: "research caching strategies" }))
       yield* tellAuto(
         AutoMsg.AutoSignal.make({
           status: "continue",
@@ -396,7 +352,7 @@ describe("Auto runtime integration", () => {
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
       // Fence: ask GetSnapshot drains the mailbox up to and including the
       // ReviewSignal tell, so peekView observes post-Review state.
-      yield* getSnapshot(runtime)
+      yield* getSnapshot()
       const engine = yield* ActorEngine
       const ref = yield* findAutoActor
       const view = yield* engine.peekView(ref)
