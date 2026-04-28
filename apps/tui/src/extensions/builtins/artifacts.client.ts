@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off `ArtifactsPackage.tui` paired-package pattern. The
  * widget owns its own Solid signal inside an Effect-typed setup, fetched
- * via `askExtension(ArtifactProtocol.List)` and refreshed on
+ * via `requestExtension(ref(ArtifactRpc.List))` and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/artifacts`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -14,9 +14,10 @@
  */
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
+import { ref } from "@gent/core/extensions/api"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
-import { ArtifactProtocol, type Artifact } from "@gent/extensions/artifacts-protocol.js"
-import { askExtension, ClientTransport } from "../client-transport"
+import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol.js"
+import { requestExtension, ClientTransport } from "../client-transport"
 import { ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
@@ -49,7 +50,7 @@ export default defineClientExtension(EXT_ID, {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const reply = await transport.runtime.run(
-          askExtension(ArtifactProtocol.List.make({}), transport, captured),
+          requestExtension(ref(ArtifactRpc.List), {}, transport, captured),
         )
         const current = transport.currentSession()
         if (

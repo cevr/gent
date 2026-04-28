@@ -1,5 +1,6 @@
-import { Schema } from "effect"
-import { ExtensionMessage, ExtensionId, ArtifactId, BranchId } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+import { ExtensionId, ArtifactId, BranchId, request } from "@gent/core/extensions/api"
+import { ArtifactsRead, ArtifactsWrite } from "./artifacts/store.js"
 
 export const ARTIFACTS_EXTENSION_ID = ExtensionId.make("@gent/artifacts")
 
@@ -39,6 +40,7 @@ export const ReadBySource = Schema.TaggedStruct("BySource", {
   branchId: Schema.optional(BranchId),
 })
 export const ReadQuery = Schema.Union([ReadById, ReadBySource])
+export type ReadQuery = typeof ReadQuery.Type
 
 // ── UI snapshot ──
 
@@ -58,56 +60,75 @@ export const ArtifactUiModel = Schema.Struct({
 })
 export type ArtifactUiModel = typeof ArtifactUiModel.Type
 
-// ── Protocol ──
+// ── RPC ──
 
-export const ArtifactProtocol = {
-  Save: ExtensionMessage.reply(
-    ARTIFACTS_EXTENSION_ID,
-    "Save",
-    {
+export const ArtifactRpc = {
+  Save: request({
+    id: "artifact.save",
+    extensionId: ARTIFACTS_EXTENSION_ID,
+    intent: "write",
+    input: Schema.Struct({
       label: Schema.String,
       sourceTool: Schema.String,
       content: Schema.String,
       path: Schema.optional(Schema.String),
       metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
       branchId: Schema.optional(BranchId),
-    },
-    Artifact,
-  ),
-  Read: ExtensionMessage.reply(
-    ARTIFACTS_EXTENSION_ID,
-    "Read",
-    {
-      query: ReadQuery,
-    },
-    Schema.NullOr(Artifact),
-  ),
-  Update: ExtensionMessage.reply(
-    ARTIFACTS_EXTENSION_ID,
-    "Update",
-    {
+    }),
+    output: Artifact,
+    execute: Effect.fn("ArtifactRpc.Save")(function* (input, ctx) {
+      const artifacts = yield* ArtifactsWrite
+      return yield* artifacts.save(ctx.sessionId, ctx.branchId, input)
+    }),
+  }),
+  Read: request({
+    id: "artifact.read",
+    extensionId: ARTIFACTS_EXTENSION_ID,
+    intent: "read",
+    input: Schema.Struct({ query: ReadQuery }),
+    output: Schema.NullOr(Artifact),
+    execute: Effect.fn("ArtifactRpc.Read")(function* ({ query }, ctx) {
+      const artifacts = yield* ArtifactsRead
+      return yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
+    }),
+  }),
+  Update: request({
+    id: "artifact.update",
+    extensionId: ARTIFACTS_EXTENSION_ID,
+    intent: "write",
+    input: Schema.Struct({
       id: ArtifactId,
       patch: Schema.optional(ContentPatch),
       metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
       status: Schema.optional(ArtifactStatus),
       label: Schema.optional(Schema.String),
-    },
-    Schema.NullOr(Artifact),
-  ),
-  Clear: ExtensionMessage.reply(
-    ARTIFACTS_EXTENSION_ID,
-    "Clear",
-    {
-      id: ArtifactId,
-    },
-    Schema.Void,
-  ),
-  List: ExtensionMessage.reply(
-    ARTIFACTS_EXTENSION_ID,
-    "List",
-    {
-      branchId: Schema.optional(BranchId),
-    },
-    Schema.Array(Artifact),
-  ),
+    }),
+    output: Schema.NullOr(Artifact),
+    execute: Effect.fn("ArtifactRpc.Update")(function* (input, ctx) {
+      const artifacts = yield* ArtifactsWrite
+      return yield* artifacts.update(ctx.sessionId, ctx.branchId, input)
+    }),
+  }),
+  Clear: request({
+    id: "artifact.clear",
+    extensionId: ARTIFACTS_EXTENSION_ID,
+    intent: "write",
+    input: Schema.Struct({ id: ArtifactId }),
+    output: Schema.Void,
+    execute: Effect.fn("ArtifactRpc.Clear")(function* ({ id }, ctx) {
+      const artifacts = yield* ArtifactsWrite
+      yield* artifacts.clear(ctx.sessionId, ctx.branchId, id)
+    }),
+  }),
+  List: request({
+    id: "artifact.list",
+    extensionId: ARTIFACTS_EXTENSION_ID,
+    intent: "read",
+    input: Schema.Struct({ branchId: Schema.optional(BranchId) }),
+    output: Schema.Array(Artifact),
+    execute: Effect.fn("ArtifactRpc.List")(function* (_input, ctx) {
+      const artifacts = yield* ArtifactsRead
+      return yield* artifacts.list(ctx.sessionId, ctx.branchId)
+    }),
+  }),
 }

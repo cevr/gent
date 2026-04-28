@@ -1,6 +1,6 @@
 /**
  * Integration tests verifying that plan/audit/review tools
- * persist artifacts via ArtifactProtocol.Save.
+ * persist artifacts via ArtifactRpc.Save.
  */
 
 import { describe, it, expect } from "effect-bun-test"
@@ -17,8 +17,9 @@ import { Agents } from "@gent/extensions/all-agents"
 import type { AgentName } from "@gent/core/domain/agent"
 import { ArtifactId, SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
+import { ref } from "@gent/core/extensions/api"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
-import { ARTIFACTS_EXTENSION_ID } from "@gent/extensions/artifacts-protocol"
+import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
@@ -28,11 +29,10 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 
 // ── Spy helpers ──
 
-interface AskCall {
+interface RequestCall {
   extensionId: string
-  tag: string
-  message: Record<string, unknown>
-  branchId?: string
+  capabilityId: string
+  input: Record<string, unknown>
 }
 
 const fakeArtifact = (sourceTool: string): Artifact => ({
@@ -45,18 +45,22 @@ const fakeArtifact = (sourceTool: string): Artifact => ({
   updatedAt: Date.now(),
 })
 
-const createAskSpy = () => {
-  const calls: AskCall[] = []
-  const ask = (message: { extensionId: string; _tag: string } & Record<string, unknown>) => {
+const ArtifactSaveRef = ref(ArtifactRpc.Save)
+
+const createRequestSpy = () => {
+  const calls: RequestCall[] = []
+  const request = (
+    capability: typeof ArtifactSaveRef,
+    input: Record<string, unknown>,
+  ): Effect.Effect<Artifact> => {
     calls.push({
-      extensionId: message.extensionId,
-      tag: message["_tag"],
-      message,
-      branchId: message["branchId"] as string | undefined,
+      extensionId: capability.extensionId,
+      capabilityId: capability.capabilityId,
+      input,
     })
-    return Effect.succeed(fakeArtifact(message["sourceTool"] as string))
+    return Effect.succeed(fakeArtifact(input["sourceTool"] as string))
   }
-  return { calls, ask }
+  return { calls, request }
 }
 
 // ── Shared agent run stub ──
@@ -95,12 +99,12 @@ const runtimePlatformLayer = RuntimePlatform.Test({
 
 describe("PlanTool artifact persistence", () => {
   it.live("saves artifact on approved plan (decision=yes)", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -118,24 +122,24 @@ describe("PlanTool artifact persistence", () => {
       PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(1)
-          expect(saves[0]!.message["sourceTool"]).toBe("plan")
-          expect(saves[0]!.message["label"]).toContain("Plan:")
-          expect(saves[0]!.branchId).toBe("test-branch")
+          expect(saves[0]!.input["sourceTool"]).toBe("plan")
+          expect(saves[0]!.input["label"]).toContain("Plan:")
+          expect(saves[0]!.input["branchId"]).toBe("test-branch")
         }),
       ),
     )
   })
 
   it.live("saves artifact on edited plan (decision=edit)", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -158,22 +162,22 @@ describe("PlanTool artifact persistence", () => {
       PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(1)
-          expect(saves[0]!.message["content"]).toBe("edited plan content")
+          expect(saves[0]!.input["content"]).toBe("edited plan content")
         }),
       ),
     )
   })
 
   it.live("does NOT save artifact on rejected plan (decision=no)", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -191,7 +195,7 @@ describe("PlanTool artifact persistence", () => {
       PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(0)
         }),
@@ -200,12 +204,12 @@ describe("PlanTool artifact persistence", () => {
   })
 
   it.live("fix mode saves artifact after execution", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -217,10 +221,10 @@ describe("PlanTool artifact persistence", () => {
       PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(1)
-          expect(saves[0]!.message["sourceTool"]).toBe("plan")
+          expect(saves[0]!.input["sourceTool"]).toBe("plan")
         }),
       ),
     )
@@ -229,12 +233,12 @@ describe("PlanTool artifact persistence", () => {
 
 describe("AuditTool artifact persistence", () => {
   it.live("saves audit findings as artifact after synthesis", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -256,12 +260,12 @@ describe("AuditTool artifact persistence", () => {
       AuditTool.effect({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(1)
-          expect(saves[0]!.message["sourceTool"]).toBe("audit")
-          expect(saves[0]!.message["label"]).toContain("Audit:")
-          expect(saves[0]!.message["metadata"]).toBeDefined()
+          expect(saves[0]!.input["sourceTool"]).toBe("audit")
+          expect(saves[0]!.input["label"]).toContain("Audit:")
+          expect(saves[0]!.input["metadata"]).toBeDefined()
         }),
       ),
     )
@@ -270,7 +274,7 @@ describe("AuditTool artifact persistence", () => {
 
 describe("ReviewTool artifact persistence", () => {
   it.live("saves review comments as artifact after synthesis", () => {
-    const spy = createAskSpy()
+    const spy = createRequestSpy()
     const reviewJson = JSON.stringify([
       {
         file: "src/auth.ts",
@@ -284,8 +288,8 @@ describe("ReviewTool artifact persistence", () => {
     const ctx = testToolContext({
       extension: {
         send: () => Effect.die("send not wired"),
-        ask: spy.ask as never,
-        request: () => Effect.die("request not wired"),
+        request: spy.request as never,
+        ask: () => Effect.die("ask not wired"),
       },
       agent: {
         ...agentLookup,
@@ -297,12 +301,12 @@ describe("ReviewTool artifact persistence", () => {
       ReviewTool.effect({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
+            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
           )
           expect(saves.length).toBe(1)
-          expect(saves[0]!.message["sourceTool"]).toBe("review")
-          expect(saves[0]!.message["label"]).toContain("Review:")
-          expect(saves[0]!.message["metadata"]).toBeDefined()
+          expect(saves[0]!.input["sourceTool"]).toBe("review")
+          expect(saves[0]!.input["label"]).toContain("Review:")
+          expect(saves[0]!.input["metadata"]).toBeDefined()
         }),
         Effect.provide(runtimePlatformLayer),
       ),

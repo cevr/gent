@@ -1,49 +1,124 @@
-import { describe, it, expect } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
-import type { Artifact } from "@gent/extensions/artifacts-protocol"
-import { ensureStorageParents } from "@gent/core/test-utils"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
-import { e2ePreset } from "../helpers/test-preset.js"
+import { ref } from "@gent/core/extensions/api"
+import { ArtifactId, BranchId, type SessionId } from "@gent/core/domain/ids"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import {
-  ActorRouter,
-  type ActorRouterService,
-} from "../../../src/runtime/extensions/resource-host/actor-router"
-import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
+import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
+import { ArtifactsExtension } from "@gent/extensions/artifacts"
+import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol"
+import { setupExtension } from "../../../src/runtime/extensions/loader"
+import { e2ePreset } from "../helpers/test-preset.js"
 
-const sessionId = SessionId.make("art-test-session")
-const branchId = BranchId.make("art-test-branch")
+const forgedBranchId = BranchId.make("art-test-branch")
 
-const withRuntime = (
-  fn: (runtime: ActorRouterService) => Effect.Effect<void, unknown, ActorRouter>,
+const setupArtifactsExt = Effect.provide(
+  setupExtension(
+    { extension: ArtifactsExtension, scope: "builtin", sourcePath: "builtin" },
+    "/test/cwd",
+    "/test/home",
+  ),
+  BunServices.layer,
+)
+
+const SaveRef = ref(ArtifactRpc.Save)
+const ReadRef = ref(ArtifactRpc.Read)
+const UpdateRef = ref(ArtifactRpc.Update)
+const ClearRef = ref(ArtifactRpc.Clear)
+const ListRef = ref(ArtifactRpc.List)
+
+type ArtifactCapabilityRef =
+  | typeof SaveRef
+  | typeof ReadRef
+  | typeof UpdateRef
+  | typeof ClearRef
+  | typeof ListRef
+
+const withArtifactsClient = <A>(
+  fn: (ctx: {
+    readonly branchId: BranchId
+    readonly request: (
+      capability: ArtifactCapabilityRef,
+      input: unknown,
+    ) => Effect.Effect<unknown, unknown>
+    readonly requestAtBranch: (
+      branchId: BranchId,
+      capability: ArtifactCapabilityRef,
+      input: unknown,
+    ) => Effect.Effect<unknown, unknown>
+    readonly requestInSession: (
+      sessionId: SessionId,
+      branchId: BranchId,
+      capability: ArtifactCapabilityRef,
+      input: unknown,
+    ) => Effect.Effect<unknown, unknown>
+    readonly createBranch: (name: string) => Effect.Effect<BranchId, unknown>
+    readonly createSession: () => Effect.Effect<
+      { readonly sessionId: SessionId; readonly branchId: BranchId },
+      unknown
+    >
+  }) => Effect.Effect<A, unknown>,
 ) =>
-  Effect.gen(function* () {
-    const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-    const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
-
-    yield* Effect.gen(function* () {
-      const runtime = yield* ActorRouter
-      yield* ensureStorageParents({ sessionId, branchId })
-      yield* fn(runtime)
-    }).pipe(Effect.provide(e2eLayer))
-  }).pipe(Effect.timeout("4 seconds"))
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ext = yield* setupArtifactsExt
+      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+      const {
+        client,
+        sessionId,
+        branchId: transportBranchId,
+      } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensions: [ext],
+      })
+      return yield* fn({
+        branchId: transportBranchId,
+        request: (capability, input) =>
+          client.extension.request({
+            sessionId,
+            branchId: transportBranchId,
+            extensionId: capability.extensionId,
+            capabilityId: capability.capabilityId,
+            intent: capability.intent,
+            input,
+          }) as Effect.Effect<unknown, unknown>,
+        requestAtBranch: (branchId, capability, input) =>
+          client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: capability.extensionId,
+            capabilityId: capability.capabilityId,
+            intent: capability.intent,
+            input,
+          }) as Effect.Effect<unknown, unknown>,
+        requestInSession: (sessionId, branchId, capability, input) =>
+          client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: capability.extensionId,
+            capabilityId: capability.capabilityId,
+            intent: capability.intent,
+            input,
+          }) as Effect.Effect<unknown, unknown>,
+        createBranch: (name) =>
+          client.branch.create({ sessionId, name }).pipe(Effect.map((result) => result.branchId)),
+        createSession: () => client.session.create({ cwd: "/tmp" }),
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 
 describe("Artifacts extension", () => {
   it.live("Save creates an artifact and returns it", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const result = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Auth migration plan",
-            sourceTool: "plan",
-            content: "## Step 1\nDo the thing",
-            branchId,
-          }),
-          branchId,
-        )
+        const result = (yield* request(SaveRef, {
+          label: "Auth migration plan",
+          sourceTool: "plan",
+          content: "## Step 1\nDo the thing",
+          branchId: forgedBranchId,
+        })) as Artifact
         expect(result.label).toBe("Auth migration plan")
         expect(result.sourceTool).toBe("plan")
         expect(result.content).toBe("## Step 1\nDo the thing")
@@ -55,317 +130,249 @@ describe("Artifacts extension", () => {
   )
 
   it.live("Save upserts by sourceTool + branchId", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const first = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan v1",
-            sourceTool: "plan",
-            content: "original",
-            branchId,
-          }),
+        const first = (yield* request(SaveRef, {
+          label: "Plan v1",
+          sourceTool: "plan",
+          content: "original",
           branchId,
-        )
-        const second = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan v2",
-            sourceTool: "plan",
-            content: "updated",
-            branchId,
-          }),
+        })) as Artifact
+        const second = (yield* request(SaveRef, {
+          label: "Plan v2",
+          sourceTool: "plan",
+          content: "updated",
           branchId,
-        )
-        // Same ID — upserted, not duplicated
+        })) as Artifact
         expect(second.id).toBe(first.id)
         expect(second.label).toBe("Plan v2")
         expect(second.content).toBe("updated")
 
-        // List should have only 1 item
-        const list = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.List.make({ branchId }),
-          branchId,
-        )
-        expect(list.length).toBe(1)
+        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        expect(list).toHaveLength(1)
       }),
     ),
   )
 
   it.live("different sourceTools create separate artifacts", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan",
-            sourceTool: "plan",
-            content: "plan content",
-            branchId,
-          }),
+        yield* request(SaveRef, {
+          label: "Plan",
+          sourceTool: "plan",
+          content: "plan content",
           branchId,
-        )
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Audit",
-            sourceTool: "audit",
-            content: "audit content",
-            branchId,
-          }),
+        })
+        yield* request(SaveRef, {
+          label: "Audit",
+          sourceTool: "audit",
+          content: "audit content",
           branchId,
-        )
-        const list = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.List.make({ branchId }),
-          branchId,
-        )
-        expect(list.length).toBe(2)
+        })
+        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        expect(list).toHaveLength(2)
       }),
     ),
   )
 
   it.live("Read by id returns the artifact", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Test",
-            sourceTool: "test",
-            content: "hello",
-            branchId,
-          }),
+        const saved = (yield* request(SaveRef, {
+          label: "Test",
+          sourceTool: "test",
+          content: "hello",
           branchId,
-        )
-        const read = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Read.make({ query: { _tag: "ById" as const, id: saved.id } }),
-          branchId,
-        )
+        })) as Artifact
+        const read = (yield* request(ReadRef, {
+          query: { _tag: "ById" as const, id: saved.id },
+        })) as Artifact | null
         expect(read).not.toBeNull()
-        expect((read as Artifact).content).toBe("hello")
+        expect(read?.content).toBe("hello")
       }),
     ),
   )
 
   it.live("Read by sourceTool returns the artifact", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Test",
-            sourceTool: "review",
-            content: "findings",
-            branchId,
-          }),
+        yield* request(SaveRef, {
+          label: "Test",
+          sourceTool: "review",
+          content: "findings",
           branchId,
-        )
-        const read = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Read.make({
-            query: { _tag: "BySource" as const, sourceTool: "review", branchId },
-          }),
-          branchId,
-        )
+        })
+        const read = (yield* request(ReadRef, {
+          query: { _tag: "BySource" as const, sourceTool: "review", branchId },
+        })) as Artifact | null
         expect(read).not.toBeNull()
-        expect((read as Artifact).content).toBe("findings")
+        expect(read?.content).toBe("findings")
       }),
     ),
   )
 
-  it.live("Read by sourceTool falls back to session-wide artifact", () =>
-    withRuntime((runtime) =>
+  it.live("Read by sourceTool uses the validated transport branch", () =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        // Save a session-wide artifact (no branchId)
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Global plan",
-            sourceTool: "plan",
-            content: "global",
-          }),
-          branchId,
-        )
-        // Read from a specific branch — should fall back to the session-wide one
-        const read = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Read.make({
-            query: { _tag: "BySource" as const, sourceTool: "plan", branchId },
-          }),
-          branchId,
-        )
+        yield* request(SaveRef, {
+          label: "Branch plan",
+          sourceTool: "plan",
+          content: "branch",
+          branchId: forgedBranchId,
+        })
+        const read = (yield* request(ReadRef, {
+          query: { _tag: "BySource" as const, sourceTool: "plan", branchId: forgedBranchId },
+        })) as Artifact | null
         expect(read).not.toBeNull()
-        expect((read as Artifact).content).toBe("global")
+        expect(read?.branchId).toBe(branchId)
+        expect(read?.content).toBe("branch")
       }),
     ),
   )
 
   it.live("Read returns null for missing artifact", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request }) =>
       Effect.gen(function* () {
-        const read = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Read.make({
-            query: { _tag: "ById" as const, id: ArtifactId.make("nonexistent") },
-          }),
-          branchId,
-        )
+        const read = yield* request(ReadRef, {
+          query: { _tag: "ById" as const, id: ArtifactId.make("nonexistent") },
+        })
         expect(read).toBeNull()
       }),
     ),
   )
 
   it.live("Update patches content", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan",
-            sourceTool: "plan",
-            content: "- [ ] step 1\n- [ ] step 2",
-            branchId,
-          }),
+        const saved = (yield* request(SaveRef, {
+          label: "Plan",
+          sourceTool: "plan",
+          content: "- [ ] step 1\n- [ ] step 2",
           branchId,
-        )
-        const updated = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Update.make({
-            id: saved.id,
-            patch: { find: "- [ ] step 1", replace: "- [x] step 1" },
-          }),
-          branchId,
-        )
-        expect(updated).not.toBeNull()
-        expect((updated as Artifact).content).toBe("- [x] step 1\n- [ ] step 2")
+        })) as Artifact
+        const updated = (yield* request(UpdateRef, {
+          id: saved.id,
+          patch: { find: "- [ ] step 1", replace: "- [x] step 1" },
+        })) as Artifact | null
+        expect(updated?.content).toBe("- [x] step 1\n- [ ] step 2")
       }),
     ),
   )
 
   it.live("Update with replaceAll patches all occurrences", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan",
-            sourceTool: "plan",
-            content: "TODO: a\nTODO: b\nTODO: c",
-            branchId,
-          }),
+        const saved = (yield* request(SaveRef, {
+          label: "Plan",
+          sourceTool: "plan",
+          content: "TODO: a\nTODO: b\nTODO: c",
           branchId,
-        )
-        const updated = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Update.make({
-            id: saved.id,
-            patch: { find: "TODO", replace: "DONE", replaceAll: true },
-          }),
-          branchId,
-        )
-        expect(updated).not.toBeNull()
-        expect((updated as Artifact).content).toBe("DONE: a\nDONE: b\nDONE: c")
+        })) as Artifact
+        const updated = (yield* request(UpdateRef, {
+          id: saved.id,
+          patch: { find: "TODO", replace: "DONE", replaceAll: true },
+        })) as Artifact | null
+        expect(updated?.content).toBe("DONE: a\nDONE: b\nDONE: c")
       }),
     ),
   )
 
   it.live("Update changes status", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "Plan",
-            sourceTool: "plan",
-            content: "done",
-            branchId,
-          }),
+        const saved = (yield* request(SaveRef, {
+          label: "Plan",
+          sourceTool: "plan",
+          content: "done",
           branchId,
-        )
-        const updated = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Update.make({ id: saved.id, status: "resolved" }),
-          branchId,
-        )
-        expect((updated as Artifact).status).toBe("resolved")
+        })) as Artifact
+        const updated = (yield* request(UpdateRef, {
+          id: saved.id,
+          status: "resolved" as const,
+        })) as Artifact | null
+        expect(updated?.status).toBe("resolved")
       }),
     ),
   )
 
   it.live("Update returns null for missing artifact", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request }) =>
       Effect.gen(function* () {
-        const result = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Update.make({ id: ArtifactId.make("nonexistent") }),
-          branchId,
-        )
+        const result = yield* request(UpdateRef, { id: ArtifactId.make("nonexistent") })
         expect(result).toBeNull()
       }),
     ),
   )
 
   it.live("Clear removes an artifact", () =>
-    withRuntime((runtime) =>
+    withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({ label: "Temp", sourceTool: "test", content: "x", branchId }),
+        const saved = (yield* request(SaveRef, {
+          label: "Temp",
+          sourceTool: "test",
+          content: "x",
           branchId,
-        )
-        yield* runtime.execute(sessionId, ArtifactProtocol.Clear.make({ id: saved.id }), branchId)
-        const list = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.List.make({ branchId }),
-          branchId,
-        )
-        expect(list.length).toBe(0)
+        })) as Artifact
+        yield* request(ClearRef, { id: saved.id })
+        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        expect(list).toHaveLength(0)
       }),
     ),
   )
 
-  it.live("List filters by branchId", () =>
-    withRuntime((runtime) =>
+  it.live("List filters by validated transport branch", () =>
+    withArtifactsClient(({ request, requestAtBranch, createBranch, branchId }) =>
       Effect.gen(function* () {
-        const otherBranch = BranchId.make("other-branch")
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({ label: "A", sourceTool: "plan", content: "a", branchId }),
+        const otherBranch = yield* createBranch("other")
+        yield* request(SaveRef, { label: "A", sourceTool: "plan", content: "a", branchId })
+        yield* requestAtBranch(otherBranch, SaveRef, {
+          label: "B",
+          sourceTool: "plan",
+          content: "b",
           branchId,
-        )
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({
-            label: "B",
-            sourceTool: "plan",
-            content: "b",
-            branchId: otherBranch,
-          }),
-          branchId,
-        )
-        // Session-wide artifact (no branchId)
-        yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.Save.make({ label: "C", sourceTool: "audit", content: "c" }),
-          branchId,
-        )
+        })
+        yield* request(SaveRef, { label: "C", sourceTool: "audit", content: "c" })
 
-        const filtered = yield* runtime.execute(
-          sessionId,
-          ArtifactProtocol.List.make({ branchId }),
+        const filtered = (yield* request(ListRef, {
+          branchId: otherBranch,
+        })) as ReadonlyArray<Artifact>
+        expect(filtered).toHaveLength(2)
+        expect(filtered.map((artifact) => artifact.label).sort()).toEqual(["A", "C"])
+
+        const otherFiltered = (yield* requestAtBranch(otherBranch, ListRef, {
           branchId,
-        )
-        // Should include A (matches branch) and C (session-wide), but not B (different branch)
-        expect(filtered.length).toBe(2)
-        expect(filtered.map((a: Artifact) => a.label).sort()).toEqual(["A", "C"])
+        })) as ReadonlyArray<Artifact>
+        expect(otherFiltered).toHaveLength(1)
+        expect(otherFiltered[0]?.label).toBe("B")
       }),
     ),
   )
 
-  // TODO(c2): "prompt projection includes active artifacts for current branch" — removed.
-  // Rewrite via the artifact projection contribution / typed snapshot ask.
-  // The previous getUiSnapshots(...) path is gone in C2.
+  it.live("artifacts are isolated by session", () =>
+    withArtifactsClient(({ request, requestInSession, createSession }) =>
+      Effect.gen(function* () {
+        const second = yield* createSession()
+        yield* request(SaveRef, {
+          label: "First session",
+          sourceTool: "plan",
+          content: "first",
+        })
+        yield* requestInSession(second.sessionId, second.branchId, SaveRef, {
+          label: "Second session",
+          sourceTool: "plan",
+          content: "second",
+        })
+
+        const firstList = (yield* request(ListRef, {})) as ReadonlyArray<Artifact>
+        const secondList = (yield* requestInSession(
+          second.sessionId,
+          second.branchId,
+          ListRef,
+          {},
+        )) as ReadonlyArray<Artifact>
+        expect(firstList.map((artifact) => artifact.label)).toEqual(["First session"])
+        expect(secondList.map((artifact) => artifact.label)).toEqual(["Second session"])
+      }),
+    ),
+  )
 })

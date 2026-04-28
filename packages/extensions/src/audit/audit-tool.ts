@@ -3,6 +3,7 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
+  ref,
   tool,
   ToolNeeds,
   type AgentDefinition,
@@ -11,7 +12,7 @@ import {
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand } from "../workflow-helpers.js"
-import { ArtifactProtocol } from "../artifacts-protocol.js"
+import { ArtifactRpc } from "../artifacts-protocol.js"
 
 const AuditConcernSchema = Schema.Struct({
   name: Schema.String,
@@ -313,16 +314,13 @@ export const AuditTool = tool({
 
     // Persist as artifact for prompt projection
     yield* ctx.extension
-      .ask(
-        ArtifactProtocol.Save.make({
-          label: `Audit: ${report.findings.length} findings`,
-          sourceTool: "audit",
-          content: report.raw,
-          metadata: { findingCount: report.findings.length, paths },
-          branchId: ctx.branchId,
-        }),
-        ctx.branchId,
-      )
+      .request(ref(ArtifactRpc.Save), {
+        label: `Audit: ${report.findings.length} findings`,
+        sourceTool: "audit",
+        content: report.raw,
+        metadata: { findingCount: report.findings.length, paths },
+        branchId: ctx.branchId,
+      })
       .pipe(Effect.ignoreCause)
 
     if (mode === "report") {
