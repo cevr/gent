@@ -18,6 +18,7 @@
  * @module
  */
 import { Effect, Layer } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   AgentName,
   defineAgent,
@@ -39,13 +40,14 @@ import { live as claudeSdkLive } from "./claude-sdk.js"
 import { generateToolDescription } from "./mcp-codemode.js"
 
 // Module-scope singletons — created once at extension setup, shared across
-// agents and `externalDrivers` factory calls. The Claude Code manager
-// captures the SDK service shape directly (rather than yielding it
-// per-turn) so the executor's `executeTurn` Stream stays free of an
-// `R = ClaudeSdk` requirement.
+// agents and `externalDrivers` factory calls. Each manager captures the
+// platform services it needs at construction time (Claude SDK / spawner)
+// so per-turn `executeTurn` stays free of any service requirement and
+// matches the no-context Stream returned by `TurnExecutor`. Without this,
+// each turn would have to re-provide `BunServices.layer` at the leaf.
 let _sharedAcpManager: ReturnType<typeof createAcpSessionManager> | undefined
-const getAcpManager = () => {
-  if (_sharedAcpManager === undefined) _sharedAcpManager = createAcpSessionManager()
+const getAcpManager = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) => {
+  if (_sharedAcpManager === undefined) _sharedAcpManager = createAcpSessionManager(spawner)
   return _sharedAcpManager
 }
 
@@ -176,7 +178,8 @@ export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
   agents: [claudeCodeAgent, ...protocolAgents],
   projections: [CodemodePromptProjection],
-  externalDrivers: () => {
+  externalDrivers: ({ ctx }) => {
+    const acpManager = getAcpManager(ctx.spawner)
     const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
     const claudeCode = {
       id: claudeCodeId,
@@ -188,23 +191,25 @@ export const AcpAgentsExtension = defineExtension({
       const id = `acp-${name}`
       return {
         id,
-        executor: makeAcpTurnExecutor(id, config, getAcpManager()),
+        executor: makeAcpTurnExecutor(id, config, acpManager),
         toolSurface: "codemode" as const,
-        invalidate: () => getAcpManager().invalidateDriver(id),
+        invalidate: () => acpManager.invalidateDriver(id),
       }
     })
     return [claudeCode, ...protocolDrivers]
   },
   // Per-process lifecycle Resource: dispose both managers (ACP-protocol
-  // subprocesses and SDK sessions) at process-scope teardown.
+  // subprocesses and SDK sessions) at process-scope teardown. Each
+  // disposal is gated on the singleton having been initialised so we
+  // don't accidentally instantiate a manager just to tear it down.
   resources: () => [
     resource(
       defineResource({
         scope: "process",
         layer: Layer.empty,
         stop: Effect.gen(function* () {
-          yield* getAcpManager().disposeAll()
-          yield* getClaudeCodeManager().disposeAll
+          if (_sharedAcpManager !== undefined) yield* _sharedAcpManager.disposeAll()
+          if (_sharedClaudeCodeManager !== undefined) yield* _sharedClaudeCodeManager.disposeAll
         }),
       }),
     ),

@@ -182,7 +182,9 @@ export const makeAcpTurnExecutor = (
       // Promise-returning function. Adapter built in
       // `executor-boundary.ts` — the only Effect crossing the SDK edge
       // is `toolRunner.run(...)`, pinned by `makeAcpRunTool`. No generic
-      // Effect-runner is exposed.
+      // Effect-runner is exposed. `Effect.context<never>()` returns the
+      // full ambient context (the `<never>` is a static R-claim, not a
+      // runtime filter), so tool runs see the runtime's services.
       const services = yield* Effect.context<never>()
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         services,

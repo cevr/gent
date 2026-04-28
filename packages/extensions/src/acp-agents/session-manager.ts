@@ -14,9 +14,11 @@
  *
  * @module
  */
-import { BunServices } from "@effect/platform-bun"
-import { Duration, Effect, Exit, Scope } from "effect"
+import { Context, Duration, Effect, Exit, Scope } from "effect"
 import { ChildProcess } from "effect/unstable/process"
+// `ChildProcessSpawner` re-exported from `effect/unstable/process` is a
+// namespace — for the runtime tag value we need the deep module path.
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import { AcpError, makeAcpConnection, type AcpClosedError, type AcpConnection } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
@@ -64,7 +66,18 @@ const fingerprintSession = (
   })
 }
 
-export const createAcpSessionManager = (): AcpSessionManager => {
+/**
+ * Build a ChildProcessSpawner-providing context once, captured at
+ * extension setup time. Per-turn `getOrCreate` then provides the
+ * captured spawner to its inner spawn calls so its public Effect has
+ * no service requirement. `TurnExecutor.executeTurn` returns a Stream
+ * with no context channel, so pinning the spawner here keeps that
+ * contract honest without re-providing `BunServices.layer` per turn.
+ */
+export const createAcpSessionManager = (
+  spawner: ChildProcessSpawner["Service"],
+): AcpSessionManager => {
+  const spawnerContext = Context.make(ChildProcessSpawner, spawner)
   const sessions = new Map<string, AcpProcess>()
   const byDriver = new Map<string, Set<string>>()
 
@@ -126,8 +139,6 @@ export const createAcpSessionManager = (): AcpSessionManager => {
             Effect.fail(new AcpError({ message: `failed to spawn ACP agent: ${e.message}` })),
           ),
           Effect.tapError(() => Scope.close(procScope, Exit.void)),
-          // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
-          Effect.provide(BunServices.layer),
         )
 
       const killProc = handle
@@ -207,7 +218,7 @@ export const createAcpSessionManager = (): AcpSessionManager => {
       byDriver.set(key.driverId, driverSet)
 
       return { conn, acpSessionId: sessionResponse.sessionId, created: true }
-    })
+    }).pipe(Effect.provide(spawnerContext))
 
   const invalidate = (key: ExternalSessionKey): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -224,17 +235,27 @@ export const createAcpSessionManager = (): AcpSessionManager => {
       if (keys === undefined) return
       const keysArr = [...keys]
       byDriver.delete(driverId)
-      for (const k of keysArr) {
-        const entry = sessions.get(k)
-        if (entry !== undefined) yield* tearDown(k, entry).pipe(Effect.ignore)
-      }
+      // Tear down in parallel — each kill may wait up to ACP_KILL_GRACE_MS
+      // for forceKillAfter, so N stuck processes serialize to N × grace.
+      yield* Effect.forEach(
+        keysArr,
+        (k) => {
+          const entry = sessions.get(k)
+          return entry === undefined ? Effect.void : tearDown(k, entry).pipe(Effect.ignore)
+        },
+        { concurrency: "unbounded", discard: true },
+      )
     })
 
   const disposeAll = (): Effect.Effect<void> =>
     Effect.gen(function* () {
-      for (const [k, entry] of sessions) {
-        yield* tearDown(k, entry)
-      }
+      // Same parallelism rationale as invalidateDriver — server shutdown
+      // shouldn't be N × ACP_KILL_GRACE_MS.
+      const entries = [...sessions.entries()]
+      yield* Effect.forEach(entries, ([k, entry]) => tearDown(k, entry).pipe(Effect.ignore), {
+        concurrency: "unbounded",
+        discard: true,
+      })
       byDriver.clear()
     })
 
