@@ -1,19 +1,22 @@
 /**
  * Skills RPC acceptance test — exercises SkillsExtension through the full
- * RPC path with per-request scopes, matching production behavior.
- *
- * Unlike skills-actor.test.ts (which bypasses RPC), this test goes through
- * Gent.test → RpcServer → extension.ask → ActorRouter.
+ * request(...) path with per-request scopes, matching production behavior.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
+import { ref } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
+import { compileExtensionReactions } from "../../../src/runtime/extensions/extension-reactions"
+import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
+import { AgentName } from "@gent/core/domain/agent"
+import { Agents } from "@gent/extensions/all-agents"
 import { SkillsExtension } from "@gent/extensions/skills"
-import { SkillsProtocol } from "@gent/extensions/skills/protocol"
+import { SkillsRpc } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { defineResource } from "@gent/core/domain/contribution"
 import { Gent } from "@gent/sdk"
@@ -36,6 +39,9 @@ const testSkills = [
     level: "local",
   }),
 ]
+
+const sessionId = SessionId.make("skills-test-session")
+const branchId = BranchId.make("skills-test-branch")
 
 const setupSkillsExtension = Effect.provide(
   Effect.gen(function* () {
@@ -64,8 +70,35 @@ const setupSkillsExtension = Effect.provide(
 )
 
 describe("SkillsExtension via RPC", () => {
+  it.live("turn projection contributes loaded skills to the prompt", () =>
+    Effect.gen(function* () {
+      const ext = yield* setupSkillsExtension
+      const compiled = compileExtensionReactions([ext])
+
+      const result = yield* compiled
+        .resolveTurnProjection({
+          sessionId,
+          branchId,
+          cwd: "/test/cwd",
+          home: "/test/home",
+          turn: {
+            sessionId,
+            branchId,
+            agent: Agents["cowork"]!,
+            allTools: [],
+            agentName: AgentName.make("cowork"),
+          },
+        })
+        .pipe(Effect.provide(Skills.Test(testSkills)))
+
+      const section = result.promptSections.find((s) => s.id === "skills")
+      expect(section?.content).toContain("effect-v4")
+      expect(section?.content).toContain("react")
+    }).pipe(Effect.provide(ActorEngine.Live)),
+  )
+
   it.live(
-    "ListSkills via RPC returns skill entries",
+    "ListSkills via request RPC returns skill entries",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -77,10 +110,13 @@ describe("SkillsExtension via RPC", () => {
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          const reply = (yield* client.extension.ask({
+          const reply = (yield* client.extension.request({
             sessionId,
+            extensionId: ref(SkillsRpc.ListSkills).extensionId,
+            capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
+            intent: ref(SkillsRpc.ListSkills).intent,
+            input: {},
             branchId,
-            message: SkillsProtocol.ListSkills.make(),
           })) as ReadonlyArray<{ name: string; description: string; level: string }>
 
           expect(Array.isArray(reply)).toBe(true)
@@ -92,7 +128,7 @@ describe("SkillsExtension via RPC", () => {
   )
 
   it.live(
-    "GetSkillContent via RPC returns single skill",
+    "GetSkillContent via request RPC returns single skill",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -104,10 +140,13 @@ describe("SkillsExtension via RPC", () => {
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          const reply = (yield* client.extension.ask({
+          const reply = (yield* client.extension.request({
             sessionId,
+            extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
+            capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
+            intent: ref(SkillsRpc.GetSkillContent).intent,
+            input: { name: "effect-v4" },
             branchId,
-            message: SkillsProtocol.GetSkillContent.make({ name: "effect-v4" }),
           })) as { name: string; content: string } | null
 
           expect(reply).not.toBeNull()
@@ -119,7 +158,7 @@ describe("SkillsExtension via RPC", () => {
   )
 
   it.live(
-    "GetSkillContent via RPC returns null for unknown skill",
+    "GetSkillContent via request RPC returns null for unknown skill",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -131,10 +170,13 @@ describe("SkillsExtension via RPC", () => {
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          const reply = yield* client.extension.ask({
+          const reply = yield* client.extension.request({
             sessionId,
+            extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
+            capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
+            intent: ref(SkillsRpc.GetSkillContent).intent,
+            input: { name: "nonexistent" },
             branchId,
-            message: SkillsProtocol.GetSkillContent.make({ name: "nonexistent" }),
           })
 
           expect(reply).toBeNull()

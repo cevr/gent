@@ -15,6 +15,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { ExtensionId, ref, request } from "@gent/core/extensions/api"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { type AutocompleteItem, autocompleteContribution } from "../src/extensions/client-facets.js"
 import {
@@ -23,6 +24,7 @@ import {
   makeClientTransportLayer,
   NoActiveSessionError,
   askExtension,
+  requestExtension,
 } from "../src/extensions/client-transport"
 import {
   makeClientComposerLayer,
@@ -41,14 +43,27 @@ const ListThings = ExtensionMessage.reply(
   Schema.Array(Schema.String),
 )
 
+const ListThingsRpc = request({
+  id: "list-things",
+  extensionId: ExtensionId.make("@test/autocomplete"),
+  intent: "read",
+  input: Schema.Struct({}),
+  output: Schema.Array(Schema.String),
+  execute: () => Effect.succeed([]),
+})
+
 const makeFakeTransport = (
   opts: {
     readonly currentSession?: () => { sessionId: SessionId; branchId: BranchId } | undefined
     readonly askReply?: unknown
+    readonly requestReply?: unknown
   } = {},
 ): ClientTransportShape => {
   const extension = {
     ask: ((): Effect.Effect<unknown, unknown> => Effect.succeed(opts.askReply ?? [])) as (
+      ...args: unknown[]
+    ) => Effect.Effect<unknown, unknown>,
+    request: ((): Effect.Effect<unknown, unknown> => Effect.succeed(opts.requestReply ?? [])) as (
       ...args: unknown[]
     ) => Effect.Effect<unknown, unknown>,
   }
@@ -57,7 +72,8 @@ const makeFakeTransport = (
     extension,
   } as unknown as GentNamespacedClient
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  const fakeRuntime = {} as GentRuntime
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+  const fakeRuntime = { run: Effect.runPromise } as unknown as GentRuntime
   return {
     client: fakeClient,
     runtime: fakeRuntime,
@@ -156,6 +172,38 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
     )
     expect(result).toEqual([])
     await runtime.dispose()
+  })
+
+  test("requestExtension dispatches extension.request through the transport runtime", () => {
+    const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
+    const runtime = makeTestRuntime(transport)
+
+    return runtime.runPromise(requestExtension(ref(ListThingsRpc), {})).then((result) => {
+      expect(result).toEqual(["effect-v4", "react"])
+      return runtime.dispose()
+    })
+  })
+
+  test("popup adapter pattern: requestExtension failure normalizes to []", () => {
+    const transport = makeFakeTransport({ currentSession: () => undefined })
+    const runtime = makeTestRuntime(transport)
+
+    const contribution = autocompleteContribution({
+      prefix: "$",
+      title: "Test",
+      items: (_filter: string) =>
+        Effect.gen(function* () {
+          const reply = yield* requestExtension(ref(ListThingsRpc), {})
+          return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
+        }),
+    })
+
+    return runAutocompleteItems(contribution, "filter", runtime)
+      .catch(() => [] as readonly AutocompleteItem[])
+      .then((result) => {
+        expect(result).toEqual([])
+        return runtime.dispose()
+      })
   })
 
   test("NoActiveSessionError is a Schema.TaggedError instance", () => {
