@@ -9,17 +9,17 @@
  */
 
 import { Effect, Schema } from "effect"
-import { tool, type ToolContext } from "@gent/core/extensions/api"
+import { ref, tool, type ToolContext } from "@gent/core/extensions/api"
 import { type ExecutorMcpToolResult, type ResumeAction, ExecutorMcpError } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
-import { ExecutorProtocol } from "./protocol.js"
+import { ExecutorRpc } from "./protocol.js"
 
 // ── Helpers ──
 
 const requireReadyBaseUrl = (ctx: ToolContext, phase: "execute" | "resume") =>
   Effect.gen(function* () {
     const snapshot = yield* ctx.extension
-      .ask(ExecutorProtocol.GetSnapshot.make(), ctx.branchId)
+      .request(ref(ExecutorRpc.GetSnapshot), {})
       .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
     if (
       snapshot === undefined ||

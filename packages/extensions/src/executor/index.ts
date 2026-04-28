@@ -2,15 +2,16 @@
  * @gent/executor extension — sandboxed TypeScript execution via Executor.
  */
 
-import { Effect, Layer, Schema } from "effect"
-import { defineExtension, defineResource, request } from "@gent/core/extensions/api"
+import { Layer } from "effect"
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 import { executorActor } from "./actor.js"
 import { ExecutorConnectionRunner, ExecutorConnectionRunnerLayer } from "./connection-runner.js"
 import { ExecuteTool, ResumeTool } from "./tools.js"
-import { ExecutorProtocol } from "./protocol.js"
+import { ExecutorRpc } from "./protocol.js"
+import { ExecutorControllerLive } from "./controller.js"
 
 export { ExecutorUiModel } from "./actor.js"
 export { EXECUTOR_EXTENSION_ID } from "./domain.js"
@@ -18,37 +19,8 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   tools: [ExecuteTool, ResumeTool],
-  rpc: [
-    request({
-      id: "executor-start",
-      extensionId: EXECUTOR_EXTENSION_ID,
-      intent: "write",
-      slash: {
-        name: "Executor: Start",
-        description: "Connect to the configured Executor endpoint.",
-      },
-      description: "Connect to the configured Executor endpoint.",
-      input: Schema.String,
-      output: Schema.Void,
-      execute: (_args, extCtx) =>
-        extCtx.extension
-          .send(ExecutorProtocol.Connect.make({ cwd: extCtx.cwd }))
-          .pipe(Effect.orDie),
-    }),
-    request({
-      id: "executor-stop",
-      extensionId: EXECUTOR_EXTENSION_ID,
-      intent: "write",
-      slash: { name: "Executor: Stop", description: "Disconnect from the Executor sidecar." },
-      description: "Disconnect from the Executor sidecar.",
-      input: Schema.String,
-      output: Schema.Void,
-      execute: (_args, extCtx) =>
-        extCtx.extension.send(ExecutorProtocol.Disconnect.make()).pipe(Effect.orDie),
-    }),
-  ],
+  rpc: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
   actors: [executorActor],
-  protocols: ExecutorProtocol,
   // Resource carries the layer for ExecutorSidecar/McpBridge plus the
   // ExecutorConnectionRunner. The runner observes the actor's state and
   // drives the sidecar connection on entry to `Connecting` (the W10-1c
@@ -66,6 +38,10 @@ export const ExecutorExtension = defineExtension({
       layer: ExecutorConnectionRunnerLayer(ctx.cwd).pipe(
         Layer.provide(Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)),
       ),
+    }),
+    defineResource({
+      scope: "process",
+      layer: ExecutorControllerLive,
     }),
     defineResource({
       scope: "process",

@@ -44,9 +44,9 @@ export type ExecutorState = Schema.Schema.Type<typeof ExecutorState>
 
 // ── Messages ──
 //
-// `_tag` strings are shared with `ExecutorProtocol.*` ExtensionMessage
-// envelopes so the actor-route fallback in ActorRouter (W10-1b.0) can
-// forward envelopes directly into the actor mailbox.
+// The public transport now enters through `ExecutorRpc`; these messages
+// remain the private actor mailbox language used by the controller and
+// connection runner.
 
 export const ExecutorMsg = TaggedEnumClass("ExecutorMsg", {
   Connect: { cwd: Schema.String },
@@ -76,7 +76,7 @@ export type ExecutorUiModel = typeof ExecutorUiModel.Type
 
 // ── Snapshot projection ──
 
-const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
+export const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
   switch (state._tag) {
     case "Idle":
       return { status: "idle" }

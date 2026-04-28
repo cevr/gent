@@ -6,14 +6,13 @@
  * `ExecutorConnectionRunner` (Option G). Connection state is volatile
  * per process — the actor has no persistence — so the old "state
  * persists via durability" test is gone; cross-extension Receptionist
- * discovery is exercised end-to-end here via the snapshot reply through
- * `ActorRouter.execute(ExecutorProtocol.GetSnapshot)`, which routes to
- * the actor mailbox.
+ * discovery is exercised end-to-end here via typed Executor RPC/controller
+ * services, while the actor remains the source of truth for connection state.
  */
 
 import { describe, test, expect } from "bun:test"
 import { it } from "effect-bun-test"
-import { Deferred, Effect, Layer, Schema } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { ensureStorageParents } from "@gent/core/test-utils"
@@ -21,8 +20,6 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Provider } from "@gent/core/providers/provider"
 import { Gent } from "@gent/sdk"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { request } from "@gent/core/extensions/api"
 import { executorActor } from "@gent/extensions/executor/actor"
 import {
   type ExecutorMcpToolResult,
@@ -32,16 +29,18 @@ import {
 } from "@gent/extensions/executor/domain"
 import { ExecutorMcpBridge } from "@gent/extensions/executor/mcp-bridge"
 import { ExecutorSidecar } from "@gent/extensions/executor/sidecar"
-import { ExecutorProtocol, type ExecutorSnapshotReply } from "@gent/extensions/executor/protocol"
+import { ExecutorRpc, type ExecutorSnapshotReply } from "@gent/extensions/executor/protocol"
+import {
+  ExecutorControllerLive,
+  ExecutorRead,
+  ExecutorWrite,
+} from "@gent/extensions/executor/controller"
 import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
 import {
   ExecutorConnectionRunner,
   ExecutorConnectionRunnerLayer,
 } from "@gent/extensions/executor/connection-runner"
-import {
-  ActorRouter,
-  type ActorRouterService,
-} from "../../src/runtime/extensions/resource-host/actor-router"
+import { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
@@ -73,7 +72,7 @@ const makeToolCtx = (snapshot: ExecutorSnapshotReply | undefined) =>
     extension: {
       send: () => Effect.void,
       ask: () => Effect.succeed(snapshot as never),
-      request: () => Effect.die("not wired"),
+      request: () => Effect.succeed(snapshot as never),
     },
   })
 
@@ -98,9 +97,6 @@ const waitingResult: ExecutorMcpToolResult = {
 
 // ── Actor lifecycle helpers ──
 
-const sessionId = SessionId.make("test-session")
-const branchId = BranchId.make("test-branch")
-
 const mockEndpoint = {
   mode: "local" as const,
   baseUrl: "http://127.0.0.1:4788",
@@ -116,7 +112,6 @@ const mockInspection = {
 /**
  * Build a `LoadedExtension` carrying:
  *   - `actors: [executorActor]` — Behavior spawned by ActorHost.
- *   - `protocols: ExecutorProtocol` — registered for actor-route fallback.
  *   - `resources` — sidecar+bridge layer for the tools, plus the
  *     ExecutorConnectionRunner layer so connection work fires on entry
  *     to `Connecting`.
@@ -154,39 +149,13 @@ const makeExecutorExtension = (overrides?: {
     scope: "builtin",
     sourcePath: "builtin",
     contributions: {
-      rpc: [
-        request({
-          id: "executor-start",
-          extensionId: EXECUTOR_EXTENSION_ID,
-          intent: "write",
-          slash: {
-            name: "Executor: Start",
-            description: "Connect to the configured Executor endpoint.",
-          },
-          input: Schema.String,
-          output: Schema.Void,
-          execute: (_args, extCtx) =>
-            extCtx.extension
-              .send(ExecutorProtocol.Connect.make({ cwd: extCtx.cwd }))
-              .pipe(Effect.orDie),
-        }),
-        request({
-          id: "executor-stop",
-          extensionId: EXECUTOR_EXTENSION_ID,
-          intent: "write",
-          slash: {
-            name: "Executor: Stop",
-            description: "Disconnect from the Executor sidecar.",
-          },
-          input: Schema.String,
-          output: Schema.Void,
-          execute: (_args, extCtx) =>
-            extCtx.extension.send(ExecutorProtocol.Disconnect.make()).pipe(Effect.orDie),
-        }),
-      ],
+      rpc: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
       actors: [executorActor],
-      protocols: ExecutorProtocol,
       resources: [
+        defineResource({
+          scope: "process",
+          layer: ExecutorControllerLive,
+        }),
         defineResource({
           tag: ExecutorConnectionRunner,
           scope: "process",
@@ -272,22 +241,25 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl)
 }
 
-const waitForExecutorStatus = (
-  runtime: ActorRouterService,
-  status: ExecutorSnapshotReply["status"],
-  targetSessionId: SessionId = sessionId,
-  targetBranchId: BranchId = branchId,
-) =>
-  waitFor(
-    runtime
-      .execute(targetSessionId, ExecutorProtocol.GetSnapshot.make(), targetBranchId)
-      .pipe(
-        Effect.catchEager(() => Effect.succeed(undefined as ExecutorSnapshotReply | undefined)),
-      ),
-    (snap) => (snap as ExecutorSnapshotReply | undefined)?.status === status,
-    3_000,
-    `executor status = ${status}`,
-  ).pipe(Effect.catchEager(() => Effect.succeed(undefined as never)))
+const executorSnapshot = Effect.gen(function* () {
+  const executor = yield* ExecutorRead
+  return yield* executor.snapshot()
+})
+
+const waitForExecutorStatus = (status: ExecutorSnapshotReply["status"]) =>
+  Effect.gen(function* () {
+    const executor = yield* ExecutorRead
+    return yield* waitFor(
+      executor
+        .snapshot()
+        .pipe(
+          Effect.catchEager(() => Effect.succeed(undefined as ExecutorSnapshotReply | undefined)),
+        ),
+      (snap) => snap?.status === status,
+      3_000,
+      `executor status = ${status}`,
+    ).pipe(Effect.catchEager(() => Effect.succeed(undefined as never)))
+  })
 
 // ── Tool tests ──
 
@@ -428,10 +400,9 @@ describe("Executor tools", () => {
 //
 // The runner observes the actor's state via `engine.subscribeState` and
 // drives the sidecar connection on entry to `Connecting`. Snapshot reads
-// route through `ActorRouter.execute(ExecutorProtocol.GetSnapshot)` —
-// the actor-route fallback (W10-1b.0) maps the envelope's `_tag` to the
-// `ExecutorMsg.GetSnapshot` mailbox via the registered `ExecutorService`
-// key, exercising end-to-end cross-extension Receptionist discovery.
+// route through `ExecutorRead.snapshot()` and `ExecutorWrite` commands,
+// exercising end-to-end cross-extension Receptionist discovery without
+// the retired actor-route protocol shim.
 
 describe("Executor actor lifecycle", () => {
   it.live(
@@ -440,15 +411,9 @@ describe("Executor actor lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          yield* waitForExecutorStatus("ready")
 
-          yield* waitForExecutorStatus(runtime, "ready")
-
-          const reply = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const reply = yield* executorSnapshot
           expect(reply.status).toBe("ready")
           expect(reply.baseUrl).toBe("http://127.0.0.1:4788")
         })
@@ -465,17 +430,11 @@ describe("Executor actor lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
-
           // autoStart=false means the runner does not tell `Connect` —
           // actor stays Idle.
-          yield* waitForExecutorStatus(runtime, "idle")
+          yield* waitForExecutorStatus("idle")
 
-          const reply = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const reply = yield* executorSnapshot
           expect(reply.status).toBe("idle")
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
@@ -496,15 +455,9 @@ describe("Executor actor lifecycle", () => {
       })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          yield* waitForExecutorStatus("error")
 
-          yield* waitForExecutorStatus(runtime, "error")
-
-          const reply = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const reply = yield* executorSnapshot
           expect(reply.status).toBe("error")
           expect(reply.errorMessage).toBeDefined()
         })
@@ -521,26 +474,18 @@ describe("Executor actor lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          const executor = yield* ExecutorWrite
 
-          yield* waitForExecutorStatus(runtime, "idle")
+          yield* waitForExecutorStatus("idle")
 
-          const before = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const before = yield* executorSnapshot
           expect(before.status).toBe("idle")
 
-          yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
+          yield* executor.connect("/test")
 
-          yield* waitForExecutorStatus(runtime, "ready")
+          yield* waitForExecutorStatus("ready")
 
-          const after = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const after = yield* executorSnapshot
           expect(after.status).toBe("ready")
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
@@ -556,26 +501,18 @@ describe("Executor actor lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          const executor = yield* ExecutorWrite
 
-          yield* waitForExecutorStatus(runtime, "ready")
+          yield* waitForExecutorStatus("ready")
 
-          const before = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const before = yield* executorSnapshot
           expect(before.status).toBe("ready")
 
-          yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
+          yield* executor.disconnect()
 
-          yield* waitForExecutorStatus(runtime, "idle")
+          yield* waitForExecutorStatus("idle")
 
-          const after = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const after = yield* executorSnapshot
           expect(after.status).toBe("idle")
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
@@ -617,10 +554,13 @@ describe("Executor actor lifecycle", () => {
             })
 
             const ready = (yield* waitFor(
-              client.extension.ask({
+              client.extension.request({
                 sessionId: createdSessionId,
                 branchId: createdBranchId,
-                message: ExecutorProtocol.GetSnapshot.make(),
+                extensionId: EXECUTOR_EXTENSION_ID,
+                capabilityId: "executor.snapshot",
+                intent: "read",
+                input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "ready",
               3_000,
@@ -638,10 +578,13 @@ describe("Executor actor lifecycle", () => {
             })
 
             const idle = (yield* waitFor(
-              client.extension.ask({
+              client.extension.request({
                 sessionId: createdSessionId,
                 branchId: createdBranchId,
-                message: ExecutorProtocol.GetSnapshot.make(),
+                extensionId: EXECUTOR_EXTENSION_ID,
+                capabilityId: "executor.snapshot",
+                intent: "read",
+                input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "idle",
               3_000,
@@ -672,28 +615,20 @@ describe("Executor actor lifecycle", () => {
       })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          const executor = yield* ExecutorWrite
 
           // First boot → autoStart Connect → resolveEndpoint fails → Error
-          yield* waitForExecutorStatus(runtime, "error")
+          yield* waitForExecutorStatus("error")
 
-          const mid = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const mid = yield* executorSnapshot
           expect(mid.status).toBe("error")
 
           // Retry via command — second resolveEndpoint succeeds.
-          yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
+          yield* executor.connect("/test")
 
-          yield* waitForExecutorStatus(runtime, "ready")
+          yield* waitForExecutorStatus("ready")
 
-          const after = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const after = yield* executorSnapshot
           expect(after.status).toBe("ready")
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
@@ -729,22 +664,18 @@ describe("Executor actor lifecycle", () => {
       })
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
+          const executor = yield* ExecutorWrite
           // Wait until the actor enters Connecting (autoStart fired).
-          yield* waitForExecutorStatus(runtime, "connecting")
+          yield* waitForExecutorStatus("connecting")
           // Disconnect mid-handshake.
-          yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
+          yield* executor.disconnect()
           // Actor should land on Idle promptly (Connecting → Idle).
-          yield* waitForExecutorStatus(runtime, "idle")
+          yield* waitForExecutorStatus("idle")
           // Now release the (cancelled) in-flight handshake. If it races
           // back to Ready, the regression has reappeared.
           yield* Deferred.succeed(sidecarGate, undefined)
           yield* Effect.sleep("100 millis")
-          const final = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          const final = yield* executorSnapshot
           expect(final.status).toBe("idle")
         })
           .pipe(Effect.provide(makeRuntimeLayer(extension)))
@@ -772,13 +703,8 @@ describe("Executor actor lifecycle", () => {
       )
       return narrowR(
         Effect.gen(function* () {
-          const runtime = yield* ActorRouter
-          yield* waitForExecutorStatus(runtime, "ready")
-          const reply = (yield* runtime.execute(
-            sessionId,
-            ExecutorProtocol.GetSnapshot.make(),
-            branchId,
-          )) as ExecutorSnapshotReply
+          yield* waitForExecutorStatus("ready")
+          const reply = yield* executorSnapshot
           expect(reply.status).toBe("ready")
         })
           .pipe(Effect.provide(layer))

@@ -73,6 +73,8 @@
     "./executor/actor.js": "./src/executor/actor.ts",
     "./executor/connection-runner": "./src/executor/connection-runner.ts",
     "./executor/connection-runner.js": "./src/executor/connection-runner.ts",
+    "./executor/controller": "./src/executor/controller.ts",
+    "./executor/controller.js": "./src/executor/controller.ts",
     "./executor/domain": "./src/executor/domain.ts",
     "./executor/domain.js": "./src/executor/domain.ts",
     "./executor/mcp-bridge": "./src/executor/mcp-bridge.ts",
