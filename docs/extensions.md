@@ -296,8 +296,8 @@ builtin).
 | --------------------------------------- | ----------------------------------------------- |
 | `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration     |
 | `packages/extensions/src/task-tools`    | `tool` + `request` + `defineResource` + machine |
-| `packages/extensions/src/memory`        | `tool` + projection + `defineResource`          |
-| `packages/extensions/src/auto.ts`       | `defineResource` with `machine` + projection    |
+| `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`            |
+| `packages/extensions/src/auto.ts`       | `defineResource` with actor view                |
 
 ## Migration Notes
 

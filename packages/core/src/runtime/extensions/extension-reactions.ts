@@ -94,12 +94,21 @@ interface RegisteredSystemPromptRewrite {
 type SystemPromptSlot = ProjectionSystemPromptSlot | RegisteredSystemPromptRewrite
 
 interface ProjectionTurnSlot {
+  readonly kind: "projection"
   readonly extensionId: ExtensionId
   readonly projectionId: string
   readonly query: AnyProjectionContribution["query"]
   readonly prompt?: NonNullable<AnyProjectionContribution["prompt"]>
   readonly policy?: NonNullable<AnyProjectionContribution["policy"]>
 }
+
+interface ReactionTurnProjectionSlot {
+  readonly kind: "reaction"
+  readonly extensionId: ExtensionId
+  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["turnProjection"]>
+}
+
+type TurnProjectionSlot = ProjectionTurnSlot | ReactionTurnProjectionSlot
 
 interface RegisteredActorRoute {
   readonly extensionId: ExtensionId
@@ -210,13 +219,52 @@ const runReaction = <Input>(
     }
   })
 
+const collectTurnProjection = (
+  projection: ExtensionTurnProjection | undefined,
+  sectionsById: Map<string, PromptSection>,
+  policyFragments: ToolPolicyFragment[],
+) => {
+  if (projection === undefined) return
+  for (const section of projection.promptSections) sectionsById.set(section.id, section)
+  for (const fragment of projection.policyFragments) policyFragments.push(fragment)
+}
+
+const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot, ctx: ProjectionTurnContext) =>
+  sealErasedEffect(
+    () =>
+      slot.handler(ctx).pipe(
+        Effect.map((projection) => ({
+          promptSections: projection.promptSections ?? [],
+          policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
+        })),
+      ),
+    {
+      onFailure: (error) =>
+        Effect.logWarning("extension.reaction.turn-projection.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: slot.extensionId,
+            error: String(error),
+          }),
+          Effect.as(undefined),
+        ),
+      onDefect: (defect) =>
+        Effect.logWarning("extension.reaction.turn-projection.defect").pipe(
+          Effect.annotateLogs({
+            extensionId: slot.extensionId,
+            defect: String(defect),
+          }),
+          Effect.as(undefined),
+        ),
+    },
+  )
+
 export const compileExtensionReactions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledExtensionReactions => {
   const sorted = sortExtensions(extensions)
   const systemPromptSlots: SystemPromptSlot[] = []
   const contextMessageSlots: ProjectionContextMessagesSlot[] = []
-  const turnProjectionSlots: ProjectionTurnSlot[] = []
+  const turnProjectionSlots: TurnProjectionSlot[] = []
   const actorRoutes = collectActorRoutes(sorted)
   const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
@@ -244,6 +292,7 @@ export const compileExtensionReactions = (
       }
       if (projection.prompt !== undefined || projection.policy !== undefined) {
         turnProjectionSlots.push({
+          kind: "projection",
           extensionId: ext.manifest.id,
           projectionId: projection.id,
           query: projection.query,
@@ -260,6 +309,13 @@ export const compileExtensionReactions = (
         kind: "reaction",
         extensionId: ext.manifest.id,
         handler: reactions.systemPrompt,
+      })
+    }
+    if (reactions.turnProjection !== undefined) {
+      turnProjectionSlots.push({
+        kind: "reaction",
+        extensionId: ext.manifest.id,
+        handler: reactions.turnProjection,
       })
     }
     if (reactions.turnBefore !== undefined) {
@@ -390,6 +446,14 @@ export const compileExtensionReactions = (
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
+          if (slot.kind === "reaction") {
+            collectTurnProjection(
+              yield* runTurnProjectionReaction(slot, ctx),
+              sectionsById,
+              policyFragments,
+            )
+            continue
+          }
           const value = yield* runProjectionQuery(
             slot.extensionId,
             slot.projectionId,

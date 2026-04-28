@@ -559,7 +559,7 @@ Key files:
 | `packages/extensions/src/memory/tools.ts`           | Agent tools                   |
 | `packages/extensions/src/memory/agents.ts`          | reflect + meditate agent defs |
 | `packages/core/src/runtime/extensions/scheduler.ts` | Host scheduler reconciliation |
-| `packages/extensions/src/memory/projection.ts`      | Prompt section + UI model     |
+| `packages/extensions/src/memory/projection.ts`      | Prompt turn-projection helper |
 | `packages/extensions/src/memory/index.ts`           | Extension registration        |
 
 ## Observability

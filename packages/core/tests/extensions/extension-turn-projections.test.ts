@@ -188,6 +188,152 @@ describe("projection-backed turn reactions", () => {
   )
 
   it.live(
+    "turnProjection reactions contribute prompt sections and tool policy in scope order",
+    () =>
+      Effect.gen(function* () {
+        const compiled = compile([
+          {
+            manifest: { id: ExtensionId.make("builtin-reaction") },
+            scope: "builtin",
+            sourcePath: "/test/builtin-reaction",
+            contributions: {
+              reactions: {
+                turnProjection: () =>
+                  Effect.succeed({
+                    promptSections: [{ id: "shared", content: "builtin", priority: 50 }],
+                    toolPolicy: { include: ["builtin-tool"] },
+                  }),
+              },
+            },
+          },
+          {
+            manifest: { id: ExtensionId.make("project-reaction") },
+            scope: "project",
+            sourcePath: "/test/project-reaction",
+            contributions: {
+              reactions: {
+                turnProjection: () =>
+                  Effect.succeed({
+                    promptSections: [
+                      { id: "shared", content: "project", priority: 50 },
+                      { id: "project-only", content: "project-only", priority: 60 },
+                    ],
+                    toolPolicy: { exclude: ["project-blocked"] },
+                  }),
+              },
+            },
+          },
+        ])
+
+        const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+        expect(result.promptSections).toEqual([
+          { id: "shared", content: "project", priority: 50 },
+          { id: "project-only", content: "project-only", priority: 60 },
+        ])
+        expect(result.policyFragments).toEqual([
+          { include: ["builtin-tool"] },
+          { exclude: ["project-blocked"] },
+        ])
+      }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live(
+    "failing turnProjection reaction is logged + skipped while later reactions continue",
+    () =>
+      Effect.gen(function* () {
+        const compiled = compile([
+          {
+            manifest: { id: ExtensionId.make("bad-reaction") },
+            scope: "builtin",
+            sourcePath: "/test/bad-reaction",
+            contributions: {
+              reactions: {
+                turnProjection: () =>
+                  Effect.fail(new ProjectionError({ projectionId: "bad", reason: "boom" })),
+              },
+            },
+          },
+          {
+            manifest: { id: ExtensionId.make("good-reaction") },
+            scope: "project",
+            sourcePath: "/test/good-reaction",
+            contributions: {
+              reactions: {
+                turnProjection: () =>
+                  Effect.succeed({
+                    promptSections: [{ id: "good", content: "still-runs", priority: 50 }],
+                    toolPolicy: { include: ["still-runs"] },
+                  }),
+              },
+            },
+          },
+        ])
+
+        const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+        expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
+        expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
+      }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live("defecting turnProjection reaction is logged + skipped", () =>
+    Effect.gen(function* () {
+      const compiled = compile([
+        {
+          manifest: { id: ExtensionId.make("defect-reaction") },
+          scope: "builtin",
+          sourcePath: "/test/defect-reaction",
+          contributions: {
+            reactions: {
+              turnProjection: () =>
+                Effect.sync(() => {
+                  throw new Error("defect")
+                }),
+            },
+          },
+        },
+        {
+          manifest: { id: ExtensionId.make("good-reaction") },
+          scope: "project",
+          sourcePath: "/test/good-reaction",
+          contributions: {
+            reactions: {
+              turnProjection: () =>
+                Effect.succeed({
+                  promptSections: [{ id: "good", content: "after-defect", priority: 50 }],
+                }),
+            },
+          },
+        },
+      ])
+
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
+      expect(result.policyFragments).toEqual([])
+    }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live("empty turnProjection reaction result does not affect prompt sections or policy", () =>
+    Effect.gen(function* () {
+      const compiled = compile([
+        {
+          manifest: { id: ExtensionId.make("empty-reaction") },
+          scope: "builtin",
+          sourcePath: "/test/empty-reaction",
+          contributions: {
+            reactions: {
+              turnProjection: () => Effect.succeed({}),
+            },
+          },
+        },
+      ])
+
+      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      expect(result.promptSections).toEqual([])
+      expect(result.policyFragments).toEqual([])
+    }).pipe(Effect.provide(evalCtxLayer)),
+  )
+
+  it.live(
     "projection query reads context and service dependencies when the layer is composed",
     () =>
       Effect.gen(function* () {

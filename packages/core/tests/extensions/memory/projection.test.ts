@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import * as Fs from "node:fs"
 import * as Path from "node:path"
 import * as Os from "node:os"
-import { MemoryVaultProjection } from "@gent/extensions/memory/projection"
+import { projectMemoryVaultTurn } from "@gent/extensions/memory/projection"
 import {
   Test as MemoryVaultTest,
   projectKey,
@@ -57,20 +57,18 @@ const turnCtx = (cwd: string): ProjectionTurnContext =>
     branchId: bid,
     cwd,
     home: tmpDir,
-    // turn is required by the type but unused by MemoryVaultProjection.query
+    // turn is required by the type but unused by the memory turn projection
     turn: {} as never,
   }) as ProjectionTurnContext
 
-describe("MemoryVaultProjection", () => {
+describe("memory vault turn projection", () => {
   test("empty vault produces no prompt section", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const value = yield* MemoryVaultProjection.query(turnCtx("/no/such/repo"))
-        const prompt = MemoryVaultProjection.prompt?.(value) ?? []
-        return prompt
+        return yield* projectMemoryVaultTurn(turnCtx("/no/such/repo"))
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
-    expect(result).toEqual([])
+    expect(result).toEqual({})
   })
 
   test("global vault entries produce a prompt section", async () => {
@@ -79,14 +77,13 @@ describe("MemoryVaultProjection", () => {
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const value = yield* MemoryVaultProjection.query(turnCtx("/no/such/repo"))
-        return MemoryVaultProjection.prompt?.(value) ?? []
+        return yield* projectMemoryVaultTurn(turnCtx("/no/such/repo"))
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
-    expect(result.length).toBe(1)
-    expect(result[0]!.content).toContain("Pattern A")
-    expect(result[0]!.content).toContain("Pattern B")
-    expect(result[0]!.content).toContain("memory_recall")
+    expect(result.promptSections?.length).toBe(1)
+    expect(result.promptSections?.[0]!.content).toContain("Pattern A")
+    expect(result.promptSections?.[0]!.content).toContain("Pattern B")
+    expect(result.promptSections?.[0]!.content).toContain("memory_recall")
   })
 
   test("project entries appear under project heading when cwd resolves to a project key", async () => {
@@ -97,20 +94,19 @@ describe("MemoryVaultProjection", () => {
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const value = yield* MemoryVaultProjection.query(turnCtx("/test-repo"))
-        return MemoryVaultProjection.prompt?.(value) ?? []
+        return yield* projectMemoryVaultTurn(turnCtx("/test-repo"))
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
-    expect(result.length).toBe(1)
-    expect(result[0]!.content).toContain("Project:")
-    expect(result[0]!.content).toContain("SQLite Gotcha")
+    expect(result.promptSections?.length).toBe(1)
+    expect(result.promptSections?.[0]!.content).toContain("Project:")
+    expect(result.promptSections?.[0]!.content).toContain("SQLite Gotcha")
   })
 
   // TODO(c2): "ui projector returns counts and entries" — removed.
-  // MemoryVaultProjection.ui surface is gone in C2 (projection.ui no longer exists).
+  // Memory vault UI surface is gone in C2 (projection.ui no longer exists).
 })
 
-describe("MemoryVaultProjection — read-only and scoped", () => {
+describe("memory vault turn projection — read-only and scoped", () => {
   test("query does not create vault directories (read-only contract)", async () => {
     // Vault with no global/ or project/ subdirs at all
     expect(Fs.existsSync(Path.join(tmpDir, "global"))).toBe(false)
@@ -118,8 +114,8 @@ describe("MemoryVaultProjection — read-only and scoped", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const value = yield* MemoryVaultProjection.query(turnCtx("/some/repo"))
-        expect(value.entries).toEqual([])
+        const value = yield* projectMemoryVaultTurn(turnCtx("/some/repo"))
+        expect(value).toEqual({})
       }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
 
@@ -136,13 +132,14 @@ describe("MemoryVaultProjection — read-only and scoped", () => {
     writeFile("global/g.md", "# G\n\nGlobal entry.")
 
     const value = await Effect.runPromise(
-      MemoryVaultProjection.query(turnCtx("/active-repo")).pipe(
-        Effect.provide(MemoryVaultTest(tmpDir)),
-      ),
+      Effect.gen(function* () {
+        return yield* projectMemoryVaultTurn(turnCtx("/active-repo"))
+      }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
     )
-    const titles = value.entries.map((e) => e.title).sort()
-    expect(titles).toEqual(["Active", "G"])
-    expect(titles).not.toContain("Other")
+    const content = value.promptSections?.[0]?.content ?? ""
+    expect(content).toContain("Active")
+    expect(content).toContain("G")
+    expect(content).not.toContain("Other")
   })
 })
 

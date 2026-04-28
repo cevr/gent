@@ -3,25 +3,22 @@
  *
  * Two surfaces:
  *
- *   1. `MemoryVaultProjection` (this module's exported contribution) —
- *      a `ProjectionContribution` that queries `MemoryVault` directly
- *      from disk for both:
- *        - prompt: vault entries grouped by scope (project/global)
- *        - ui:     counts + summaries
+ *   1. `projectMemoryVaultTurn` — a turn projection reaction that queries
+ *      `MemoryVault` directly from disk for prompt entries grouped by scope
+ *      (project/global).
  *      No actor, no mirror. `derive-do-not-create-states`: disk is truth.
  *
- *   2. Session-memory helpers (`projectSessionMemoryTurn`,
- *      `projectSessionMemorySnapshot`) — used by the still-actor-based
- *      session memory state to build its own `turn`/`snapshot` projection.
- *      Session memories are volatile and genuinely live in the actor.
+ * Session memories were removed with the legacy state-holder; the vault is
+ * the prompt source.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import {
-  type ProjectionContribution,
   ProjectionError,
+  type ProjectionTurnContext,
   type PromptSection,
   type ReadOnly,
+  type TurnProjection,
 } from "@gent/core/extensions/api"
 import {
   MemoryVaultReadOnly,
@@ -72,62 +69,47 @@ const buildVaultPromptSection = (
   }
 }
 
-/** UI snapshot model for the vault portion (counts + summaries). */
-export const MemoryVaultUiModel = Schema.Struct({
-  vaultCount: Schema.Number,
-  projectKey: Schema.optional(Schema.String),
-  entries: Schema.Array(
-    Schema.Struct({
-      title: Schema.String,
-      scope: Schema.Literals(["project", "global"]),
-      summary: Schema.String,
-    }),
-  ),
-})
-export type MemoryVaultUiModel = typeof MemoryVaultUiModel.Type
-
 interface VaultProjectionValue {
   readonly entries: ReadonlyArray<MemoryEntry>
   readonly projectKey: string | undefined
 }
 
 /**
- * Reads the on-disk vault index per evaluation, derives prompt + ui from it.
- * `query` yields `MemoryVaultReadOnly`, the branded read-only Tag — the
- * `ProjectionContribution<A, R extends ReadOnlyTag>` fence blocks
- * `ensureDirs` / `write` / `remove` / `rebuildIndex` access at the type
- * level (B11.4).
+ * Reads the on-disk vault index per evaluation and derives prompt from it.
+ * The reaction reads through `MemoryVaultReadOnly`, keeping `ensureDirs` /
+ * `write` / `remove` / `rebuildIndex` out of the service surface.
  *
  * Performance: scopes the disk walk to the relevant slice (global + the
  * derived project key only) rather than scanning every project under
  * `~/.gent/memory/project/`. Cheap O(N) where N = entries in the active
  * session's project + global, not all projects across the user's history.
  */
-export const MemoryVaultProjection: ProjectionContribution<
-  VaultProjectionValue,
-  ReadOnly<MemoryVaultReadOnly>
-> = {
-  id: "memory-vault",
-  query: (ctx) =>
-    Effect.gen(function* () {
-      const vault = yield* MemoryVaultReadOnly
-      const key = ctx.cwd !== undefined ? projectKeyOf(ctx.cwd) : undefined
-      const failed = (e: unknown): ProjectionError =>
-        new ProjectionError({
-          projectionId: "memory-vault",
-          reason: `MemoryVault.list failed: ${String(e)}`,
-        })
-      const globalEntries = yield* vault
-        .list("global")
-        .pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
-      const projectEntries =
-        key !== undefined
-          ? yield* vault.list("project", key).pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
-          : []
-      return { entries: [...globalEntries, ...projectEntries], projectKey: key }
+const readVaultProjectionValue = (
+  ctx: ProjectionTurnContext,
+): Effect.Effect<VaultProjectionValue, ProjectionError, ReadOnly<MemoryVaultReadOnly>> =>
+  Effect.gen(function* () {
+    const vault = yield* MemoryVaultReadOnly
+    const key = projectKeyOf(ctx.cwd)
+    const failed = (e: unknown): ProjectionError =>
+      new ProjectionError({
+        projectionId: "memory-vault",
+        reason: `MemoryVault.list failed: ${String(e)}`,
+      })
+    const globalEntries = yield* vault
+      .list("global")
+      .pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
+    const projectEntries = yield* vault
+      .list("project", key)
+      .pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
+    return { entries: [...globalEntries, ...projectEntries], projectKey: key }
+  })
+
+export const projectMemoryVaultTurn = (
+  ctx: ProjectionTurnContext,
+): Effect.Effect<TurnProjection, ProjectionError, ReadOnly<MemoryVaultReadOnly>> =>
+  readVaultProjectionValue(ctx).pipe(
+    Effect.map((value) => {
+      const section = buildVaultPromptSection(value.entries, value.projectKey)
+      return section !== undefined ? { promptSections: [section] } : {}
     }),
-  prompt: (value) => {
-    const section = buildVaultPromptSection(value.entries, value.projectKey)
-    return section !== undefined ? [section] : []
-  },
-}
+  )

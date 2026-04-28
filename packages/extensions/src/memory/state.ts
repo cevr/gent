@@ -3,7 +3,7 @@
  *
  * The session-memory state-holder (W10-1d) was deleted along with the
  * legacy `Resource.machine` plumbing. The vault is the durable store and
- * `MemoryVaultProjection` derives the prompt surface; tools use the
+ * `projectMemoryVaultTurn` derives the prompt surface; tools use the
  * helpers below to compute on-disk paths and write frontmatter.
  */
 

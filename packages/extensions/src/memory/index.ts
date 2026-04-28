@@ -3,9 +3,8 @@
  *
  * Composition:
  *   - Tools (memory_remember / memory_recall / memory_forget) for the LLM
- *   - MemoryVaultProjection — derives the on-disk vault index + project
- *     key on demand, contributing both `prompt` and `ui` surfaces. No
- *     actor mirror; vault files are the durable store.
+ *   - `reactions.turnProjection` derives the on-disk vault index + project
+ *     key on demand. No actor mirror; vault files are the durable store.
  *   - MemoryAgents — system agents
  *   - MemoryDreamJobs — durable background memory promotion jobs
  *
@@ -16,13 +15,13 @@
  * legacy `Resource.machine` plumbing here: nothing read the session list
  * (the projection-time inject was already removed in C8), `MemoryIntent`
  * had zero external publishers, and `reduce` was a no-op. Tools write
- * straight to `MemoryVault`; the prompt surface comes exclusively from
- * `MemoryVaultProjection` over the on-disk vault.
+ * straight to `MemoryVault`; the prompt surface comes exclusively from a
+ * turn projection over the on-disk vault.
  */
 
 import { defineExtension, defineResource, ExtensionId } from "@gent/core/extensions/api"
 import { MemoryTools } from "./tools.js"
-import { MemoryVaultProjection } from "./projection.js"
+import { projectMemoryVaultTurn } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
 import { Live as MemoryVaultLive } from "./vault.js"
 import { MemoryDreamJobs } from "./dreaming.js"
@@ -35,7 +34,9 @@ export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
   tools: [...MemoryTools],
   agents: [...MemoryAgents],
-  projections: [MemoryVaultProjection],
+  reactions: {
+    turnProjection: (ctx) => projectMemoryVaultTurn(ctx),
+  },
   resources: [
     defineResource({
       scope: "process",
