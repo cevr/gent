@@ -1,5 +1,4 @@
-import { BunServices } from "@effect/platform-bun"
-import { Duration, Effect, Schema, Stream } from "effect"
+import { Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import {
   tool,
@@ -172,12 +171,19 @@ export const BashTool = tool({
     // Background mode — fork a fiber that spawns, collects, and queues
     // a follow-up. The spawn lives in the forked fiber's scope, so the
     // tool can return immediately while the watcher runs to completion.
+    // Failures are surfaced through queueFollowUp instead of being
+    // silently swallowed.
     if (params.run_in_background === true) {
+      const queueBgFailure = (message: string) =>
+        ctx.session
+          .queueFollowUp({
+            content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
+          })
+          .pipe(Effect.catchEager(() => Effect.void))
+
       const bgEffect = Effect.gen(function* () {
         const bgResult = yield* runBashCommand(command, cwd).pipe(
           Effect.scoped,
-          // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
-          Effect.provide(BunServices.layer),
           Effect.catchTag("PlatformError", (e) =>
             Effect.fail(
               new BashError({ message: `Background command failed: ${e.message}`, command }),
@@ -204,7 +210,10 @@ export const BashTool = tool({
         yield* ctx.session.queueFollowUp({
           content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
         })
-      }).pipe(Effect.catchEager(() => Effect.void))
+      }).pipe(
+        Effect.catchTag("BashError", (e) => queueBgFailure(e.message)),
+        Effect.catchCause((cause) => queueBgFailure(`Internal error: ${cause.toString()}`)),
+      )
 
       yield* bgEffect.pipe(Effect.forkDetach)
 
@@ -215,18 +224,30 @@ export const BashTool = tool({
       }
     }
 
+    // Sync mode — spawn into an explicit scope so on timeout we can
+    // fork-and-forget the scope-close (which fires SIGTERM/SIGKILL via
+    // the spawn finalizer) instead of awaiting forceKillAfter on the
+    // calling fiber. Matches the prior killGracefully fire-and-forget
+    // semantics: tool returns immediately on timeout, kill happens async.
+    const spawnScope = yield* Scope.make()
+    const closeSpawnScope = Scope.close(spawnScope, Exit.void).pipe(Effect.ignore)
     const result = yield* runBashCommand(command, cwd).pipe(
+      Scope.provide(spawnScope),
       Effect.timeoutOrElse({
         duration: Duration.millis(timeout),
         orElse: () =>
-          Effect.fail(new BashError({ message: `Command timed out after ${timeout}ms`, command })),
+          Effect.forkDetach(closeSpawnScope).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new BashError({ message: `Command timed out after ${timeout}ms`, command }),
+              ),
+            ),
+          ),
       }),
+      Effect.ensuring(closeSpawnScope),
       Effect.catchTag("PlatformError", (e) =>
         Effect.fail(new BashError({ message: `Failed to execute command: ${e.message}`, command })),
       ),
-      Effect.scoped,
-      // @effect-diagnostics-next-line strictEffectProvide:off platform services for ChildProcess spawn
-      Effect.provide(BunServices.layer),
     )
 
     // Use OutputBuffer for head+tail truncation

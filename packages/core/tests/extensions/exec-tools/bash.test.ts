@@ -1,14 +1,21 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
-
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
+import { Effect, Layer, Path } from "effect"
+import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import {
   splitCdCommand,
   injectGitTrailers,
   stripBackground,
   BashTool,
 } from "@gent/extensions/exec-tools/bash"
+
+const platformLayer = Layer.mergeAll(
+  BunFileSystem.layer,
+  Path.layer,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+)
+const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test boundary, R is platform services we provide here
+  Effect.provide(e, platformLayer) as Effect.Effect<A, E, never>
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -124,20 +131,22 @@ const stubCtx: ToolContext = {
 describe("BashTool execution", () => {
   test("runs a command and returns stdout", async () => {
     const result = await Effect.runPromise(
-      narrowR(BashTool.effect({ command: "echo hello" }, stubCtx)),
+      provideBun(BashTool.effect({ command: "echo hello" }, stubCtx)),
     )
     expect(result.stdout.trim()).toBe("hello")
     expect(result.exitCode).toBe(0)
   })
 
   test("captures nonzero exit code", async () => {
-    const result = await Effect.runPromise(narrowR(BashTool.effect({ command: "exit 2" }, stubCtx)))
+    const result = await Effect.runPromise(
+      provideBun(BashTool.effect({ command: "exit 2" }, stubCtx)),
+    )
     expect(result.exitCode).toBe(2)
   })
 
   test("respects cwd parameter", async () => {
     const result = await Effect.runPromise(
-      narrowR(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx)),
+      provideBun(BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx)),
     )
     // /tmp may resolve to /private/tmp on macOS
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -146,7 +155,7 @@ describe("BashTool execution", () => {
 
   test("splits cd + command into cwd and executes", async () => {
     const result = await Effect.runPromise(
-      narrowR(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx)),
+      provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx)),
     )
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
     expect(result.exitCode).toBe(0)
@@ -171,7 +180,7 @@ describe("BashTool execution", () => {
       },
     }
     const result = await Effect.runPromise(
-      narrowR(
+      provideBun(
         BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
       ),
     )
