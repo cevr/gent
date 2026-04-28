@@ -458,7 +458,7 @@ const makeSharedRunnerHelpers = (
  * Build the layer for an ephemeral child run via {@link RuntimeComposer}.
  *
  * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
- * registry/state-runtime/event-bus shape stays identical — extensions don't
+ * registry/actor/resource/event-bus shape stays identical — extensions don't
  * "see" a different runtime when invoked from a child agent. Local-only
  * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
  * services) are declared via `.own(...)` so the composer derives the

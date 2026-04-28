@@ -2,8 +2,8 @@
  * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
  * every composition root that needs to *discover* extensions.
  *
- * Three callers build the same `{ registry, state-runtime }`
- * shape via `buildExtensionLayers`:
+ * Three callers build the same registry / actor / resource layer shape via
+ * `buildExtensionLayers`:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
  *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
@@ -13,7 +13,7 @@
  *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
  *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
- * All three end up with the same registry / state-runtime shape — no more
+ * All three end up with the same registry / actor / resource shape — no more
  * drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel

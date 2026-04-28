@@ -150,7 +150,7 @@ Generic middleware APIs are not the extension model anymore. Migrate as follows:
 
 - prompt shaping -> `reactions.turnProjection` and prompt slots
 - permission policy -> explicit policy slots / capability policy
-- turn reactions -> `reactions.turnBefore` / `turnAfter` / `messageOutput`
+- turn reactions -> `reactions.turnBefore` / `turnAfter` / `messageOutput` / `toolResult`
 - long-lived state / lifecycle -> `defineResource(...)`
 
 Turn projection authoring is a reaction handler:

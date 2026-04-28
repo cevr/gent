@@ -1,8 +1,8 @@
 /**
  * Memory extension helpers — slug + path + frontmatter constructors.
  *
- * The session-memory state-holder (W10-1d) was deleted along with the
- * legacy `Resource.machine` plumbing. The vault is the durable store and
+ * The session-memory state-holder (W10-1d) was deleted along with the old
+ * session-local FSM plumbing. The vault is the durable store and
  * `projectMemoryVaultTurn` derives the prompt surface; tools use the
  * helpers below to compute on-disk paths and write frontmatter.
  */

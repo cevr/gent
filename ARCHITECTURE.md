@@ -37,7 +37,7 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # SQLite persistence (Storage + 6 sub-Tags: SessionStorage, BranchStorage, MessageStorage, EventStorage, RelationshipStorage, ExtensionStateStorage)
+│   ├── storage/   # SQLite persistence (Storage + focused sub-Tags for sessions, branches, messages, events, relationships, actors, checkpoints, interactions, search)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
@@ -305,7 +305,6 @@ Core never imports from extensions. Composition roots (apps, SDK) pass `BuiltinE
 Extensions (builtin and third-party) may import from:
 
 - `@gent/core/extensions/api` — the authoring surface
-- `effect-machine` — directly, for actor extensions
 - `effect`, `@effect/*` — as peer deps
 
 Extensions may NOT import from `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`, `@gent/core/providers/*`. The `no-extension-internal-imports` oxlint rule enforces this.
@@ -462,7 +461,8 @@ Plan, audit, and review tools save artifacts deterministically after producing r
 
 ## Auto Loop Extension
 
-`@gent/auto` — iterative workflow driver via effect-machine.
+`@gent/auto` — iterative workflow driver backed by a `Behavior` actor plus
+`reactions.toolResult` / `turnAfter`.
 
 State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: `review` tool completion between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
 
