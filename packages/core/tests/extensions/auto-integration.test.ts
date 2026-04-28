@@ -15,15 +15,12 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
-import {
-  ActorRouter,
-  type ActorRouterService,
-} from "../../src/runtime/extensions/resource-host/actor-router"
+import type { ActorRouter } from "../../src/runtime/extensions/resource-host/actor-router"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { AutoProtocol } from "@gent/extensions/auto-protocol"
+import { AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
 
 const sessionId = SessionId.make("auto-e2e-session")
 const branchId = BranchId.make("auto-e2e-branch")
@@ -58,7 +55,7 @@ const runE2ETest = (
   steps: Parameters<typeof Provider.Sequence>[0],
   test: (
     controls: SequenceProviderControls,
-  ) => Effect.Effect<void, unknown, AgentLoop | ActorRouter | EventStore>,
+  ) => Effect.Effect<void, unknown, AgentLoop | ActorRouter | EventStore | AutoRead | AutoWrite>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
@@ -69,26 +66,27 @@ const runE2ETest = (
     })
 
     yield* Effect.gen(function* () {
-      const stateRuntime = yield* ActorRouter
+      const auto = yield* AutoWrite
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* stateRuntime.send(
-        sessionId,
-        AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
-        branchId,
-      )
+      yield* auto.start({ goal: "Fix the bug" })
       yield* test(controls)
     }).pipe(Effect.provide(e2eLayer))
   })
 
-const waitForAutoActive = (runtime: ActorRouterService, active: boolean, timeoutMs = 3_000) =>
-  waitFor(
-    runtime
-      .execute(sessionId, AutoProtocol.GetSnapshot.make(), branchId)
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined as { active: boolean } | undefined))),
-    (snap) => (snap as { active: boolean } | undefined)?.active === active,
-    timeoutMs,
-    `auto active = ${String(active)}`,
-  )
+const waitForAutoActive = (active: boolean, timeoutMs = 3_000) =>
+  Effect.gen(function* () {
+    const auto = yield* AutoRead
+    return yield* waitFor(
+      auto
+        .snapshot()
+        .pipe(
+          Effect.catchEager(() => Effect.succeed(undefined as { active: boolean } | undefined)),
+        ),
+      (snap) => (snap as { active: boolean } | undefined)?.active === active,
+      timeoutMs,
+      `auto active = ${String(active)}`,
+    )
+  })
 
 describe("Auto extension E2E", () => {
   it.live("single iteration: start → checkpoint(complete)", () =>
@@ -105,15 +103,11 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* ActorRouter
+          const auto = yield* AutoRead
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const model = (yield* stateRuntime.execute(
-            sessionId,
-            AutoProtocol.GetSnapshot.make(),
-            branchId,
-          )) as { active: boolean }
+          const model = yield* auto.snapshot()
           expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(3)
           yield* controls.assertDone()
@@ -154,15 +148,11 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* ActorRouter
+          const auto = yield* AutoRead
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const model = (yield* stateRuntime.execute(
-            sessionId,
-            AutoProtocol.GetSnapshot.make(),
-            branchId,
-          )) as { active: boolean }
+          const model = yield* auto.snapshot()
           expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(7)
           yield* controls.assertDone()
@@ -241,15 +231,11 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ActorRouter
+        const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.send(
-          sessionId,
-          AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
-          branchId,
-        )
+        yield* auto.start({ goal: "Fix the bug" })
 
         // Turn 1 (initial) + Turn 2 (auto kickoff follow-up, drained during finalization)
         yield* agentLoop.run(makeMessage("begin"))
@@ -260,7 +246,7 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage(`follow-up ${i + 1}`))
         }
 
-        const model = yield* waitForAutoActive(stateRuntime, false)
+        const model = yield* waitForAutoActive(false)
         expect(model?.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
@@ -283,15 +269,12 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ActorRouter
+        const autoWrite = yield* AutoWrite
+        const autoRead = yield* AutoRead
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.send(
-          sessionId,
-          AutoProtocol.StartAuto.make({ goal: "Verify phases" }),
-          branchId,
-        )
+        yield* autoWrite.start({ goal: "Verify phases" })
 
         // Fork the run — it will process turn 1, then start turn 2 which blocks on the gate
         const runFiber = yield* Effect.forkChild(agentLoop.run(makeMessage("begin")))
@@ -300,11 +283,7 @@ describe("Auto extension E2E", () => {
         yield* controls.waitForCall(1)
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
-        const midModel = (yield* stateRuntime.execute(
-          sessionId,
-          AutoProtocol.GetSnapshot.make(),
-          branchId,
-        )) as { active: boolean; phase?: string }
+        const midModel = yield* autoRead.snapshot()
         expect(midModel.active).toBe(true)
         expect(midModel.phase).toBe("working")
 
@@ -315,11 +294,7 @@ describe("Auto extension E2E", () => {
         yield* Fiber.join(runFiber)
 
         // Final state: auto is inactive
-        const finalModel = (yield* stateRuntime.execute(
-          sessionId,
-          AutoProtocol.GetSnapshot.make(),
-          branchId,
-        )) as { active: boolean }
+        const finalModel = yield* autoRead.snapshot()
         expect(finalModel.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
@@ -353,15 +328,11 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ActorRouter
+        const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.send(
-          sessionId,
-          AutoProtocol.StartAuto.make({ goal: "Test handoff dedup" }),
-          branchId,
-        )
+        yield* auto.start({ goal: "Test handoff dedup" })
 
         yield* agentLoop.run(makeMessage("begin"))
 
@@ -406,15 +377,11 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ActorRouter
+        const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
 
-        yield* stateRuntime.send(
-          sessionId,
-          AutoProtocol.StartAuto.make({ goal: "Verify no direct handoff" }),
-          branchId,
-        )
+        yield* auto.start({ goal: "Verify no direct handoff" })
 
         yield* agentLoop.run(makeMessage("begin"))
 
@@ -449,15 +416,11 @@ describe("Auto extension E2E", () => {
 
           yield* Effect.gen(function* () {
             const agentLoop = yield* AgentLoop
-            const stateRuntime = yield* ActorRouter
+            const auto = yield* AutoWrite
 
             yield* ensureStorageParents({ sessionId, branchId })
 
-            yield* stateRuntime.send(
-              sessionId,
-              AutoProtocol.StartAuto.make({ goal: "Threshold handoff test" }),
-              branchId,
-            )
+            yield* auto.start({ goal: "Threshold handoff test" })
 
             yield* agentLoop.run(makeMessage("begin"))
 

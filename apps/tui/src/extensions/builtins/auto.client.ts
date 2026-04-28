@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off `AutoPackage.tui` paired-package pattern. The widget
  * owns its own Solid signal inside an Effect-typed setup, fetched via
- * `askExtension(AutoProtocol.GetSnapshot)` and refreshed on
+ * `requestExtension(ref(AutoRpc.GetSnapshot))` and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/auto`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -14,6 +14,7 @@
  */
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
+import { ref } from "@gent/core/extensions/api"
 import {
   defineClientExtension,
   borderLabelContribution,
@@ -21,9 +22,9 @@ import {
   overlayContribution,
 } from "../client-facets.js"
 import type { AutoSnapshotReply } from "@gent/extensions/auto-protocol.js"
-import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
+import { AutoRpc } from "@gent/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
-import { askExtension, ClientTransport } from "../client-transport"
+import { requestExtension, ClientTransport } from "../client-transport"
 import { ClientShell, ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/auto"
@@ -58,7 +59,7 @@ export default defineClientExtension(EXT_ID, {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const reply = await transport.runtime.run(
-          askExtension(AutoProtocol.GetSnapshot.make(), transport, captured),
+          requestExtension(ref(AutoRpc.GetSnapshot), {}, transport, captured),
         )
         const current = transport.currentSession()
         if (
@@ -138,7 +139,17 @@ export default defineClientExtension(EXT_ID, {
         onSelect: () => {
           const model = liveModel()
           if (model?.active) {
-            shell.send(AutoProtocol.CancelAuto.make())
+            void transport.runtime.run(
+              requestExtension(ref(AutoRpc.CancelAuto), {}, transport).pipe(
+                Effect.catchEager((err: unknown) =>
+                  Effect.logWarning(`[${EXT_ID}] auto cancel failed`).pipe(
+                    Effect.annotateLogs({
+                      error: err instanceof Error ? err.message : String(err),
+                    }),
+                  ),
+                ),
+              ),
+            )
           } else {
             shell.openOverlay("auto-goal")
           }

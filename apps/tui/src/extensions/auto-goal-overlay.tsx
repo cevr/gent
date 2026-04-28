@@ -7,7 +7,8 @@
 
 import { createSignal } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
-import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
+import { ref } from "@gent/core/extensions/api"
+import { AutoRpc } from "@gent/extensions/auto-protocol.js"
 import { ChromePanel } from "../components/chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useClient } from "../client/context"
@@ -27,11 +28,15 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
     if (text === "") return
     const sid = clientCtx.session()?.sessionId
     const bid = clientCtx.session()?.branchId
-    if (sid === undefined) return
+    if (sid === undefined || bid === undefined) return
+    const startRef = ref(AutoRpc.StartAuto)
     clientCtx.runtime.cast(
-      clientCtx.client.extension.send({
+      clientCtx.client.extension.request({
         sessionId: sid,
-        message: AutoProtocol.StartAuto.make({ goal: text }),
+        extensionId: startRef.extensionId,
+        capabilityId: startRef.capabilityId,
+        intent: startRef.intent,
+        input: { goal: text },
         branchId: bid,
       }),
     )

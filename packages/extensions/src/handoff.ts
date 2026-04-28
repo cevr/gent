@@ -8,10 +8,11 @@ import {
   type ExtensionHostContext,
   type Message,
   type TurnAfterInput,
+  ref,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
 import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
-import { AutoProtocol } from "./auto-protocol.js"
+import { AutoRpc } from "./auto-protocol.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
@@ -86,7 +87,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
     const autoActive = yield* ctx.extension
-      .ask(AutoProtocol.IsActive.make())
+      .request(ref(AutoRpc.IsActive), {})
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 

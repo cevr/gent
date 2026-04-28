@@ -115,8 +115,8 @@ describe("transport-only extension widgets", () => {
         | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
-    const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
-    const runtime = buildRuntime(activeSession, { askDeferred })
+    const requestDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
+    const runtime = buildRuntime(activeSession, { requestDeferred })
 
     try {
       const contributions = await runtime.runPromise(
@@ -134,7 +134,7 @@ describe("transport-only extension widgets", () => {
         branchId: BranchId.make("branch-B"),
       }
       await Effect.runPromise(
-        Deferred.succeed(askDeferred, { active: true, phase: "working", iteration: 1 }),
+        Deferred.succeed(requestDeferred, { active: true, phase: "working", iteration: 1 }),
       )
       await Promise.resolve()
       await Promise.resolve()
@@ -151,8 +151,8 @@ describe("transport-only extension widgets", () => {
         | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
-    const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
-    const runtime = buildRuntime(activeSession, { askDeferred })
+    const requestDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
+    const runtime = buildRuntime(activeSession, { requestDeferred })
 
     try {
       const contributions = await runtime.runPromise(
@@ -166,7 +166,7 @@ describe("transport-only extension widgets", () => {
       expect(borderLabel).toBeDefined()
 
       await Effect.runPromise(
-        Deferred.succeed(askDeferred, {
+        Deferred.succeed(requestDeferred, {
           active: true,
           phase: "working",
           iteration: 2,
@@ -188,8 +188,8 @@ describe("transport-only extension widgets", () => {
         | { sessionId: SessionId; branchId: BranchId }
         | undefined,
     }
-    const askDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
-    const runtime = buildRuntime(activeSession, { askDeferred })
+    const requestDeferred = await Effect.runPromise(Deferred.make<unknown, never>())
+    const runtime = buildRuntime(activeSession, { requestDeferred })
 
     try {
       const contributions = await runtime.runPromise(
@@ -202,7 +202,7 @@ describe("transport-only extension widgets", () => {
 
       expect(borderLabel).toBeDefined()
 
-      await Effect.runPromise(Deferred.succeed(askDeferred, { active: "yes" }))
+      await Effect.runPromise(Deferred.succeed(requestDeferred, { active: "yes" }))
       await Promise.resolve()
       await Promise.resolve()
 

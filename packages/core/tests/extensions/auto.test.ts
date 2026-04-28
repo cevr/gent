@@ -1,11 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { EventStore } from "@gent/core/domain/event"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
-import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
+import { type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
+import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
 import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import {
   ActorRouter,
@@ -30,9 +30,6 @@ const AutoIntent = TaggedEnumClass("AutoIntent", {
 type AutoIntent = Schema.Schema.Type<typeof AutoIntent>
 
 // ── Runtime integration tests ──
-
-const sessionId = SessionId.make("auto-session")
-const branchId = BranchId.make("auto-branch")
 
 const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
@@ -82,32 +79,40 @@ const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = [])
 
 const makeLayer = () => seededMachineLayer()
 
-const getSnapshot = (runtime: ActorRouterService) =>
+const getSnapshot = (_runtime: ActorRouterService) =>
   Effect.gen(function* () {
-    const model = (yield* runtime.execute(
-      sessionId,
-      AutoProtocol.GetSnapshot.make(),
-      branchId,
-    )) as AutoSnapshotReply
+    const engine = yield* ActorEngine
+    const ref = yield* findAutoActor
+    const model = yield* engine.ask(ref, AutoMsg.GetSnapshot.make({}))
     return { model } as { readonly model: AutoSnapshotReply }
   })
 
-const sendAuto = (runtime: ActorRouterService, intent: AutoIntent) => {
+const sendAuto = (_runtime: ActorRouterService, intent: AutoIntent) => {
   switch (intent._tag) {
     case "StartAuto":
-      return runtime.send(
-        sessionId,
-        AutoProtocol.StartAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
-        branchId,
-      )
+      return Effect.gen(function* () {
+        const engine = yield* ActorEngine
+        const ref = yield* findAutoActor
+        yield* engine.tell(
+          ref,
+          AutoMsg.StartAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        )
+      })
     case "CancelAuto":
-      return runtime.send(sessionId, AutoProtocol.CancelAuto.make(), branchId)
+      return Effect.gen(function* () {
+        const engine = yield* ActorEngine
+        const ref = yield* findAutoActor
+        yield* engine.tell(ref, AutoMsg.CancelAuto.make({}))
+      })
     case "ToggleAuto":
-      return runtime.send(
-        sessionId,
-        AutoProtocol.ToggleAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
-        branchId,
-      )
+      return Effect.gen(function* () {
+        const engine = yield* ActorEngine
+        const ref = yield* findAutoActor
+        yield* engine.tell(
+          ref,
+          AutoMsg.ToggleAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        )
+      })
   }
 }
 
@@ -137,6 +142,19 @@ const tellAuto = (msg: AutoMsg) =>
   })
 
 describe("Auto runtime integration", () => {
+  it.live("public controller fails when the auto actor is unavailable", () =>
+    Effect.gen(function* () {
+      const read = yield* AutoRead
+      const write = yield* AutoWrite
+
+      const startExit = yield* write.start({ goal: "test" }).pipe(Effect.exit)
+      const snapshotExit = yield* read.snapshot().pipe(Effect.exit)
+
+      expect(startExit._tag).toBe("Failure")
+      expect(snapshotExit._tag).toBe("Failure")
+    }).pipe(Effect.provide(AutoControllerLive.pipe(Layer.provide(ActorEngine.Live)))),
+  )
+
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
       const runtime = yield* ActorRouter
@@ -378,11 +396,7 @@ describe("Auto runtime integration", () => {
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
       // Fence: ask GetSnapshot drains the mailbox up to and including the
       // ReviewSignal tell, so peekView observes post-Review state.
-      yield* runtime.execute(
-        sessionId,
-        AutoProtocol.GetSnapshot.make(),
-        branchId,
-      ) as Effect.Effect<AutoSnapshotReply>
+      yield* getSnapshot(runtime)
       const engine = yield* ActorEngine
       const ref = yield* findAutoActor
       const view = yield* engine.peekView(ref)

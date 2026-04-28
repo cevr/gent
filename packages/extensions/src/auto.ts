@@ -15,8 +15,8 @@
  * `review`, `TurnCompleted`) are observed by the Resource shell's
  * `runtime.toolResult` / `runtime.turnAfter` slots which translate them
  * to actor messages and drain pending follow-ups via
- * `ctx.session.queueFollowUp`. ExtensionMessage envelopes route through
- * the actor-route fallback in ActorRouter (W10-1b.0).
+ * `ctx.session.queueFollowUp`. Public commands/readers are exposed through
+ * typed RPC capabilities; actor messages stay private to the workflow.
  */
 
 import { Effect, Schema } from "effect"
@@ -25,15 +25,18 @@ import {
   defineExtension,
   defineResource,
   isRecord,
-  ServiceKey,
+  ref,
   TaggedEnumClass,
   type Behavior,
   type ToolResultInput,
   type TurnAfterInput,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
+export { AutoMsg, AutoService } from "./auto-actor-protocol.js"
+import { AutoMsg, AutoService } from "./auto-actor-protocol.js"
+import { AUTO_EXTENSION_ID, AutoRpc, type AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
+import { AutoControllerLive } from "./auto-controller.js"
 import { AutoJournal } from "./auto-journal.js"
 
 const parseCheckpointParams = (
@@ -140,47 +143,15 @@ export const AutoState = TaggedEnumClass("AutoState", {
 })
 export type AutoState = Schema.Schema.Type<typeof AutoState>
 
-// ── Actor messages ──
-//
-// `_tag` strings are shared with `AutoProtocol.*` ExtensionMessage envelopes
-// so the actor-route fallback in ActorRouter (W10-1b.0) can forward
-// envelopes directly into the actor mailbox without re-encoding.
-
-export const AutoMsg = TaggedEnumClass("AutoMsg", {
-  StartAuto: { goal: Schema.String, maxIterations: Schema.optional(Schema.Number) },
-  CancelAuto: {},
-  ToggleAuto: {
-    goal: Schema.optional(Schema.String),
-    maxIterations: Schema.optional(Schema.Number),
-  },
-  AutoSignal: {
-    status: Schema.Literals(["continue", "complete", "abandon"]),
-    summary: Schema.String,
-    learnings: Schema.optional(Schema.String),
-    metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
-    nextIdea: Schema.optional(Schema.String),
-  },
-  RequestHandoff: { content: Schema.String },
-  ReviewSignal: {},
-  TurnCompleted: {},
-  IsActive: {},
-  GetSnapshot: {},
-  /** Slot-handler-only: read & clear the pending follow-up content. */
-  DrainFollowUp: TaggedEnumClass.askVariant<string | undefined>()({}),
-})
-export type AutoMsg = Schema.Schema.Type<typeof AutoMsg>
-
-export const AutoService = ServiceKey<AutoMsg>("@gent/auto/workflow")
-
 // ── Snapshot projection ──
 //
-// `projectSnapshot` is the typed RPC reply for `AutoProtocol.GetSnapshot` —
+// `projectSnapshot` is the typed RPC reply for `AutoRpc.GetSnapshot` —
 // other extensions read the auto loop state through this shape. The behavior's
 // `view` slot uses the same projected snapshot to derive prompt sections + tool
 // policy fragments per turn in
 // `ExtensionReactions.resolveTurnProjection`.
 
-const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
+export const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
   if (state._tag === "Inactive") return { active: false }
   if (state._tag === "Working") {
     return {
@@ -547,9 +518,11 @@ const drainAndQueueFollowUp = (ctx: ExtensionHostContext) =>
 // follow-up the resulting transition queued.
 
 const readSnapshot = (ctx: ExtensionHostContext) =>
-  ctx.extension
-    .ask(AutoProtocol.GetSnapshot.make())
-    .pipe(Effect.catchEager(() => Effect.succeed(undefined as AutoSnapshotReply | undefined)))
+  Effect.gen(function* () {
+    const autoRef = yield* findAutoRef(ctx)
+    if (autoRef === undefined) return undefined
+    return yield* ctx.actors.ask(autoRef, AutoMsg.GetSnapshot.make({}))
+  }).pipe(Effect.catchEager(() => Effect.succeed(undefined as AutoSnapshotReply | undefined)))
 
 const tellAutoFromTool = (input: ToolResultInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
@@ -656,10 +629,10 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     // Tell the actor about the turn boundary first so the wedge watchdog
     // and AwaitingReview promptPending flag advance before snapshot reads.
-    const ref = yield* findAutoRef(ctx)
-    if (ref !== undefined) {
+    const autoRef = yield* findAutoRef(ctx)
+    if (autoRef !== undefined) {
       yield* ctx.actors
-        .tell(ref, AutoMsg.TurnCompleted.make({}))
+        .tell(autoRef, AutoMsg.TurnCompleted.make({}))
         .pipe(Effect.catchEager(() => Effect.void))
     }
 
@@ -689,19 +662,17 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       }
     }
 
-    yield* ctx.extension.send(
-      AutoProtocol.RequestHandoff.make({
-        content: [
-          `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
-          `Include this context:`,
-          `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
-          `- Goal: ${snapshot.goal}`,
-          journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      }),
-    )
+    yield* ctx.extension.request(ref(AutoRpc.RequestHandoff), {
+      content: [
+        `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
+        `Include this context:`,
+        `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
+        `- Goal: ${snapshot.goal}`,
+        journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    })
 
     // RequestHandoff queues a follow-up via the actor; drain it now so the
     // handoff prompt lands on the upcoming turn rather than the next one.
@@ -721,7 +692,14 @@ export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   tools: [AutoCheckpointTool],
   actors: [behavior(autoBehavior)],
-  protocols: AutoProtocol,
+  rpc: [
+    AutoRpc.StartAuto,
+    AutoRpc.RequestHandoff,
+    AutoRpc.CancelAuto,
+    AutoRpc.ToggleAuto,
+    AutoRpc.IsActive,
+    AutoRpc.GetSnapshot,
+  ],
   reactions: {
     toolResult: (input, hostCtx) =>
       journalInterceptorImpl(input, (next) => Effect.succeed(next.result), hostCtx),
@@ -735,6 +713,10 @@ export const AutoExtension = defineExtension({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
+    }),
+    defineResource({
+      scope: "process",
+      layer: AutoControllerLive,
     }),
   ],
 })
