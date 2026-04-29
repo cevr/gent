@@ -1119,3 +1119,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd73e-865d-7853-ad48-d4a32112f413`; no P0/P1/P2 blockers.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-031822-codex-to-claude-55029a/claude.md`; no P0/P1/P2 blockers.
   - Note: recovery now emits `AgentLoopRecoveryAbandoned` for checkpoint read/version/decode abandonment and fails closed on fatal checkpoint reads; `RecoveryOutcome` is a real typed result of recovery resolution rather than a discarded marker.
+- Batch 8 complete.
+  - Gate: `bun run typecheck`, `bun test packages/core/tests/runtime/agent-loop.test.ts --timeout 20000`, `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd74c-158e-7602-bd2a-92ad0121bd9d`; no P0/P1/P2 blockers.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-033309-codex-to-claude-4450ba/`; attempt timed out/stuck in worktree discovery before producing `claude.md`, so no counsel findings were available for this narrowed batch.
+  - Note: this batch deliberately landed the smallest safe side-ref deletion: `idlePersistedRef` and `turnFailureRef` are now derived from the canonical `loopRef` aggregate via `stateEpoch` and `turnFailure`; active stream/startup side state remains explicit follow-up work.

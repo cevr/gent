@@ -174,10 +174,6 @@ type CommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
   | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
 
-type TurnFailureState =
-  | { readonly count: number }
-  | { readonly count: number; readonly error: AgentLoopError }
-
 const findPersistedEvent = (params: {
   storage: StorageService
   sessionId: SessionId
@@ -1347,8 +1343,6 @@ type LoopDriverEvent = Schema.Schema.Type<typeof LoopDriverEvent>
 type LoopHandle = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>
-  idlePersistedRef: SubscriptionRef.SubscriptionRef<number>
-  turnFailureRef: SubscriptionRef.SubscriptionRef<TurnFailureState>
   sideMutationSemaphore: Semaphore.Semaphore
   queueMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
@@ -1426,25 +1420,23 @@ const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
       })
 }
 
-const awaitIdlePersisted = (
-  loop: LoopHandle,
-  baseline: number,
-): Effect.Effect<void, AgentLoopError> =>
+const awaitIdleStateSince = (loop: LoopHandle, baseline: number): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.idlePersistedRef)
-    if (current > baseline) return
-    yield* SubscriptionRef.changes(loop.idlePersistedRef).pipe(
-      Stream.filter((count) => count > baseline),
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
+    yield* SubscriptionRef.changes(loop.loopRef).pipe(
+      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
       Stream.runHead,
     )
   })
 
-const failTurnFailureState = (state: TurnFailureState) =>
+const failTurnFailureState = (failure: { readonly error: unknown }) =>
   Effect.fail(
-    "error" in state
-      ? state.error
+    Schema.is(AgentLoopError)(failure.error)
+      ? failure.error
       : new AgentLoopError({
           message: "Agent loop turn failed",
+          cause: failure.error,
         }),
   )
 
@@ -1453,13 +1445,20 @@ const awaitTurnFailure = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.turnFailureRef)
-    if (current.count > baseline) return yield* failTurnFailureState(current)
-    const next = yield* SubscriptionRef.changes(loop.turnFailureRef).pipe(
-      Stream.filter((state) => state.count > baseline),
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
+    const hasNewTurnFailure = (
+      state: AgentLoopState,
+    ): state is AgentLoopState & {
+      readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
+    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
+    const next = yield* SubscriptionRef.changes(loop.loopRef).pipe(
+      Stream.filter(hasNewTurnFailure),
       Stream.runHead,
     )
-    if (Option.isSome(next)) return yield* failTurnFailureState(next.value)
+    if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
     return yield* new AgentLoopError({
       message: "Agent loop turn failure stream ended",
     })
@@ -1470,8 +1469,10 @@ const failIfTurnFailedSince = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.turnFailureRef)
-    if (current.count > baseline) return yield* failTurnFailureState(current)
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
   })
 
 type LoopRecoveryDecision = {
@@ -1815,8 +1816,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
             )
             const queueMutationSemaphore = yield* Semaphore.make(1)
-            const idlePersistedRef = yield* SubscriptionRef.make(0)
-            const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const closed = yield* Deferred.make<void>()
             let started = false
@@ -1829,20 +1828,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 if (!shouldRetainLoopCheckpoint({ state, queue })) {
                   yield* checkpointStorage.remove({ sessionId, branchId })
                   yield* Effect.logDebug("checkpoint.save.removed")
-                  // Update loopRef BEFORE the idle-bump signal so any
-                  // `awaitIdlePersisted` waiter sees the new state when it
-                  // wakes up. Bumping idlePersistedRef first makes that
-                  // waiter race the loopRef update.
                   yield* SubscriptionRef.update(loopRef, (s) => ({
                     ...s,
                     state,
                     queue,
+                    stateEpoch: s.stateEpoch + 1,
                     startingState: undefined,
                   }))
-                  if (state._tag === "Idle") {
-                    const count = yield* SubscriptionRef.get(idlePersistedRef)
-                    yield* SubscriptionRef.set(idlePersistedRef, count + 1)
-                  }
                   return
                 }
                 yield* checkpointStorage.upsert(
@@ -1860,6 +1852,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   ...s,
                   state,
                   queue,
+                  stateEpoch: s.stateEpoch + 1,
                   startingState: undefined,
                 }))
               }).pipe(
@@ -1878,13 +1871,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
 
             const recordTurnFailure = (cause: Cause.Cause<unknown>) =>
-              Effect.gen(function* () {
-                const current = yield* SubscriptionRef.get(turnFailureRef)
-                yield* SubscriptionRef.set(turnFailureRef, {
-                  count: current.count + 1,
+              SubscriptionRef.update(loopRef, (s) => ({
+                ...s,
+                turnFailure: {
+                  epoch: (s.turnFailure?.epoch ?? 0) + 1,
                   error: causeToAgentLoopError(cause),
-                })
-              })
+                },
+              }))
 
             const currentLoopState = SubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.state))
 
@@ -2217,7 +2210,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             // Persistence is invoked at every state mutation that the FSM
             // previously handled via `lifecycle.durability.save`. The
             // `persistenceFailure` deferred mirrors the FSM's failure
-            // channel so `awaitIdlePersisted` races can short-circuit;
+            // channel so state watchers can short-circuit;
             // the failure also propagates back through the dispatcher so
             // callers (e.g. `submit`) see the error directly — matching
             // the prior `actor.call(Event.Start)` semantics.
@@ -2537,6 +2530,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 ...s,
                 state: recovered.value.state,
                 queue: recovered.value.queue,
+                stateEpoch: s.stateEpoch + 1,
                 startingState: undefined,
               }))
               if (recovered.value.state._tag === "Running") {
@@ -2552,8 +2546,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             return {
               activeStreamRef,
               loopRef,
-              idlePersistedRef,
-              turnFailureRef,
               sideMutationSemaphore,
               queueMutationSemaphore,
               persistenceFailure: Deferred.await(persistenceFailure),
@@ -2958,9 +2950,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 yield* loop.persistQueueState(nextQueue)
                 return undefined
               }
-              const idlePersistedBaseline = yield* SubscriptionRef.get(loop.idlePersistedRef)
-              const turnFailureBaseline = (yield* SubscriptionRef.get(loop.turnFailureRef)).count
-              return { idlePersistedBaseline, turnFailureBaseline }
+              const current = yield* SubscriptionRef.get(loop.loopRef)
+              return {
+                stateEpochBaseline: current.stateEpoch,
+                turnFailureBaseline: current.turnFailure?.epoch ?? 0,
+              }
             }),
           )
           if (start === undefined) {
@@ -2980,7 +2974,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           yield* Effect.raceFirst(
             Effect.raceFirst(
-              awaitIdlePersisted(loop, start.idlePersistedBaseline),
+              awaitIdleStateSince(loop, start.stateEpochBaseline),
               awaitTurnFailure(loop, start.turnFailureBaseline),
             ),
             loop.persistenceFailure,

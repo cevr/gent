@@ -374,6 +374,13 @@ export const runtimeStateFromLoopState = (
 export interface AgentLoopState {
   readonly state: LoopState
   readonly queue: LoopQueueState
+  readonly stateEpoch: number
+  readonly turnFailure:
+    | {
+        readonly epoch: number
+        readonly error: unknown
+      }
+    | undefined
   readonly startingState: LoopState | undefined
 }
 
@@ -383,6 +390,8 @@ export const buildInitialAgentLoopState = (params: {
 }): AgentLoopState => ({
   state: params.state,
   queue: params.queue ?? emptyLoopQueueState(),
+  stateEpoch: 0,
+  turnFailure: undefined,
   startingState: undefined,
 })
 
