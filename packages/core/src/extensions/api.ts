@@ -282,8 +282,17 @@ export type FieldSpec<A> =
       readonly ctx: ExtensionSetupContext
     }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError>)
 
-export interface DefineExtensionInput {
+export interface DefineExtensionInput<Client = unknown> {
   readonly id: string
+  /**
+   * Optional client-side facet owned by the same extension artifact.
+   *
+   * Core keeps this intentionally opaque: the server loader ignores it, while
+   * clients that know their UI runtime can lower it into their local
+   * contribution shape. This lets one conceptual extension carry one id and
+   * one server/client pairing without making core depend on a TUI package.
+   */
+  readonly client?: Client
   readonly resources?: FieldSpec<AnyResourceContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
@@ -502,10 +511,19 @@ export const validatePackageShape = (
  * })
  * ```
  */
-export const defineExtension = (params: DefineExtensionInput): GentExtension => {
+export function defineExtension(
+  params: DefineExtensionInput & { readonly client?: undefined },
+): GentExtension
+export function defineExtension<Client>(
+  params: DefineExtensionInput<Client> & { readonly client: Client },
+): GentExtension & { readonly client: Client }
+export function defineExtension(
+  params: DefineExtensionInput,
+): GentExtension & { readonly client?: unknown } {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,
+    ...(params.client !== undefined ? { client: params.client } : {}),
     setup: (ctx) =>
       Effect.gen(function* () {
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)

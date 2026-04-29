@@ -25,6 +25,7 @@
 //   - autocomplete: collected (no winner), scope-ordered
 
 import type { Effect, ManagedRuntime } from "effect"
+import type { GentExtension } from "@gent/core/extensions/api"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -311,6 +312,11 @@ export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientD
 }
 
 export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
+export type UnifiedClientExtension<R extends ClientRuntimeServices = ClientDeps> = GentExtension & {
+  readonly client: {
+    readonly setup: ExtensionClientSetup<R>
+  }
+}
 
 /**
  * Standalone factory for TUI client modules. Server extensions and TUI
@@ -329,4 +335,22 @@ function standaloneClientModule<R extends ClientRuntimeServices = ClientDeps>(
 }
 
 /** Create a TUI client extension module with typed contributions. */
-export const defineClientExtension = standaloneClientModule
+export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
+  id: string,
+  spec: { readonly setup: ExtensionClientSetup<R> },
+): ExtensionClientModule<R>
+export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
+  extension: UnifiedClientExtension<R>,
+): ExtensionClientModule<R>
+export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
+  idOrExtension: string | UnifiedClientExtension<R>,
+  spec?: { readonly setup: ExtensionClientSetup<R> },
+): ExtensionClientModule<R> {
+  if (typeof idOrExtension === "string") {
+    if (spec === undefined) {
+      throw new Error("defineClientExtension(id, spec) requires a setup spec")
+    }
+    return standaloneClientModule(idOrExtension, spec)
+  }
+  return standaloneClientModule(String(idOrExtension.manifest.id), idOrExtension.client)
+}

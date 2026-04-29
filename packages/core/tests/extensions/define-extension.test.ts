@@ -12,6 +12,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
 import type { ExtensionSetupContext } from "../../src/domain/extension.js"
@@ -43,7 +44,7 @@ const stubProjectionCtx = {
   },
 }
 
-const setupOf = (ext: ReturnType<typeof defineExtension>) => ext.setup(testSetupCtx())
+const setupOf = (ext: GentExtension) => ext.setup(testSetupCtx())
 
 describe("defineExtension", () => {
   it.live("empty extension produces empty contribution buckets", () =>
@@ -56,6 +57,17 @@ describe("defineExtension", () => {
       expect(contributions.resources ?? []).toEqual([])
       expect(contributions.externalDrivers ?? []).toEqual([])
       expect(contributions.reactions).toBeUndefined()
+    }),
+  )
+
+  it.live("client facet is preserved on the shared extension artifact", () =>
+    Effect.gen(function* () {
+      const client = { setup: Effect.succeed([]) }
+      const ext = defineExtension({ id: "shared-client", client })
+      const contributions = yield* setupOf(ext)
+
+      expect(ext.client).toBe(client)
+      expect(contributions).toEqual({})
     }),
   )
 

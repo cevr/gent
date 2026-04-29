@@ -667,6 +667,23 @@ not migration-era optimism.
     findings.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 8 implemented:
+  - Added a typed `defineExtension({ client })` facet that preserves the exact
+    client-side object on the shared extension artifact while keeping core
+    server setup oblivious to client runtime types.
+  - Added TUI `defineClientExtension(sharedExtension)` lowering so clients can
+    derive their module id from the shared server manifest and reuse the
+    facet's setup Effect.
+  - Ported the auto TUI builtin to derive `@gent/auto` from `AutoExtension`
+    instead of duplicating the extension id literal.
+  - Added core and TUI regression tests for client-facet preservation and
+    lowering.
+  - Focused gate: `bun test packages/core/tests/extensions/define-extension.test.ts apps/tui/tests/extension-client-facets.test.ts apps/tui/tests/extension-effect-setup.test.ts apps/tui/tests/extensions-resolve.test.ts`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd96b-cfc5-7780-8c29-1432582c8170`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition
