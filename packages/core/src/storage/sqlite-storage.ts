@@ -897,6 +897,31 @@ const migrateMessageSearchIndex = Effect.fn("Storage.migrateMessageSearchIndex")
   yield* setStorageMeta("messages_fts_schema_version", MESSAGES_FTS_SCHEMA_VERSION)
 })
 
+const repairDuplicatePendingInteractions = Effect.fn("Storage.repairDuplicatePendingInteractions")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+    UPDATE interaction_requests
+    SET status = 'resolved'
+    WHERE status = 'pending'
+      AND request_id IN (
+        SELECT request_id
+        FROM (
+          SELECT
+            request_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY session_id, branch_id
+              ORDER BY created_at DESC, request_id DESC
+            ) AS pending_rank
+          FROM interaction_requests
+          WHERE status = 'pending'
+        )
+        WHERE pending_rank > 1
+      )
+  `
+  },
+)
+
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
@@ -1094,6 +1119,10 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,
+  )
+  yield* repairDuplicatePendingInteractions()
+  yield* sql.unsafe(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_interaction_requests_pending_singleton ON interaction_requests(session_id, branch_id) WHERE status = 'pending'`,
   )
 
   yield* migrateMessageSearchIndex()

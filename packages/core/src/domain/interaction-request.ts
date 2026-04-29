@@ -130,10 +130,11 @@ export interface InteractionService {
 
 /**
  * Storage callbacks for durable interaction requests.
- * Errors are caught at the callback site — these must not fail.
+ * Persist failures fail closed. A presented interaction without a durable row
+ * strands recovery and breaks the pending singleton invariant.
  */
 export interface InteractionStorageConfig {
-  readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, never>
+  readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
 }
 
@@ -190,7 +191,6 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
       }
 
       const requestId = InteractionRequestId.make(Bun.randomUUIDv7())
-      pendingByContext.set(ctxKey, requestId)
 
       // Persist to storage before publishing event (crash-safe)
       if (config.storage !== undefined) {
@@ -205,6 +205,7 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
           createdAt: yield* Clock.currentTimeMillis,
         })
       }
+      pendingByContext.set(ctxKey, requestId)
 
       yield* config.onPresent(requestId, params, ctx)
 

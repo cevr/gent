@@ -563,6 +563,24 @@ not migration-era optimism.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output, matching the documented
     counsel instability risk.
+- Batch 2 implemented:
+  - Added startup repair for legacy duplicate pending `interaction_requests`
+    rows, keeping newest pending by `(created_at DESC, request_id DESC)` and
+    marking older duplicates resolved.
+  - Added partial unique index
+    `idx_interaction_requests_pending_singleton` on `(session_id, branch_id)`
+    where `status = 'pending'`.
+  - Changed durable interaction persistence to fail closed before publishing a
+    new interaction, so rejected singleton persists cannot create non-durable
+    UI requests.
+  - Added storage migration coverage, direct storage uniqueness coverage, and a
+    service-level fail-closed regression for duplicate pending persistence.
+  - Focused gate: `bun test packages/core/tests/domain/interaction-request.test.ts packages/core/tests/storage/sqlite-storage.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd924-fe5b-7692-abff-2bca898dd598`; P1 swallowed
+    persist failure fixed in-batch.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

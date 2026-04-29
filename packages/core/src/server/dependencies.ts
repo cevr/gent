@@ -3,7 +3,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import { EventStore } from "../domain/event.js"
+import { EventStore, EventStoreError } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
@@ -213,7 +213,17 @@ export const createDependencies = (config: DependenciesConfig) => {
       Effect.gen(function* () {
         const store = yield* InteractionStorage
         return ApprovalService.LiveWithStorage({
-          persist: (record) => store.persist(record).pipe(Effect.catchEager(() => Effect.void)),
+          persist: (record) =>
+            store.persist(record).pipe(
+              Effect.asVoid,
+              Effect.mapError(
+                (cause) =>
+                  new EventStoreError({
+                    message: "Failed to persist interaction request",
+                    cause,
+                  }),
+              ),
+            ),
           resolve: (requestId) =>
             store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         })

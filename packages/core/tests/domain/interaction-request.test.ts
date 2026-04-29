@@ -1,8 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { InteractionStorage } from "@gent/core/storage/interaction-storage"
+import {
+  InteractionStorage,
+  type InteractionStorageService,
+} from "@gent/core/storage/interaction-storage"
 import { ensureStorageParents } from "@gent/core/test-utils"
+import { EventStoreError } from "@gent/core/domain/event"
 import {
   makeInteractionService,
   InteractionPendingError,
@@ -10,6 +14,18 @@ import {
   type InteractionStorageConfig,
 } from "@gent/core/domain/interaction-request"
 import { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
+
+const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
+  is.persist(record).pipe(
+    Effect.asVoid,
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: "Failed to persist interaction request",
+          cause,
+        }),
+    ),
+  )
 // ============================================================================
 // Interaction Request — cold interaction mechanics
 // ============================================================================
@@ -20,11 +36,7 @@ describe("Interaction Request", () => {
       yield* Effect.gen(function* () {
         const is = yield* InteractionStorage
         const storageCallbacks: InteractionStorageConfig = {
-          persist: (record) =>
-            is.persist(record).pipe(
-              Effect.asVoid,
-              Effect.catchEager(() => Effect.void),
-            ),
+          persist: (record) => persistInteraction(is, record),
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
         const interaction = makeInteractionService({
@@ -84,6 +96,86 @@ describe("Interaction Request", () => {
         expect(after.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
           false,
         )
+      }).pipe(Effect.provide(storageLive))
+    }),
+  )
+  it.live("pending requests are unique per session branch", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const is = yield* InteractionStorage
+        const sessionId = SessionId.make("s-singleton")
+        const branchId = BranchId.make("b-singleton")
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* is.persist({
+          requestId: InteractionRequestId.make("req-singleton-1"),
+          type: "approval",
+          sessionId,
+          branchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: 1,
+        })
+        const duplicate = yield* Effect.exit(
+          is.persist({
+            requestId: InteractionRequestId.make("req-singleton-2"),
+            type: "approval",
+            sessionId,
+            branchId,
+            paramsJson: "{}",
+            status: "pending",
+            createdAt: 2,
+          }),
+        )
+        expect(duplicate._tag).toBe("Failure")
+        const pending = yield* is.listPending({ sessionId, branchId })
+        expect(pending.map((record) => record.requestId)).toEqual([
+          InteractionRequestId.make("req-singleton-1"),
+        ])
+      }).pipe(Effect.provide(storageLive))
+    }),
+  )
+  it.live("service fails closed when durable pending singleton rejects a second request", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const is = yield* InteractionStorage
+        const sessionId = SessionId.make("s-service-singleton")
+        const branchId = BranchId.make("b-service-singleton")
+        const storageCallbacks: InteractionStorageConfig = {
+          persist: (record) => persistInteraction(is, record),
+          resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        }
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* is.persist({
+          requestId: InteractionRequestId.make("req-existing-pending"),
+          type: "approval",
+          sessionId,
+          branchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: 1,
+        })
+
+        const presented: InteractionRequestId[] = []
+        const interaction = makeInteractionService({
+          onPresent: (requestId) =>
+            Effect.sync(() => {
+              presented.push(requestId)
+            }),
+          storage: storageCallbacks,
+        })
+        const exit = yield* Effect.exit(
+          interaction.present({ text: "second" }, { sessionId, branchId }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(Cause.pretty(exit.cause)).toContain("Failed to persist interaction request")
+        }
+        expect(presented).toEqual([])
+        expect(interaction.pendingRequestId({ sessionId, branchId })).toBeUndefined()
+        const pending = yield* is.listPending({ sessionId, branchId })
+        expect(pending.map((record) => record.requestId)).toEqual([
+          InteractionRequestId.make("req-existing-pending"),
+        ])
       }).pipe(Effect.provide(storageLive))
     }),
   )
@@ -175,11 +267,7 @@ describe("Interaction Request", () => {
       yield* Effect.gen(function* () {
         const is = yield* InteractionStorage
         const storageCallbacks: InteractionStorageConfig = {
-          persist: (record) =>
-            is.persist(record).pipe(
-              Effect.asVoid,
-              Effect.catchEager(() => Effect.void),
-            ),
+          persist: (record) => persistInteraction(is, record),
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
         const sessionId = SessionId.make("s-cold-resume")
@@ -231,11 +319,7 @@ describe("Interaction Request", () => {
       yield* Effect.gen(function* () {
         const is = yield* InteractionStorage
         const storageCallbacks: InteractionStorageConfig = {
-          persist: (record) =>
-            is.persist(record).pipe(
-              Effect.asVoid,
-              Effect.catchEager(() => Effect.void),
-            ),
+          persist: (record) => persistInteraction(is, record),
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
         const interaction = makeInteractionService({

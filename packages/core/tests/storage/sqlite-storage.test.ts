@@ -1145,6 +1145,65 @@ describe("Storage", () => {
         expect(remaining[0]?.count).toBe(0)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
+    it.live("migrates duplicate pending interactions to one pending row per session branch", () =>
+      Effect.gen(function* () {
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-interaction-singleton-"))),
+          (dir) =>
+            Effect.gen(function* () {
+              const dbPath = join(dir, "legacy.db")
+              const layer = Storage.LiveWithSql(dbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              yield* Effect.gen(function* () {
+                const storage = yield* Storage
+                const sql = yield* SqlClient.SqlClient
+                yield* storage.createSession(
+                  new Session({
+                    id: SessionId.make("legacy-interaction-session"),
+                    name: "legacy",
+                    createdAt: new Date(0),
+                    updatedAt: new Date(0),
+                  }),
+                )
+                yield* storage.createBranch(
+                  new Branch({
+                    id: BranchId.make("legacy-interaction-branch"),
+                    sessionId: SessionId.make("legacy-interaction-session"),
+                    name: "main",
+                    createdAt: new Date(0),
+                  }),
+                )
+                yield* sql.unsafe(`DROP INDEX idx_interaction_requests_pending_singleton`)
+                yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"old-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${1})`
+                yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"new-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${2})`
+              }).pipe(Effect.provide(layer))
+
+              yield* Effect.gen(function* () {
+                yield* Storage
+                const sql = yield* SqlClient.SqlClient
+                const rows = yield* sql<{
+                  request_id: string
+                  status: string
+                }>`SELECT request_id, status FROM interaction_requests ORDER BY request_id`
+                expect(rows).toEqual([
+                  { request_id: "new-pending", status: "pending" },
+                  { request_id: "old-pending", status: "resolved" },
+                ])
+                const duplicate = yield* Effect.exit(
+                  sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"third-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${3})`,
+                )
+                expect(duplicate._tag).toBe("Failure")
+              }).pipe(Effect.provide(layer))
+            }),
+          (dir) =>
+            Effect.sync(() => {
+              rmSync(dir, { recursive: true, force: true })
+            }),
+        )
+      }),
+    )
   })
   describe("Events", () => {
     it.live("getLatestEvent returns latest event by tag", () =>
