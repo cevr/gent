@@ -703,6 +703,22 @@ not migration-era optimism.
     typing gap fixed in-batch.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 10 implemented:
+  - Added typed reaction seams for `messageInput`, `contextMessages`,
+    `permissionCheck`, and `toolExecute`.
+  - Wired the seams through `compileExtensionReactions` with scope-ordered
+    composition and isolated failure handling, matching existing
+    `systemPrompt` / `toolResult` behavior.
+  - Preserved the base permission service and base tool execution as the first
+    authoritative step before extension interceptors.
+  - Added focused reaction tests for pass-through behavior, ordering, failure
+    isolation, permission decision composition, and tool execution wrapping.
+  - Focused gate: `bun test packages/core/tests/extensions/extension-reactions.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd97e-9f0f-70a1-895c-ee500abecd57`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

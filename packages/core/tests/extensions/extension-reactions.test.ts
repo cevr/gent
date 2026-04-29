@@ -5,8 +5,11 @@ import type {
   ContextMessagesInput,
   ExtensionContributions,
   LoadedExtension,
+  MessageInputInput,
   MessageOutputInput,
+  PermissionCheckInput,
   SystemPromptInput,
+  ToolExecuteInput,
   TurnBeforeInput,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
@@ -65,6 +68,58 @@ describe("runtime slots", () => {
         stubHostCtx,
       )
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello"))))
+  })
+
+  it.live("messageInput composes explicit rewrites in scope order", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          messageInput: (input) => Effect.succeed(`${input.content} builtin`),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          messageInput: (input) => Effect.succeed(`${input.content} project`),
+        },
+      }),
+    ])
+
+    return slots
+      .normalizeMessageInput(
+        {
+          content: "hello",
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+        } satisfies MessageInputInput,
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello builtin project"))))
+  })
+
+  it.live("messageInput isolates failing rewrites", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          messageInput: (input) => Effect.succeed(`${input.content} builtin`),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          messageInput: () => Effect.fail(new BoomError({ reason: "bad input" })),
+        },
+      }),
+    ])
+
+    return slots
+      .normalizeMessageInput(
+        {
+          content: "hello",
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+        } satisfies MessageInputInput,
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello builtin"))))
   })
 
   it.live("systemPrompt composes explicit reaction rewrites in scope order", () => {
@@ -149,6 +204,85 @@ describe("runtime slots", () => {
       )
   })
 
+  it.live("contextMessages composes explicit rewrites and isolates failures", () => {
+    const baseMessage = Message.Regular.make({
+      id: MessageId.make("m1"),
+      sessionId: SessionId.make("test-session"),
+      branchId: BranchId.make("test-branch"),
+      role: "user",
+      parts: [new TextPart({ type: "text", text: "hello" })],
+      createdAt: new Date(),
+    })
+    const appendedMessage = Message.Regular.make({
+      id: MessageId.make("m2"),
+      sessionId: SessionId.make("test-session"),
+      branchId: BranchId.make("test-branch"),
+      role: "user",
+      parts: [new TextPart({ type: "text", text: "extra" })],
+      createdAt: new Date(),
+    })
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          contextMessages: (input) => Effect.succeed([...input.messages, appendedMessage]),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          contextMessages: () => Effect.fail(new BoomError({ reason: "bad context" })),
+        },
+      }),
+    ])
+
+    return slots
+      .resolveContextMessages(
+        {
+          messages: [baseMessage],
+          agent: Agents["cowork"]!,
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+        } satisfies ContextMessagesInput,
+        { projection: stubProjectionCtx, host: stubHostCtx },
+      )
+      .pipe(
+        Effect.tap((messages) =>
+          Effect.sync(() =>
+            expect(messages.map((message) => message.id)).toEqual([
+              MessageId.make("m1"),
+              MessageId.make("m2"),
+            ]),
+          ),
+        ),
+      )
+  })
+
+  it.live("permissionCheck composes from base decision", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          permissionCheck: (input) =>
+            Effect.succeed(input.toolName === "blocked" ? "denied" : input.current),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          permissionCheck: () => Effect.fail(new BoomError({ reason: "bad permission" })),
+        },
+      }),
+    ])
+
+    return slots
+      .checkPermission(
+        {
+          toolName: "blocked",
+          input: {},
+        } satisfies PermissionCheckInput,
+        () => Effect.succeed("allowed"),
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))))
+  })
+
   it.live("toolResult applies explicit resource enrichments in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
@@ -179,6 +313,64 @@ describe("runtime slots", () => {
         stubHostCtx,
       )
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))))
+  })
+
+  it.live("toolExecute wraps base execution in scope order", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          toolExecute: (input) => Effect.succeed(`${String(input.current)}-builtin`),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          toolExecute: (input) => Effect.succeed(`${String(input.current)}-project`),
+        },
+      }),
+    ])
+
+    return slots
+      .executeTool(
+        {
+          toolCallId: ToolCallId.make("tc-1"),
+          toolName: "echo",
+          input: { text: "hello" },
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+        } satisfies ToolExecuteInput,
+        () => Effect.succeed("base"),
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-project"))))
+  })
+
+  it.live("toolExecute isolates wrapper failures", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        reactions: {
+          toolExecute: (input) => Effect.succeed(`${String(input.current)}-builtin`),
+        },
+      }),
+      makeExt("project", "project", {
+        reactions: {
+          toolExecute: () => Effect.fail(new BoomError({ reason: "bad execute" })),
+        },
+      }),
+    ])
+
+    return slots
+      .executeTool(
+        {
+          toolCallId: ToolCallId.make("tc-1"),
+          toolName: "echo",
+          input: { text: "hello" },
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+        } satisfies ToolExecuteInput,
+        () => Effect.succeed("base"),
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin"))))
   })
 
   it.live("turnAfter explicit reactions keep continue/isolate/halt semantics", () => {

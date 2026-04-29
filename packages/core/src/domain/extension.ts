@@ -10,6 +10,7 @@ export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
+import type { PermissionResult } from "./permission.js"
 
 // Extension Manifest — authored by extension author
 
@@ -264,6 +265,30 @@ export interface ExtensionReactions<E = never, R = never> {
     ctx: ExtensionHostContext,
   ) => Effect.Effect<string, E, R>
   /**
+   * User-message rewrite before the message is committed. Runs in scope order;
+   * failures are isolated and leave the current content unchanged.
+   */
+  readonly messageInput?: (
+    input: MessageInputInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<string, E, R>
+  /**
+   * Context-message rewrite before prompt assembly. Runs in scope order;
+   * failures are isolated and leave the current message list unchanged.
+   */
+  readonly contextMessages?: (
+    input: ContextMessagesInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<ReadonlyArray<Message>, E, R>
+  /**
+   * Permission decision interceptor. Receives the current decision and may
+   * narrow or widen it. Failures are isolated and preserve the current result.
+   */
+  readonly permissionCheck?: (
+    input: PermissionCheckInput & { readonly current: PermissionResult },
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<PermissionResult, E, R>
+  /**
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
    * derivations that need current turn metadata plus services.
    */
@@ -279,6 +304,15 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly toolResult?: (
     input: ToolResultInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<unknown, E, R>
+  /**
+   * Tool execution wrapper. Receives the current result produced by the base
+   * tool or a lower-scope wrapper. Use sparingly for auditing or compatibility
+   * shims; ordinary behavior belongs in the tool implementation.
+   */
+  readonly toolExecute?: (
+    input: ToolExecuteInput & { readonly current: unknown },
     ctx: ExtensionHostContext,
   ) => Effect.Effect<unknown, E, R>
 }
