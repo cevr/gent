@@ -11,7 +11,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Context } from "effect"
-import { Effect, Fiber, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
@@ -31,10 +31,9 @@ import { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { MessageId } from "@gent/core/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
-import { runWithReconnect } from "../utils/run-with-reconnect"
 import { useWorkspace } from "../workspace"
-import { reduceAgentLifecycle } from "./agent-lifecycle"
-import { runSessionSubscriptionAttempt } from "./session-subscription"
+import { AgentStatus, type AgentState } from "./agent-state"
+import { createSessionSubscriptionEffect } from "./session-subscription"
 
 import type {
   ConnectionState,
@@ -85,33 +84,7 @@ const resolveModelInfo = (
 
 export type { Session, SessionState } from "./session-state"
 
-// =============================================================================
-// Agent State (derived from events) - discriminated union
-// =============================================================================
-
-export type AgentStatus =
-  | { readonly _tag: "idle" }
-  | { readonly _tag: "streaming" }
-  | { readonly _tag: "error"; readonly error: string }
-
-export const AgentStatus = {
-  idle: (): AgentStatus => ({ _tag: "idle" }),
-  streaming: (): AgentStatus => ({ _tag: "streaming" }),
-  error: (error: string): AgentStatus => ({ _tag: "error", error }),
-} as const
-
-export interface AgentState {
-  agent: AgentName | undefined
-  status: AgentStatus
-  cost: number
-  /**
-   * Server-authoritative model id from `SessionSnapshot.metrics.lastModelId`.
-   * Mirrors the cost field's flow: hydrated from snapshot, refreshed on
-   * `StreamEnded`. Falls back to the agent's default model only when no
-   * stream has ended yet for the active session.
-   */
-  lastModelId: ModelId | undefined
-}
+export { AgentStatus, type AgentState } from "./agent-state"
 
 // =============================================================================
 // Focused Client Surfaces
@@ -471,232 +444,59 @@ export function ClientProvider(props: ClientProviderProps) {
     ),
   )
 
-  // Subscribe to events when session becomes active - SINGLE shared subscription
-  // Uses on() to explicitly track only sessionKey, not other signals read inside
-  createEffect(
-    on([sessionKey, workerEpoch], ([key]) => {
-      if (key === null) {
-        setLastSeenEventId(null)
-        setLastSeenSessionKey(null)
-        setConnectionIssue(null)
-        return
-      }
-      if (key !== lastSeenSessionKey()) {
-        setLastSeenSessionKey(key)
-        setLastSeenEventId(null)
-        setConnectionIssue(null)
-      }
-
-      const sep = key.indexOf(":")
-      const sessionId = SessionId.make(key.slice(0, sep))
-      const branchId = BranchId.make(key.slice(sep + 1))
-      let cancelled = false
-      const isActiveSession = () => !cancelled && sessionKey() === key
-
-      const forwardExtensionStateChanged = (event: EventEnvelope["event"]): void => {
-        if (event._tag !== "ExtensionStateChanged") return
-        if (extensionStateChangedSubscribers.size === 0) return
-        const pulse = {
-          sessionId: event.sessionId,
-          branchId: event.branchId,
+  const notifyExtensionStateChanged = (event: EventEnvelope["event"]): void => {
+    if (event._tag !== "ExtensionStateChanged") return
+    if (extensionStateChangedSubscribers.size === 0) return
+    const pulse = {
+      sessionId: event.sessionId,
+      branchId: event.branchId,
+      extensionId: event.extensionId,
+    }
+    for (const cb of extensionStateChangedSubscribers) {
+      try {
+        cb(pulse)
+      } catch (err) {
+        log.warn("client.extensionStateChanged.subscriber.threw", {
           extensionId: event.extensionId,
-        }
-        for (const cb of extensionStateChangedSubscribers) {
-          // Each subscriber owns its own try/catch — one bad subscriber
-          // shouldn't starve siblings. We log + drop.
-          try {
-            cb(pulse)
-          } catch (err) {
-            log.warn("client.extensionStateChanged.subscriber.threw", {
-              extensionId: event.extensionId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-      }
-
-      const forwardSessionEvent = (envelope: EventEnvelope): void => {
-        if (sessionEventSubscribers.size === 0) return
-        for (const cb of sessionEventSubscribers) {
-          try {
-            cb(envelope)
-          } catch (err) {
-            log.warn("client.sessionEvent.subscriber.threw", {
-              tag: envelope.event._tag,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-      }
-
-      const processEvent = (envelope: EventEnvelope): void => {
-        if (!isActiveSession()) return
-
-        log.debug("event.received", {
-          eventId: envelope.id,
-          tag: envelope.event._tag,
-          traceId: envelope.traceId,
+          error: err instanceof Error ? err.message : String(err),
         })
-        setConnectionIssue(null)
-
-        forwardSessionEvent(envelope)
-
-        setLastSeenEventId(envelope.id)
-
-        const event = envelope.event
-
-        // Cost/token updates come from the server — `client.actor.getMetrics`
-        // is the authority. On `StreamEnded` we fetch fresh metrics instead
-        // of re-joining event.usage against a client-side pricing registry.
-        // The server computes cost against ModelRegistry and sums it per
-        // session, so there is one source of truth.
-        if (event._tag === "StreamEnded" && event.usage !== undefined) {
-          const s = session()
-          if (s !== null) {
-            cast(
-              client.actor.getMetrics({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
-                Effect.tap((metrics) =>
-                  Effect.sync(() => {
-                    setAgentStore({
-                      cost: metrics.costUsd,
-                      lastModelId: metrics.lastModelId,
-                    })
-                    setLatestInputTokens(metrics.lastInputTokens)
-                  }),
-                ),
-                Effect.catchEager(() => Effect.void),
-              ),
-            )
-          }
-        }
-
-        if (event._tag === "ErrorOccurred") {
-          log.error("agent.error", { error: event.error, eventId: envelope.id })
-        }
-
-        const lifecycle = reduceAgentLifecycle(event)
-        if (lifecycle.preferredAgent !== undefined) {
-          if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
-            setAgentStore({ agent: lifecycle.preferredAgent })
-          } else {
-            setAgentStore({ agent: undefined })
-          }
-        }
-        if (lifecycle.status !== undefined) {
-          switch (lifecycle.status._tag) {
-            case "idle":
-              setAgentStore({ status: AgentStatus.idle() })
-              break
-            case "streaming":
-              setAgentStore({ status: AgentStatus.streaming() })
-              break
-            case "error":
-              setAgentStore({ status: AgentStatus.error(lifecycle.status.error) })
-              break
-          }
-        }
-
-        // Forward extension state-change pulses to registered callback
-        forwardExtensionStateChanged(event)
-
-        switch (event._tag) {
-          case "SessionNameUpdated":
-            if (event.sessionId === sessionId) {
-              dispatchSession(SessionStateEvent.UpdateName.make({ name: event.name }))
-            }
-            break
-
-          case "BranchSwitched":
-            if (event.sessionId === sessionId) {
-              dispatchSession(SessionStateEvent.UpdateBranch.make({ branchId: event.toBranchId }))
-            }
-            break
-
-          case "SessionSettingsUpdated":
-            if (event.sessionId === sessionId) {
-              if (event.reasoningLevel !== undefined) {
-                dispatchSession(
-                  SessionStateEvent.UpdateReasoningLevel.make({
-                    reasoningLevel: event.reasoningLevel,
-                  }),
-                )
-              }
-            }
-            break
-        }
       }
+    }
+  }
 
-      log.info("ctx.subscribe.start", { sessionId, branchId })
-      const fiber = runtime.fork(
-        runWithReconnect(
-          () =>
-            Effect.gen(function* () {
-              if (connectionState()?._tag !== "connected") {
-                log.info("ctx.wait-for-ready", { sessionId, branchId })
-                yield* runtime.lifecycle.waitForReady
-                log.info("ctx.ready", { sessionId, branchId })
-              }
+  const notifySessionEvent = (envelope: EventEnvelope): void => {
+    if (sessionEventSubscribers.size === 0) return
+    for (const cb of sessionEventSubscribers) {
+      try {
+        cb(envelope)
+      } catch (err) {
+        log.warn("client.sessionEvent.subscriber.threw", {
+          tag: envelope.event._tag,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
 
-              yield* runSessionSubscriptionAttempt({
-                sessionId,
-                branchId,
-                lastSeenEventId: lastSeenEventId(),
-                log,
-                isActiveSession,
-                getSnapshot: client.session.getSnapshot({ sessionId, branchId }),
-                hydrateSnapshot: (snapshot) => {
-                  setConnectionIssue(null)
-                  if (snapshot.reasoningLevel !== undefined) {
-                    dispatchSession(
-                      SessionStateEvent.UpdateReasoningLevel.make({
-                        reasoningLevel: snapshot.reasoningLevel,
-                      }),
-                    )
-                  }
-                  const rt = snapshot.runtime
-                  const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
-                  setAgentStore({
-                    agent: rt.agent,
-                    status,
-                    cost: snapshot.metrics.costUsd,
-                    lastModelId: snapshot.metrics.lastModelId,
-                  })
-                  setLatestInputTokens(snapshot.metrics.lastInputTokens)
-
-                  // No initial-snapshot fan-out: the UI snapshot channel is gone.
-                  // Widgets fetch initial state via `client.extension.request(...)`
-                  // and refetch from session events or explicit extension-state changes.
-                },
-                openEvents: (after) =>
-                  client.session.events({
-                    sessionId,
-                    branchId,
-                    ...(after !== undefined ? { after } : {}),
-                  }),
-                processEvent,
-              })
-            }),
-          {
-            label: "ctx.events",
-            log,
-            onError: (err) => {
-              if (!isActiveSession()) return
-              if (connectionState()?._tag !== "connected") return
-              log.error("event.subscription.failed", { error: formatError(err) })
-              setConnectionIssue(formatConnectionIssue(err))
-            },
-            waitForRetry: () => runtime.lifecycle.waitForReady,
-          },
-        ),
-      )
-
-      onCleanup(() => {
-        log.info("ctx.subscribe.cleanup", { sessionId, branchId })
-        cancelled = true
-        Effect.runFork(Fiber.interrupt(fiber))
-      })
-    }),
-  )
+  createSessionSubscriptionEffect({
+    client,
+    runtime,
+    log,
+    sessionKey,
+    workerEpoch,
+    connectionState,
+    session,
+    lastSeenEventId,
+    lastSeenSessionKey,
+    setLastSeenEventId,
+    setLastSeenSessionKey,
+    setConnectionIssue,
+    dispatchSessionEvent: dispatchSession,
+    setAgentStore,
+    setLatestInputTokens,
+    notifyExtensionStateChanged,
+    notifySessionEvent,
+  })
 
   const transportValue: ClientTransportValue = {
     client,
