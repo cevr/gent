@@ -5,7 +5,12 @@
  * `serviceKey` on their `Behavior` register here at spawn time;
  * peers discover them via `ctx.find(key)` (snapshot) or
  * `ctx.subscribe(key)` (live stream of refs as registrations
- * change).
+ * change). The registry is deliberately not a remote death-watch
+ * service: liveness is maintained by the local actor engine cleanup
+ * path, which unregisters refs when their fibers exit. Sending to a
+ * stale or unknown ref is handled at the engine boundary (`tell` no-op,
+ * `ask` timeout, state/view streams empty) so discovery never grows a
+ * second failure policy.
  *
  * Backed by `SubscriptionRef<Map<string, Set<ActorRef<unknown>>>>`
  * — keyed on the ServiceKey's `name`. The `M` parameter is type

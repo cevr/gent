@@ -206,6 +206,12 @@ export interface ActorSupervision {
  * Effect requirements available to `receive` (services from the
  * extension's layer).
  *
+ * `receive` is defect-only: authored behaviors do not expose a typed
+ * failure channel. Recoverable domain outcomes should be represented
+ * in state or replies; unexpected faults should die so the owning host
+ * can apply supervision. Engine persistence/commit failures are a
+ * separate runtime boundary, not behavior-authored receive failures.
+ *
  * Persistence is opt-in via `persistence`. When set, the engine
  * snapshots the live `S` through `persistence.state` at checkpoint
  * time and rehydrates it back into `initialState` at restore time.

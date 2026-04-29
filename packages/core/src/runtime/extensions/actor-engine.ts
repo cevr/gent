@@ -7,10 +7,12 @@
  * one-shot reply via `Deferred<A>` plus a per-correlation `reply` shim
  * attached to the `ActorContext` for the duration of one `receive`.
  *
- * Supervision policy in the receive loop:
+ * Supervision policy in the actor loop:
  *   - interrupts propagate (scope close is tearing the actor down).
- *   - typed failures: log + continue, state survives the transient
- *     crash because the loop re-reads `SubscriptionRef<S>` on the next iteration.
+ *   - authored `Behavior.receive` is defect-only (`E = never`).
+ *     Recoverable outcomes belong in state or replies.
+ *   - runtime boundary failures (for example durable commit hooks)
+ *     log + continue; the next iteration re-reads `SubscriptionRef<S>`.
  *   - defects (`Effect.die`): log + escalate, killing the fiber so the
  *     absence is observable to ask callers.
  *
@@ -498,10 +500,12 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               )
             })
 
-            // Interrupts propagate so scope close ends the loop. Typed
-            // failures log + continue (state survives via Ref). Defects
-            // log + escalate so the fiber dies — subsequent asks observe
-            // ActorAskTimeout instead of silently hanging.
+            // Interrupts propagate so scope close ends the loop. Authored
+            // receives cannot fail typed errors, but runtime boundary work
+            // in the same step can fail (for example durable commit hooks);
+            // those failures log + continue. Defects log + escalate so the
+            // fiber dies — subsequent asks observe ActorAskTimeout instead
+            // of silently hanging.
             const loop: Effect.Effect<void, never> = step.pipe(
               Effect.catchCause((cause: Cause.Cause<unknown>) => {
                 if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
@@ -511,7 +515,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                     Effect.andThen(Effect.die(Cause.squash(cause))),
                   )
                 }
-                return Effect.logWarning("actor.receive.failed").pipe(
+                return Effect.logWarning("actor.runtime-step.failed").pipe(
                   Effect.annotateLogs({ actorId: id, error: String(Cause.squash(cause)) }),
                 )
               }),

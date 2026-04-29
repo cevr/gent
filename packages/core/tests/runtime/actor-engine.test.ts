@@ -4,8 +4,8 @@
  * Three-tier coverage:
  *  - pure reducer: Behavior.receive evolves state correctly
  *  - actor runtime: spawn + tell + state evolution observable via ask
- *  - supervision: failure inside receive does NOT terminate the actor;
- *    next message is processed against the prior state.
+ *  - supervision: defects inside receive terminate the actor; runtime
+ *    boundary failures are logged without killing the actor.
  *
  * `find` / `subscribe` return empty / never until W9-3 (Receptionist).
  */
@@ -18,7 +18,6 @@ import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 const CounterMsg = TaggedEnumClass("CounterMsg", {
   Inc: {},
   Get: TaggedEnumClass.askVariant<number>()({}),
-  Boom: {},
 })
 type CounterMsg = Schema.Schema.Type<typeof CounterMsg>
 interface CounterState {
@@ -34,8 +33,6 @@ const counterBehavior: Behavior<CounterMsg, CounterState, never> = {
         case "Get":
           yield* ctx.reply(state.count)
           return state
-        case "Boom":
-          return yield* Effect.fail("boom" as const)
       }
     }) as Effect.Effect<CounterState, never, never>,
 }
@@ -121,17 +118,24 @@ describe("ActorEngine — runtime", () => {
       }
     }),
   )
-  it.live("supervision: receive failure does not terminate the actor", () =>
+  it.live("runtime commit failure does not terminate the actor", () =>
     Effect.gen(function* () {
+      const PersistedCounterState = Schema.Struct({ count: Schema.Number })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const engine = yield* ActorEngine
-          const ref = yield* engine.spawn(counterBehavior)
-          yield* engine.tell(ref, CounterMsg.Inc.make({}))
-          yield* engine.tell(ref, CounterMsg.Boom.make({}))
+          const ref = yield* engine.spawn(
+            {
+              ...counterBehavior,
+              persistence: { key: "counter", state: PersistedCounterState },
+            },
+            {
+              onStateCommitted: () => Effect.fail("commit failed" as const),
+            },
+          )
           yield* engine.tell(ref, CounterMsg.Inc.make({}))
           const count = yield* engine.ask(ref, CounterMsg.Get.make({}))
-          expect(count).toBe(2)
+          expect(count).toBe(1)
         }).pipe(Effect.provide(ActorEngine.Live)),
       )
     }),

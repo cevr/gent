@@ -650,6 +650,23 @@ not migration-era optimism.
     encode-failure visibility fixed in-batch.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 7 implemented:
+  - Kept `Behavior.receive` defect-only (`E = never`) and documented that
+    recoverable behavior outcomes belong in actor state or typed replies.
+  - Renamed the surviving typed-failure path from receive failure to runtime
+    step failure, because the only intended recoverable typed failure there is
+    boundary work such as durable commit hooks.
+  - Replaced the artificial typed receive-failure test with a real runtime
+    commit-failure continuation test.
+  - Documented the dead-ref contract: unknown `tell` no-ops, unknown `ask`
+    times out, state/view reads are empty/undefined, and receptionist liveness
+    is maintained by actor cleanup rather than a second death-watch policy.
+  - Focused gate: `bun test packages/core/tests/runtime/actor-engine.test.ts`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd965-af54-77d1-886f-657b3cf52d24`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

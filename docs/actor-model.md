@@ -92,7 +92,17 @@ Core rule: let it crash inside the owned boundary, then recover at the boundary 
 - provider stream failure -> loop emits error receipt and runtime surfaces failure
 - tool timeout / failure -> tool receipt emitted, loop applies policy
 - restart / crash -> checkpoint + storage restore loop/runtime state
-- extension actor failure -> isolated to the owning extension runtime/resource
+- extension actor defect -> fiber dies, actor cleanup unregisters service refs, and the owning host restarts or quarantines according to the behavior supervision policy
+- extension actor runtime-boundary failure -> logged and isolated when it is recoverable, such as a durable commit hook failure before an ask reply is released
+
+`Behavior.receive` has no typed failure channel. Recoverable extension outcomes belong in actor state or typed replies. Unexpected faults should use defects so the supervisor sees a real crash instead of a hidden local convention.
+
+Dead refs have one policy:
+
+- `tell` to an unknown actor is a no-op
+- `ask` to an unknown actor returns `ActorAskTimeout`
+- state/view reads on unknown actors are empty or `undefined`
+- receptionist discovery drops refs during actor cleanup
 
 ## Persistence
 
@@ -101,6 +111,8 @@ Persistence is structural, not optional folklore:
 - storage holds durable session / message / event / interaction facts
 - checkpoint holds resumable loop/runtime state
 - interaction resume replays from storage, not in-memory continuations
+- durable actor state commits at the mutation boundary before buffered ask replies are released
+- actor snapshots remain a backup/compaction path, not the first durable acknowledgement
 
 ## Non-Goals
 
