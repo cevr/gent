@@ -1,10 +1,10 @@
 /**
- * C9.2 lock: autocomplete `items()` returning an Effect that yields
+ *  lock: autocomplete `items()` returning an Effect that yields
  * `ClientTransport` flows through a `ManagedRuntime` providing the transport
  * layer, mirroring how `autocomplete-popup-boundary.ts` dispatches
  * Effect-typed results to the resource.
  *
- * This locks the C9.2 proof path counsel called out: the existing
+ * This locks the  proof path counsel called out: the existing
  * `extension-effect-setup.test.ts` only proves an Effect-typed `setup` resolves
  * `FileSystem | Path`. Here we prove the *contribution-time* adapter path
  * (Effect items() → runtime.runPromise → typed transport → decoded reply)
@@ -100,7 +100,7 @@ const makeTestRuntime = (transport: ClientTransportShape) =>
       makeClientLifecycleLayer({ addCleanup: () => {} }),
     ),
   )
-describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
+describe("autocomplete Effect items() through ClientTransport", () => {
   it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport()

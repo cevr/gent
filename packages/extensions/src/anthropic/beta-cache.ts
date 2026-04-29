@@ -94,7 +94,7 @@ export class AnthropicBetaCache extends Context.Service<
   )
 
   /**
-   * Counsel C3 fix: cell Ref provided externally so the cache can live
+   * Counsel  fix: cell Ref provided externally so the cache can live
    * for the extension lifetime instead of being rebuilt for every
    * `resolveModel` call. Without this, cross-request beta learning is
    * lost — a beta the server rejected on turn N would still appear on

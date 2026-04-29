@@ -212,7 +212,7 @@ export const ExecutorConnectionRunnerLayer = (
         // Log defects so a layer-composer regression (e.g. an
         // `ActorEngine` / `Receptionist` not in scope) is observable
         // instead of silently disabling the runner. A swallow is
-        // exactly what hid B1 (`Layer.mergeAll` not cross-wiring R)
+        // exactly what hid  (`Layer.mergeAll` not cross-wiring R)
         // until an integration test caught it.
         Effect.catchDefect((cause) =>
           Effect.logError("executor.connection-runner.bootstrap.defect").pipe(

@@ -322,7 +322,7 @@ export type UnifiedClientExtension<R extends ClientRuntimeServices = ClientDeps>
  * client modules share an id by convention — the TUI loader looks up the
  * module by id when wiring contributions.
  *
- * The setup is an Effect; legacy sync `(ctx) => Array` shape is gone (B11.6).
+ * The setup is an Effect; legacy sync `(ctx) => Array` shape is gone ().
  * Read the typed transport via `yield* ClientTransport` and the other
  * services via `yield* ClientShell` / `ClientComposer` / `ClientWorkspace`.
  */

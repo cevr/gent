@@ -1,5 +1,5 @@
 /**
- * B11.8f — end-to-end capability permissionRules denial.
+ *  — end-to-end capability permissionRules denial.
  *
  * Proves that a capability declaring `permissionRules: [deny("bash")]` causes
  * a real tool-call denial in a full agent session:

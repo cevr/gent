@@ -113,7 +113,7 @@ describe("buildResourceLayer", () => {
 
 // ── lifecycle correctness (Resource.start / Resource.stop) ──
 //
-// Codex C3.4 review flagged two BLOCK findings that these tests lock down:
+// Codex  review flagged two BLOCK findings that these tests lock down:
 //
 //   - BLOCK 1: a `stop` may not run when its corresponding `start` failed.
 //     (Pre-fix `withLifecycle` registered `stop` unconditionally.)

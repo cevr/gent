@@ -151,8 +151,8 @@ const isGentExtension = (value: unknown): value is GentExtension => {
   return true
 }
 
-/** Extract GentExtension from a module export. Paired-package wrapping
- *  is gone (B11.6); only raw `GentExtension` values are valid now. */
+/** Extract GentExtension from a module export. Paired-package wrapping is gone;
+ *  only raw `GentExtension` values are valid now. */
 const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
   if (isGentExtension(value)) return value
   return undefined

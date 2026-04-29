@@ -20,7 +20,7 @@ import {
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
-// Test helper: build a no-op model Capability directly. Post-B11.5d the
+// Test helper: build a no-op model Capability directly. Post- the
 // `tool({...})` factory rejects the legacy `{ name, params, execute }`
 // shape, so test fixtures here construct the lowered Capability literal.
 const makeTool = (name: string): ToolToken =>
@@ -39,7 +39,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   name: name ?? providerId,
   resolveModel: (_modelName) => ({ layer: Layer.empty as never }),
 })
-// C7: static prompt sections live on capability leaf `prompt`. Build a synthetic
+// Static prompt sections live on capability leaf `prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.
 const promptSectionAsToolContribution = (section: PromptSection): ToolToken =>
   tool({
@@ -572,8 +572,8 @@ describe("ExtensionRegistry", () => {
       expect(sections[0]?.priority).toBe(50)
     }),
   )
-  // C7 dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
-  // After C7 dynamic content is assembled per-turn by ExtensionReactions, not
+  //  dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
+  // After  dynamic content is assembled per-turn by ExtensionReactions, not
   // by `listPromptSections` (which only sees static sections from capability
   // leaf `prompt`).
 })

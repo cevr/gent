@@ -631,7 +631,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
   )
   it.live("two layer builds sharing the same cellRef share the cache", () =>
     Effect.gen(function* () {
-      // Counsel C3 fix: extension-closure-owned Ref must survive across
+      // Counsel  fix: extension-closure-owned Ref must survive across
       // resolveModel-equivalent layer builds. Two builds against the same
       // Ref must observe each other's writes.
       const fresh = makeCreds("fresh", FAR_FUTURE)

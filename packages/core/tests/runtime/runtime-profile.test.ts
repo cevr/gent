@@ -54,7 +54,7 @@ const fsLayer = Layer.mergeAll(
 
 const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), Storage.TestWithSql())
 
-// C7: static prompt sections live on capability leaf `prompt`. The tool here is a
+// Static prompt sections live on capability leaf `prompt`. The tool here is a
 // no-op carrier — its only purpose is to bring the prompt section into scope.
 const sectionTool = tool({
   id: "rp-test-tool",

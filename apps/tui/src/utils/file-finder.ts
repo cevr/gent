@@ -12,7 +12,7 @@
  * Scan readiness: each finder kicks off `waitForScan` once on creation,
  * stored as a settled `Promise<ScanResult>`. The native call is wrapped so
  * a throwing call resolves to a typed failure object instead of leaving
- * the promise unresolved (counsel C9.3 finding 4). The search effect
+ * the promise unresolved (counsel  finding 4). The search effect
  * awaits via `Effect.promise` + a typed error map; Effect interruption
  * cleanly abandons the wait without canceling the underlying scan (which
  * is fine — the finder stays valid for the next search).

@@ -13,7 +13,7 @@ describe("Plan extension", () => {
   test("registers plan tool", () =>
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
-      // W10-3b: tool({...}) outputs slot into the typed `tools:` bucket.
+      // tool({...}) outputs slot into the typed `tools:` bucket.
       const toolIds = modelCapabilities(contributions).map((cap) => String(cap.id))
       expect(toolIds).toContain("plan")
     }).pipe(Effect.runPromise))

@@ -1,7 +1,7 @@
 /**
  * BranchStorage — focused service for branch CRUD + message counting.
  *
- * Split from the `Storage` god-interface (B11.7).
+ * Split from the `Storage` god-interface ().
  */
 
 import type { Effect } from "effect"

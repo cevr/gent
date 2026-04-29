@@ -1,8 +1,8 @@
 /**
  * Task-tools TUI widget — transport-only.
  *
- * B11.6: migrated off the paired-package snapshot cache. The widget owns
- * its own Solid signal inside an Effect-typed setup, fetched via the
+ * Transport-only widget. The widget owns its own Solid signal inside an
+ * Effect-typed setup, fetched via the
  * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed
  * when task mutation events arrive on the active session stream.
  *

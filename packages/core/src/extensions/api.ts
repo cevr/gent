@@ -204,10 +204,10 @@ export {
 export { ActorEngine } from "../runtime/extensions/actor-engine.js"
 export { Receptionist } from "../runtime/extensions/receptionist.js"
 
-// B11.5 typed capability factories — the old generic audience flag matrix
+//  typed capability factories — the old generic audience flag matrix
 // is gone from the author surface. Extension registries dispatch by
-// factory-origin metadata baked into the lowering. The B11.5 migration
-// window closed in B11.5d; the legacy `defineTool` smart constructor
+// factory-origin metadata baked into the lowering. The  migration
+// window closed in ; the legacy `defineTool` smart constructor
 // and the dual-shape `tool()` overload were deleted there.
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
@@ -273,7 +273,7 @@ export type { ExtensionSetupContext } from "../domain/extension.js"
  *   - a `(args) => array` factory (when the bucket needs `ctx` but no Effect)
  *   - a `(args) => Effect<array>` factory (when setup needs Effect-typed work)
  *
- * Codex C8 review: prefer literal arrays as default; the variance behind one
+ * Codex  review: prefer literal arrays as default; the variance behind one
  * helper (`resolveField`) keeps 26 of 30 builtin extensions ceremony-free
  * while preserving Effect for the 4 that genuinely need it.
  */
@@ -343,7 +343,7 @@ export type DefineUiExtensionInput<Client> = DefineToolExtensionInput<Client> & 
  * Resolve a single bucket field — accepts literal array, sync factory, or
  * Effect-returning factory. Errors are annotated with the bucket name so
  * the failure message points at the field, not "setup failed" (codex
- * C8 finding 2).
+ *  finding 2).
  */
 const resolveField = <A>(
   manifest: ExtensionManifest,
@@ -367,7 +367,7 @@ const resolveField = <A>(
     // Effect-typed factory: yield it AND seal its failure channel into
     // ExtensionLoadError. Without this, an Effect-factory could escape its
     // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
-    // be propagated raw — loader.ts only catches defects). Codex C8 BLOCK 1.
+    // be propagated raw — loader.ts only catches defects). Codex  BLOCK 1.
     if (Effect.isEffect(result)) {
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS bucket factory crosses the explicit load membrane here; E/R are intentionally erased and re-sealed to ExtensionLoadError
       const value = yield* sealRuntimeLoadedEffect({
@@ -400,7 +400,7 @@ const resolveField = <A>(
 
 /**
  * Cross-bucket validation — runs after every bucket's spec resolves. Codex
- * C8 finding 4: field-local errors beat "_kind expected". The shape of the
+ *  finding 4: field-local errors beat "_kind expected". The shape of the
  * messages is `Extension "@x" <field>[<i>] invalid: <reason>`.
  *
  * Invariants enforced here:

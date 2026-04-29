@@ -114,7 +114,7 @@ describe("buildBasePromptSections", () => {
 })
 
 describe("withSectionMarkers / sectionPatternFor", () => {
-  // Counsel C6 — `PromptSection.id` is unconstrained; the helpers must
+  // Counsel  — `PromptSection.id` is unconstrained; the helpers must
   // tolerate ids carrying regex metacharacters without leaking them
   // into the compiled pattern.
   test("round-trips a normal id", () => {

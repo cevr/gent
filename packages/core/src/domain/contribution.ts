@@ -1,23 +1,23 @@
 /**
  * Contribution buckets — typed sub-arrays for `defineExtension`.
  *
- * C8: the legacy `Contribution` discriminated union is gone. Extensions now
+ * The legacy `Contribution` discriminated union is gone. Extensions now
  * declare their leaf values in homogeneously-typed buckets. The bucket name
  * IS the discrimination — no `_kind` field on leaves, no wrapper smart
  * constructors, no `filterByKind`.
  *
- * Capabilities (B11.5): authored exclusively through the typed factories
+ * Capabilities (): authored exclusively through the typed factories
  * `tool({...})` / `request({...})` / `action({...})` at
  * `domain/capability/{tool,request,action}.ts`. The legacy lowering smart
- * constructors `tool` / `request` aliases from the old split were deleted in B11.5d.
+ * constructors `tool` / `request` aliases from the old split were deleted in .
  *
  * Resource keeps an identity smart constructor (`resource`) below — it
  * exists to widen variance at the bucket boundary, not to lower a legacy
  * shape.
  *
- * Codex BLOCK on C8 design: drivers split into `modelDrivers` and
+ * Codex BLOCK on  design: drivers split into `modelDrivers` and
  * `externalDrivers` — one untagged `drivers: []` would smuggle back the
- * ambiguity C7's correlated union fixed.
+ * ambiguity 's correlated union fixed.
  *
  * @module
  */
@@ -69,8 +69,8 @@ export type AnyBehavior = Behavior<any, any, never>
  *
  * Driver split: `modelDrivers` / `externalDrivers` are separate buckets. They
  * share `id` (driver registry key) but nothing else, so a single `drivers`
- * bucket would re-introduce the union-shape unsoundness C7's correlated
- * `DriverKindContribution` fixed (codex BLOCK on C8 design).
+ * bucket would re-introduce the union-shape unsoundness that the correlated
+ * `DriverKindContribution` fixed.
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
@@ -134,7 +134,7 @@ export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray
 //
 // `resource` widens the typed authoring shape to the bucket leaf. The
 // legacy `tool` / `query` / `mutation` smart constructors were deleted in
-// B11.5d — capabilities are now authored exclusively through the typed factories in
+//  — capabilities are now authored exclusively through the typed factories in
 // `domain/capability/{tool,request,action}.ts`.
 
 // The old query/mutation smart constructors are gone. Authors use the
@@ -142,7 +142,7 @@ export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray
 // `domain/capability/request.ts`.
 
 // `defineResource` is exported directly from `./resource.ts` — returns the
-// Resource leaf that goes straight into the `resources` bucket. After C8 it
+// Resource leaf that goes straight into the `resources` bucket. After  it
 // no longer sets a `_kind: "resource"` field; the bucket IS the discrimination.
 export { defineResource } from "./resource.js"
 

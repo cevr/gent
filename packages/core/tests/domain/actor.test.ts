@@ -1,5 +1,5 @@
 /**
- * W9-1 — domain/actor.ts surface tests.
+ * — domain/actor.ts surface tests.
  *
  * Type-level: ServiceKey<M> infers M end-to-end through tell/ask/find;
  *             ActorAskTimeout is a Schema.TaggedErrorClass with the

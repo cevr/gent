@@ -1,10 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
 /**
  * Executor integration tests — tool execution with mocked services,
- * and actor lifecycle through the actor primitive (W10-1c).
+ * and actor lifecycle through the actor primitive.
  *
  * The executor uses a `Behavior` actor + Layer-scoped
- * `ExecutorConnectionRunner` (Option G). Connection state is volatile
+ * `ExecutorConnectionRunner`. Connection state is volatile
  * per process — the actor has no persistence — so the old "state
  * persists via durability" test is gone; cross-extension Receptionist
  * discovery is exercised end-to-end here via typed Executor RPC/controller
@@ -548,12 +548,12 @@ describe("Executor actor lifecycle", () => {
   // from `Idle` via autoStart. Cross-process persistence is covered by
   // `actor-host.test.ts > fromResolvedWithPersistence round-trips state`
   // for actors that DO opt in.
-  // Regression for W10-1c B2: Disconnect mid-handshake must cancel
+  // Regression lock: Disconnect mid-handshake must cancel
   // the in-flight `runConnection` fork. Without the cancel, the
   // sidecar resolve eventually `tell`s `Connected` and pushes the
   // actor to Ready against user intent.
   it.live(
-    "Disconnect during Connecting cancels in-flight handshake (B2 regression)",
+    "Disconnect during Connecting cancels in-flight handshake",
     () => {
       const sidecarGate = Deferred.makeUnsafe<void>()
       const { extension } = makeExecutorExtension({
@@ -587,7 +587,7 @@ describe("Executor actor lifecycle", () => {
     },
     10000,
   )
-  // Regression for W10-1c B1: production composer must cross-wire
+  // Regression lock: production composer must cross-wire
   // `ActorEngine | Receptionist` into the resource layer's R channel.
   // `Layer.mergeAll(baseLayers, resourceLayer)` does NOT cross-wire,
   // so the `ExecutorConnectionRunner` layer would build silently dead
@@ -595,7 +595,7 @@ describe("Executor actor lifecycle", () => {
   // Validation: drive autoStart through `buildExtensionLayers` (the
   // production composer) and assert state reaches `ready`.
   it.live(
-    "buildExtensionLayers wires runner so autoStart reaches Ready (B1 regression)",
+    "buildExtensionLayers wires runner so autoStart reaches Ready",
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       const resolved = resolveExtensions([extension])

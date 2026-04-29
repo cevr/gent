@@ -152,7 +152,7 @@ export const projectDisplayName = (key: string): string => {
 /**
  * Read-only slice of MemoryVault — vault path, listing, single-file
  * read, and full-text search. Projections (and `request({ intent: "read" })`
- * capabilities once B11.5 lands) yield `MemoryVaultReadOnly` (the branded
+ * capabilities once  lands) yield `MemoryVaultReadOnly` (the branded
  * Tag below) instead of `MemoryVault` so the type system blocks
  * accidental writes (`write`/`remove`/`ensureDirs`/`rebuildIndex`) in
  * read contexts.

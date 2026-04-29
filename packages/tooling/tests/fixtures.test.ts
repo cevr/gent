@@ -1,7 +1,7 @@
 /**
  * Lint fixture verification.
  *
- * For each custom oxlint rule scaffolded in C0, runs `oxlint` against a
+ * For each custom oxlint rule scaffolded in , runs `oxlint` against a
  * positive fixture (must error) and a negative fixture (must pass). Verifies
  * each rule actually fires on the cases its docstring claims.
  *

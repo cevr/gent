@@ -1895,7 +1895,7 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
-  // W7-C8.5a: dedup-cache TTL eviction. The cache schedules a delayed
+  // Dedup-cache TTL eviction. The cache schedules a delayed
   // eviction via `Effect.forkDetach(Effect.sleep(60s))` after each
   // success. Beyond the TTL window, a retry of the same `requestId`
   // must NOT collide with the prior outcome — it must execute fresh.
@@ -1945,7 +1945,7 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 
-  // W7-C8.5a: dedup-cache hard-cap eviction. The cache caps at 1024
+  // Dedup-cache hard-cap eviction. The cache caps at 1024
   // entries; on overflow the oldest insertion-ordered entry is evicted
   // before insert. After overflow, the original `requestId` is no
   // longer cached and a retry must execute fresh. Use 1025 distinct

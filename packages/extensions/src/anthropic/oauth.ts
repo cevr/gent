@@ -156,7 +156,7 @@ const readFromKeychain = (
  * multi-account picker.
  *
  * Exported so the policy can be unit-tested without spawning
- * `security`. Counsel C4 review surfaced this as a real defect.
+ * `security`. Counsel  review surfaced this as a real defect.
  */
 export const shouldFallBackToCredentialsFile = (platform: string, source: string): boolean =>
   platform !== "darwin" || source === PRIMARY_CLAUDE_SERVICE
@@ -168,7 +168,7 @@ export const shouldFallBackToCredentialsFile = (platform: string, source: string
  * non-primary spawn could refresh the wrong account.
  *
  * Exported so the policy can be unit-tested without spawning a
- * subprocess. Counsel C4 review.
+ * subprocess. Counsel  review.
  */
 export const shouldFallBackToCli = (source: string): boolean => source === PRIMARY_CLAUDE_SERVICE
 
@@ -377,7 +377,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * `acct` field is preserved by reading the existing entry first.
  *
  * Errors are surfaced as `ProviderAuthError` for the caller to log
- * (per C2: write-back is best-effort; the in-memory creds are
+ * (per : write-back is best-effort; the in-memory creds are
  * authoritative for the in-flight request).
  */
 export const writeBackCredentials = (
@@ -394,7 +394,7 @@ export const writeBackCredentials = (
           const updated = updateCredentialBlob(raw, creds)
           if (updated === undefined) return
           await Bun.write(CREDENTIALS_FILE, updated)
-          // Counsel C8 deep — chmod 0600 after write so the credentials
+          // Counsel  deep — chmod 0600 after write so the credentials
           // file isn't world-readable on first creation. Matches the
           // opencode reference's keychain.ts:297 behavior.
           await fsPromises.chmod(CREDENTIALS_FILE, 0o600)
@@ -408,7 +408,7 @@ export const writeBackCredentials = (
       return
     }
 
-    // Counsel C8 deep — surface the read failure as a typed error
+    // Counsel  deep — surface the read failure as a typed error
     // instead of swallowing it into "" and silently returning success.
     // The previous shape bypassed the warn-on-failure path at the
     // refresh call site, so a keychain read fault during write-back
@@ -617,7 +617,7 @@ export const refreshClaudeCodeCredentials = (
 
 // ── Beta Management ──
 //
-// Counsel C8 — beta + ccVersion config delegates to `model-config.ts`
+// Counsel  — beta + ccVersion config delegates to `model-config.ts`
 // (port of `griffinmartin/opencode-claude-auth/src/model-config.ts`).
 // This module keeps the env-var override + per-process exclusion cache
 // (used by the long-context backoff path) and forwards to
@@ -655,7 +655,7 @@ export const isLongContextError = (responseBody: string): boolean =>
 
 /**
  * Long-context backoff candidates — only the long-context betas that
- * actually appear in this model's effective header. Counsel C8 deep
+ * actually appear in this model's effective header. Counsel  deep
  * surfaced two related defects in the prior shape:
  *   1. We walked `LONG_CONTEXT_BETAS` directly, ignoring per-model
  *      overrides — so a haiku request (which excludes
@@ -690,7 +690,7 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): Readonly
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
-// Counsel C8 — single source of truth in `model-config.ts`
+// Counsel  — single source of truth in `model-config.ts`
 // (`MODEL_CONFIG.ccVersion`). Env-var override still wins so users can
 // pin a specific CC version without editing source.
 export const getCliVersion = (): string => _env.cliVersion ?? getCcVersion()

@@ -166,7 +166,7 @@ describe("extension activation isolation", () => {
       }),
   )
 
-  // C4.4 BLOCK: validation must catch cross-bucket capability collisions in
+  //  BLOCK: validation must catch cross-bucket capability collisions in
   // addition to tool/tool. The resolver overwrites silently in last-write-wins
   // order without this check.
 

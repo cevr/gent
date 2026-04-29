@@ -1,6 +1,6 @@
 /**
  * Per-model Anthropic configuration — beta lists + ccVersion + override
- * table. Counsel C8 — locks the port of
+ * table. Counsel  — locks the port of
  * `griffinmartin/opencode-claude-auth/src/model-config.ts` so future
  * version bumps + override edits stay aligned with Claude Code's wire
  * shape.
@@ -87,7 +87,7 @@ describe("supports1mContext", () => {
   })
 
   test("date-suffix model ids are treated as x.0 (not x.<N>)", () => {
-    // Counsel C8 — date suffix like 20250514 reads minor>99 → effective 0,
+    // Counsel  — date suffix like 20250514 reads minor>99 → effective 0,
     // so opus-4-20250514 is treated as 4.0 (not 1m-eligible).
     expect(supports1mContext("claude-opus-4-20250514")).toBe(false)
   })

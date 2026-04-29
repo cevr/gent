@@ -90,7 +90,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     // layer fakes the brand with an empty extension set.
     ServerProfileService.Test(),
     // SessionCwdRegistry — fast (sessionId → cwd) cache used by the
-    // per-cwd EventPublisher router (B11.6c). In-memory Test variant.
+    // per-cwd EventPublisher router (). In-memory Test variant.
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
     ...(config.extraLayers ?? []),

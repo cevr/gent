@@ -89,7 +89,7 @@ const taskFromRow = (row: TaskRow) =>
 /**
  * Read-only slice of the TaskStorage surface — list/get queries +
  * dependency reads. Projections (and `request({ intent: "read" })`
- * capabilities once B11.5 lands) yield this branded sub-Tag instead
+ * capabilities once  lands) yield this branded sub-Tag instead
  * of `TaskStorage` so the type system blocks accidental write
  * dependencies in read contexts.
  *

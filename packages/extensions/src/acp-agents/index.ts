@@ -109,7 +109,7 @@ const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
  * sentinel pair that section authors opt into via `withSectionMarkers`
  * (currently `tool-list` + `tool-guidelines` in `agent-loop.utils.ts`).
  *
- * Counsel C6 — replaces the prior `indexOf(section.content)` surgery,
+ * Counsel  — replaces the prior `indexOf(section.content)` surgery,
  * which broke the moment any upstream pipeline rewrote a single
  * character inside the native section. Markers are stable across
  * upstream edits to section *content* and stay invisible to most
@@ -125,7 +125,7 @@ const stripNativeToolSections = (compiled: string): { stripped: string; anyStrip
   let out = compiled
   let anyStripped = false
   for (const id of NATIVE_TOOL_SECTION_IDS) {
-    // Counsel C8 deep — duplicate marker-wrapped sections (rare, but
+    // Counsel  deep — duplicate marker-wrapped sections (rare, but
     // possible when an upstream pipeline duplicates the tool list)
     // used to leave one behind because we ran a single non-global
     // replace per id. Loop until no match so every wrapped section

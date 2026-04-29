@@ -1,6 +1,6 @@
 /**
  * Per-model Anthropic configuration — beta flags, ccVersion, and
- * model-specific overrides. Counsel C8 — ports
+ * model-specific overrides. Counsel  — ports
  * `griffinmartin/opencode-claude-auth/src/model-config.ts` so beta
  * derivation lives in one place instead of being scattered across
  * `oauth.ts` (`DEFAULT_BETA_FLAGS`, `LONG_CONTEXT_BETAS`,

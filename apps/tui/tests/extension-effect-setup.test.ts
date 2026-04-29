@@ -1,7 +1,7 @@
 /**
  * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
- * provided `runtime: ManagedRuntime`. C9.1's legacy sync `setup(ctx)` arm
- * was deleted in B11.6 — only the Effect shape is accepted now.
+ * provided `runtime: ManagedRuntime`. The legacy sync `setup(ctx)` arm
+ * was deleted; only the Effect shape is accepted now.
  */
 import { afterAll, beforeAll } from "bun:test"
 import { describe, it, expect } from "effect-bun-test"
@@ -53,7 +53,7 @@ describe("loadTuiExtensions Effect setup", () => {
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
     }),
   )
-  // C9.1 codex BLOCK 1 lock — discovered (not pre-imported) modules with an
+  // Regression lock — discovered (not pre-imported) modules with an
   // Effect-valued `setup` must pass `importExtension`'s shape validator. The
   // bridge is only reachable if the validator accepts the value; rejecting
   // non-functions silently dropped the entire discovered population.
@@ -65,7 +65,7 @@ describe("loadTuiExtensions Effect setup", () => {
       rmSync(tmpRoot, { recursive: true, force: true })
       mkdirSync(userDir, { recursive: true })
       mkdirSync(projectDir, { recursive: true })
-      // Effect-valued `setup` — exactly the shape C9.1 promises will work.
+      // Effect-valued `setup` — exactly the accepted shape.
       writeFileSync(
         join(userDir, "discovered.client.ts"),
         `

@@ -10,7 +10,7 @@
  * prior messages with structured tool/reasoning blocks, then appends the
  * live user message.
  *
- * Counsel C5 — the prior renderer only emitted text parts, so tool-heavy
+ * Counsel  — the prior renderer only emitted text parts, so tool-heavy
  * codemode sessions lost every `tool_use`/`tool_result`/`reasoning` block
  * across a rebuild. User content is HTML-escaped and the whole preamble
  * is wrapped in `<historical-transcript>` so the remote agent treats it

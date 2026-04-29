@@ -1,8 +1,8 @@
 /**
  * Auto-loop TUI widget — transport-only.
  *
- * B11.6: migrated off `AutoPackage.tui` paired-package pattern. The widget
- * owns its own Solid signal inside an Effect-typed setup, fetched via
+ * Transport-only widget. The widget owns its own Solid signal inside an
+ * Effect-typed setup, fetched via
  * `requestExtension(ref(AutoRpc.GetSnapshot))` and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/auto`.
  *

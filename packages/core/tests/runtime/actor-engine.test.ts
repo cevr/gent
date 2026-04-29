@@ -1,5 +1,5 @@
 /**
- * W9-2 — ActorEngine.
+ * — ActorEngine.
  *
  * Three-tier coverage:
  *  - pure reducer: Behavior.receive evolves state correctly
@@ -7,7 +7,7 @@
  *  - supervision: defects inside receive terminate the actor; runtime
  *    boundary failures are logged without killing the actor.
  *
- * `find` / `subscribe` return empty / never until W9-3 (Receptionist).
+ * `find` / `subscribe` return empty / never until (Receptionist).
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
@@ -151,9 +151,9 @@ describe("ActorEngine — runtime", () => {
       )
     }),
   )
-  it.live("layer scope teardown interrupts spawned actor fibers (B1 regression)", () =>
+  it.live("layer scope teardown interrupts spawned actor fibers", () =>
     Effect.gen(function* () {
-      // Regression for W9-2 review B1: runtimeScope was leaked, so spawned
+      // Regression lock: runtimeScope was leaked, so spawned
       // actors kept running after the layer scope closed. We assert that
       // closing the outer scope around ActorEngine.Live observably stops
       // the actor by blocking it in `receive` on an addFinalizer that
@@ -192,9 +192,9 @@ describe("ActorEngine — runtime", () => {
       })
     }),
   )
-  it.live("defects in receive escalate and terminate the actor (B2 regression)", () =>
+  it.live("defects in receive escalate and terminate the actor", () =>
     Effect.gen(function* () {
-      // Regression for W9-2 review B2: defects (Cause.Die) were silently
+      // Regression lock: defects (Cause.Die) were silently
       // swallowed and the loop continued. They should escalate, killing
       // the actor's fiber, so a follow-up `ask` observes ActorAskTimeout
       // (no mailbox).
@@ -237,9 +237,9 @@ describe("ActorEngine — runtime", () => {
       }
     }),
   )
-  it.live("receptionist unregisters actor after fiber death (W10-0b regression)", () =>
+  it.live("receptionist unregisters actor after fiber death (regression)", () =>
     Effect.gen(function* () {
-      // Regression for W10-0b: when an actor with a serviceKey dies
+      // Regression for : when an actor with a serviceKey dies
       // (defect or interrupt), its mailbox cleanup must call
       // receptionist.unregister so dead refs don't leak into discovery
       // results. Previously verified only by spawn-time wiring; this
@@ -324,7 +324,7 @@ describe("ActorEngine — runtime", () => {
       )
     }),
   )
-  it.live("snapshot blocks until in-flight receive completes (W10-0d.2 regression)", () =>
+  it.live("snapshot blocks until in-flight receive completes", () =>
     Effect.gen(function* () {
       // A receive that holds open until we explicitly release it must
       // make `snapshot()` wait. Without the per-actor permit, snapshot

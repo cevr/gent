@@ -325,7 +325,7 @@ describe("ActorHost", () => {
     () =>
       Effect.gen(function* () {
         const dup = makePingBehavior("shared-key")
-        // Pre-W10-0c the second spawn would collide on `shared-key`. With
+        // Pre-the second spawn would collide on `shared-key`. With
         // host-level extension-id namespacing the engine sees
         // `@test/ext-1/shared-key` vs `@test/ext-2/shared-key` — distinct
         // claims, both actors live.
@@ -362,7 +362,7 @@ describe("ActorHost", () => {
       expect(live).toBe(1)
     }),
   )
-  it.live("snapshot keys are extension-id-namespaced (W10-0c regression)", () =>
+  it.live("snapshot keys are extension-id-namespaced (regression)", () =>
     Effect.gen(function* () {
       const counter = makePingBehavior("counter")
       // Using scoped extension ids that contain `/` proves the encoding

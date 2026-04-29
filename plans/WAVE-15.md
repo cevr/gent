@@ -98,7 +98,8 @@ dated audit receipts, not source, tests, or lint-rule comments.
 
 **Verification**:
 
-- `rg -n "planned for batch|planify Commit|\\bC[0-9]+(\\.[0-9]+)?\\b|\\bB[0-9]+(\\.[0-9]+)?\\b|same wave|downstream batches|batch12|wave14|planify-migration" apps packages lint --glob '!**/dist/**' --glob '!**/.turbo/**'`
+- `rg -n "planned for batch|planify Commit|\\bC[0-9]+(\\.[0-9]+)?[a-z]?\\b|\\bB[0-9]+(\\.[0-9]+)?[a-z]?\\b|\\bW[0-9]+(?:-[0-9]+[a-z]?)?\\b|same wave|downstream batches|batch12|wave14|planify-migration|codex BLOCK|Option G" apps packages lint --glob '!**/dist/**' --glob '!**/.turbo/**'`
+- `git diff --name-only -- apps packages lint | xargs rg -n "^[[:space:]]*(//|/\\*|\\*)[[:space:]]*:|codex BLOCK|Option G|\\bW[0-9]+|\\bC[0-9]+|\\bB[0-9]+|planify|batch12|wave14|downstream batches|planned for batch|planify Commit"`
 - `bun run typecheck && bun run lint && bun run test`.
 - One review round: one Codex subagent plus one Okra counsel attempt, P0/P1/P2
   only.
@@ -107,3 +108,23 @@ dated audit receipts, not source, tests, or lint-rule comments.
 
 - Wave 15 is complete when the active-source process-name audit is clean, the
   full gate passes, and the single review round reports no P0/P1/P2 findings.
+
+## Status
+
+- Batch 1 implemented:
+  - Removed process-shaped migration labels from active `apps/**`,
+    `packages/**`, and `lint/**` source/test comments and behavioral test
+    descriptions.
+  - Removed the obsolete `batch12-modules` test-file allow-list path from the
+    custom lint plugin.
+  - Stabilized `runProcess` shell tests by using `/bin/sh` for shell-only
+    subprocess assertions.
+  - Review round completed:
+    - Codex subagent found no P0/P1 behavior regression and one P2 cleanup
+      issue: label deletion had left malformed comments/test names. Fixed.
+    - Okra counsel attempt produced no final report before termination, but its
+      partial event log at
+      `/tmp/counsel/personal-gent-860892a9/20260429-162349-codex-to-claude-38cc6d/events.jsonl`
+      surfaced the same P2 class plus missed `W#` labels. Fixed.
+  - Active-source process-name audit and malformed-comment audit returned no
+    matches.

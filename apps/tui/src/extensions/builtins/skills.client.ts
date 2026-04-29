@@ -4,7 +4,7 @@ import { ref } from "@gent/core/extensions/api"
 import { SkillsRpc } from "@gent/extensions/skills/protocol"
 import { requestExtension } from "../client-transport"
 
-// C9.3: Effect-typed setup. The setup itself takes no dependencies — the
+// Effect-typed setup. The setup itself takes no dependencies; the
 // autocomplete `items` Effect yields `ClientTransport` transitively via
 // `requestExtension(ref, input)`, which auto-fills sessionId/branchId
 // from the active session and decodes the reply against the request token.

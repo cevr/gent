@@ -10,7 +10,7 @@
  * Each export NAMES a specific external seam — there's no generic
  * `runAnyEffect(runtime, effect)` trampoline, because that would let any
  * non-boundary file create new Promise edges by laundering through this
- * module (counsel B11.2a finding).
+ * module (counsel  finding).
  */
 
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"

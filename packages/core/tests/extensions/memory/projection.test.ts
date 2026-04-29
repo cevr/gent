@@ -97,7 +97,7 @@ describe("memory vault turn projection", () => {
       }),
   )
   // TODO(c2): "ui projector returns counts and entries" — removed.
-  // Memory vault UI surface is gone in C2 (projection.ui no longer exists).
+  // Memory vault UI surface is gone in  (projection.ui no longer exists).
 })
 describe("memory vault turn projection — read-only and scoped", () => {
   projectionTest("query does not create vault directories (read-only contract)", () =>

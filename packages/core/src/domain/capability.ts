@@ -29,8 +29,8 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
 ) {}
 
 /**
- * Per codex BLOCK on C4.1: a single fat `CapabilityContext extends
- * ExtensionHostContext` would expose typed request dispatch, session mutation,
+ * A single fat `CapabilityContext extends ExtensionHostContext` would expose
+ * typed request dispatch, session mutation,
  * interaction, and turn-control surfaces to every read capability — making
  * the `intent: "read"` fence dishonest at the context level even when lint
  * stops write-shaped service calls.

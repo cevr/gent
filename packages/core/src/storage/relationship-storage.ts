@@ -1,7 +1,7 @@
 /**
  * RelationshipStorage — focused service for session tree / relationship queries.
  *
- * Split from the `Storage` god-interface (B11.7).
+ * Split from the `Storage` god-interface.
  */
 
 import type { Effect } from "effect"

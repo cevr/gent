@@ -3,7 +3,7 @@
  * through the full per-request scope path that
  * production uses (Gent.test → RpcServer → registry dispatch → handler).
  *
- * Locks the C4 transport boundary the per-commit unit tests don't cover:
+ * Locks the  transport boundary the per-commit unit tests don't cover:
  *  - request(write) creates a task → request(read) lists it → request(write)
  *    updates → request(read) confirms
  *  - bad input fails as ExtensionProtocolError (Schema rejects at the boundary)

@@ -13,7 +13,7 @@
  * Read-fence: `intent: "read"` capabilities have `R extends ReadOnlyTag`
  * (a structural narrowing of the constraint to the same brand projection
  * R-channels use). Write-capable service Tags fail to compile in the
- * read-intent factory's R, mirroring the projection fence from B11.4.
+ * read-intent factory's R, mirroring the projection fence from .
  *
  * @module
  */

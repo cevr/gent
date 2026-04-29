@@ -1,7 +1,7 @@
 /**
  * @gent/exec-tools — shell-execution capability surface.
  *
- * The W10-1d migration removed the legacy `notificationMachine` /
+ * The migration removed the legacy `notificationMachine` /
  * `notificationResource` FSM that mediated background-command
  * notifications. The bash tool now calls `ctx.session.queueFollowUp`
  * directly from its `Effect.forkDetach` watcher (`bash.ts`), which is

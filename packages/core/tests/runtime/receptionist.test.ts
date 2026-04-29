@@ -1,5 +1,5 @@
 /**
- * W9-3 — Receptionist.
+ * — Receptionist.
  *
  * SubscriptionRef-backed registry of `ActorRef<M>` keyed by
  * `ServiceKey<M>.name`. Tests target the public surface only:

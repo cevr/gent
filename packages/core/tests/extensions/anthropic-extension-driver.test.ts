@@ -163,7 +163,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         yield* Effect.promise(() => runOne(layer1, fetchState1))
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
         // Mutate the test-owned Ref between calls. If the second
-        // `resolveModel` allocated a fresh internal Ref (the C3 regression),
+        // `resolveModel` allocated a fresh internal Ref (the  regression),
         // the second request would still use "first-token" — instead of
         // observing this update through the shared Ref. Asserting the second
         // request uses "second-token" pins the Ref-sharing semantics.

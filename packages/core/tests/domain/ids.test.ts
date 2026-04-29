@@ -1,5 +1,5 @@
 /**
- * Branded id locks — guarantees the W7-C1 brand pass survives.
+ * Branded id locks — guarantees id brands survive.
  *
  * Tests cover:
  * - `Schema.decodeUnknownSync` roundtrip for each branded id

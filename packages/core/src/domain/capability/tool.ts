@@ -8,7 +8,7 @@
  * `input`, `output`) are forbidden.
  *
  * Replaces the previous two-step `tool(defineTool({...}))` pattern. The
- * old `defineTool` carrier dies in B11.5d.
+ * old `defineTool` carrier dies in .
  *
  * Lowering: produces a branded `ToolToken` with the author-supplied `intent`
  * (default `"write"`). Read-only tools (`fs-tools/read.ts`, `grep.ts`,
@@ -119,7 +119,7 @@ export interface ToolInput<
  * Lower a `ToolInput` to a `ToolToken` with `intent: "write"` by default.
  *
  * Generic over `<Params, Result, Error, Deps>` so authors keep their
- * The legacy `defineTool` carrier was deleted in B11.5d.
+ * The legacy `defineTool` carrier was deleted in .
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary

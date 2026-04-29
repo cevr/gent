@@ -11,9 +11,9 @@
  * Three-tier: global, per-project, session-local.
  * Flat .md files at ~/.gent/memory/ for durability.
  *
- * The session-memory state-holder (W10-1d) was deleted alongside the old
+ * The session-memory state-holder () was deleted alongside the old
  * session-local FSM plumbing here: nothing read the session list (the
- * projection-time inject was already removed in C8), `MemoryIntent` had
+ * projection-time inject was already removed in ), `MemoryIntent` had
  * zero external publishers, and `reduce` was a no-op. Tools write
  * straight to `MemoryVault`; the prompt surface comes exclusively from a
  * turn projection over the on-disk vault.

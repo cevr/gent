@@ -2708,11 +2708,11 @@ describe("recovery", () => {
   )
 })
 // ============================================================================
-// W8 regression: durable suspension + queue drain
+// Durable suspension + queue drain regression
 // ============================================================================
 //
 // Verifies the two genuine FSM-justified behaviors are preserved by the
-// post-W8 runtime (plain Effect fiber + Phase Ref + checkpoint):
+// current runtime (plain Effect fiber + Phase Ref + checkpoint):
 //   1. Durable suspension across scope teardown (process death simulation):
 //      a session in `WaitingForInteraction` survives a scope tear-down,
 //      and `respondInteraction` against a fresh scope re-executes the
@@ -2721,9 +2721,9 @@ describe("recovery", () => {
 //      calls enqueue and drain in submission order after `TurnDone`.
 //
 // Cites: `make-impossible-states-unrepresentable` (phase-tag invariants),
-//        `redesign-from-first-principles` (post-W8 runtime carries the
+//        `redesign-from-first-principles` (the current runtime carries the
 //        same correctness load as the FSM did).
-describe("W8 regression: durable suspension and queue drain", () => {
+describe("durable suspension and queue drain regression", () => {
   // ── Suspension test ──
   const suspendSessionId = SessionId.make("session-loop-suspend")
   const suspendBranchId = BranchId.make("branch-loop-suspend")
@@ -2900,7 +2900,7 @@ describe("W8 regression: durable suspension and queue drain", () => {
                   expect(finalState._tag).toBe("Idle")
                   // The resumed turn must have driven the provider through
                   // its second response (text + stop), so streamCallRef
-                  // advanced to 2 — proves the post-W8 runtime runs the
+                  // advanced to 2 — proves the current runtime runs the
                   // full inner loop on resume, not just a result hand-back.
                   expect(yield* Ref.get(streamCallRef)).toBe(2)
                 }).pipe(

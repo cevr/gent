@@ -382,18 +382,17 @@ export interface RequestResult<State, Reply> extends ReduceResult<State> {
   readonly reply: Reply
 }
 
-// The legacy server slash-command contribution was deleted in C8 — human
-// surfaces now come from `commands:` action leaves. The TUI's separate
-// client-facet `_kind: "command"` model is unrelated.
+// The legacy server slash-command contribution was deleted; human surfaces
+// now come from `commands:` action leaves. The TUI's separate client-facet
+// `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"
 
 // Driver auth + hint shared types — re-exported from dedicated file
 //
-// Lives in driver.ts now (was provider-contribution.ts pre-C9). Re-exported
-// here so existing internal consumers keep their import paths through
-// `domain/extension.js`.
+// Lives in driver.ts now. Re-exported here so existing internal consumers keep
+// their import paths through `domain/extension.js`.
 
 export type {
   ProviderAuthInfo,
@@ -426,8 +425,8 @@ export interface GentExtension {
   /**
    * Returns the typed `ExtensionContributions` buckets for this extension.
    * The runtime stores this directly on `LoadedExtension.contributions`;
-   * consumers read each bucket as a typed array. After C8 there is no flat
-   * `Contribution[]` and no `_kind` discriminator.
+   * consumers read each bucket as a typed array. There is no flat
+   * `Contribution[]` and no core `_kind` discriminator.
    */
   readonly setup: (
     ctx: ExtensionSetupContext,

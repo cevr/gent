@@ -47,7 +47,7 @@ import type {
 
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
-// Dedup cache (W6-29): bound success entries by both time and count so a
+// Dedup cache: bound success entries by both time and count so a
 // long-running shared server does not accumulate one Map entry per user
 // prompt + per session create indefinitely.
 const DEDUP_SUCCESS_TTL_MS = Duration.seconds(60)
@@ -125,7 +125,7 @@ export type SessionCommandError = StorageError | EventStoreError | NotFoundError
 // live on `SessionMutations` (extension surface) and SessionCommands delegates
 // to it via `mutations.*` so there is exactly one implementation of each
 // mutation. The previous "parallel surface" — duplicated handlers on both
-// services — was deleted in W7-C5; tests calling `commands.renameSession`
+// services — was deleted; tests calling `commands.renameSession`
 // were migrated to `mutations.renameSession`.
 export interface SessionCommandsService {
   readonly createSession: (
@@ -607,7 +607,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
        * Atomic-claim dedup helper. Concurrent callers with the same
        * `requestId` collapse onto the first caller's outcome.
        *
-       * Eviction (W6-29):
+       * Eviction:
        * - On failure: evict immediately so retries can re-attempt the same
        *   `requestId` under fresh state.
        * - On success: schedule a delayed eviction after `DEDUP_SUCCESS_TTL_MS`.

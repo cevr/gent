@@ -226,7 +226,7 @@ describe("ActorEngine — persistence", () => {
       )
     }),
   )
-  it.live("failed spawn after claim releases the persistence-key claim (W10-0a regression)", () =>
+  it.live("failed spawn after claim releases the persistence-key claim (regression)", () =>
     Effect.gen(function* () {
       // A spawn that fails AFTER the claim (here: malformed restoredState
       // → ActorRestoreError) must not leak the persistence-key claim. A

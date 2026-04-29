@@ -5,7 +5,7 @@ import type { PromptSection } from "./prompt.js"
 import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
 
 /**
- * Actor primitives — W9 foundation.
+ * Actor primitives — typed actor foundation.
  *
  * `ActorRef<M>` and `ServiceKey<M>` carry a phantom message type so
  * `tell` / `ask` / `find` / `subscribe` reject mismatched targets at
@@ -14,8 +14,8 @@ import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
  *
  * Behaviors compose by message: `receive` is the sole reducer-like
  * surface, `view` is the sole projection surface, `serviceKey` is
- * the sole discovery surface. ActorEngine (W9-2) consumes Behaviors;
- * Receptionist (W9-3) consumes ServiceKeys.
+ * the sole discovery surface. ActorEngine consumes Behaviors; Receptionist
+ * consumes ServiceKeys.
  */
 
 /**

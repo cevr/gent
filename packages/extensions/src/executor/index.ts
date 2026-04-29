@@ -23,9 +23,8 @@ export const ExecutorExtension = defineExtension({
   actors: [executorActor],
   // Resource carries the layer for ExecutorSidecar/McpBridge plus the
   // ExecutorConnectionRunner. The runner observes the actor's state and
-  // drives the sidecar connection on entry to `Connecting` (the W10-1c
-  // "Option G" pattern: connection effect outside the actor, hosted on
-  // a Layer.scoped fiber).
+  // drives the sidecar connection on entry to `Connecting` from outside the
+  // actor, hosted on a Layer.scoped fiber.
   //
   // The runner depends on `ActorEngine | Receptionist` from the runtime
   // and `ExecutorSidecar | ExecutorMcpBridge` from this layer; we

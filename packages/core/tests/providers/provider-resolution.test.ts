@@ -164,7 +164,7 @@ describe("Provider model resolution", () => {
         expect(errOpt._tag).toBe("Some")
         if (errOpt._tag === "Some") {
           const err = errOpt.value as ProviderError
-          // W6-13: the original `Error` thrown from the driver must be
+          // The original `Error` thrown from the driver must be
           // preserved as `cause` so the upstream chain is debuggable.
           expect(err._tag).toBe("ProviderError")
           expect(err.cause).toBe(original)
@@ -213,9 +213,9 @@ describe("Provider model resolution", () => {
       }
     }),
   )
-  it.live("BedrockExtension resolveModel fails closed as ProviderAuthError (W6-14)", () =>
+  it.live("BedrockExtension resolveModel fails closed as ProviderAuthError", () =>
     Effect.gen(function* () {
-      // W6-14: bedrock has no @effect/ai provider at beta.47. The contribution
+      // Bedrock has no @effect/ai provider at beta.47. The contribution
       // throws on resolveModel — that throw must surface as ProviderAuthError
       // (fail-closed) rather than being wrapped as transient ProviderError and
       // retried. Use a test contribution that mirrors the BedrockExtension

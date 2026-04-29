@@ -1,6 +1,6 @@
 /**
  * Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
- * tests. Counsel called this out as the missing piece behind the C4.1
+ * tests. Counsel called this out as the missing piece behind the
  * "coverage theater" bug: provider-extension tests stopped at the seam
  * (sibling `layerFromRef` probes / structural layer inspection) instead
  * of driving one real request through the resolved layer and asserting

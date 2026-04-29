@@ -46,7 +46,7 @@ export interface InteractionPendingReaderService {
  * is structurally read-only by construction (only `listPending` is
  * exposed; writes live on `InteractionStorage`). The brand makes the
  * read-only contract checkable at the type level for projection and
- * read-intent capability R-channels (B11.4).
+ * read-intent capability R-channels ().
  */
 export class InteractionPendingReader extends Context.Service<
   InteractionPendingReader,

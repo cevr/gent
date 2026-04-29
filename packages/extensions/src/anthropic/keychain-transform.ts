@@ -287,7 +287,7 @@ export const buildKeychainTransformClient =
       // LongContextBetaError so Effect.retry re-runs preprocess (which
       // re-reads the now-larger excluded set) + postprocess. Budget = one
       // retry slot per long-context candidate the model actually emits
-      // (Counsel C8 deep at the to-be-deleted oauth.ts:847-887 fixed
+      // (Counsel  deep at the to-be-deleted oauth.ts:847-887 fixed
       // the prior off-by-one + per-model-override bugs; this port
       // preserves that fix). When candidates exhaust, the catch-tag
       // folds the terminal 400 back into the success channel.
@@ -302,7 +302,7 @@ export const buildKeychainTransformClient =
             > => {
               // 400-only: the legacy guard included 429 too, but in
               // legacy 429s came post-transient-retry (the inner layer
-              // never saw raw 429s). Counsel C2d flagged this as a
+              // never saw raw 429s). Counsel  flagged this as a
               // parity drift in the new stack where the long-context
               // layer wraps the transient layer. Narrowing to 400
               // restores legacy semantics: 429s flow through to the

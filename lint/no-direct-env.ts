@@ -8,15 +8,14 @@
  *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
  * - no-projection-writes: heuristic AST-string-match fence on
  *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
- *   for write-shaped method names. Projection coverage was deleted in B11.4 —
- *   `ProjectionContribution<A, R extends ReadOnlyTag>` enforces it
- *   structurally now.
+ *   for write-shaped method names. Projection coverage is enforced
+ *   structurally by `ProjectionContribution<A, R extends ReadOnlyTag>`.
  * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
  *   `await`, and Promise chains in test files.
  *   Test resources should live in Effect scopes (`Effect.scoped`,
  *   `FileSystem.makeTempDirectoryScoped`, `Effect.acquireRelease`, etc.).
  *
- * Six-primitive substrate rules (C0 scaffolds, sharpened in later batches):
+ * Six-primitive substrate rules:
  * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
  *   in *-boundary.ts files OR when consuming an SdkBoundary value via runSdkBoundary
  * - all-errors-are-tagged: classes named *Error/*Failure must extend
@@ -44,10 +43,10 @@ const LOG_METHODS = new Set([
   "logFatal",
 ])
 
-// After B11.1c the `projection` / `capability` identity smart constructors are
-// gone; only `query` and `mutation` survive as real lowering helpers. After
-// B11.4 the projection arm is gone too — `ProjectionContribution<A, R extends
-// ReadOnlyTag>` enforces the read-only fence at the type level. The
+// The `projection` / `capability` identity smart constructors are gone; only
+// `query` and `mutation` survive as real lowering helpers. The projection arm
+// is gone too: `ProjectionContribution<A, R extends ReadOnlyTag>` enforces the
+// read-only fence at the type level. The
 // CallExpression detection branch below uses these sets for factory-call
 // matching; type-annotation and `satisfies` paths still cover direct
 // `CapabilityContribution` / `QueryContribution` object literals.
@@ -113,9 +112,7 @@ const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => 
 }
 
 const isTestFilename = (filename: string): boolean =>
-  /\/tests\//.test(filename) ||
-  /\/batch12-modules\/(?:tests|integration)\//.test(filename) ||
-  /\.test\.tsx?$/.test(filename)
+  /\/tests\//.test(filename) || /\.test\.tsx?$/.test(filename)
 
 /** Return the call's function name (Identifier or MemberExpression property). */
 const calleeName = (node: AstNode): string | undefined => {
@@ -470,16 +467,14 @@ const plugin: Plugin = {
      * Sanctioned call sites:
      *   - File path matches `*-boundary.ts`
      *   - File path is in {@link KNOWN_BOUNDARY_FILES} (legacy boundaries
-     *     pending migration to `*-boundary.ts`; tracked per-batch in the
-     *     v2 redesign plan)
+     *     pending migration to `*-boundary.ts`)
      *   - File path under `tests/**`, `**\/*.test.ts`, `**\/*.test.tsx`
      *   - File is the `SdkBoundary` consumer module itself
      *
      * Anywhere else: error. SDK edges must be explicit.
      *
-     * Migration plan: each entry in `KNOWN_BOUNDARY_FILES` is removed in the
-     * batch that renames the file to `*-boundary.ts` (anthropic/openai in
-     * driver work, acp in C3, sdk in transport batches, TUI hook in C9).
+     * Migration plan: each entry in `KNOWN_BOUNDARY_FILES` is removed when
+     * the corresponding file is renamed to `*-boundary.ts`.
      */
     "no-runpromise-outside-boundary": {
       create(context) {
@@ -508,7 +503,7 @@ const plugin: Plugin = {
         // `*-boundary.ts`. `runSync`/`runFork`/`runForkWith` are NOT in this
         // set: they're Effect-internal (no Promise edge) and used heavily by
         // Solid signal lanes, PubSub.unbounded eager-build, etc. — adding
-        // them would force a much wider boundary refactor than this batch.
+        // them would force a much wider boundary refactor.
         const EFFECT_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
         // Instance methods on a `ManagedRuntime` / `Runtime` that exit via
         // Promise — same boundary semantics as `Effect.runPromise`. Effect's
@@ -604,7 +599,7 @@ const plugin: Plugin = {
      *
      * The factory's `setup` callback is called by the loader during extension
      * load; a synchronous `throw` becomes a defect at the load site instead
-     * of a typed `ExtensionLoadError` on the Effect channel. The B7 fix
+     * of a typed `ExtensionLoadError` on the Effect channel. The  fix
      * (wrapping the call in `Effect.try`) routes the defect, but the lint
      * rule prevents authors from writing the bug in the first place.
      *
@@ -617,7 +612,7 @@ const plugin: Plugin = {
      * `ThrowStatement` directly inside that callback's body (not inside a
      * further-nested function — those are deferred runtime calls).
      *
-     * NOTE: C0 ships the rule; C8 introduces `definePackage` whose setup is
+     * NOTE:  ships the rule;  introduces `definePackage` whose setup is
      * Effect-typed, at which point this rule's bite is exact.
      */
     "no-define-extension-throw": {
@@ -692,9 +687,9 @@ const plugin: Plugin = {
         // Allow tests
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
-        // The SDK-boundary allow-list previously sat here as well. After B11.2
-        // every Promise edge lives behind a `*-boundary.ts` file (caught by
-        // the `-boundary.ts$` allow above), so the list is empty. New
+        // The SDK-boundary allow-list previously sat here as well. Every
+        // Promise edge now lives behind a `*-boundary.ts` file (caught by the
+        // `-boundary.ts$` allow above), so the list is empty. New
         // boundary helpers should follow the same convention rather than
         // re-introduce an allow-list.
         return {

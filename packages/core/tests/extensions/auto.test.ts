@@ -88,7 +88,7 @@ const sendAuto = (intent: AutoIntent) => {
 
 // ── Actor drivers ──
 //
-// The auto FSM is hosted on a `Behavior` actor (W10-1b). Tool-result and
+// The auto FSM is hosted on a `Behavior` actor (). Tool-result and
 // turn-boundary AgentEvents reach the actor through the Resource shell's
 // `runtime.toolResult` / `runtime.turnAfter` slot handlers — which only
 // fire when invoked by the agent loop. End-to-end coverage of those
@@ -347,7 +347,7 @@ describe("Auto runtime integration", () => {
       // After AutoSignal{continue} the loop is in AwaitingReview. ReviewSignal
       // pushes it back to Working with the learnings + nextIdea preserved —
       // exactly the state where the actor's `view(state)` should inject them
-      // into the system prompt. W10-2a.3: replaces `AutoProjection`.
+      // into the system prompt. .3: replaces `AutoProjection`.
       yield* tellAuto(AutoMsg.ReviewSignal.make({}))
       // Fence: ask GetSnapshot drains the mailbox up to and including the
       // ReviewSignal tell, so peekView observes post-Review state.
@@ -363,10 +363,10 @@ describe("Auto runtime integration", () => {
   )
 })
 
-// JSONL replay tests deleted with W10-1b.1.b: the replay-on-spawn path
+// JSONL replay tests deleted with .1.b: the replay-on-spawn path
 // (formerly `onInit` on the workflow) was removed because the new actor
 // primitive doesn't yet support cross-extension Receptionist discovery
 // from a non-host slot + the session-ancestry guard. Reintroduce in
-// W10-1c with a *positive* test that verifies state is hydrated from
+// with a *positive* test that verifies state is hydrated from
 // the journal — the old "active === false" assertions trivially held
 // because replay was dead code, so they were false reassurance.

@@ -1,5 +1,5 @@
 /**
- * Executor actor — pure FSM hosted on a `Behavior` (W10-1c).
+ * Executor actor — pure FSM hosted on a `Behavior` ().
  *
  * States: Idle | Connecting{cwd} | Ready{...} | Error{message}
  *
@@ -97,7 +97,7 @@ export const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => 
 //
 // Pure derivation from `ExecutorState`, sampled via
 // `ActorEngine.peekView` from turn reactions. Replaces the
-// retired `ExecutorProjection` (W10-2): when state is `Ready` and an
+// retired `ExecutorProjection` (): when state is `Ready` and an
 // `executorPrompt` is present, contribute the executor-guidance prompt
 // section; otherwise exclude `execute`/`resume` from the active policy
 // until the connection is up.

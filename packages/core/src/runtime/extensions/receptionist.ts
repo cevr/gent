@@ -1,5 +1,5 @@
 /**
- * Receptionist — W9-3.
+ * Receptionist — .
  *
  * Typed `ServiceKey<M>` registry. Actors that declare a
  * `serviceKey` on their `Behavior` register here at spawn time;

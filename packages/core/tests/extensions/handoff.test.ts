@@ -99,7 +99,7 @@ describe("HandoffTool", () => {
 })
 
 // ============================================================================
-// Cooldown actor (C8b regression lock — re-pinned to actor primitive in W10-1a)
+// Cooldown actor ( regression lock — re-pinned to actor primitive in )
 //
 // Pin the cooldown semantics from the old FSM implementation:
 // `Suppress(n)` SETS the counter to N (overwrite, not add);

@@ -174,8 +174,8 @@ export const createDependencies = (config: DependenciesConfig) => {
   }
 
   // SessionCwdRegistry — fast (sessionId → cwd) cache for the per-cwd
-  // EventPublisher router (B11.6c). Registry writes happen at session
-  // creation; reads fall back to Storage on cache miss.
+  // EventPublisher router. Registry writes happen at session creation; reads
+  // fall back to Storage on cache miss.
   const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
 
   // Per-cwd EventPublisher router — dispatches events through the correct

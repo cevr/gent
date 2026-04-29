@@ -10,7 +10,7 @@
  * Gate: peer review via review tool (AwaitingReview blocks until review tool called)
  * Safety: maxIterations ceiling + turnsSinceCheckpoint watchdog
  *
- * Hand-rolled FSM hosted on a `Behavior` actor (W10-1b). The actor owns
+ * Hand-rolled FSM hosted on a `Behavior` actor (). The actor owns
  * pure transitions; turn/tool boundary AgentEvents (`auto_checkpoint`,
  * `review`, `TurnCompleted`) are observed by the Resource shell's
  * `runtime.toolResult` / `runtime.turnAfter` slots which translate them
@@ -180,7 +180,7 @@ export const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
 //
 // Per-turn prompt + tool-policy contribution derived from the actor's
 // current state. `Behavior.view` replaces the standalone `AutoProjection`
-// (W10-2a.3) — turn reactions sample this on every turn via
+// (.3) — turn reactions sample this on every turn via
 // `ActorEngine.peekView` and fold it into the same prompt/policy aggregate
 // as explicit turn-projection reactions.
 
@@ -676,7 +676,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     yield* drainAndQueueFollowUp(ctx).pipe(Effect.catchEager(() => Effect.void))
   }).pipe(Effect.catchEager(() => Effect.void))
 
-// Replay (cold-start hydration from journal) is staged for W10-1c.
+// Replay (cold-start hydration from journal) is staged for .
 // Needs cross-extension Receptionist discovery from a non-host slot
 // plus a session-ancestry guard. The journal interceptor still appends
 // rows during the live loop — only the on-spawn replay path is gone.

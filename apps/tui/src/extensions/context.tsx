@@ -4,7 +4,7 @@
  * Loads on mount: discovers *.client.* files, imports them, resolves with
  * scope precedence. Provides resolved contributions to descendants.
  *
- * B11.6 deleted the paired-package snapshot cache. Widgets that need
+ *  deleted the paired-package snapshot cache. Widgets that need
  * server-side state subscribe to `ClientTransport.onSessionEvent` or
  * `ClientTransport.onExtensionStateChanged` and call
  * `client.extension.request` directly — see e.g.

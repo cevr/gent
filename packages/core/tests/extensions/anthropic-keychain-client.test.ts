@@ -441,7 +441,7 @@ describe("transformPayload — system content relocation", () => {
 
   test("inserts relocated text after a leading tool_result run (preserves Anthropic ordering)", () => {
     // Anthropic requires tool_result blocks to be the FIRST blocks of
-    // a user message that carries any. Counsel C7 follow-up: relocator
+    // a user message that carries any. Counsel  follow-up: relocator
     // must splice the prefix in AFTER the leading tool_result run,
     // not at index 0, otherwise the API returns 400.
     const payload = {
@@ -534,7 +534,7 @@ describe("transformPayload — haiku effort-strip", () => {
   test("strips thinking.effort for haiku models (defensive — opencode parity)", () => {
     // gent's anthropic/index.ts only emits output_config.effort today,
     // but the upstream Anthropic SDK may emit thinking.effort in
-    // future shapes. Counsel C7 follow-up — match the opencode reference
+    // future shapes. Counsel  follow-up — match the opencode reference
     // and strip both, so the haiku 400 stays away regardless of which
     // shape carries the knob.
     const payload = {

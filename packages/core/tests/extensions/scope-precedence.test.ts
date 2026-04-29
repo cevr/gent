@@ -123,9 +123,9 @@ describe("scope precedence", () => {
     })
 
     it.live("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
-      // C7 codex BLOCKER: previously, prompts/rules were collected from raw
-      // extracted leaves, not winners. A higher-scope tool shadowing a
-      // lower-scope tool would leak the loser's prompt.
+      // Previously, prompts/rules were collected from raw extracted leaves, not
+      // winners. A higher-scope tool shadowing a lower-scope tool would leak
+      // the loser's prompt.
       const builtinTool = tool({
         id: "shadow-me",
         description: "carrier",
@@ -149,9 +149,8 @@ describe("scope precedence", () => {
     })
 
     it.live("tool permissionRules: shadowed lower-scope rules do NOT survive", () => {
-      // C7 codex BLOCKER companion: a project-scope tool shadowing the
-      // builtin `bash` without `permissionRules` must NOT inherit the
-      // builtin's deny rules.
+      // A project-scope tool shadowing the builtin `bash` without
+      // `permissionRules` must NOT inherit the builtin's deny rules.
       const builtinTool = tool({
         id: "shadow-rules",
         description: "carrier",

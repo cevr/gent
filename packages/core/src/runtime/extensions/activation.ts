@@ -297,7 +297,7 @@ export const collectValidationFailures = (
 
   // Model tools MUST declare a non-empty description — the
   // string is sent to the LLM as part of the tool schema, so empty/missing
-  // becomes "why is the model dumb?" rot later. Codex ADVISORY on C4.4a.
+  // becomes "why is the model dumb?" rot later. Codex ADVISORY on .
   for (const ext of extensions) {
     for (const cap of modelCapabilities(ext.contributions)) {
       const trimmed = (cap.description ?? "").trim()

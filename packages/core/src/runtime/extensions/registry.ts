@@ -35,7 +35,7 @@ import { sealErasedEffect } from "./effect-membrane.js"
 // SlashCommand — public-facing slash entry. Built from `commands:` bucket
 // winners. Read- and write-intent both surface as commands; the bucket is the
 // load-bearing filter. The legacy server-side command contribution shape died
-// in C8.
+// in .
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
@@ -347,7 +347,7 @@ export const resolveExtensions = (
   // Prompt sections from capability leaves are read off the WINNERS map,
   // not raw extractions. Otherwise a higher-scope capability shadowing a
   // lower-scope tool would still inherit the loser's prompt — defeating the
-  // shadow (codex BLOCKER on C7). Last scope wins by section id, identical
+  // shadow. Last scope wins by section id, identical
   // to the legacy promptSection contribution semantics.
   // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
@@ -355,9 +355,9 @@ export const resolveExtensions = (
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
-  // C7: permission rules collected from WINNERS, not raw extractions —
+  // Permission rules are collected from WINNERS, not raw extractions:
   // otherwise overriding `bash` without `permissionRules` would still inherit
-  // builtin denies (codex BLOCKER on C7).
+  // builtin denies.
   const permissionRules: PermissionRule[] = []
   for (const { capability: cap } of capabilityWinners.values()) {
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
@@ -560,7 +560,7 @@ export class ExtensionRegistry extends Context.Service<
             "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
-      // C7: dynamic prompt sections are assembled per-turn by ExtensionReactions.
+      // Dynamic prompt sections are assembled per-turn by ExtensionReactions.
       // The sections here come from capability leaf `prompt`, all static. No more
       // per-section Effect resolution — return the array directly.
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),

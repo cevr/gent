@@ -2,7 +2,7 @@
  * Driver primitives — unified registration for both model providers and
  * external turn executors.
  *
- * Codex's review of the C9 plan flagged that collapsing both into a single
+ * Codex's review of the  plan flagged that collapsing both into a single
  * `TurnDriver` interface loses provider-shaped capabilities (auth + listModels
  * + resolveModel). So drivers split by **capability** under one registry:
  *
@@ -156,7 +156,7 @@ export interface ProviderAuthContribution {
 
 /**
  * Registers a model provider as a driver. Same capability surface as the
- * pre-C9 `ProviderContribution` — `id` doubles as the driver id, the layer
+ * pre- `ProviderContribution` — `id` doubles as the driver id, the layer
  * returned by `resolveModel` produces an `effect/unstable/ai` LanguageModel,
  * `listModels` filters/extends the catalog, and `auth` wires the OAuth/API
  * key flow. The driver registry routes a `DriverRef({ _tag: "model", id })`
@@ -187,7 +187,7 @@ export interface ModelDriverContribution {
 // What an external driver streams back per turn (TurnEvent), the per-turn
 // context it receives (TurnContext), the failure type it can raise (TurnError),
 // and the executor interface itself (TurnExecutor) live here as part of the
-// driver primitive. Pre-C9 they were a parallel `domain/turn-executor.ts`
+// driver primitive. Pre- they were a parallel `domain/turn-executor.ts`
 // primitive — collapsed into the driver module to remove the parallel API.
 
 export const TurnEventUsage = Schema.Struct({
@@ -277,7 +277,7 @@ export interface TurnContext {
  *  SDK `q.interrupt`). A driver-wide `cancel(sessionId)` hook would only see
  *  the outer session string, not the full `(sessionId, branchId, driverId)`
  *  cache key, so it cannot target a specific cached session correctly.
- *  Counsel C5 — drop the dead optional rather than keep it as a no-op stub. */
+ *  Counsel  — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
   readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
 }
@@ -329,11 +329,9 @@ export interface ExternalDriverContribution {
    * Hook called by the runtime when a config change makes any cached
    * external session for this driver stale (e.g. `driver.set` /
    * `driver.clear` swaps an agent's routing). Implementations should tear
-   * down every cached session keyed under this driver id. Counsel C6 —
-   * required, not optional: external drivers are the only contributors to
-   * this primitive, and an absent `invalidate` hides cache-staleness bugs
-   * (the BLOCKER fixed in C1 only mattered because we *expected* tearDown
-   * to fully reclaim resources). Stateless drivers supply `Effect.void`
+   * down every cached session keyed under this driver id. External drivers
+   * are the only contributors to this primitive, and an absent `invalidate`
+   * hides cache-staleness bugs. Stateless drivers supply `Effect.void`
    * explicitly so reviewers see the intent.
    */
   readonly invalidate: () => Effect.Effect<void>

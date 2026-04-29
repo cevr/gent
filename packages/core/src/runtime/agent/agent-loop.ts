@@ -778,7 +778,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               }).pipe(Effect.orDie) as Effect.Effect<S>
 
             // The result of a single Running turn. The driver branches on this
-            // to decide the next state transition (W8-2: replaces the FSM
+            // to decide the next state transition (: replaces the FSM
             // event return previously consumed by `Machine.task`).
             const TurnOutcome = TaggedEnumClass("TurnOutcome", {
               Done: {},
@@ -1031,7 +1031,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             //
             // The previous FSM driver mediated state via `Machine.spawn`'s
             // event queue + transition table. With state already collapsed to
-            // a single SubscriptionRef (W8-1), the driver is now a switch on
+            // a single SubscriptionRef, the driver is now a switch on
             // `state._tag` inside each method. The per-turn fiber is forked
             // with `Effect.forkIn(loopScope)`; its completion runs the
             // post-turn transition (Done/Failed → drain queue, Interaction →

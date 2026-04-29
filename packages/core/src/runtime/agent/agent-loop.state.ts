@@ -234,7 +234,7 @@ export type ResolvedTurn = {
 // ── Phase-tagged loop state (flat, persisted) ──
 //
 // Replaces the `effect-machine` `State()` / `Machine` driver from
-// pre-W8-2. The loop is a single fiber + Phase Ref now; this enum is
+// pre-. The loop is a single fiber + Phase Ref now; this enum is
 // the source of truth for "where is the loop?". Persisted directly via
 // `agent-loop.checkpoint.ts`.
 
@@ -367,7 +367,7 @@ export const runtimeStateFromLoopState = (
   }
 }
 
-// ── Aggregate (W8-1 single-Ref shape) ──
+// ── Aggregate (single-Ref shape) ──
 //
 // Replaces the stateRef / queueRef / runtimeStateRef projection mirror set
 // with one source of truth. The FSM driver still owns the LoopState

@@ -21,7 +21,7 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 // (`list` / `get`) but no reload/refresh path. Skill loading runs once
 // in the Live layer's setup; if a runtime reload becomes a real need
 // later it should arrive as an admin `request` capability or a fresh
-// resource start, not a method on the read interface (B11.4).
+// resource start, not a method on the read interface ().
 
 export interface SkillsService {
   readonly list: () => Effect.Effect<ReadonlyArray<Skill>>

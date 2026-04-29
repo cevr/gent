@@ -95,7 +95,7 @@ describe("defineExtension", () => {
 
   it.live("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
-      // C7: PermissionRule + PromptSection are now bundled on the Capability
+      // PermissionRule + PromptSection are bundled on the Capability
       // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
       const myTool = tool({
         id: "echo",
@@ -175,7 +175,7 @@ describe("defineExtension", () => {
             yield* Layer.build(buildResourceLayer([loaded], "process"))
           }),
         )
-        // Strict ordering — no sorting. Codex C3.4 review flagged that the
+        // Strict ordering — no sorting. Codex  review flagged that the
         // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
         // is now sequenced through one Effect, so this is deterministic.
         expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])

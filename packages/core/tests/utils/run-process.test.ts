@@ -23,7 +23,7 @@ describe("runProcess", () => {
         Effect.gen(function* () {
           // sh -c "exit 7" gives a deterministic nonzero without relying on
           // a specific binary's error semantics.
-          const result = yield* provideBun(runProcess("sh", ["-c", "exit 7"]))
+          const result = yield* provideBun(runProcess("/bin/sh", ["-c", "exit 7"]))
           expect(result.exitCode).toBe(7)
         }),
       ),
@@ -34,7 +34,9 @@ describe("runProcess", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const result = yield* provideBun(runProcess("sh", ["-c", "printf out; printf err 1>&2"]))
+          const result = yield* provideBun(
+            runProcess("/bin/sh", ["-c", "printf out; printf err 1>&2"]),
+          )
           expect(result.stdout).toBe("out")
           expect(result.stderr).toBe("err")
         }),
@@ -62,7 +64,7 @@ describe("runProcess", () => {
           // PATH is included so `sh` resolves on systems where it isn't at a
           // hard-coded path; the marker var is what we actually assert on.
           const result = yield* provideBun(
-            runProcess("sh", ["-c", 'printf %s "$RUN_PROCESS_TEST_VAR"'], {
+            runProcess("/bin/sh", ["-c", 'printf %s "$RUN_PROCESS_TEST_VAR"'], {
               env: { PATH: "/usr/bin:/bin:/usr/local/bin", RUN_PROCESS_TEST_VAR: "marker-value" },
             }),
           )
@@ -77,7 +79,7 @@ describe("runProcess", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const failed = yield* provideBun(
-            runProcess("sh", ["-c", "sleep 5"], { timeout: Duration.millis(100) }).pipe(
+            runProcess("/bin/sh", ["-c", "sleep 5"], { timeout: Duration.millis(100) }).pipe(
               Effect.flip,
             ),
           )

@@ -20,7 +20,7 @@ const AutoSnapshotLearning = Schema.Struct({
  *   - interceptors (active + iteration + maxIterations + goal)
  *   - the prompt projection (learnings, lastSummary, nextIdea) — replaces the
  *     workflow's previous `derive().promptSections` path that was lost when
- *     `WorkflowContribution.turn` was deleted in C2.
+ *     `WorkflowContribution.turn` was deleted in .
  *  The TUI widget consumes only the interceptor-shaped fields. */
 export const AutoSnapshotReply = Schema.Struct({
   active: Schema.Boolean,

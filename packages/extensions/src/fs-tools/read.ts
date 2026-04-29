@@ -36,7 +36,7 @@ export const ReadResult = Schema.Struct({
   truncated: Schema.Boolean,
 })
 
-// Read Tool — authored through the typed `tool(...)` factory (B11.5).
+// Read Tool — authored through the typed `tool(...)` factory ().
 // `tool(...)` lowers directly to a Capability; the previous two-step
 // `tool(defineTool({...}))` pattern is gone.
 

@@ -19,7 +19,7 @@ import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/
 //
 // Pure transitions are exposed as standalone functions; the Behavior
 // composes them into a `receive` switch. We test the transitions
-// directly — that's the W10-1b/c test pattern. End-to-end coverage
+// directly — that's the /c test pattern. End-to-end coverage
 // (actor mailbox + connection runner) lives in the integration test.
 
 const idle = executorBehavior.initialState
@@ -115,7 +115,7 @@ describe("Executor state machine", () => {
   })
 })
 
-// ── Actor view (new W10-2 path) ──
+// ── Actor view (new path) ──
 //
 // `ExecutorActorConfig.derive` is gone. Prompt/policy come from
 // `viewForState(state)` — a pure function of `ExecutorState` sampled by
@@ -123,7 +123,7 @@ describe("Executor state machine", () => {
 
 describe("executor viewForState — prompt + tool policy", () => {
   test("executorBehavior.view is wired so turn reactions sample it", () => {
-    // Regression-locks the W10-2 seam: if `view` is unset on the
+    // Regression-locks the seam: if `view` is unset on the
     // behavior, `ActorEngine.peekView` returns undefined and the
     // executor-guidance prompt section / policy exclusions never
     // reach prompt assembly — even though `viewForState` itself

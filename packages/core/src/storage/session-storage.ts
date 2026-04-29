@@ -1,7 +1,7 @@
 /**
  * SessionStorage — focused service for session CRUD.
  *
- * Split from the `Storage` god-interface (B11.7). Each consumer yields
+ * Split from the `Storage` god-interface (). Each consumer yields
  * only the narrow Tag it needs; the full SQLite implementation provides
  * all sub-Tags through `Storage.LiveWithSql` / `Storage.MemoryWithSql`.
  */

@@ -25,7 +25,7 @@ import { getModelOverride } from "./model-config.js"
 const MCP_PREFIX = "mcp_"
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
 
-// Counsel C8 — model-specific quirks (effort-disabled, etc.) live in
+// Counsel  — model-specific quirks (effort-disabled, etc.) live in
 // `model-config.ts`'s `MODEL_OVERRIDES` table; we read them via
 // `getModelOverride(modelId).disableEffort` rather than a prefix check
 // hard-coded here.
@@ -83,7 +83,7 @@ const transformToolChoice = (toolChoice: unknown): unknown => {
 }
 
 /**
- * Counsel C7 (opencode parity B) — drop orphan `tool_use` blocks (no
+ * Counsel  (opencode parity B) — drop orphan `tool_use` blocks (no
  * matching downstream `tool_result`) and orphan `tool_result` blocks
  * (no matching upstream `tool_use`) from message history. Anthropic
  * rejects requests with mismatched pairs (HTTP 400), and a partial turn
@@ -179,7 +179,7 @@ const stripExistingBillingBlocks = (
  * decide what to pull into the first user message before billing is
  * computed.
  *
- * Counsel C8 deep — a single block carrying `IDENTITY + "\n\n<rest>"`
+ * Counsel  deep — a single block carrying `IDENTITY + "\n\n<rest>"`
  * (the shape OpenCode's `system.transform` hook produces) used to
  * classify as identity-only and silently drop `<rest>`. Now we split
  * the block at the identity boundary: identity goes to identityBlocks,
@@ -223,7 +223,7 @@ const partitionSystemBlocks = (
  *   [0] billing-header text block (no cache_control)
  *   [1] identity prefix text block (no cache_control)
  *
- * After C7 relocation there are no third-party blocks left to attach;
+ * After  relocation there are no third-party blocks left to attach;
  * any third-party content was pulled into the first user message
  * before this builder ran. Identity must be its own entry —
  * concatenating it into another text block trips the validator
@@ -231,7 +231,7 @@ const partitionSystemBlocks = (
  * Anthropic rejects requests exceeding 4 cache_control blocks per
  * request, and the billing entry would count toward that limit.
  *
- * Counsel C7 — caller MUST pass the FINAL post-relocation messages so
+ * Counsel  — caller MUST pass the FINAL post-relocation messages so
  * the billing hash matches the first-user text actually sent on the
  * wire. Computing the hash from pre-relocation messages produces a
  * stale digest and 400s.
@@ -288,14 +288,14 @@ export const transformSystem = (system: unknown): unknown => {
 }
 
 /**
- * Counsel C7 (opencode parity A) — Anthropic's OAuth-billing path
+ * Counsel  (opencode parity A) — Anthropic's OAuth-billing path
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
  * (already partitioned by `partitionSystemBlocks`) and folds them into
  * the first user message as a single text block.
  *
- * Counsel C7 follow-up:
+ * Counsel  follow-up:
  *   - tool_result ordering: Anthropic requires tool_result blocks to be
  *     the FIRST blocks of a user message that carries any. Inserting
  *     text at index 0 in such a message produces 400. We splice the
@@ -356,7 +356,7 @@ const relocateThirdPartyIntoFirstUser = (
 }
 
 /**
- * Counsel C7 (opencode parity C) — strip the effort knob for models
+ * Counsel  (opencode parity C) — strip the effort knob for models
  * that don't support it (haiku family). Anthropic returns 400 if
  * effort is sent with a haiku model. We strip from BOTH
  * `output_config.effort` (the shape gent emits today via
@@ -365,7 +365,7 @@ const relocateThirdPartyIntoFirstUser = (
  * matches the opencode reference). Each branch deletes the parent
  * object if it empties out.
  *
- * C8 will replace the `claude-haiku` prefix match with the per-model
+ *  will replace the `claude-haiku` prefix match with the per-model
  * override table from opencode-claude-auth's `model-config.ts`.
  */
 const stripObjectKey = (
@@ -380,7 +380,7 @@ const stripObjectKey = (
 const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unknown> => {
   const model = payload["model"]
   if (typeof model !== "string") return payload
-  // Counsel C8 — defer to the per-model override table instead of
+  // Counsel  — defer to the per-model override table instead of
   // string-prefix matching here. `disableEffort` is currently set for
   // the `haiku` family in `MODEL_CONFIG`.
   const override = getModelOverride(model)
