@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Queue } from "effect"
 import {
   BuiltinEventSink,
   EventPublisher,
@@ -6,7 +6,6 @@ import {
 } from "../domain/event-publisher.js"
 import {
   EventStore,
-  getEventBranchId,
   getEventSessionId,
   type EventEnvelope,
   type EventStoreError,
@@ -30,46 +29,46 @@ interface InnerPublisherDeps {
  * (single-profile, ephemeral children) and the router (per-cwd dispatch).
  */
 const deliverInner = (envelope: EventEnvelope, deps: InnerPublisherDeps) =>
-  Effect.gen(function* () {
-    yield* deps.baseEventStore.broadcast(envelope)
-    const sessionId = getEventSessionId(envelope.event)
-    if (sessionId === undefined) return
+  deps.baseEventStore.broadcast(envelope)
 
-    const branchId = getEventBranchId(envelope.event)
-    if (branchId === undefined) return
-
-    // Yield the calling fiber after broadcast, before publish returns.
-    //
-    // The legacy publisher routed every event through a per-session
-    // mailbox (`mailbox.submit`), which forced a fiber yield as it
-    // serialized via semaphore. Sites that publish on the same fiber
-    // that drives the agent loop (e.g. EventPublisher dispatched from a
-    // turn-control command) implicitly relied on that yield to let the
-    // loop's driver fiber pick up the transition before deliverInner
-    // returns. Without this `yieldNow`, the regression caught by
-    // `packages/e2e/tests/queue-contract.test.ts` ("direct runs steer
-    // before queued follow-up") slips back in: the runtime-state
-    // subscriber observes initial Idle and never sees the
-    // Idle → Running edge before the test polls.
-    //
-    // The honest fix is to restructure the agent-loop driver so it does
-    // not depend on publisher fiber-yields (tracked separately as a
-    // future architecture wave). Until then, yielding here preserves
-    // the contract.
-    yield* Effect.yieldNow
-  })
-
-const makeIdempotentDeliver = (
-  deliver: (envelope: EventEnvelope) => Effect.Effect<void, EventStoreError>,
-) => {
-  const delivered = new Set<EventEnvelope["id"]>()
-  return (envelope: EventEnvelope) =>
-    Effect.gen(function* () {
-      if (delivered.has(envelope.id)) return
-      yield* deliver(envelope)
-      delivered.add(envelope.id)
-    })
+type DeliveryJob = {
+  readonly envelope: EventEnvelope
+  readonly ack: Deferred.Deferred<void, EventStoreError>
 }
+
+const makeSerializedDeliver = (
+  deliver: (envelope: EventEnvelope) => Effect.Effect<void, EventStoreError>,
+) =>
+  Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<DeliveryJob>()
+    const delivered = new Set<EventEnvelope["id"]>()
+    yield* Queue.take(queue).pipe(
+      Effect.flatMap((job) =>
+        Effect.gen(function* () {
+          if (delivered.has(job.envelope.id)) {
+            yield* Deferred.succeed(job.ack, void 0)
+            return
+          }
+          const exit = yield* Effect.exit(deliver(job.envelope))
+          if (Exit.isSuccess(exit)) {
+            delivered.add(job.envelope.id)
+            yield* Deferred.succeed(job.ack, void 0)
+            return
+          }
+          yield* Deferred.failCause(job.ack, exit.cause)
+        }),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+
+    return (envelope: EventEnvelope) =>
+      Effect.gen(function* () {
+        const ack = yield* Deferred.make<void, EventStoreError>()
+        yield* Queue.offer(queue, { envelope, ack })
+        yield* Deferred.await(ack)
+      })
+  })
 
 const makePublisherContext = (publisher: EventPublisherService) =>
   Context.empty().pipe(
@@ -92,7 +91,7 @@ export const EventPublisherLive: Layer.Layer<EventPublisher | BuiltinEventSink, 
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
       const deps: InnerPublisherDeps = { baseEventStore }
-      const deliver = makeIdempotentDeliver((envelope) => deliverInner(envelope, deps))
+      const deliver = yield* makeSerializedDeliver((envelope) => deliverInner(envelope, deps))
 
       return makePublisherContext(
         EventPublisher.of({
@@ -226,7 +225,7 @@ export const makeEventPublisherRouter = (): {
 
           yield* deliverInner(envelope, cwdDeps)
         })
-      const deliver = makeIdempotentDeliver(deliverToProfile)
+      const deliver = yield* makeSerializedDeliver(deliverToProfile)
 
       return makePublisherContext(
         EventPublisher.of({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
@@ -109,26 +109,20 @@ describe("EventPublisher", () => {
       expect(broadcasted).toEqual([TAG.OuterEvent])
     }),
   )
-  it.live("publish yields after broadcast so concurrent fibers observe the state transition", () =>
+  it.live("publish waits for serialized delivery before returning", () =>
     Effect.gen(function* () {
-      // Regression: deliverInner has an `Effect.yieldNow` after
-      // baseEventStore.broadcast and before publish returns. The yield lets
-      // fibers blocked on the broadcast (the agent-loop driver subscribed via
-      // EventStore) take a step before publish returns. Without it, sites that
-      // publish on the same fiber that drives the loop can skip the
-      // Idle → Running edge.
-      //
-      // We model the contract directly: a forked fiber released by the
-      // broadcast hook sets a Ref. If the yield happens, publish returns after the
-      // Ref is "ran"; if removed, publish can return with the Ref still unset.
-      const broadcastReleased = Effect.runSync(Deferred.make<void>())
-      const observedAtEmit = Effect.runSync(Ref.make<"unset" | "ran">("unset"))
+      // The publisher no longer relies on an explicit scheduler yield. Publish
+      // enqueues committed envelopes through a delivery worker and waits for the
+      // broadcast acknowledgment before returning.
+      const broadcastStarted = yield* Deferred.make<void>()
+      const releaseBroadcast = yield* Deferred.make<void>()
       const customEventStore = Layer.succeed(EventStore, {
         append: (event) =>
           Effect.succeed({ id: EventId.make(1), event, createdAt: Date.now() } as EventEnvelope),
         broadcast: () =>
           Effect.gen(function* () {
-            yield* Deferred.succeed(broadcastReleased, void 0)
+            yield* Deferred.succeed(broadcastStarted, void 0)
+            yield* Deferred.await(releaseBroadcast)
           }),
         publish: () => Effect.void,
         subscribe: () => Effect.void as never,
@@ -138,16 +132,54 @@ describe("EventPublisher", () => {
       yield* Effect.promise(() =>
         Effect.gen(function* () {
           const publisher = yield* EventPublisher
-          yield* Effect.forkChild(
-            Effect.gen(function* () {
-              yield* Deferred.await(broadcastReleased)
-              yield* Ref.set(observedAtEmit, "ran")
-            }),
+          const fiber = yield* Effect.forkScoped(
+            publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
           )
-          yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-        }).pipe(Effect.provide(layer), Effect.runPromise),
+          yield* Deferred.await(broadcastStarted)
+          const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("50 millis"))
+          expect(early._tag).toBe("None")
+          yield* Deferred.succeed(releaseBroadcast, void 0)
+          yield* Fiber.join(fiber)
+        }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise),
       )
-      expect(Effect.runSync(Ref.get(observedAtEmit))).toBe("ran")
+    }),
+  )
+  it.live("deliver serializes duplicate committed envelopes", () =>
+    Effect.gen(function* () {
+      const firstBroadcastStarted = yield* Deferred.make<void>()
+      const releaseFirstBroadcast = yield* Deferred.make<void>()
+      const broadcastCount = yield* Ref.make(0)
+      const envelope = {
+        id: EventId.make(1),
+        event: makeEvent("OuterEvent", "session-1", "branch-1"),
+        createdAt: Date.now(),
+      } as EventEnvelope
+      const customEventStore = Layer.succeed(EventStore, {
+        append: (event) => Effect.succeed({ ...envelope, event }),
+        broadcast: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(broadcastCount, (count) => count + 1)
+            yield* Deferred.succeed(firstBroadcastStarted, void 0)
+            yield* Deferred.await(releaseFirstBroadcast)
+          }),
+        publish: () => Effect.void,
+        subscribe: () => Effect.void as never,
+        removeSession: () => Effect.void,
+      })
+      const layer = Layer.provide(EventPublisherLive, customEventStore)
+      yield* Effect.promise(() =>
+        Effect.gen(function* () {
+          const publisher = yield* EventPublisher
+          const first = yield* Effect.forkScoped(publisher.deliver(envelope))
+          yield* Deferred.await(firstBroadcastStarted)
+          const second = yield* Effect.forkScoped(publisher.deliver(envelope))
+          expect(yield* Ref.get(broadcastCount)).toBe(1)
+          yield* Deferred.succeed(releaseFirstBroadcast, void 0)
+          yield* Fiber.join(first)
+          yield* Fiber.join(second)
+          expect(yield* Ref.get(broadcastCount)).toBe(1)
+        }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise),
+      )
     }),
   )
 })

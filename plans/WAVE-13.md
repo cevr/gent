@@ -1124,3 +1124,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd74c-158e-7602-bd2a-92ad0121bd9d`; no P0/P1/P2 blockers.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-033309-codex-to-claude-4450ba/`; attempt timed out/stuck in worktree discovery before producing `claude.md`, so no counsel findings were available for this narrowed batch.
   - Note: this batch deliberately landed the smallest safe side-ref deletion: `idlePersistedRef` and `turnFailureRef` are now derived from the canonical `loopRef` aggregate via `stateEpoch` and `turnFailure`; active stream/startup side state remains explicit follow-up work.
+- Batch 9 complete.
+  - Gate: `bun run typecheck`, `bun test packages/core/tests/server/event-publisher.test.ts --timeout 20000`, `bun test packages/e2e/tests/queue-contract.test.ts --timeout 30000`, `bun run lint`, `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd759-7451-7a32-a234-078621df7877`; no P0/P1/P2 blockers.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-034804-codex-to-claude-546854/`; attempt hit the 180s hard timeout before producing `claude.md`.
+  - Note: event delivery no longer relies on `Effect.yieldNow`; committed envelopes flow through a scoped serialized worker with per-call acknowledgments and worker-owned duplicate suppression.
