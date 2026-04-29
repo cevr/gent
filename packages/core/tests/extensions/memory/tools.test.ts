@@ -7,33 +7,35 @@
  * section never finds them. These tests lock the auto-derive contract.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
+import { BunFileSystem } from "@effect/platform-bun"
 import * as Fs from "node:fs"
 import * as Path from "node:path"
-import * as Os from "node:os"
 import { MemoryRememberTool, MemoryForgetTool } from "@gent/extensions/memory/tools"
 import { Test as MemoryVaultTest, projectKey as projectKeyOf } from "@gent/extensions/memory/vault"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-let tmpDir: string
-beforeEach(() => {
-  tmpDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), "gent-memtool-test-"))
-})
-afterEach(() => {
-  Fs.rmSync(tmpDir, { recursive: true, force: true })
-})
+import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
+
+const memoryToolTest = it.scopedLive.layer(BunFileSystem.layer)
+
+// ToolToken.effect intentionally erases its dependency channel at the public tool boundary.
+// These tests provide MemoryVaultTest(tmpDir) at every call site before narrowing to never.
+const runMemoryTool = <A, E>(
+  effect: Effect.Effect<A, E, unknown>,
+  tmpDir: string,
+): Effect.Effect<A, E, never> =>
+  effect.pipe(Effect.provide(MemoryVaultTest(tmpDir))) as Effect.Effect<A, E, never>
+
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-const makeCtx = (cwd: string): ToolContext =>
+const makeCtx = (cwd: string, home: string): ToolContext =>
   testToolContext({
     sessionId: SessionId.make("019d97c0-0000-7000-0000-000000000000"),
     branchId: BranchId.make("019d97c0-0000-7001-0000-000000000000"),
     toolCallId: ToolCallId.make("tc1"),
     cwd,
-    home: tmpDir,
+    home,
     extension: {
       request: dieStub("request"),
     },
@@ -70,19 +72,21 @@ const makeCtx = (cwd: string): ToolContext =>
     },
   })
 describe("MemoryRememberTool — auto-derived projectKey", () => {
-  it.live("project scope without project_key writes under derived key", () =>
+  memoryToolTest("project scope without project_key writes under derived key", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const cwd = "/some/active/repo"
       const expectedKey = projectKeyOf(cwd)
-      yield* narrowR(
+      yield* runMemoryTool(
         MemoryRememberTool.effect(
           {
             title: "Auto Key",
             content: "should land in project dir",
             scope: "project",
           },
-          makeCtx(cwd),
-        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+          makeCtx(cwd, tmpDir),
+        ),
+        tmpDir,
       )
       const expectedPath = Path.join(tmpDir, "project", expectedKey, "auto-key.md")
       expect(Fs.existsSync(expectedPath)).toBe(true)
@@ -91,9 +95,10 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
       expect(content).toContain("should land in project dir")
     }),
   )
-  it.live("project scope with explicit project_key honors the param", () =>
+  memoryToolTest("project scope with explicit project_key honors the param", () =>
     Effect.gen(function* () {
-      yield* narrowR(
+      const tmpDir = yield* makeScopedTempDir
+      yield* runMemoryTool(
         MemoryRememberTool.effect(
           {
             title: "Explicit Key",
@@ -101,33 +106,37 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
             scope: "project",
             project_key: "explicit-1234ab",
           },
-          makeCtx("/any/cwd"),
-        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+          makeCtx("/any/cwd", tmpDir),
+        ),
+        tmpDir,
       )
       expect(
         Fs.existsSync(Path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md")),
       ).toBe(true)
     }),
   )
-  it.live("global scope ignores cwd and writes to global/", () =>
+  memoryToolTest("global scope ignores cwd and writes to global/", () =>
     Effect.gen(function* () {
-      yield* narrowR(
+      const tmpDir = yield* makeScopedTempDir
+      yield* runMemoryTool(
         MemoryRememberTool.effect(
           {
             title: "Global Note",
             content: "no project key needed",
             scope: "global",
           },
-          makeCtx("/any/repo"),
-        ).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+          makeCtx("/any/repo", tmpDir),
+        ),
+        tmpDir,
       )
       expect(Fs.existsSync(Path.join(tmpDir, "global", "global-note.md"))).toBe(true)
     }),
   )
 })
 describe("MemoryForgetTool — auto-derived projectKey", () => {
-  it.live("project scope without project_key removes from derived key dir", () =>
+  memoryToolTest("project scope without project_key removes from derived key dir", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const cwd = "/yet/another/repo"
       const key = projectKeyOf(cwd)
       // Pre-create file under derived key
@@ -139,10 +148,9 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
         "---\nscope: project\ntags: []\ncreated: 2026\nupdated: 2026\nsource: agent\n---\n\n# To Remove\n\nbye.",
       )
       expect(Fs.existsSync(file)).toBe(true)
-      yield* narrowR(
-        MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
-          Effect.provide(MemoryVaultTest(tmpDir)),
-        ),
+      yield* runMemoryTool(
+        MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd, tmpDir)),
+        tmpDir,
       )
       expect(Fs.existsSync(file)).toBe(false)
     }),

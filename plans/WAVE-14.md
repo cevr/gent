@@ -749,6 +749,28 @@ not migration-era optimism.
   - Okra counsel attempt:
     `/tmp/counsel/personal-gent-860892a9/20260429-140804-codex-to-claude-395009/claude.md`;
     P1 raw Promise loophole and P2 formatting/count issues fixed in-batch.
+- Batch 13 implemented:
+  - Added shared scoped temp-dir helper backed by
+    `FileSystem.makeTempDirectoryScoped`.
+  - Migrated extension storage and memory vault/tool/projection tests away
+    from global temp-dir hooks and sync teardown into `it.scopedLive` Effect
+    resources.
+  - Removed top-level storage runtime execution from validation tests so
+    storage creation and operations run inside the scoped platform layer.
+  - Consolidated memory temp-dir boilerplate and documented the single
+    ToolToken dependency-erasure membrane used by memory tool tests.
+  - Focused gate: `bun test packages/core/tests/extensions/storage.test.ts packages/core/tests/extensions/memory/tools.test.ts packages/core/tests/extensions/memory/projection.test.ts packages/core/tests/extensions/memory/vault.test.ts --timeout 30000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Gate note: one first full-gate run hit a transient
+    `tests/extensions/exec-tools/bash.test.ts` stdout timeout; the focused
+    BashTool file and repeated `bun run test` both passed without code
+    changes.
+  - Codex review: `019dd99f-7f49-70c1-9616-e72b5c60904e`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt:
+    `/tmp/counsel/personal-gent-860892a9/20260429-142328-codex-to-claude-a28e4c/claude.md`;
+    P2 top-level runtime/helper duplication/erased tool-effect notes fixed
+    in-batch.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

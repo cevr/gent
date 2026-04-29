@@ -1,9 +1,8 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
+import { BunFileSystem } from "@effect/platform-bun"
 import * as Fs from "node:fs"
 import * as Path from "node:path"
-import * as Os from "node:os"
 import {
   makeMemoryVault,
   parseFrontmatter,
@@ -12,13 +11,10 @@ import {
   projectDisplayName,
   type MemoryFrontmatter,
 } from "@gent/extensions/memory/vault"
-let tmpDir: string
-beforeEach(() => {
-  tmpDir = Fs.mkdtempSync(Path.join(Os.tmpdir(), "gent-vault-test-"))
-})
-afterEach(() => {
-  Fs.rmSync(tmpDir, { recursive: true, force: true })
-})
+import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
+
+const vaultTest = it.scopedLive.layer(BunFileSystem.layer)
+
 const makeFm = (scope: "global" | "project" = "global"): MemoryFrontmatter => ({
   scope,
   tags: ["test"],
@@ -27,8 +23,9 @@ const makeFm = (scope: "global" | "project" = "global"): MemoryFrontmatter => ({
   source: "agent",
 })
 describe("MemoryVault", () => {
-  it.live("write + read roundtrip", () =>
+  vaultTest("write + read roundtrip", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
@@ -40,8 +37,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("write creates parent directories", () =>
+  vaultTest("write creates parent directories", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* vault.write(
         "project/my-proj-abc123/deep-topic.md",
@@ -51,8 +49,9 @@ describe("MemoryVault", () => {
       expect(Fs.existsSync(Path.join(tmpDir, "project/my-proj-abc123/deep-topic.md"))).toBe(true)
     }),
   )
-  it.live("list returns entries with parsed frontmatter", () =>
+  vaultTest("list returns entries with parsed frontmatter", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
@@ -65,8 +64,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("list filters by scope", () =>
+  vaultTest("list filters by scope", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs("test-proj-aaa111")
@@ -85,8 +85,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("remove deletes file and rebuilds index", () =>
+  vaultTest("remove deletes file and rebuilds index", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
@@ -99,8 +100,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("search finds by title", () =>
+  vaultTest("search finds by title", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
@@ -112,8 +114,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("search finds by content", () =>
+  vaultTest("search finds by content", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
@@ -123,8 +126,9 @@ describe("MemoryVault", () => {
       })
     }),
   )
-  it.live("rebuildIndex creates scope and root indexes", () =>
+  vaultTest("rebuildIndex creates scope and root indexes", () =>
     Effect.gen(function* () {
+      const tmpDir = yield* makeScopedTempDir
       const vault = makeMemoryVault(tmpDir)
       yield* Effect.gen(function* () {
         yield* vault.ensureDirs()
