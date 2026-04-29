@@ -1,6 +1,5 @@
-/* eslint-disable */
 import { afterEach } from "bun:test"
-import { it, describe, expect, test } from "effect-bun-test"
+import { it, describe, expect } from "effect-bun-test"
 import { mkdtempSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"

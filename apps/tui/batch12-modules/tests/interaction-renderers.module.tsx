@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event"

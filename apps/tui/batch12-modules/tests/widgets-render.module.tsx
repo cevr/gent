@@ -1,4 +1,3 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"

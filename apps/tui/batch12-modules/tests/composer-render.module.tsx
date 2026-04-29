@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, test, expect } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { createSignal, type JSX } from "solid-js"
 import { Composer } from "../../src/components/composer"
 import {

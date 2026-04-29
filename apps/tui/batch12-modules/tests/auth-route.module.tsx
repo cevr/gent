@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Context, Effect, Layer, Scope } from "effect"
 import { LinkOpener, LinkOpenerError } from "../../src/services/link-opener"

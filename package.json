@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "turbo run typecheck",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,effect \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"turbo run lint\"",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,effect,disable \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"turbo run lint\" \"bun packages/tooling/src/check-blanket-eslint-disable.ts\"",
     "lint:fix": "env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore --fix",
     "fmt": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore",
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",

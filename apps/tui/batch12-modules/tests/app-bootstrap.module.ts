@@ -1,5 +1,4 @@
-/* eslint-disable */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"

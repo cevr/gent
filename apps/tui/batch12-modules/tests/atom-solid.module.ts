@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { describe, it, expect, test } from "effect-bun-test"
 import { createComponent, createRoot } from "solid-js"
 import * as Context from "effect/Context"

@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { onMount } from "solid-js"

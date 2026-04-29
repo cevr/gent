@@ -1,5 +1,4 @@
-/* eslint-disable */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Stream } from "effect"
 import { EventEnvelope, TurnCompleted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"

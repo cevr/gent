@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, test, expect } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PromptSearchPalette } from "../../src/components/prompt-search-palette"
 import { PromptSearchState, transitionPromptSearch } from "../../src/components/prompt-search-state"

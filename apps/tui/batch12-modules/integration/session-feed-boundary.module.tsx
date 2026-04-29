@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Route } from "../../src/router"
 import { Session } from "../../src/routes/session"
@@ -14,6 +13,7 @@ import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Provider } from "@gent/core/providers/provider.js"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "../../src/../integration/helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
@@ -182,6 +182,8 @@ describe("session feed boundary", () => {
   )
   it.live("interrupts the feed fiber through runtime cleanup on unmount", () =>
     Effect.gen(function* () {
+      const sessionId = SessionId.make("session-test")
+      const branchId = BranchId.make("branch-test")
       const interrupted: Array<Effect.Effect<void>> = []
       const runtime = (() => {
         const base = createMockRuntime()
@@ -195,24 +197,21 @@ describe("session feed boundary", () => {
         }
       })()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <Session sessionId={"session-test" as never} branchId={"branch-test" as never} />,
-          {
-            client: createMockClient(),
-            runtime,
-            initialSession: {
-              id: "session-test" as never,
-              branchId: "branch-test" as never,
-              name: "Test Session",
-              createdAt: 0,
-              updatedAt: 0,
-            },
-            initialRoute: Route.session("session-test" as never, "branch-test" as never),
-            cwd: repoRoot,
-            width: 100,
-            height: 32,
+        renderWithProviders(() => <Session sessionId={sessionId} branchId={branchId} />, {
+          client: createMockClient(),
+          runtime,
+          initialSession: {
+            id: sessionId,
+            branchId,
+            name: "Test Session",
+            createdAt: 0,
+            updatedAt: 0,
           },
-        ),
+          initialRoute: Route.session(sessionId, branchId),
+          cwd: repoRoot,
+          width: 100,
+          height: 32,
+        }),
       )
       const castCountBeforeDestroy = interrupted.length
       destroyRenderSetup(setup)

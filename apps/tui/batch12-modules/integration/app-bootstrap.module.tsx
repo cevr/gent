@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../../src/app"
@@ -140,8 +139,9 @@ describe("app bootstrap", () => {
             )
             yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
             expect(ctx).toBeDefined()
+            if (ctx === undefined) return
             // Route should already be session — no loading transition needed
-            expect(ctx!.router.route()._tag).toBe("session")
+            expect(ctx.router.route()._tag).toBe("session")
             // waitForFrame polls until the loading marker clears — no
             // pre-sleep needed.
             const frame = yield* waitForFrame(

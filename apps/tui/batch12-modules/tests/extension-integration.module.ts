@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * TUI extension integration contracts.
  *

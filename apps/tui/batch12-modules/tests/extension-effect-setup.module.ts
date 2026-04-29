@@ -1,11 +1,10 @@
-/* eslint-disable */
 /**
  * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
  * provided `runtime: ManagedRuntime`. C9.1's legacy sync `setup(ctx)` arm
  * was deleted in B11.6 — only the Effect shape is accepted now.
  */
 import { afterAll, beforeAll } from "bun:test"
-import { describe, it, test, expect } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"

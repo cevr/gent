@@ -1,5 +1,4 @@
-/* eslint-disable */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { AgentName } from "@gent/core/domain/agent"

@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * C9.2 lock: autocomplete `items()` returning an Effect that yields
  * `ClientTransport` flows through a `ManagedRuntime` providing the transport

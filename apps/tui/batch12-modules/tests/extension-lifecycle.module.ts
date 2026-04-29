@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { describe, it, expect, test } from "effect-bun-test"
 import { Deferred, Effect, Layer, ManagedRuntime } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -15,13 +14,7 @@ import artifactsBuiltin from "../../src/extensions/builtins/artifacts.client"
 import tasksBuiltin from "../../src/extensions/builtins/tasks.client"
 import { AgentEvent, EventId, type EventEnvelope } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
-const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) =>
-  (
-    Deferred as unknown as Record<
-      string,
-      (value: Deferred.Deferred<A, E>) => Effect.Effect<A, E, never>
-    >
-  )["awa" + "it"]!(deferred)
+const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.await(deferred)
 const buildRuntime = (
   activeSession: {
     value:

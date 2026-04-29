@@ -1,6 +1,5 @@
-/* eslint-disable */
 /** @jsxImportSource @opentui/solid */
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, it, expect } from "effect-bun-test"
 import { createEffect, onMount } from "solid-js"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
