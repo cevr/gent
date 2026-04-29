@@ -53,6 +53,8 @@ bun run --cwd apps/tui dev sessions
 - **Signal provider for lifecycle assertions** - Use `Provider.Signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`Provider.Debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer through `buildEphemeralRuntime({ parent: ServerProfile, parentServices, overrides, extensionLayers })`. The explicit override families map fields like `storage` and `eventPublisher` to ALL Tags omitted from parent context, including sub-Tags such as `SessionStorage`, `BranchStorage`, and `BuiltinEventSink`. The builder also omits `Layer.CurrentMemoMap` from the forwarded parent context and wraps the final merged layer in `Layer.fresh`; both are load-bearing. The `parent: ServerProfile` brand makes cross-scope misuse a type error.
+- **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
+- **Process-shaped names** - Active source/test/module names should describe product behavior, not migration history. Avoid names like `batch12`, `wave14`, or `planify-migration` outside `plans/` and dated audit receipts.
 
 ## Architecture
 
@@ -81,9 +83,9 @@ Use `effect` skill. Key patterns:
 ```
 packages/core/src/       # Everything non-UI
   domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
-  storage/               # SQLite
+  storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
   providers/             # AI SDK adapters
-  runtime/               # AgentLoop, ActorProcess, context-estimation, retry
+  runtime/               # SessionRuntime, AgentLoop internals, actors, profiles, context-estimation, retry
   tools/                 # Tool implementations
   server/                # transport contract, commands, queries, handlers, startup wiring
   test-utils/            # Mock layers, sequence recording, in-process layer
@@ -155,11 +157,14 @@ assertSequence(calls, [
 
 | File                                               | Purpose                                             |
 | -------------------------------------------------- | --------------------------------------------------- | ------ | ----- | -------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`      | `decodeMessageParts` for JSON→Schema roundtrip      |
+| `packages/core/src/storage/sqlite-storage.ts`      | Storage service tags and SQLite layer assembly      |
+| `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
+| `packages/core/src/storage/sqlite/impl.ts`         | SQLite-backed focused sub-tag implementation        |
 | `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
 | `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
 | `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
-| `packages/core/src/runtime/agent/agent-loop.ts`    | flat loop machine assembly                          |
+| `packages/core/src/runtime/agent/agent-loop.ts`    | loop coordinator and command ingress                |
+| `packages/core/src/runtime/agent/phases/turn.ts`   | turn resolution, stream, tool, and finalize phases  |
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
 | `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
 | `packages/core/src/debug/provider.ts`              | step builders for `Provider.Sequence`               |

@@ -986,15 +986,13 @@ const plugin: Plugin = {
      * read-intent `CapabilityContribution.effect` for write-shaped method
      * calls (`.create(`, `.update(`, `.delete(`, `.set(`, `.write(`, etc.).
      *
-     * Projections are NOT covered here — B11.4 replaced the heuristic for
-     * projections with a structural type fence: `ProjectionContribution<A,
-     * R extends ReadOnlyTag>` makes write-capable Tags fail to compile in
-     * the projection R channel. See `domain/read-only.ts` and
-     * `domain/projection.ts`.
+     * Projections are NOT covered here: they use a structural type fence via
+     * `ProjectionContribution<A, R extends ReadOnlyTag>`, which makes
+     * write-capable Tags fail to compile in the projection R channel. See
+     * `domain/read-only.ts` and `domain/projection.ts`.
      *
-     * Query/capability coverage stays heuristic until B11.5 introduces the
-     * `request({ intent: "read" })` factory whose R channel can be branded
-     * the same way.
+     * Query/capability coverage stays heuristic until read-intent request
+     * factories can brand the R channel the same way.
      *
      * Valid:   handler: () => MyService.get(id)
      * Invalid: handler: () => MyService.update(id, ...)

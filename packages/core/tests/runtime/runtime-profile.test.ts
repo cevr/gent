@@ -1,16 +1,15 @@
 /**
  * RuntimeProfileResolver regression locks.
  *
- * Locks the single-pipeline contract introduced in planify Commit 7 — both
- * discovering composition roots (server startup, per-cwd profile cache) flow
+ * Locks the single-pipeline contract: both discovering composition roots
+ * (server startup, per-cwd profile cache) flow
  * through `resolveRuntimeProfile` and `buildExtensionLayers`. The locks prove:
  *
  *   1. Same inputs → same resolved extensions (extension ids, scope precedence).
  *   2. `buildExtensionLayers` actually wires `ExtensionRegistry` from the
  *      resolved data (not just exported as a helper).
  *   3. turn-projection reactions resolve services contributed via
- *      `defineResource` — the Skills-shaped bug class C7 was specifically
- *      designed to handle.
+ *      `defineResource`.
  *   4. Server-style and per-cwd-style assemblies produce equivalent observable
  *      output (same registry contents, same merged sections). If the per-cwd
  *      path skips an extension layer, this fails.

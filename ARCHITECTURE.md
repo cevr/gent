@@ -37,7 +37,7 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # SQLite persistence (Storage + focused sub-Tags for sessions, branches, messages, events, relationships, actors, checkpoints, interactions, search)
+│   ├── storage/   # Storage tags, schema/migrations, SQLite assembler, focused sub-tag impls
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
@@ -143,11 +143,13 @@ Core orchestration lives in:
 - `packages/core/src/runtime/agent/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
 - `packages/core/src/runtime/agent/agent-loop.utils.ts`
+- `packages/core/src/runtime/agent/phases/turn.ts`
 
 Shape:
 
 - `SessionRuntime` is the single public session engine.
 - `AgentLoop` is an internal flat machine-owned control plane.
+- Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
 - local CLI routing is in-process by default; remote routing is explicit server topology
 - queue ownership is structural
@@ -368,18 +370,19 @@ Other notes:
 
 After W10-PhaseB collapsed the old FSM resource slot and the new `actors:` bucket into one path, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and event-backed client widgets subscribe to the normal session event stream.
 
-**ActorHost** (`runtime/extensions/resource-host/actor-host.ts`):
+**ActorHost** (`runtime/extensions/actor-host.ts`):
 
 - Profile-scoped: one `ActorHost` per cwd-profile, spawning each `actors:` Behavior once per profile and registering its `ActorRef` against the Behavior's `ServiceKey` in the Receptionist.
-- Snapshot writer: a periodic background fiber persists each actor's state to the `actor_persistence` table; on respawn the host loads the snapshot and resumes from there.
-- `start` failures degrade only the failing actor — sibling actors keep running.
+- Durable commit boundary: durable actor mutations are written to `actor_persistence` before buffered ask replies are released.
+- Snapshot writer: periodic and finalizer snapshots remain backup/compaction paths; on respawn the host loads the stored state and resumes from there.
+- Supervision: actor defects report death to the host; the host restarts within the behavior's budget or quarantines the actor while siblings keep running.
 
 **Receptionist + ActorEngine** (`runtime/extensions/receptionist.ts`, `runtime/extensions/actor-engine.ts`):
 
 - `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
 - One `ActorEngine` instance is wired at the composition boundary so `ActorHost` and direct actor callers share the same actor map.
 
-**ExtensionRuntime** (`runtime/extensions/resource-host/extension-runtime.ts`):
+**ExtensionRuntime** (`runtime/extensions/extension-runtime.ts`):
 
 - Runtime marker for the extension actor host. It has no public send/ask surface; extension code that needs actors uses `ExtensionHostContext.actors` with explicit `ServiceKey`s.
 - Behaviors do not receive `AgentEvent` automatically. Extensions that need to react to events declare `reactions:` handlers that explicitly `tell` their actor (see `auto.ts`).
@@ -409,6 +412,10 @@ Use the smallest honest boundary:
 
 **Banned test primitives**: `Provider.Test` and `EventStore.Test` are deleted. Use `Provider.Debug()` or `Provider.Sequence([...])` for provider mocking and `EventStore.Memory` for in-memory event stores.
 
+**Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
+
+**Names describe behavior**: active test modules are behavior-named. Historical process names belong only in `plans/` and dated audit receipts.
+
 ### Commands
 
 | Command            | Scope                                                 | Target   |
@@ -428,7 +435,7 @@ tests/
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage, search-storage, task-storage, bypass
+├── storage/       # sqlite-storage, search-storage, actor persistence, task storage
 ├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```

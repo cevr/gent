@@ -195,9 +195,8 @@ export interface AutocompleteContribution {
    *    subset of services the runtime provides (FileSystem | Path |
    *    ClientTransport | ClientWorkspace | ...).
    *  The popup wraps in `createResource` — undefined while loading, items
-   *  when resolved. C9.3 deleted the Promise variant per
-   *  `migrate-callers-then-delete-legacy-apis`; async work goes through
-   *  Effect now. */
+   *  when resolved. Async work goes through Effect so client extension code
+   *  shares the TUI shell runtime and cancellation semantics. */
   readonly items: (filter: string) => ReadonlyArray<AutocompleteItem> | AutocompleteItemsEffect
   /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */
   readonly formatInsertion?: (id: string) => string

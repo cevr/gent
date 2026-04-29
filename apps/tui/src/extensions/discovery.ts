@@ -4,8 +4,8 @@
  * Mirrors the server's discoverDir() but for client-side modules only.
  * Files are tagged with "user" or "project" scope based on their source directory.
  *
- * C9.3: takes Effect's `FileSystem.FileSystem` directly — the
- * `AsyncFileSystem` Promise-proxy was deleted in the same wave.
+ * Takes Effect's `FileSystem.FileSystem` directly so discovery shares the
+ * runtime's scoped filesystem services.
  */
 
 import { Effect, FileSystem, Path } from "effect"

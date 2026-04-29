@@ -23,10 +23,9 @@
  * enforcement. The `R` channel must be `never` (closed-over dependencies —
  * the boundary is not a way to launder ambient services).
  *
- * NOTE: this module is **type-only** scaffolding. C0 introduces the brand and
- * factories; downstream batches migrate the five known boundaries
- * (`anthropic-boundary.ts`, `openai-boundary.ts`, `acp-boundary.ts`,
- * `tui-resource-boundary.ts`, `sdk-client-boundary.ts`) to use it.
+ * NOTE: this module is **type-only** scaffolding for boundary APIs that must
+ * expose only serializable success values, tagged error surfaces, and a closed
+ * dependency channel.
  *
  * @module
  */

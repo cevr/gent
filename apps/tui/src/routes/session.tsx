@@ -176,8 +176,8 @@ export function Session(props: SessionProps) {
             />
 
             <ExtensionWidgets slot="below-messages" />
-            {/* QueueWidget stays hardwired — its data comes from session controller state,
-              not available via extension context yet (planned for batch 9) */}
+            {/* QueueWidget stays hardwired because its data comes from session controller
+              state that is not exposed through the extension context. */}
             <QueueWidget
               queuedMessages={controller.queueState().followUp}
               steerMessages={controller.queueState().steering}

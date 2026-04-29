@@ -37,6 +37,7 @@ Those commands are schema-tagged values with `_tag`, not ambient method bags or 
 `SessionRuntime` owns:
 
 - session + branch command ingress
+- validation of existing `(sessionId, branchId)` targets before dispatch
 - queue serialization
 - checkpoint / recovery
 - interaction parking + resume
@@ -56,6 +57,7 @@ Those commands are schema-tagged values with `_tag`, not ambient method bags or 
 
 - FIFO per `sessionId + branchId`
 - one active turn per runtime target
+- commands target an existing session branch, not a raw session id plus assumed branch ownership
 - interrupt preempts the active turn
 - interject queues a steering turn
 - follow-ups batch structurally
@@ -109,6 +111,7 @@ Dead refs have one policy:
 Persistence is structural, not optional folklore:
 
 - storage holds durable session / message / event / interaction facts
+- SQLite storage is split into a small public assembler plus schema and focused implementation modules
 - checkpoint holds resumable loop/runtime state
 - interaction resume replays from storage, not in-memory continuations
 - durable actor state commits at the mutation boundary before buffered ask replies are released

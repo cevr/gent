@@ -797,6 +797,78 @@ extensionLayers })`.
   - Okra counsel attempt:
     `/tmp/counsel/personal-gent-860892a9/20260429-143435-codex-to-claude-285ba8`;
     timed out with no usable findings and was stopped to unblock the gate.
+- Batch 15 implemented:
+  - Consolidated extension erasure membranes so public authoring helpers keep
+    exact typed buckets while runtime registry code owns the necessary
+    internal narrowing.
+  - Preserved the stable `@gent/core/extensions/authoring` entrypoint and
+    kept advanced runtime/provider surfaces off the default path.
+  - Full gate passed through pre-commit.
+  - Codex review found no P0/P1/P2 findings; Okra counsel attempt timed out
+    without usable output.
+- Batch 16 implemented:
+  - Split TUI session subscription ownership so session event/watch lifecycle
+    is owned by the client provider boundary rather than scattered component
+    effects.
+  - Kept route/component code focused on rendering and user commands while
+    stale session/branch feeds are invalidated at the provider edge.
+  - Full gate passed through pre-commit.
+  - Codex review found no P0/P1/P2 findings; Okra counsel attempt timed out
+    without usable output.
+- Batch 17 implemented:
+  - Split `sqlite-storage.ts` from a large implementation module into the
+    public service/layer assembler.
+  - Moved schema, migrations, row codecs, search helpers, and concrete SQLite
+    implementation to `storage/schema.ts` and `storage/sqlite/*`.
+  - Added migrated-schema versus fresh-schema coverage.
+  - Focused storage tests, `bun run typecheck`, `bun run lint`,
+    `bun run test`, and pre-commit passed.
+  - Codex review `019dd9c8-0cb7-7e51-9bdb-d9d60e82fec1` found no P0/P1/P2
+    findings; Okra counsel attempt
+    `/tmp/counsel/personal-gent-860892a9/20260429-150748-codex-to-claude-67b023`
+    produced no usable `claude.md`.
+- Batch 18 implemented:
+  - Extracted turn resolution, before-hook, stream, tool execution,
+    invoke-tool, tool-result, and finalize phases into
+    `packages/core/src/runtime/agent/phases/turn.ts`.
+  - Kept `agent-loop.ts` as the command/coordinator boundary while preserving
+    the resolve -> before hook -> stream -> tool execution -> finalize order.
+  - Focused runtime tests, `bun run typecheck`, `bun run lint`,
+    `bun run test`, and pre-commit passed.
+  - Codex review `019dd9cf-f9c0-7de1-a172-586b265c80d8` found no P0/P1/P2
+    findings; Okra counsel attempt
+    `/tmp/counsel/personal-gent-860892a9/20260429-151628-codex-to-claude-093b9d`
+    produced no usable `claude.md`.
+- Batch 19 implemented:
+  - Deleted active `apps/tui/batch12-modules/**` trampoline modules by moving
+    real test bodies into behavior-named `apps/tui/tests` and
+    `apps/tui/integration` files.
+  - Renamed tooling fixtures to
+    `packages/tooling/fixtures/test-module-control-flow/**`.
+  - Removed remaining process-shaped active test comments/fixtures surfaced
+    by review.
+  - `rg` confirmed no active `batch12` / `wave14` / process-shaped source
+    names remain in `apps/tui`, `packages/tooling`, or `packages/core/tests`.
+  - `bun run typecheck`, `bun run lint`, TUI tests, tooling tests,
+    `bun run test`, and pre-commit passed.
+  - Codex review `019dd9d5-9fd0-7982-9239-ccbc2175d92b` found P2 residual
+    process-shaped comments/fixture text, fixed in-batch. Okra counsel attempt
+    `/tmp/counsel/personal-gent-860892a9/20260429-152237-codex-to-claude-a0338e`
+    produced no usable `claude.md`.
+- Batch 20 implemented:
+  - Updated `docs/actor-model.md`, `ARCHITECTURE.md`, and `AGENTS.md` for
+    branch target validation, actor supervision/durable commit semantics,
+    storage implementation boundaries, extracted turn phases, test control
+    flow bans, and process-shaped naming guidance.
+  - Created `plans/WAVE-15.md` as the post-Wave-14 continuation plan.
+  - Final recursive Codex audit `019dd9da-5c5c-7260-8328-8d42e1be6af6`
+    found one P2: active source/tests still had migration-history labels in
+    comments. The concrete examples it cited were rewritten in-batch.
+  - `plans/WAVE-15.md` now carries the broader active-comment cleanup as the
+    closure wave instead of a no-op placeholder.
+  - Final recursive Okra counsel attempt
+    `/tmp/counsel/personal-gent-860892a9/20260429-152747-codex-to-claude-696c4f`
+    produced no usable `claude.md` and was stopped after remaining silent.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

@@ -5,8 +5,6 @@
  * `ExtensionContributions` from `setup()` that the runtime registry consumes.
  * Each contribution kind round-trips, lifecycle effects compose in registration
  * order, and the result wires into `ExtensionRegistry`.
- *
- * Tied to planify Commit 1 / C8 — without this, `defineExtension` is a paper API.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
