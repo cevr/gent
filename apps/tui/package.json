@@ -10,7 +10,8 @@
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.lint.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests integration"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ./node_modules/@opentui/solid/scripts/preload.ts --path-ignore-patterns='**/headless-cli-exit.test.ts' --path-ignore-patterns='**/headless-runner.test.ts' tests",
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ./node_modules/@opentui/solid/scripts/preload.ts integration tests/headless-cli-exit.test.ts tests/headless-runner.test.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
@@ -18,8 +19,8 @@
     "@gent/core": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*",
-    "@opentui/core": "^0.1.102",
-    "@opentui/solid": "^0.1.102",
+    "@opentui/core": "^0.2.0",
+    "@opentui/solid": "^0.2.0",
     "beautiful-mermaid": "^1.1.3",
     "diff": "^9.0.0",
     "solid-js": "catalog:"

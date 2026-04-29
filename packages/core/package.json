@@ -173,7 +173,8 @@
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
     "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.lint.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --parallel=6 tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" ! -path \"*/extensions/exec-tools/bash-execution.test.ts\" ! -path \"*/utils/run-process.test.ts\" -print0 | xargs -0 bun test --reporter=dots --parallel=16'",
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/extensions/exec-tools/bash-execution.test.ts tests/utils/run-process.test.ts"
   },
   "dependencies": {
     "effect-wide-event": "catalog:"

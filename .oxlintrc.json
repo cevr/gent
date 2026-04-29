@@ -61,6 +61,7 @@
 
     // Unused vars
     "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-underscore-dangle": "off",
 
     // Readability
     "no-nested-ternary": "error",

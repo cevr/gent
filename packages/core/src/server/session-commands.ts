@@ -53,6 +53,63 @@ const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 const DEDUP_SUCCESS_TTL_MS = Duration.seconds(60)
 const DEDUP_MAX_ENTRIES = 1024
 
+export const dedupRequest = <A, E>(input: {
+  readonly cache: Ref.Ref<Map<string, Deferred.Deferred<A, E>>>
+  readonly requestId: string | undefined
+  readonly body: Effect.Effect<A, E>
+  readonly maxEntries?: number
+  readonly successTtl?: Duration.Input
+}): Effect.Effect<A, E> =>
+  Effect.gen(function* () {
+    const requestId = input.requestId
+    if (requestId === undefined) return yield* input.body
+    const maxEntries = input.maxEntries ?? DEDUP_MAX_ENTRIES
+    const successTtl = input.successTtl ?? DEDUP_SUCCESS_TTL_MS
+    const fresh = yield* Deferred.make<A, E>()
+    const claimed = yield* Ref.modify(input.cache, (m) => {
+      const existing = m.get(requestId)
+      if (existing !== undefined) return [existing, m] as const
+      const next = new Map(m)
+      // Hard cap: evict oldest insertion-ordered entry once full.
+      if (next.size >= maxEntries) {
+        const oldest = next.keys().next().value
+        if (oldest !== undefined) next.delete(oldest)
+      }
+      next.set(requestId, fresh)
+      return [fresh, next] as const
+    })
+    if (claimed !== fresh) return yield* Deferred.await(claimed)
+    const evictAfterTtl = Effect.gen(function* () {
+      yield* Effect.sleep(successTtl)
+      yield* Ref.update(input.cache, (m) => {
+        if (m.get(requestId) !== fresh) return m
+        const next = new Map(m)
+        next.delete(requestId)
+        return next
+      })
+    })
+    return yield* input.body.pipe(
+      Effect.tap((result) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(fresh, result)
+          // Detached so retries inside the window can still collapse onto the
+          // cached outcome after the request fiber completes.
+          yield* Effect.forkDetach(evictAfterTtl)
+        }),
+      ),
+      Effect.tapCause((cause) =>
+        Effect.gen(function* () {
+          yield* Ref.update(input.cache, (m) => {
+            const next = new Map(m)
+            next.delete(requestId)
+            return next
+          })
+          yield* Deferred.failCause(fresh, cause)
+        }),
+      ),
+    )
+  })
+
 interface SessionRuntimeTerminatorService {
   readonly register: (runtime: SessionRuntimeService) => Effect.Effect<void>
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
@@ -619,59 +676,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
        *   insertion order, so the first key returned by the iterator is the
        *   oldest. This guarantees bounded memory regardless of TTL.
        */
-      const dedupRequest = <A, E>(
-        cache: Ref.Ref<Map<string, Deferred.Deferred<A, E>>>,
-        requestId: string | undefined,
-        body: Effect.Effect<A, E>,
-      ): Effect.Effect<A, E> =>
-        Effect.gen(function* () {
-          if (requestId === undefined) return yield* body
-          const fresh = yield* Deferred.make<A, E>()
-          const claimed = yield* Ref.modify(cache, (m) => {
-            const existing = m.get(requestId)
-            if (existing !== undefined) return [existing, m] as const
-            const next = new Map(m)
-            // Hard cap: evict oldest insertion-ordered entry once full.
-            if (next.size >= DEDUP_MAX_ENTRIES) {
-              const oldest = next.keys().next().value
-              if (oldest !== undefined) next.delete(oldest)
-            }
-            next.set(requestId, fresh)
-            return [fresh, next] as const
-          })
-          if (claimed !== fresh) return yield* Deferred.await(claimed)
-          const evictAfterTtl = Effect.gen(function* () {
-            yield* Effect.sleep(DEDUP_SUCCESS_TTL_MS)
-            yield* Ref.update(cache, (m) => {
-              if (m.get(requestId) !== fresh) return m
-              const next = new Map(m)
-              next.delete(requestId)
-              return next
-            })
-          })
-          return yield* body.pipe(
-            Effect.tap((result) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(fresh, result)
-                // Schedule delayed eviction so retries inside the window still
-                // collapse onto the cached outcome, but the entry does not
-                // survive indefinitely. Detached fork — outlives this call.
-                yield* Effect.forkDetach(evictAfterTtl)
-              }),
-            ),
-            Effect.tapCause((cause) =>
-              Effect.gen(function* () {
-                yield* Ref.update(cache, (m) => {
-                  const next = new Map(m)
-                  next.delete(requestId)
-                  return next
-                })
-                yield* Deferred.failCause(fresh, cause)
-              }),
-            ),
-          )
-        })
-
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
       ) {
@@ -730,7 +734,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
         "SessionCommands.createSession",
       )(function* (input: CreateSessionInput) {
-        return yield* dedupRequest(createRequestCache, input.requestId, doCreateSession(input))
+        return yield* dedupRequest({
+          cache: createRequestCache,
+          requestId: input.requestId,
+          body: doCreateSession(input),
+        })
       })
 
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
@@ -831,19 +839,23 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
         input: CreateBranchInput,
       ) {
-        return yield* dedupRequest(
-          createBranchRequestCache,
-          input.requestId,
-          mutations.createSessionBranch({
+        return yield* dedupRequest({
+          cache: createBranchRequestCache,
+          requestId: input.requestId,
+          body: mutations.createSessionBranch({
             sessionId: input.sessionId,
             ...(input.name !== undefined ? { name: input.name } : {}),
           }),
-        )
+        })
       })
 
       const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
-          yield* dedupRequest(switchBranchRequestCache, input.requestId, doSwitchBranch(input))
+          yield* dedupRequest({
+            cache: switchBranchRequestCache,
+            requestId: input.requestId,
+            body: doSwitchBranch(input),
+          })
         })
 
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
@@ -882,7 +894,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateBranchResult, AppServiceError> = Effect.fn(
         "SessionCommands.forkBranch",
       )(function* (input: ForkBranchInput) {
-        return yield* dedupRequest(forkBranchRequestCache, input.requestId, doForkBranch(input))
+        return yield* dedupRequest({
+          cache: forkBranchRequestCache,
+          requestId: input.requestId,
+          body: doForkBranch(input),
+        })
       })
 
       const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
@@ -898,7 +914,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
-          yield* dedupRequest(sendRequestCache, input.requestId, doSendMessage(input))
+          yield* dedupRequest({
+            cache: sendRequestCache,
+            requestId: input.requestId,
+            body: doSendMessage(input),
+          })
         })
 
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
