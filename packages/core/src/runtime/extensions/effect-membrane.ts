@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import type { Exit } from "effect"
 
 export interface ErasedEffectHandlers<A, E> {
@@ -40,15 +40,75 @@ export const exitErasedEffect = <A>(
   Effect.exit(Effect.suspend(effect)) as Effect.Effect<Exit.Exit<A, unknown>>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
+export type ErasedLayer = Layer.Layer<any, any, any>
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
+export type ErasedContextKey = Context.Key<any, any>
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
 export type ErasedResourceLayer = Layer.Layer<any>
 
 /**
- * Membrane for heterogeneous extension Resource layers.
+ * Membrane for heterogeneous Effect layers.
  *
- * Resource layers can provide different service tags, fail with extension-owned
- * errors, and require scope-branded host services. ResourceHost intentionally
- * erases those channels only at assembly time so the composition root can merge
- * an unknown extension set.
+ * Runtime and extension layers can provide different service tags, fail with
+ * owner-local errors, and require scope-branded host services. Composition
+ * roots intentionally erase those channels only at assembly time so they can
+ * merge an unknown extension set.
+ */
+export const eraseLayer = <I, E, R>(layer: Layer.Layer<I, E, R>): ErasedLayer =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit resource-layer membrane
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  layer as unknown as ErasedLayer
+
+export const emptyErasedLayer: ErasedLayer =
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  Layer.empty as unknown as ErasedLayer
+
+export const eraseContextKey = (key: unknown): ErasedContextKey =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  key as unknown as ErasedContextKey
+
+export const omitErasedContext = (
+  ctx: Context.Context<never>,
+  keys: ReadonlyArray<ErasedContextKey>,
+): Context.Context<never> => {
+  if (keys.length === 0) return ctx
+  return Context.omit(...keys)(ctx) as Context.Context<never>
+}
+
+export const mergeErasedLayers = (layers: ReadonlyArray<ErasedLayer>): ErasedLayer => {
+  const [first, ...rest] = layers
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit layer-erasure membrane
+  if (first === undefined) return emptyErasedLayer
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit layer-erasure membrane
+  if (rest.length === 0) return first
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit layer-erasure membrane
+  return Layer.mergeAll(first, ...rest)
+}
+
+export const restoreErasedLayer = <I, E = never, R = never>(
+  layer: ErasedLayer,
+): Layer.Layer<I, E, R> =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit layer-erasure membrane
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  layer as Layer.Layer<I, E, R>
+
+/**
+ * Restore a phantom type after reading from an explicitly erased runtime store.
+ *
+ * Keep this helper for host-owned storage membranes only: actor refs, ask
+ * replies, streams, and similar values whose real type is fixed by the key/ref
+ * used at the call site but cannot be represented inside a heterogeneous map.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- call sites recover phantom types from erased stores
+export const restoreErasedValue = <A>(value: unknown): A =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  value as A
+
+/**
+ * Resource-host call sites keep the old narrower return type (`Layer.Layer<any>`)
+ * so resource layers do not leak an `unknown` requirement channel into tests.
  */
 export const eraseResourceLayer = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary

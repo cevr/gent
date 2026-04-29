@@ -7,7 +7,8 @@
  * source of truth for parent service omission.
  */
 
-import { Context, Layer } from "effect"
+import { Layer } from "effect"
+import type { Context } from "effect"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -27,9 +28,13 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { SessionRuntime } from "./session-runtime.js"
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
-type OpaqueLayer = Layer.Layer<any, any, any>
+import {
+  eraseContextKey,
+  eraseLayer,
+  mergeErasedLayers,
+  omitErasedContext,
+  restoreErasedLayer,
+} from "./extensions/effect-membrane.js"
 
 export interface EphemeralRuntimeInputs<Provides> {
   readonly parent: ServerProfile
@@ -97,36 +102,6 @@ const omitTagsForEphemeralOverrides = [
   SessionRuntime,
 ] as const
 
-const omitContext = (
-  ctx: Context.Context<never>,
-  keys: ReadonlyArray<Context.Key<unknown, unknown>>,
-): Context.Context<never> => {
-  if (keys.length === 0) return ctx
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  return Context.omit(...(keys as Array<any>))(ctx) as Context.Context<never>
-}
-
-const mergeRuntimeLayers = (layers: ReadonlyArray<OpaqueLayer>): OpaqueLayer => {
-  const [first, ...rest] = layers
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-  if (first === undefined) return eraseLayer(Layer.empty)
-  if (rest.length === 0) {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    return first
-  }
-  return Layer.mergeAll(
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    first,
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    ...rest,
-  )
-}
-
-const eraseLayer = <I, E, R>(layer: Layer.Layer<I, E, R>): OpaqueLayer =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  layer as unknown as OpaqueLayer
-
 export const buildEphemeralRuntime = <Provides>(
   inputs: EphemeralRuntimeInputs<Provides>,
 ): {
@@ -137,21 +112,22 @@ export const buildEphemeralRuntime = <Provides>(
   // prevents already-resolved parent instances from bleeding into the child;
   // memo-map omission prevents layer-object identity from replaying parent
   // builds. `Layer.fresh` below is the second half of that contract.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  const memoKey = Layer.CurrentMemoMap as unknown as Context.Key<unknown, unknown>
+  const memoKey = eraseContextKey(Layer.CurrentMemoMap)
   const parentLayer = Layer.succeedContext(
-    omitContext(inputs.parentServices, [...omitTagsForEphemeralOverrides, memoKey]),
+    omitErasedContext(inputs.parentServices, [
+      ...omitTagsForEphemeralOverrides.map(eraseContextKey),
+      memoKey,
+    ]),
   )
 
   // Merge order is parent → extension layers → child overrides. Last writer wins.
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-  const merged = mergeRuntimeLayers([
+  const merged = mergeErasedLayers([
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
     eraseLayer(parentLayer),
     ...(inputs.extensionLayers === undefined
       ? []
       : [
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
           eraseLayer(inputs.extensionLayers),
         ]),
@@ -181,7 +157,6 @@ export const buildEphemeralRuntime = <Provides>(
   return {
     profile,
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — builder recovers Provides at this boundary
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-    layer: Layer.fresh(merged) as Layer.Layer<Provides | EphemeralOverrideProvides, never, never>,
+    layer: restoreErasedLayer<Provides | EphemeralOverrideProvides>(Layer.fresh(merged)),
   }
 }

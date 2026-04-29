@@ -20,6 +20,7 @@
 
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect"
 import type { ActorRef, ServiceKey } from "../../domain/actor.js"
+import { restoreErasedValue } from "./effect-membrane.js"
 
 type RegistryMap = ReadonlyMap<string, ReadonlySet<ActorRef<unknown>>>
 
@@ -86,22 +87,12 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
 
       const register = <M>(key: ServiceKey<M>, actorRef: ActorRef<M>): Effect.Effect<void> =>
         SubscriptionRef.update(ref, (registry) =>
-          addToRegistry(
-            registry,
-            key.name,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
-            actorRef as ActorRef<unknown>,
-          ),
+          addToRegistry(registry, key.name, restoreErasedValue<ActorRef<unknown>>(actorRef)),
         )
 
       const unregister = <M>(key: ServiceKey<M>, actorRef: ActorRef<M>): Effect.Effect<void> =>
         SubscriptionRef.update(ref, (registry) =>
-          removeFromRegistry(
-            registry,
-            key.name,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
-            actorRef as ActorRef<unknown>,
-          ),
+          removeFromRegistry(registry, key.name, restoreErasedValue<ActorRef<unknown>>(actorRef)),
         )
 
       const find = <M>(key: ServiceKey<M>): Effect.Effect<ReadonlyArray<ActorRef<M>>> =>
@@ -109,8 +100,7 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
           Effect.map((registry) => {
             const set = registry.get(key.name)
             if (set === undefined) return []
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
-            return Array.from(set) as ReadonlyArray<ActorRef<M>>
+            return restoreErasedValue<ReadonlyArray<ActorRef<M>>>(Array.from(set))
           }),
         )
 
@@ -122,8 +112,7 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
             // Iterate the underlying Set directly — `Array.from(...)[0]`
             // would allocate an N-element array just to drop N-1 of them.
             for (const r of set) {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
-              return r as ActorRef<M>
+              return restoreErasedValue<ActorRef<M>>(r)
             }
             return undefined
           }),
@@ -133,9 +122,8 @@ export class Receptionist extends Context.Service<Receptionist, ReceptionistServ
         SubscriptionRef.changes(ref).pipe(
           Stream.map((registry: RegistryMap) => {
             const set = registry.get(key.name)
-            if (set === undefined) return [] as ReadonlyArray<ActorRef<M>>
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased registry storage; M pinned by ServiceKey<M>
-            return Array.from(set) as ReadonlyArray<ActorRef<M>>
+            if (set === undefined) return []
+            return restoreErasedValue<ReadonlyArray<ActorRef<M>>>(Array.from(set))
           }),
         )
 

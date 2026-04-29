@@ -71,6 +71,7 @@ import {
 } from "../../domain/actor.js"
 import type { AskBranded, ExtractAskReply } from "../../domain/schema-tagged-enum-class.js"
 import { ActorId } from "../../domain/ids.js"
+import { restoreErasedValue } from "./effect-membrane.js"
 import { Receptionist } from "./receptionist.js"
 
 /**
@@ -280,8 +281,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             const askId = crypto.randomUUID()
             const deferred = yield* Deferred.make<Reply, ActorAskTimeout>()
             const resolve = (answer: unknown): Effect.Effect<void> =>
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased ask correlation; Reply pinned by AskBranded<R> on the message at the call site
-              Effect.asVoid(Deferred.succeed(deferred, answer as Reply))
+              Effect.asVoid(Deferred.succeed(deferred, restoreErasedValue<Reply>(answer)))
             const cleanup = Ref.update(pendingAsks, (m) => {
               const next = new Map(m)
               next.delete(askId)
@@ -402,9 +402,9 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               offer: (env) => Effect.asVoid(Queue.offer(queue, env)),
               snapshot: snapshotForActor,
               subscribeState: () =>
-                SubscriptionRef.changes(stateChannel).pipe(
-                  Stream.changes,
-                ) as Stream.Stream<unknown>,
+                restoreErasedValue<Stream.Stream<unknown>>(
+                  SubscriptionRef.changes(stateChannel).pipe(Stream.changes),
+                ),
               peekView: peekViewForActor,
             }
             yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
@@ -452,8 +452,7 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // arrives is by construction an M. The cast widens unknown
             // → M; type safety is preserved by the spawn-time type
             // parameter on `Behavior<M, S>`.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type-erased mailbox storage; M pinned at spawn time
-            const receiveMsg = (msg: unknown): M => msg as M
+            const receiveMsg = (msg: unknown): M => restoreErasedValue<M>(msg)
 
             // Take outside the permit so the next message's blocking
             // dequeue does not hold the snapshot lock. Receive + state
@@ -621,12 +620,15 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
           // by the ref's phantom (set at spawn time), the underlying
           // `SubscriptionRef<S>` stores exactly that `S`, and the
           // engine never publishes anything else into that channel.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased mailbox channel; S pinned by ActorRef<M, S> phantom set at spawn time
-          Stream.unwrap(
-            lookup(target.id).pipe(
-              Effect.map((entry) => (entry === undefined ? Stream.empty : entry.subscribeState())),
+          restoreErasedValue<Stream.Stream<S>>(
+            Stream.unwrap(
+              lookup(target.id).pipe(
+                Effect.map((entry) =>
+                  entry === undefined ? Stream.empty : entry.subscribeState(),
+                ),
+              ),
             ),
-          ) as Stream.Stream<S>
+          )
 
         const peekView = <M>(target: ActorRef<M>): Effect.Effect<ActorView | undefined> =>
           lookup(target.id).pipe(
