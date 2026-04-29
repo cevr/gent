@@ -176,7 +176,6 @@ describe("extension activation isolation", () => {
   // path or that bypass typed authoring — these tests assert validation works
   // on the typed-bucket leaf shape.
   const rawToolLeaf = (id: string, description: string | undefined): never =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the ToolToken brand
     ({
       id,
       ...(description !== undefined ? { description } : {}),
@@ -187,7 +186,6 @@ describe("extension activation isolation", () => {
     }) as never
 
   const rawRpcLeaf = (id: string): never =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test crafts a token-shaped value to bypass the RequestToken brand
     ({
       id,
       intent: "read",
@@ -298,7 +296,6 @@ describe("extension activation isolation", () => {
                 }),
               ],
               resources: [
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only narrow to AnyResourceContribution
                 defineResource({
                   scope: "process",
                   layer: Layer.empty as Layer.Layer<unknown>,

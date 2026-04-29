@@ -119,11 +119,9 @@ describe("Handoff cooldown actor", () => {
         scope: "builtin" as const,
         sourcePath: "test",
         sealedRequirements: undefined,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only reads `manifest.id` + `contributions.actors`
       } as unknown as LoadedExtension
       const resolved = {
         extensions: [loaded],
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only walks `extensions`
       } as unknown as ResolvedExtensions
 
       const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))

@@ -38,7 +38,6 @@ const autoExtension: LoadedExtension = {
 const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = []) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActorHost only walks `extensions`
   const resolved = { extensions: [autoExtension] } as unknown as ResolvedExtensions
   const machine = ExtensionRuntime.Live([autoExtension]).pipe(
     Layer.provideMerge(turnControl),

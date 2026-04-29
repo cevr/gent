@@ -347,7 +347,6 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
             | undefined
         )?._tag,
     )
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reads opaque RawInput as Prompt
 const latestUserText = (request: { readonly prompt: unknown }) =>
   [...Prompt.make(request.prompt as Prompt.RawInput).content]
     .reverse()

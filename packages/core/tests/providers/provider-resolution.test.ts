@@ -38,7 +38,6 @@ const testAuthStorage = {
   list: () => Effect.succeed([] as ReadonlyArray<string>),
   listInfo: () => Effect.succeed(emptyAuthInfo),
 }
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub against opaque LanguageModel.Service generic shape
 const failingLanguageModel: LanguageModel.Service = {
   generateText: (() =>
     Effect.fail(
@@ -595,9 +594,7 @@ describe("Provider model resolution", () => {
           messages: [],
           toolkit: typedToolkit,
         })
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- typed toolkit narrows the generic
         const stream = yield* provider.stream(request as never)
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- typed toolkit narrows the generic
         const typedStream: Stream.Stream<
           Response.StreamPart<TypedTools>,
           ProviderError

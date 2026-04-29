@@ -333,15 +333,10 @@ const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   branchId: BranchId.make("br-acp-boundary-test"),
   cwd: "/tmp/gent-acp-boundary-test",
   home: "/tmp/gent-acp-boundary-test-home",
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: facets are not invoked by makeAcpRunTool
   extension: {} as ExtensionHostContext["extension"],
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   agent: {} as ExtensionHostContext["agent"],
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   session: {} as ExtensionHostContext["session"],
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   interaction: {} as ExtensionHostContext["interaction"],
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
   actors: {} as ExtensionHostContext["actors"],
 })
 describe("codemode proxy via makeAcpRunTool", () => {

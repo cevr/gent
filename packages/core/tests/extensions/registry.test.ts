@@ -37,7 +37,6 @@ const makeAgent = (
 const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
   name: name ?? providerId,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: empty layer
   resolveModel: (_modelName) => ({ layer: Layer.empty as never }),
 })
 // C7: static prompt sections live on capability leaf `prompt`. Build a synthetic

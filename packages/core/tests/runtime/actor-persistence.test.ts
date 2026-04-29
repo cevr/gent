@@ -193,7 +193,6 @@ describe("ActorEngine — persistence", () => {
             const engine = yield* ActorEngine
             // CounterState requires `count: number`. A string-typed
             // value cannot decode through the schema.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- intentional malformed encoded value
             return yield* engine.spawn(durableCounter, {
               restoredState: { count: "not-a-number" } as never,
             })
@@ -240,7 +239,6 @@ describe("ActorEngine — persistence", () => {
           const engine = yield* ActorEngine
           const failed = yield* Effect.exit(
             engine.spawn(durableCounter, {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- intentional malformed encoded value
               restoredState: { count: "not-a-number" } as never,
             }),
           )

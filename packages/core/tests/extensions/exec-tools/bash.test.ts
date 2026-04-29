@@ -15,7 +15,6 @@ const makePlatformLayer = () =>
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test boundary, R is platform services we provide here
   Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
 
 const processTestTimeout = 15_000

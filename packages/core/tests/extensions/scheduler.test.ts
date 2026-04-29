@@ -22,7 +22,6 @@ const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedEx
   sourcePath: "builtin",
   contributions: {
     resources: [
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
       defineResource({
         scope: "process",
         layer: Layer.empty,
@@ -108,7 +107,6 @@ describe("scheduled jobs", () => {
   it.live("scheduler install failure is isolated instead of crashing reconciliation", () =>
     Effect.gen(function* () {
       const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-scheduler-failure-"))
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test mock for private CronRuntime
       const runtime = {
         install: (_entryPath: string, _schedule: string, name: string) => {
           if (name.includes("meditate")) {
@@ -167,7 +165,6 @@ describe("scheduled jobs", () => {
         ...sessionExt,
         contributions: {
           resources: [
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
             defineResource({
               scope: "session",
               layer: Layer.empty,

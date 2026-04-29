@@ -58,7 +58,6 @@ const makeCtx = Effect.gen(function* () {
       .rpcRegistry.run(ref.extensionId, ref.capabilityId, input, ctxBase, {
         intent: ref.intent,
       })
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
   }
   return testToolContext({

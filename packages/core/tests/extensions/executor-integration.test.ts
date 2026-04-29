@@ -140,10 +140,8 @@ const makeExecutorExtension = (overrides?: {
         defineResource({
           tag: ExecutorConnectionRunner,
           scope: "process",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: sidecar+bridge are mocked, so layer R is closed at construction
           layer: runnerLayer as Layer.Layer<ExecutorConnectionRunner>,
         }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: bare sidecar+bridge for the tools, A widened to unknown for bucket fit
         defineResource({
           scope: "process",
           layer: sidecarBridgeLayer as Layer.Layer<unknown>,
@@ -156,7 +154,6 @@ const makeExecutorExtension = (overrides?: {
 const makeRuntimeLayer = (extension: LoadedExtension) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActorHost only walks `extensions`
   const resolved = { extensions: [extension] } as unknown as ResolvedExtensions
   // Build the actor runtime stack: `ActorEngine.Live` provides engine +
   // Receptionist; `ActorHost.fromResolved` spawns contributed behaviors;
@@ -174,11 +171,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // instance the host registers actors with.
   const extLayers = (extension.contributions.resources ?? [])
     .filter((r) => r.scope === "process")
-    .map(
-      (r) =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture: closed-R typed elsewhere
-        r.layer as Layer.Layer<any, never, any>,
-    )
+    .map((r) => r.layer as Layer.Layer<any, never, any>)
   // Stack the resource layers on top of `machine + storage` so each
   // resource's `ActorEngine | Receptionist | Storage | …` deps are
   // satisfied by the underlying stack. `provideMerge` keeps the
@@ -186,7 +179,6 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // and forces the resource layer to activate (otherwise an unused
   // output is dead-stripped, and the connection runner never starts).
   const baseStack = Layer.mergeAll(machine, storage)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture: extLayers carry open A; provideMerge widens, narrowed at consumption
   const machineWithResources = extLayers.reduce<Layer.Layer<any, never, any>>(
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,

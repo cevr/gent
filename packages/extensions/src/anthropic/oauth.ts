@@ -531,7 +531,6 @@ const spawnClaudeCli = (): Effect.Effect<
   ProviderAuthError,
   ChildProcessSpawner.ChildProcessSpawner
 > => {
-  // eslint-disable-next-line no-process-env -- auth probe inherits local CLI credentials from the shell
   const env = { ...process.env, TERM: "dumb" }
   return runProcess("claude", ["-p", ".", "--model", "haiku"], {
     env,
@@ -708,7 +707,6 @@ export const getUserAgent = (): string =>
  */
 export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
   version: getCliVersion(),
-  // eslint-disable-next-line no-process-env -- CLI entrypoint is passed through Anthropic's environment contract
   entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
 })
 

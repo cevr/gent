@@ -14,9 +14,7 @@ import {
 const makeAgent = (
   name: string,
   overrides: Partial<ConstructorParameters<typeof AgentDefinition>[0]> = {},
-): AgentDefinition =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  AgentDefinition.make({ name: name as never, ...overrides })
+): AgentDefinition => AgentDefinition.make({ name: name as never, ...overrides })
 
 describe("resolveAgentDriver", () => {
   test("agent.driver wins — config override is ignored when the agent hardcodes a driver", () => {

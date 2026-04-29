@@ -104,10 +104,8 @@ const makeLoaded = (
     scope: "builtin" as const,
     sourcePath: "test",
     sealedRequirements: undefined,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub of LoadedExtension; only the fields ActorHost reads matter
   }) as unknown as LoadedExtension
 const makeResolved = (extensions: ReadonlyArray<LoadedExtension>): ResolvedExtensions =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub; ActorHost only walks `extensions`
   ({ extensions }) as unknown as ResolvedExtensions
 describe("ActorHost", () => {
   it.live("contributed Behavior is spawned and discoverable via its ServiceKey", () =>
@@ -166,7 +164,6 @@ describe("ActorHost", () => {
             ) as Effect.Effect<null, never, never>,
         }
         const resolved = makeResolved([
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: ActorHost only reads `manifest.id` + `contributions.actors`
           makeLoaded("@test/hold", [
             holdBehavior as unknown as Behavior<PingMsg, PingState, never>,
           ]),
@@ -352,7 +349,6 @@ describe("ActorHost", () => {
                 persistenceKey: namespacedKey,
               })
               if (row !== undefined) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode of stored JSON; shape is PingState
                 const parsed = JSON.parse(row.stateJson) as {
                   hits: number
                 }
@@ -548,7 +544,6 @@ describe("ActorHost", () => {
           }
         })
         const initialRow = yield* waitForRow.pipe(Effect.timeout("2 seconds"))
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode
         const initialParsed = JSON.parse(initialRow.stateJson) as {
           hits: number
         }
@@ -567,7 +562,6 @@ describe("ActorHost", () => {
           persistenceKey: namespacedKey,
         })
         expect(afterClose).toBeDefined()
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test-only decode
         const parsed = JSON.parse(afterClose!.stateJson) as {
           hits: number
         }

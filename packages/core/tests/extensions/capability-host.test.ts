@@ -313,7 +313,6 @@ describe("extension capability registries", () => {
         intent: "read",
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture intentionally violates output contract
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
