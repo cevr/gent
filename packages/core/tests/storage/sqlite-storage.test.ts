@@ -148,6 +148,105 @@ describe("Storage", () => {
         expect(rows[0]?.foreign_keys).toBe(1)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
+    it.scoped("configures file-backed sqlite durability pragmas", () =>
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-storage-pragmas-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        )
+        const layer = Storage.LiveWithSql(join(dir, "gent.db")).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const journal = yield* sql<{
+            journal_mode: string
+          }>`PRAGMA journal_mode`
+          const synchronous = yield* sql<{
+            synchronous: number
+          }>`PRAGMA synchronous`
+          const busyTimeout = yield* sql<{
+            timeout: number
+          }>`PRAGMA busy_timeout`
+          const walAutocheckpoint = yield* sql<{
+            wal_autocheckpoint: number
+          }>`PRAGMA wal_autocheckpoint`
+          const foreignKeys = yield* sql<{
+            foreign_keys: number
+          }>`PRAGMA foreign_keys`
+          expect(journal[0]?.journal_mode).toBe("wal")
+          expect(synchronous[0]?.synchronous).toBe(1)
+          expect(busyTimeout[0]?.timeout).toBe(5000)
+          expect(walAutocheckpoint[0]?.wal_autocheckpoint).toBe(1000)
+          expect(foreignKeys[0]?.foreign_keys).toBe(1)
+        }).pipe(Effect.provide(layer))
+      }),
+    )
+    it.scoped("does not rebuild current-version FTS projection on every startup", () =>
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-storage-fts-version-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        )
+        const dbPath = join(dir, "gent.db")
+        const layer = Storage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+        const sessionId = SessionId.make("fts-version-session")
+        const branchId = BranchId.make("fts-version-branch")
+        const messageId = MessageId.make("fts-version-message")
+        yield* Effect.gen(function* () {
+          const storage = yield* Storage
+          yield* storage.createSession(
+            new Session({
+              id: sessionId,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: branchId,
+              sessionId,
+              createdAt: new Date(),
+            }),
+          )
+          yield* storage.createMessage(
+            Message.Regular.make({
+              id: messageId,
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "versioned fts projection" })],
+              createdAt: new Date(),
+            }),
+          )
+          const sql = yield* SqlClient.SqlClient
+          const version = yield* sql<{
+            value: string
+          }>`SELECT value FROM storage_meta WHERE key = ${"messages_fts_schema_version"}`
+          expect(version[0]?.value).toBe("1")
+        }).pipe(Effect.provide(layer))
+
+        const db = new Database(dbPath)
+        db.query(`DELETE FROM messages_fts WHERE message_id = ?`).run(messageId)
+        db.close()
+
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const version = yield* sql<{
+            value: string
+          }>`SELECT value FROM storage_meta WHERE key = ${"messages_fts_schema_version"}`
+          const ftsRows = yield* sql<{
+            count: number
+          }>`SELECT COUNT(*) as count FROM messages_fts WHERE message_id = ${messageId}`
+          expect(version[0]?.value).toBe("1")
+          expect(ftsRows[0]?.count).toBe(0)
+        }).pipe(Effect.provide(layer))
+      }),
+    )
     it.live("rejects orphan branch, message, and event rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage

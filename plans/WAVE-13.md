@@ -1104,3 +1104,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd718-1618-7a20-8a1b-4328df8df694`; initial P1/P2 findings resolved in the same review round.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-023613-codex-to-claude-42e8a8/claude.md`; initial typed-failure and repair-surface findings addressed.
   - Note: startup no longer repairs or drops retired tables before failing closed; explicit FK orphan repair lives in internal-only `packages/core/src/storage/sqlite-repair.ts`.
+- Batch 5 complete.
+  - Gate: `bun test packages/core/tests/storage/sqlite-storage.test.ts --timeout 20000`, `bun run typecheck`, `bun test packages/core/tests/extensions/exec-tools/bash.test.ts packages/core/tests/utils/run-process.test.ts --timeout 20000`, `bun run lint`, `bun run test`.
+  - Codex review: `019dd727-1b9e-7cd2-bc1a-6827986d5fd8`; no P0/P1/P2 blockers.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-025237-codex-to-claude-e7fe89/claude.md`; no P0/P1/P2 blockers.
+  - Note: SQLite startup now sets WAL/NORMAL/busy-timeout/autocheckpoint pragmas; message FTS rebuild is version-gated through `storage_meta` instead of running on every boot.

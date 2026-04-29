@@ -48,6 +48,8 @@ const LEGACY_EVENT_TAGS = {
   AgentRunFailed: ["AgentRunFailed", "SubagentFailed"],
 } as const satisfies Record<string, readonly string[]>
 
+const MESSAGES_FTS_SCHEMA_VERSION = "1"
+
 const normalizeLegacyAgentEvent = (value: unknown): unknown => {
   if (!isRecord(value)) return value
   const record = value
@@ -833,9 +835,70 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
   })
 })
 
+const configureSqliteConnection = Effect.fn("Storage.configureSqliteConnection")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`PRAGMA journal_mode = WAL`)
+  yield* sql.unsafe(`PRAGMA synchronous = NORMAL`)
+  yield* sql.unsafe(`PRAGMA busy_timeout = 5000`)
+  yield* sql.unsafe(`PRAGMA wal_autocheckpoint = 1000`)
+  yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
+})
+
+const createStorageMetaTable = Effect.fn("Storage.createStorageMetaTable")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS storage_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `)
+})
+
+const tableExists = Effect.fn("Storage.tableExists")(function* (table: string) {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{
+    name: string
+  }>`SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ${table}`
+  return rows.length > 0
+})
+
+const getStorageMeta = Effect.fn("Storage.getStorageMeta")(function* (key: string) {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{
+    value: string
+  }>`SELECT value FROM storage_meta WHERE key = ${key}`
+  return rows[0]?.value
+})
+
+const setStorageMeta = Effect.fn("Storage.setStorageMeta")(function* (key: string, value: string) {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql`INSERT INTO storage_meta (key, value) VALUES (${key}, ${value}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+})
+
+const createMessageFtsTable = Effect.fn("Storage.createMessageFtsTable")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(
+    `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, message_id UNINDEXED, session_id UNINDEXED, branch_id UNINDEXED, role UNINDEXED)`,
+  )
+})
+
+const migrateMessageSearchIndex = Effect.fn("Storage.migrateMessageSearchIndex")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* createStorageMetaTable()
+  const version = yield* getStorageMeta("messages_fts_schema_version")
+  const hasFtsTable = yield* tableExists("messages_fts")
+
+  if (version === MESSAGES_FTS_SCHEMA_VERSION && hasFtsTable) return
+
+  yield* sql.unsafe(`DROP TRIGGER IF EXISTS messages_fts_ai`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`).pipe(Effect.ignoreCause)
+  yield* createMessageFtsTable()
+  yield* backfillMessageSearchIndex()
+  yield* setStorageMeta("messages_fts_schema_version", MESSAGES_FTS_SCHEMA_VERSION)
+})
+
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -1033,18 +1096,7 @@ const initSchema = Effect.gen(function* () {
     `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,
   )
 
-  // FTS5 for message search (standalone — no content-sync)
-  // Migration: drop old content-sync FTS table if it exists (had column mismatch bug)
-  yield* sql.unsafe(`DROP TRIGGER IF EXISTS messages_fts_ai`).pipe(Effect.ignoreCause)
-  yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`).pipe(Effect.ignoreCause)
-
-  yield* sql
-    .unsafe(
-      `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, message_id UNINDEXED, session_id UNINDEXED, branch_id UNINDEXED, role UNINDEXED)`,
-    )
-    .pipe(Effect.ignoreCause)
-
-  yield* backfillMessageSearchIndex()
+  yield* migrateMessageSearchIndex()
 })
 
 const makeStorageImpl = Effect.gen(function* () {
@@ -1052,7 +1104,7 @@ const makeStorageImpl = Effect.gen(function* () {
   // PRAGMA foreign_keys is connection-state, not stored in the DB blob.
   // Deserialized DBs come up with FKs OFF — re-enable on every connection.
   // Idempotent, cheap; runs before any user query.
-  yield* Effect.orDie(sql.unsafe(`PRAGMA foreign_keys = ON`))
+  yield* Effect.orDie(configureSqliteConnection())
   const insertContent = (messageId: MessageId, partJsons: ReadonlyArray<string>) =>
     insertMessageContent(messageId, partJsons).pipe(Effect.provideService(SqlClient.SqlClient, sql))
   const indexSearch = (
@@ -1679,6 +1731,7 @@ const mapStartupError = (error: unknown): StorageError =>
     : new StorageError({ message: "Failed to initialize SQLite storage", cause: error })
 
 const makeStorage = Effect.gen(function* () {
+  yield* configureSqliteConnection().pipe(Effect.mapError(mapStartupError))
   yield* initSchema.pipe(Effect.mapError(mapStartupError))
   return yield* makeStorageImpl
 })
