@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { onMount } from "solid-js"
-import { Effect } from "effect"
+import { Deferred, Effect } from "effect"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { emptyQueueSnapshot } from "@gent/sdk"
@@ -26,15 +26,16 @@ const waitForMessage = (
   timeoutMs = 2000,
 ): Promise<void> => {
   const startedAt = Date.now()
-  const poll = (): Promise<void> =>
-    setup.renderOnce().then(() => {
-      if (messages.some((message) => message.content === content)) return
-      if (Date.now() - startedAt >= timeoutMs) {
-        throw new Error(`timed out waiting for message: ${content}`)
-      }
-      return new Promise((resolve) => setTimeout(resolve, 10)).then(() => poll())
-    })
-  return poll()
+  const poll: Effect.Effect<void, Error> = Effect.gen(function* () {
+    yield* Effect.promise(() => setup.renderOnce())
+    if (messages.some((message) => message.content === content)) return
+    if (Date.now() - startedAt >= timeoutMs) {
+      return yield* Effect.fail(new Error(`timed out waiting for message: ${content}`))
+    }
+    yield* Effect.sleep("10 millis")
+    return yield* poll
+  })
+  return Effect.runPromise(poll)
 }
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -215,34 +216,21 @@ describe("App auth gate", () => {
   )
   it.live("cold start with prompt and missing auth defers the prompt until auth resolves", () =>
     Effect.gen(function* () {
-      let resolveProviders:
-        | ((
-            providers: Array<{
-              provider: string
-              hasKey: boolean
-              required: boolean
-              source: "none"
-              authType: undefined
-            }>,
-          ) => void)
-        | undefined
-      const sentMessages: Array<{
-        content: string
-      }> = []
-      const providersPromise = new Promise<
+      const providersDeferred = yield* Deferred.make<
         Array<{
           provider: string
           hasKey: boolean
           required: boolean
-          source: "none"
+          source: string
           authType: undefined
         }>
-      >((resolve) => {
-        resolveProviders = resolve
-      })
+      >()
+      const sentMessages: Array<{
+        content: string
+      }> = []
       const client = createMockClient({
         auth: {
-          listProviders: () => Effect.promise(() => providersPromise),
+          listProviders: () => Deferred.await(providersDeferred),
           listMethods: () =>
             Effect.succeed({
               openai: [{ label: "API key", type: "api" as const }],
@@ -279,7 +267,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages).toEqual([])
       // Resolve auth — keys are required but missing
-      resolveProviders?.([
+      yield* Deferred.succeed(providersDeferred, [
         {
           provider: "openai",
           hasKey: false,
@@ -349,7 +337,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => authChecks > 0, "auth check failure"),
       )
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)))
+      yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages).toEqual([])
       setup.renderer.destroy()
@@ -463,13 +451,7 @@ describe("App auth gate", () => {
       Effect.gen(function* () {
         let hasOpenAiKey = false
         let initialAuthCheckResolved = false
-        let resolveInitialAuthCheck: (() => void) | undefined
-        const initialAuthCheck = new Promise<void>((resolve) => {
-          resolveInitialAuthCheck = () => {
-            initialAuthCheckResolved = true
-            resolve()
-          }
-        })
+        const initialAuthCheck = yield* Deferred.make<void>()
         const sentMessages: Array<{
           sessionId: SessionId
           branchId: BranchId
@@ -531,7 +513,7 @@ describe("App auth gate", () => {
                 },
               ]
               if (hasOpenAiKey || initialAuthCheckResolved) return Effect.succeed(providers)
-              return Effect.promise(() => initialAuthCheck).pipe(Effect.as(providers))
+              return Deferred.await(initialAuthCheck).pipe(Effect.as(providers))
             },
             listMethods: () =>
               Effect.succeed({
@@ -598,10 +580,11 @@ describe("App auth gate", () => {
         yield* Effect.promise(() => setup.renderOnce())
         setup.mockInput.pressEnter()
         yield* Effect.promise(() => setup.renderOnce())
-        yield* Effect.promise(() => Promise.resolve())
+        yield* Effect.yieldNow
         yield* Effect.promise(() => setup.renderOnce())
         expect(sentMessages).toEqual([])
-        resolveInitialAuthCheck?.()
+        initialAuthCheckResolved = true
+        yield* Deferred.succeed(initialAuthCheck, undefined)
         yield* Effect.promise(() =>
           waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
         )
@@ -659,28 +642,15 @@ describe("App auth gate", () => {
       let ctx: ClientContextValue | undefined
       let hasOpenAiKey = false
       let sessionAuthChecks = 0
-      let resolveStaleSessionCheck:
-        | ((
-            providers: Array<{
-              provider: string
-              hasKey: boolean
-              required: boolean
-              source: "none"
-              authType: undefined
-            }>,
-          ) => void)
-        | undefined
-      const staleSessionCheck = new Promise<
+      const staleSessionCheck = yield* Deferred.make<
         Array<{
           provider: string
           hasKey: boolean
           required: boolean
-          source: "none"
+          source: string
           authType: undefined
         }>
-      >((resolve) => {
-        resolveStaleSessionCheck = resolve
-      })
+      >()
       const sentMessages: Array<{
         content: string
       }> = []
@@ -704,7 +674,7 @@ describe("App auth gate", () => {
                   },
                 ])
               }
-              if (sessionAuthChecks === 2) return Effect.promise(() => staleSessionCheck)
+              if (sessionAuthChecks === 2) return Deferred.await(staleSessionCheck)
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -799,7 +769,7 @@ describe("App auth gate", () => {
         waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved"),
       )
       yield* Effect.promise(() => waitForMessage(setup, sentMessages, initialPrompt))
-      resolveStaleSessionCheck?.([
+      yield* Deferred.succeed(staleSessionCheck, [
         {
           provider: "openai",
           hasKey: false,
@@ -808,7 +778,7 @@ describe("App auth gate", () => {
           authType: undefined,
         },
       ])
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)))
+      yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("API Keys")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)

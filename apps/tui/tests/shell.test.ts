@@ -1,99 +1,115 @@
-import { describe, expect, test } from "effect-bun-test"
-import { beforeAll, afterAll } from "bun:test"
+import { describe, expect, it } from "effect-bun-test"
 import { executeShell } from "../src/utils/shell"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer } from "effect"
 import { BunServices, BunFileSystem } from "@effect/platform-bun"
-import { mkdtemp, rm, writeFile } from "fs/promises"
-import { tmpdir } from "os"
-import { join } from "path"
+
+const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
+const shellTest = it.scopedLive.layer(testLayer)
 
 describe("executeShell", () => {
-  let testDir: string
-  const platformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
-  const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(platformLayer)))
-
-  beforeAll(() =>
-    mkdtemp(join(tmpdir(), "shell-test-")).then((dir) => {
-      testDir = dir
-    }),
-  )
-
-  afterAll(() => rm(testDir, { recursive: true, force: true }))
-
-  test("executes simple command", () =>
-    run(executeShell("echo hello", testDir)).then((result) => {
+  shellTest("executes simple command", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo hello", testDir)
       expect(result.output).toBe("hello")
       expect(result.truncated).toBe(false)
       expect(result.savedPath).toBeUndefined()
-    }))
+    }),
+  )
 
-  test("captures stderr", () =>
-    run(executeShell("echo error >&2", testDir)).then((result) => {
+  shellTest("captures stderr", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo error >&2", testDir)
       expect(result.output).toContain("error")
       expect(result.truncated).toBe(false)
-    }))
+    }),
+  )
 
-  test("respects cwd", () =>
-    run(executeShell("pwd", testDir)).then((result) => {
+  shellTest("respects cwd", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("pwd", testDir)
       // macOS may resolve /var to /private/var
       expect(result.output.endsWith(testDir.split("/").pop()!)).toBe(true)
       expect(result.truncated).toBe(false)
-    }))
+    }),
+  )
 
-  test("handles multi-line output", () =>
-    run(executeShell("echo -e 'line1\\nline2\\nline3'", testDir)).then((result) => {
+  shellTest("handles multi-line output", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo -e 'line1\\nline2\\nline3'", testDir)
       expect(result.output).toContain("line1")
       expect(result.output).toContain("line2")
       expect(result.output).toContain("line3")
       expect(result.truncated).toBe(false)
-    }))
+    }),
+  )
 
-  test("handles empty output", () =>
-    run(executeShell("true", testDir)).then((result) => {
+  shellTest("handles empty output", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("true", testDir)
       expect(result.output).toBe("")
       expect(result.truncated).toBe(false)
-    }))
+    }),
+  )
 
-  test("handles command with arguments", () =>
-    run(executeShell("echo -n test", testDir)).then((result) => {
+  shellTest("handles command with arguments", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo -n test", testDir)
       expect(result.output).toBe("test")
-    }))
+    }),
+  )
 
-  test("handles pipes", () =>
-    run(executeShell("echo hello | tr 'h' 'H'", testDir)).then((result) => {
+  shellTest("handles pipes", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo hello | tr 'h' 'H'", testDir)
       expect(result.output).toBe("Hello")
-    }))
+    }),
+  )
 
-  test("handles file operations", () => {
-    const testFile = join(testDir, "test.txt")
-    return writeFile(testFile, "file content")
-      .then(() => run(executeShell(`cat ${testFile}`, testDir)))
-      .then((result) => {
-        expect(result.output).toBe("file content")
-      })
-  })
+  shellTest("handles file operations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* fs.makeTempDirectoryScoped()
+      const testFile = `${testDir}/test.txt`
+      yield* fs.writeFileString(testFile, "file content")
+      const result = yield* executeShell(`cat ${testFile}`, testDir)
+      expect(result.output).toBe("file content")
+    }),
+  )
 
-  test("truncates output over line limit", () =>
+  shellTest("truncates output over line limit", () =>
     // Generate output with more than 2000 lines
-    run(executeShell("seq 1 2500", testDir)).then((result) => {
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("seq 1 2500", testDir)
       expect(result.truncated).toBe(true)
       expect(result.savedPath).toBeDefined()
 
       // Output should be truncated to ~2000 lines
       const lineCount = result.output.split("\n").length
       expect(lineCount).toBeLessThanOrEqual(2001)
-    }))
+    }),
+  )
 
-  test("truncates output over byte limit", () =>
+  shellTest("truncates output over byte limit", () =>
     // Generate output over 50KB (each 'x' repeated 100 times per line, 600 lines = 60KB)
-    run(
-      executeShell("for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done", testDir),
-    ).then((result) => {
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell(
+        "for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done",
+        testDir,
+      )
       expect(result.truncated).toBe(true)
       expect(result.savedPath).toBeDefined()
 
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
-    }))
+    }),
+  )
 })

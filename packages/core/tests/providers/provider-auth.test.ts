@@ -20,14 +20,16 @@ const oauthProvider: ModelDriverContribution = {
     authorize: (ctx) =>
       Effect.tryPromise({
         try: () =>
-          Promise.resolve().then(() => {
-            pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
-            return {
-              url: "http://example.com/auth",
-              method: "code" as const,
-              instructions: "Paste code",
-            }
-          }),
+          Effect.runPromise(
+            Effect.sync(() => {
+              pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
+              return {
+                url: "http://example.com/auth",
+                method: "code" as const,
+                instructions: "Paste code",
+              }
+            }),
+          ),
         catch: (e) => ({ _tag: "AuthError" as const, cause: e }),
       }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
     callback: (ctx) =>

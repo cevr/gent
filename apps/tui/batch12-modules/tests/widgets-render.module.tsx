@@ -376,12 +376,12 @@ describe("TUI renderer surfaces", () => {
         extensions: [],
       }
       lifecycle.emit({ _tag: "reconnecting", attempt: 1, generation: 1 })
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       lifecycle.emit({ _tag: "connected", generation: 1 })
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(callCount).toBe(2)
@@ -443,9 +443,9 @@ describe("TUI renderer surfaces", () => {
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
       controls.switchSession()
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(frame).not.toContain("failed session actors")
@@ -509,9 +509,9 @@ describe("TUI renderer surfaces", () => {
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
       controls?.switchBranchSameSession()
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(frame).toContain("failed session actors")

@@ -139,7 +139,7 @@ describe("transport-only extension widgets", () => {
           branchId: BranchId.make("branch-B"),
         }
         yield* Deferred.succeed(requestDeferred, { active: true, phase: "working", iteration: 1 })
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -183,7 +183,7 @@ describe("transport-only extension widgets", () => {
           iteration: 2,
           maxIterations: 4,
         })
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "auto 2/4", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -222,7 +222,7 @@ describe("transport-only extension widgets", () => {
         )
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, { active: "yes" })
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -276,7 +276,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -326,7 +326,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "1 artifact", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -365,7 +365,7 @@ describe("transport-only extension widgets", () => {
         )
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ status: "active" }])
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -414,7 +414,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "1 task ↓", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
@@ -489,7 +489,7 @@ describe("transport-only extension widgets", () => {
               > => entry._tag === "border-label" && entry.position === "bottom-left",
             )
             expect(borderLabel).toBeDefined()
-            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+            yield* Effect.sleep("0 millis")
             expect(borderLabel?.produce()).toEqual([])
             tasks = [
               {
@@ -503,8 +503,8 @@ describe("transport-only extension widgets", () => {
               },
             ]
             for (const cb of sessionEventSubscribers) cb(makeEnvelope(tag, index))
-            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
-            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+            yield* Effect.sleep("0 millis")
+            yield* Effect.sleep("0 millis")
             expect(borderLabel?.produce()).toEqual([{ text: "1 task ↓", color: "info" }])
           }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
         }),
@@ -545,7 +545,7 @@ describe("transport-only extension widgets", () => {
         )
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }])
-        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+        yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),

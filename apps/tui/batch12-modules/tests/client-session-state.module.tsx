@@ -21,27 +21,33 @@ const waitForState = (
   predicate: (state: SessionState) => boolean,
   remaining = 10,
 ): Promise<SessionState> =>
-  setup.renderOnce().then(() => {
-    const state = read()
-    if (predicate(state)) return state
-    if (remaining <= 1) {
-      throw new Error(
-        `session state did not reach expected condition; got ${JSON.stringify(state)}`,
-      )
-    }
-    return waitForState(setup, read, predicate, remaining - 1)
-  })
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => setup.renderOnce())
+      const state = read()
+      if (predicate(state)) return state
+      if (remaining <= 1) {
+        return yield* Effect.fail(
+          new Error(`session state did not reach expected condition; got ${JSON.stringify(state)}`),
+        )
+      }
+      return yield* Effect.promise(() => waitForState(setup, read, predicate, remaining - 1))
+    }),
+  )
 const waitForAgentError = (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,
   read: () => string | null,
   remaining = 10,
 ): Promise<string> =>
-  setup.renderOnce().then(() => {
-    const error = read()
-    if (error !== null) return error
-    if (remaining <= 1) throw new Error("agent error did not surface")
-    return waitForAgentError(setup, read, remaining - 1)
-  })
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => setup.renderOnce())
+      const error = read()
+      if (error !== null) return error
+      if (remaining <= 1) return yield* Effect.fail(new Error("agent error did not surface"))
+      return yield* Effect.promise(() => waitForAgentError(setup, read, remaining - 1))
+    }),
+  )
 describe("ClientProvider session lifecycle", () => {
   it.live("model list failures surface as agent errors", () =>
     Effect.gen(function* () {
@@ -158,7 +164,7 @@ describe("ClientProvider session lifecycle", () => {
       if (ctx === undefined) throw new Error("client context not ready")
       ctx.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
       failOldSnapshot?.(new Error("stale session failed"))
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
       expect(ctx.connectionIssue()).toBeNull()
@@ -252,7 +258,7 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
       expect(eventCalls).not.toContain("session-a:branch-a")

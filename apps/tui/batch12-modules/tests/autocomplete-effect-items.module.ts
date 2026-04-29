@@ -159,42 +159,44 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
             return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
           }),
       })
-      const result = yield* Effect.promise(() =>
-        runAutocompleteItems(contribution, "filter", runtime).catch(
-          () => [] as readonly AutocompleteItem[],
-        ),
-      )
+      const result = yield* Effect.tryPromise(() =>
+        runAutocompleteItems(contribution, "filter", runtime),
+      ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))
       expect(result).toEqual([])
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  test("requestExtension dispatches extension.request through the transport runtime", () => {
-    const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
-    const runtime = makeTestRuntime(transport)
-    return runtime.runPromise(requestExtension(ref(ListThingsRpc), {})).then((result) => {
+  it.live("requestExtension dispatches extension.request through the transport runtime", () =>
+    Effect.gen(function* () {
+      const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
+      const runtime = makeTestRuntime(transport)
+      const result = yield* Effect.promise(() =>
+        runtime.runPromise(requestExtension(ref(ListThingsRpc), {})),
+      )
       expect(result).toEqual(["effect-v4", "react"])
-      return runtime.dispose()
-    })
-  })
-  test("popup adapter pattern: requestExtension failure normalizes to []", () => {
-    const transport = makeFakeTransport({ currentSession: () => undefined })
-    const runtime = makeTestRuntime(transport)
-    const contribution = autocompleteContribution({
-      prefix: "$",
-      title: "Test",
-      items: (_filter: string) =>
-        Effect.gen(function* () {
-          const reply = yield* requestExtension(ref(ListThingsRpc), {})
-          return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
-        }),
-    })
-    return runAutocompleteItems(contribution, "filter", runtime)
-      .catch(() => [] as readonly AutocompleteItem[])
-      .then((result) => {
-        expect(result).toEqual([])
-        return runtime.dispose()
+      yield* Effect.promise(() => runtime.dispose())
+    }),
+  )
+  it.live("popup adapter pattern: requestExtension failure normalizes to []", () =>
+    Effect.gen(function* () {
+      const transport = makeFakeTransport({ currentSession: () => undefined })
+      const runtime = makeTestRuntime(transport)
+      const contribution = autocompleteContribution({
+        prefix: "$",
+        title: "Test",
+        items: (_filter: string) =>
+          Effect.gen(function* () {
+            const reply = yield* requestExtension(ref(ListThingsRpc), {})
+            return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
+          }),
       })
-  })
+      const result = yield* Effect.tryPromise(() =>
+        runAutocompleteItems(contribution, "filter", runtime),
+      ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))
+      expect(result).toEqual([])
+      yield* Effect.promise(() => runtime.dispose())
+    }),
+  )
   test("NoActiveSessionError is a Schema.TaggedError instance", () => {
     const err = new NoActiveSessionError()
     expect(err._tag).toBe("NoActiveSessionError")

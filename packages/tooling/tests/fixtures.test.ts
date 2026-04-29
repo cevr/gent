@@ -16,7 +16,9 @@
  * @module
  */
 
-import { beforeAll, describe, expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { Effect } from "effect"
+import { describe as effectDescribe, it } from "effect-bun-test"
 import {
   runOxlint,
   type Diagnostic,
@@ -93,13 +95,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
     valid: "no-promise-control-flow-in-tests.valid.test.ts",
-    expectedCount: 4,
+    expectedCount: 7,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "batch12-modules/tests/no-promise-control-flow-in-tests.invalid.module.ts",
     valid: "batch12-modules/tests/no-promise-control-flow-in-tests.valid.module.ts",
-    expectedCount: 4,
+    expectedCount: 10,
   },
 ]
 
@@ -114,50 +116,48 @@ const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
   }
 }
 
-describe("custom lint rules", () => {
-  let invalidRun: OxlintRun
-  let validRun: OxlintRun
-
-  beforeAll(() => {
-    // One spawn per fixture set instead of N. Each per-rule test then
-    // filters the shared report by filename.
-    return Promise.all([
-      runOxlint(CASES.map((c) => c.invalid)),
-      runOxlint(CASES.map((c) => c.valid)),
-    ]).then(([invalid, valid]) => {
-      invalidRun = invalid
-      validRun = valid
-    })
-  })
+effectDescribe("custom lint rules", () => {
+  const loadRuns = Effect.promise(() =>
+    Promise.all([runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))]),
+  )
 
   for (const c of CASES) {
-    test(`${c.rule} fires on invalid fixture`, () => {
-      assertProcessed(invalidRun, c.invalid)
-      // oxlint exits non-zero when ANY fixture has violations — and our
-      // invalid set always does, so we just need to assert the per-file
-      // diagnostics.
-      expect(invalidRun.exitCode).not.toBe(0)
-      const fileDiagnostics = filterByFile(invalidRun.report, c.invalid)
-      const violations = countViolations(fileDiagnostics, c.rule)
-      if (c.expectedCount !== undefined) {
-        expect(violations).toBe(c.expectedCount)
-      } else {
-        expect(violations).toBeGreaterThan(0)
-      }
-    })
+    it.live(`${c.rule} fires on invalid fixture`, () =>
+      Effect.gen(function* () {
+        const [invalidRun] = yield* loadRuns
+        assertProcessed(invalidRun, c.invalid)
+        // oxlint exits non-zero when ANY fixture has violations — and our
+        // invalid set always does, so we just need to assert the per-file
+        // diagnostics.
+        expect(invalidRun.exitCode).not.toBe(0)
+        const fileDiagnostics = filterByFile(invalidRun.report, c.invalid)
+        const violations = countViolations(fileDiagnostics, c.rule)
+        if (c.expectedCount !== undefined) {
+          expect(violations).toBe(c.expectedCount)
+        } else {
+          expect(violations).toBeGreaterThan(0)
+        }
+      }),
+    )
 
-    test(`${c.rule} does not fire on valid fixture`, () => {
-      // The valid fixture set should produce zero diagnostics overall;
-      // exit-code 0 is the global signal. Per-file: zero violations of
-      // this specific rule.
-      const fileDiagnostics = filterByFile(validRun.report, c.valid)
-      const violations = countViolations(fileDiagnostics, c.rule)
-      expect(violations).toBe(0)
-    })
+    it.live(`${c.rule} does not fire on valid fixture`, () =>
+      Effect.gen(function* () {
+        const [, validRun] = yield* loadRuns
+        // The valid fixture set should produce zero diagnostics overall;
+        // exit-code 0 is the global signal. Per-file: zero violations of
+        // this specific rule.
+        const fileDiagnostics = filterByFile(validRun.report, c.valid)
+        const violations = countViolations(fileDiagnostics, c.rule)
+        expect(violations).toBe(0)
+      }),
+    )
   }
 
-  test("valid fixture set passes oxlint cleanly", () => {
-    expect(validRun.exitCode).toBe(0)
-    expect(validRun.report.diagnostics.length).toBe(0)
-  })
+  it.live("valid fixture set passes oxlint cleanly", () =>
+    Effect.gen(function* () {
+      const [, validRun] = yield* loadRuns
+      expect(validRun.exitCode).toBe(0)
+      expect(validRun.report.diagnostics.length).toBe(0)
+    }),
+  )
 })

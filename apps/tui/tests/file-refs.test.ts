@@ -1,12 +1,7 @@
-import { describe, expect, test } from "effect-bun-test"
-import { beforeAll, afterAll } from "bun:test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { parseFileRefs, expandFileRefs } from "../src/utils/file-refs"
-import { Effect } from "effect"
+import { Effect, FileSystem } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import type { FileSystem } from "effect"
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises"
-import { tmpdir } from "os"
-import { join } from "path"
 
 describe("parseFileRefs", () => {
   test("parses simple file reference", () => {
@@ -75,86 +70,104 @@ describe("parseFileRefs", () => {
 })
 
 describe("expandFileRefs", () => {
-  let testDir: string
-  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(BunFileSystem.layer)))
+  const fileRefsTest = it.scopedLive.layer(BunFileSystem.layer)
+  const makeFixture = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const testDir = yield* fs.makeTempDirectoryScoped()
+    yield* fs.makeDirectory(`${testDir}/src`, { recursive: true })
+    yield* fs.writeFileString(`${testDir}/src/foo.ts`, "line1\nline2\nline3\nline4\nline5\n")
+    yield* fs.writeFileString(`${testDir}/src/bar.ts`, "export const bar = 1\n")
+    yield* fs.writeFileString(`${testDir}/README.md`, "# Title\n\nDescription here.\n")
+    return testDir
+  })
 
-  beforeAll(() =>
-    mkdtemp(join(tmpdir(), "file-refs-test-")).then((dir) => {
-      testDir = dir
-      return mkdir(join(testDir, "src"), { recursive: true })
-        .then(() =>
-          writeFile(join(testDir, "src", "foo.ts"), "line1\nline2\nline3\nline4\nline5\n"),
-        )
-        .then(() => writeFile(join(testDir, "src", "bar.ts"), "export const bar = 1\n"))
-        .then(() => writeFile(join(testDir, "README.md"), "# Title\n\nDescription here.\n"))
-    }),
-  )
-
-  afterAll(() => rm(testDir, { recursive: true, force: true }))
-
-  test("expands simple file reference", () =>
-    run(expandFileRefs("check @src/bar.ts", testDir)).then((result) => {
+  fileRefsTest("expands simple file reference", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("check @src/bar.ts", testDir)
       expect(result).toContain("```src/bar.ts")
       expect(result).toContain("export const bar = 1")
       expect(result).toContain("```")
       expect(result).not.toContain("@src/bar.ts")
-    }))
+    }),
+  )
 
-  test("expands reference with line range", () =>
-    run(expandFileRefs("see @src/foo.ts#2-4", testDir)).then((result) => {
+  fileRefsTest("expands reference with line range", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("see @src/foo.ts#2-4", testDir)
       expect(result).toContain("```src/foo.ts:2-4")
       expect(result).toContain("line2")
       expect(result).toContain("line3")
       expect(result).toContain("line4")
       expect(result).not.toContain("line1")
       expect(result).not.toContain("line5")
-    }))
+    }),
+  )
 
-  test("expands reference with single line", () =>
-    run(expandFileRefs("@src/foo.ts#3 is important", testDir)).then((result) => {
+  fileRefsTest("expands reference with single line", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("@src/foo.ts#3 is important", testDir)
       expect(result).toContain("```src/foo.ts:3")
       expect(result).toContain("line3")
-    }))
+    }),
+  )
 
-  test("expands multiple references", () =>
-    run(expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir)).then((result) => {
+  fileRefsTest("expands multiple references", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir)
       expect(result).toContain("```src/foo.ts:1")
       expect(result).toContain("```src/bar.ts")
       expect(result).toContain("line1")
       expect(result).toContain("export const bar")
-    }))
+    }),
+  )
 
-  test("returns original text when no references", () => {
-    const text = "no file references here"
-    return run(expandFileRefs(text, testDir)).then((result) => {
+  fileRefsTest("returns original text when no references", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const text = "no file references here"
+      const result = yield* expandFileRefs(text, testDir)
       expect(result).toBe(text)
-    })
-  })
+    }),
+  )
 
-  test("preserves non-reference text around expansions", () =>
-    run(expandFileRefs("Before @src/bar.ts after", testDir)).then((result) => {
+  fileRefsTest("preserves non-reference text around expansions", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("Before @src/bar.ts after", testDir)
       expect(result.startsWith("Before ")).toBe(true)
       expect(result.endsWith(" after")).toBe(true)
-    }))
+    }),
+  )
 
-  test("leaves reference as-is when file not found", () => {
-    const text = "check @nonexistent/file.ts"
-    return run(expandFileRefs(text, testDir)).then((result) => {
+  fileRefsTest("leaves reference as-is when file not found", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const text = "check @nonexistent/file.ts"
+      const result = yield* expandFileRefs(text, testDir)
       expect(result).toBe(text)
-    })
-  })
+    }),
+  )
 
-  test("handles out-of-range line numbers gracefully", () =>
+  fileRefsTest("handles out-of-range line numbers gracefully", () =>
     // File has 5 lines, requesting lines 10-20
-    run(expandFileRefs("@src/foo.ts#10-20", testDir)).then((result) => {
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("@src/foo.ts#10-20", testDir)
       // Should expand but content will be empty or partial
       expect(result).toContain("```src/foo.ts:10-20")
-    }))
+    }),
+  )
 
-  test("handles root-level files", () =>
-    run(expandFileRefs("see @README.md for docs", testDir)).then((result) => {
+  fileRefsTest("handles root-level files", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("see @README.md for docs", testDir)
       expect(result).toContain("```README.md")
       expect(result).toContain("# Title")
-    }))
+    }),
+  )
 })

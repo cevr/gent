@@ -10,23 +10,17 @@ class Greeting extends Context.Service<
     readonly text: string
   }
 >()("@gent/tui/tests/atom-solid/Greeting") {}
-const waitFor = (predicate: () => boolean): Promise<void> =>
-  new Promise((resolve, reject) => {
-    let attempts = 20
-    const check = () => {
-      if (predicate()) {
-        resolve()
-        return
-      }
-      attempts -= 1
-      if (attempts <= 0) {
-        reject(new Error("condition did not settle"))
-        return
-      }
-      setTimeout(check, 0)
-    }
-    check()
+const waitFor = (predicate: () => boolean): Effect.Effect<void, Error> => {
+  let attempts = 20
+  const check: Effect.Effect<void, Error> = Effect.gen(function* () {
+    if (predicate()) return
+    attempts -= 1
+    if (attempts <= 0) return yield* Effect.fail(new Error("condition did not settle"))
+    yield* Effect.sleep("0 millis")
+    return yield* check
   })
+  return check
+}
 describe("atom-solid registry", () => {
   test("keeps distinct atom instances isolated", () => {
     const registry = make()
@@ -85,7 +79,7 @@ describe("atom-solid registry", () => {
         }),
       )
       const unmount = registry.mount(greeting)
-      yield* Effect.promise(() => waitFor(() => Result.isSuccess(registry.get(greeting))))
+      yield* waitFor(() => Result.isSuccess(registry.get(greeting)))
       expect(Result.getOrUndefined(registry.get(greeting))).toBe("hello")
       unmount()
       registry.dispose()
@@ -116,7 +110,7 @@ describe("atom-solid registry", () => {
         })
         return disposeRoot
       })
-      yield* Effect.promise(() => waitFor(() => observed === "scoped"))
+      yield* waitFor(() => observed === "scoped")
       expect(observedRegistry).toBe(registry)
       expect(observed).toBe("scoped")
       dispose()
@@ -145,7 +139,7 @@ describe("atom-solid registry", () => {
         })
         return disposeRoot
       })
-      yield* Effect.promise(() => waitFor(() => observed === "default-scope"))
+      yield* waitFor(() => observed === "default-scope")
       expect(observed).toBe("default-scope")
       dispose()
       registry.dispose()

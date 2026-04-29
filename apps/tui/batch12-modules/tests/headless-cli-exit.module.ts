@@ -14,14 +14,16 @@ const makeTempDir = () => {
   return dir
 }
 const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
-  const timeout = new Promise<number>((resolve) => {
-    const handle = setTimeout(() => {
-      proc.kill()
-      resolve(-1)
-    }, timeoutMs)
-    handle.unref?.()
-  })
-  return Promise.race([proc.exited, timeout])
+  const timeout = Effect.sleep(timeoutMs).pipe(
+    Effect.tap(() => Effect.sync(() => proc.kill())),
+    Effect.as(-1),
+  )
+  return Effect.runPromise(
+    Effect.race(
+      Effect.promise(() => proc.exited),
+      timeout,
+    ),
+  )
 }
 afterEach(() => {
   while (tempDirs.length > 0) {

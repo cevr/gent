@@ -258,12 +258,13 @@ describe("Capability factory-shape locks (compile-time)", () => {
 
 describe("Effect-purity locks (compile-time)", () => {
   test("tool.execute MUST return Effect — Promise handler rejected", () => {
+    const promiseString = Effect.runPromise(Effect.succeed("result"))
     tool({
       id: "ok",
       description: "ok",
       params: Schema.Struct({}),
       // @ts-expect-error — Promise handler must not be assignable to Effect-returning execute
-      execute: () => Promise.resolve("result"),
+      execute: () => promiseString,
     })
     expect(true).toBe(true)
   })
@@ -353,24 +354,26 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("reactions.systemPrompt MUST return Effect — Promise handler rejected", () => {
+    const promiseString = Effect.runPromise(Effect.succeed("prompt"))
     defineExtension({
       id: "bad-prompt-reaction",
       reactions: {
         // @ts-expect-error — Promise handler must not be assignable to Effect-returning systemPrompt
-        systemPrompt: (input) => Promise.resolve(`${input.basePrompt}x`),
+        systemPrompt: () => promiseString,
       },
     })
     expect(true).toBe(true)
   })
 
   test("extension reactions and lifecycle hooks reject Promise handlers", () => {
+    const promiseVoid = Effect.runPromise(Effect.void)
     defineExtension({
       id: "purity-reaction",
       reactions: {
         turnAfter: {
           failureMode: "isolate",
           // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension reaction
-          handler: () => Promise.resolve(undefined),
+          handler: () => promiseVoid,
         },
       },
     })
@@ -378,13 +381,13 @@ describe("Effect-purity locks (compile-time)", () => {
       scope: "process",
       layer: Layer.empty,
       // @ts-expect-error — Promise must not be assignable to Effect Resource.start
-      start: Promise.resolve(),
+      start: promiseVoid,
     })
     defineResource({
       scope: "process",
       layer: Layer.empty,
       // @ts-expect-error — Promise must not be assignable to Effect Resource.stop
-      stop: Promise.resolve(),
+      stop: promiseVoid,
     })
     expect(true).toBe(true)
   })

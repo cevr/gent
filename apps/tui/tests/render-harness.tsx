@@ -172,7 +172,7 @@ const toInitialSession = (session: SessionInfo | Session | undefined): Session |
 }
 
 const getServices = (): Promise<Context.Context<unknown>> => {
-  if (sharedServices !== undefined) return Promise.resolve(sharedServices)
+  if (sharedServices !== undefined) return Effect.runPromise(Effect.succeed(sharedServices))
   return Effect.runPromise(
     Effect.gen(function* () {
       sharedScope = yield* Scope.make()
@@ -205,60 +205,67 @@ export const renderWithProviders = (
     services?: Context.Context<unknown>
   },
 ): Promise<TestRenderSetup> =>
-  (options?.services === undefined ? getServices() : Promise.resolve(options.services)).then(
-    (services) => {
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const services = yield* Effect.promise(() =>
+        options?.services === undefined
+          ? getServices()
+          : Effect.runPromise(Effect.succeed(options.services)),
+      )
       const client = options?.client ?? createMockClient()
       const runtime = options?.runtime ?? createMockRuntime()
 
-      return testRender(
-        () => (
-          <RegistryProvider services={services}>
-            <KeyboardScopeProvider>
-              <ThemeProvider mode="dark">
-                <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
-                  <CommandProvider>
-                    <RouterProvider
-                      initialRoute={
-                        options?.initialRoute ??
-                        Route.session(SessionId.make("test-session"), BranchId.make("test-branch"))
-                      }
-                    >
-                      <WorkspaceProvider
-                        cwd={options?.cwd ?? defaultWorkspaceCwd}
-                        home="/tmp"
-                        services={services}
+      const setup = yield* Effect.promise(() =>
+        testRender(
+          () => (
+            <RegistryProvider services={services}>
+              <KeyboardScopeProvider>
+                <ThemeProvider mode="dark">
+                  <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
+                    <CommandProvider>
+                      <RouterProvider
+                        initialRoute={
+                          options?.initialRoute ??
+                          Route.session(
+                            SessionId.make("test-session"),
+                            BranchId.make("test-branch"),
+                          )
+                        }
                       >
-                        <ClientProvider
-                          client={client}
-                          runtime={runtime}
+                        <WorkspaceProvider
+                          cwd={options?.cwd ?? defaultWorkspaceCwd}
+                          home="/tmp"
                           services={services}
-                          log={noopLog}
-                          initialSession={toInitialSession(options?.initialSession)}
-                          initialAgent={options?.initialAgent}
                         >
-                          <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                        </ClientProvider>
-                      </WorkspaceProvider>
-                    </RouterProvider>
-                  </CommandProvider>
-                </EnvProvider>
-              </ThemeProvider>
-            </KeyboardScopeProvider>
-          </RegistryProvider>
+                          <ClientProvider
+                            client={client}
+                            runtime={runtime}
+                            services={services}
+                            log={noopLog}
+                            initialSession={toInitialSession(options?.initialSession)}
+                            initialAgent={options?.initialAgent}
+                          >
+                            <ExtensionUIProvider>{node()}</ExtensionUIProvider>
+                          </ClientProvider>
+                        </WorkspaceProvider>
+                      </RouterProvider>
+                    </CommandProvider>
+                  </EnvProvider>
+                </ThemeProvider>
+              </KeyboardScopeProvider>
+            </RegistryProvider>
+          ),
+          {
+            width: options?.width ?? 80,
+            height: options?.height ?? 24,
+          },
         ),
-        {
-          width: options?.width ?? 80,
-          height: options?.height ?? 24,
-        },
-      ).then((setup) => {
-        currentSetup = setup
-        return setup
-          .renderOnce()
-          .then(() => Promise.resolve())
-          .then(() => setup.renderOnce())
-          .then(() => setup)
-      })
-    },
+      )
+      currentSetup = setup
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+      return setup
+    }),
   )
 
 export const renderFrame = (setup: TestRenderSetup) =>

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Scope } from "effect"
 import { LinkOpener, LinkOpenerError } from "../../src/services/link-opener"
 import { Auth } from "../../src/routes/auth"
 import { useClient } from "../../src/client"
@@ -32,12 +32,13 @@ const servicesWithLinkOpener = (
   open: (url: string) => Effect.Effect<void, LinkOpenerError>,
 ): Promise<Context.Context<unknown>> => {
   const layer = Layer.merge(BunServices.layer, LinkOpener.Test({ open }))
-  return Effect.runPromise(Scope.make()).then((scope) =>
-    Effect.runPromise(Layer.buildWithScope(layer, scope)).then(
-      (built) =>
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: foreign-runtime context shape is validated at use sites
-        Context.add(built, Scope.Scope, scope) as unknown as Context.Context<unknown>,
-    ),
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make()
+      const built = yield* Layer.buildWithScope(layer, scope)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: foreign-runtime context shape is validated at use sites
+      return Context.add(built, Scope.Scope, scope) as unknown as Context.Context<unknown>
+    }),
   )
 }
 describe("Auth route", () => {
@@ -74,29 +75,25 @@ describe("Auth route", () => {
       let ctx: ClientContextValue | undefined
       const pending: Array<{
         agentName?: string
-        resolve: (
-          providers: ReadonlyArray<{
+        deferred: Deferred.Deferred<
+          ReadonlyArray<{
             provider: string
             hasKey: boolean
             required: boolean
-          }>,
-        ) => void
+          }>
+        >
       }> = []
       const client = createMockClient({
         auth: {
           listProviders: (input: { agentName?: string }) =>
-            Effect.promise(
-              () =>
-                new Promise<
-                  ReadonlyArray<{
-                    provider: string
-                    hasKey: boolean
-                    required: boolean
-                  }>
-                >((resolve) => {
-                  pending.push({ agentName: input.agentName, resolve })
-                }),
-            ),
+            Effect.gen(function* () {
+              const deferred =
+                yield* Deferred.make<
+                  ReadonlyArray<{ provider: string; hasKey: boolean; required: boolean }>
+                >()
+              pending.push({ agentName: input.agentName, deferred })
+              return yield* Deferred.await(deferred)
+            }),
           listMethods: () => Effect.succeed({}),
         },
       })
@@ -120,14 +117,22 @@ describe("Auth route", () => {
       ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.promise(() => setup.renderOnce())
       expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
-      pending[1]?.resolve([{ provider: "openai", hasKey: false, required: false }])
+      if (pending[1] !== undefined) {
+        yield* Deferred.succeed(pending[1].deferred, [
+          { provider: "openai", hasKey: false, required: false },
+        ])
+      }
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
           (frame) => frame.includes("openai") && !frame.includes("anthropic"),
         ),
       )
-      pending[0]?.resolve([{ provider: "anthropic", hasKey: false, required: false }])
+      if (pending[0] !== undefined) {
+        yield* Deferred.succeed(pending[0].deferred, [
+          { provider: "anthropic", hasKey: false, required: false },
+        ])
+      }
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -142,7 +147,7 @@ describe("Auth route", () => {
   it.live("ignores stale auth mutations after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx: ClientContextValue | undefined
-      let resolveOldKeySave: (() => void) | undefined
+      const oldKeySave = yield* Deferred.make<void>()
       const client = createMockClient({
         auth: {
           listProviders: (input: { agentName?: string }) =>
@@ -174,12 +179,7 @@ describe("Auth route", () => {
             }),
           setKey: ({ provider }: { provider: string; key: string }) => {
             if (provider === "anthropic") {
-              return Effect.promise(
-                () =>
-                  new Promise<void>((resolve) => {
-                    resolveOldKeySave = resolve
-                  }),
-              )
+              return Deferred.await(oldKeySave)
             }
             return Effect.succeed(undefined)
           },
@@ -227,7 +227,7 @@ describe("Auth route", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for openai")),
       )
-      resolveOldKeySave?.()
+      yield* Deferred.succeed(oldKeySave, undefined)
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -244,14 +244,12 @@ describe("Auth route", () => {
   it.live("ignores stale oauth callbacks after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx: ClientContextValue | undefined
-      let resolveAuthorize:
-        | ((authorization: {
-            authorizationId: string
-            url: string
-            method: "auto"
-            instructions?: string
-          }) => void)
-        | undefined
+      const authorizeDeferred = yield* Deferred.make<{
+        authorizationId: string
+        url: string
+        method: "auto"
+        instructions?: string
+      } | null>()
       const authorizeCalls: Array<{
         provider: string
         method: number
@@ -296,17 +294,7 @@ describe("Auth route", () => {
             authorizeCalls.push(input)
             const { provider } = input
             if (provider !== "anthropic") return Effect.succeed(null)
-            return Effect.promise(
-              () =>
-                new Promise<{
-                  authorizationId: string
-                  url: string
-                  method: "auto"
-                  instructions?: string
-                }>((resolve) => {
-                  resolveAuthorize = resolve
-                }),
-            )
+            return Deferred.await(authorizeDeferred)
           },
           callback: (input: {
             provider: string
@@ -344,7 +332,7 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.promise(() => waitForRenderedFrame(setup, (frame) => frame.includes("openai")))
-      resolveAuthorize?.({
+      yield* Deferred.succeed(authorizeDeferred, {
         authorizationId: "auth-old",
         url: "https://example.com/oauth",
         method: "auto",
@@ -530,7 +518,7 @@ describe("Auth route", () => {
         waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below")),
       )
       ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
       rejectOpen?.(new LinkOpenerError({ message: "open failed" }))

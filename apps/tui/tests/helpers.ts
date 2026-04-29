@@ -1,4 +1,5 @@
 import { renderFrame, type renderWithProviders } from "./render-harness"
+import { Effect } from "effect"
 
 export { renderFrame }
 
@@ -19,18 +20,19 @@ export const waitForRenderedFrame = (
   const startedAt = Date.now()
   let lastFrame = ""
 
-  const loop = (): Promise<string> =>
-    setup.renderOnce().then(() => {
-      if (Date.now() - startedAt >= timeoutMs) {
-        throw new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`)
-      }
-      const frame = renderFrame(setup)
-      lastFrame = frame
-      if (predicate(frame)) return frame
-      return new Promise<void>((resolve) => {
-        setTimeout(resolve, 10)
-      }).then(loop)
-    })
+  const loop: Effect.Effect<string, Error> = Effect.gen(function* () {
+    yield* Effect.promise(() => setup.renderOnce())
+    if (Date.now() - startedAt >= timeoutMs) {
+      return yield* Effect.fail(
+        new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`),
+      )
+    }
+    const frame = renderFrame(setup)
+    lastFrame = frame
+    if (predicate(frame)) return frame
+    yield* Effect.sleep("10 millis")
+    return yield* loop
+  })
 
-  return loop()
+  return Effect.runPromise(loop)
 }

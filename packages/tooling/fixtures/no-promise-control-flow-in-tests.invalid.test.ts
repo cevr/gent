@@ -8,6 +8,12 @@ test("manual cleanup is banned", async () => {
   }
 })
 
+test("promise chains are banned", () => work().then((value) => value))
+
+test("promise catch is banned", () => work().catch(() => "fallback"))
+
+test("promise finally is banned", () => work().finally(cleanup))
+
 async function work(): Promise<string> {
   return "work"
 }

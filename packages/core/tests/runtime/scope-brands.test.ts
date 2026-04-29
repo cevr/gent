@@ -115,9 +115,12 @@ describe("scope brand type fences", () => {
     const _typed: Effect.Effect<number, never, Scope.Scope> = provided
     void _typed
 
-    return Effect.runPromise(Effect.scoped(provided)).then((value) => {
-      expect(value).toBe(42)
-    })
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const value = yield* Effect.scoped(provided)
+        expect(value).toBe(42)
+      }),
+    )
   })
 
   test("withOverrides omits Storage sub-Tags from parent context", () => {

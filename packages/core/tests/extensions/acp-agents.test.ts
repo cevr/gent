@@ -253,10 +253,12 @@ describe("codemode proxy", () => {
       const server = yield* startCodemodeServer({
         tools: [mockTool],
         runTool: (toolName, args) =>
-          Promise.resolve().then(() => {
-            calls.push({ toolName, args })
-            return { result: "ok" }
-          }),
+          Effect.runPromise(
+            Effect.sync(() => {
+              calls.push({ toolName, args })
+              return { result: "ok" }
+            }),
+          ),
       })
       yield* Effect.acquireUseRelease(
         Effect.succeed(server),
@@ -291,7 +293,7 @@ describe("codemode proxy", () => {
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({
         tools: [],
-        runTool: () => Promise.reject(new Error("should not be called")),
+        runTool: () => Effect.runPromise(Effect.fail(new Error("should not be called"))),
       })
       yield* Effect.acquireUseRelease(
         Effect.succeed(server),

@@ -11,8 +11,8 @@
  *   for write-shaped method names. Projection coverage was deleted in B11.4 —
  *   `ProjectionContribution<A, R extends ReadOnlyTag>` enforces it
  *   structurally now.
- * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`, and
- *   `await` control flow in test files.
+ * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
+ *   `await`, and Promise chains in test files.
  *   Test resources should live in Effect scopes (`Effect.scoped`,
  *   `FileSystem.makeTempDirectoryScoped`, `Effect.acquireRelease`, etc.).
  *
@@ -141,6 +141,43 @@ const queryFactoryName = (node: AstNode): string | undefined => {
 const capabilityFactoryName = (node: AstNode): string | undefined => {
   const name = calleeName(node)
   return name !== undefined && CAPABILITY_FACTORY_NAMES.has(name) ? name : undefined
+}
+
+const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
+const PROMISE_STATIC_METHODS = new Set(["resolve", "reject"])
+
+const promiseChainMethodName = (node: AstNode): string | undefined => {
+  if (node.type !== "CallExpression") return undefined
+  const callee = getNodeField(node, "callee")
+  if (callee?.type !== "MemberExpression") return undefined
+  const object = getNodeField(callee, "object")
+  if (object?.type === "Identifier" && getStringField(object, "name") === "Effect") {
+    return undefined
+  }
+  const prop = getNodeField(callee, "property")
+  if (prop?.type !== "Identifier") return undefined
+  const name = getStringField(prop, "name")
+  return name !== undefined && PROMISE_CHAIN_METHODS.has(name) ? name : undefined
+}
+
+const promiseStaticMethodName = (node: AstNode): string | undefined => {
+  if (node.type !== "CallExpression") return undefined
+  const callee = getNodeField(node, "callee")
+  if (callee?.type !== "MemberExpression") return undefined
+  const object = getNodeField(callee, "object")
+  if (object?.type !== "Identifier" || getStringField(object, "name") !== "Promise") {
+    return undefined
+  }
+  const prop = getNodeField(callee, "property")
+  if (prop?.type !== "Identifier") return undefined
+  const name = getStringField(prop, "name")
+  return name !== undefined && PROMISE_STATIC_METHODS.has(name) ? name : undefined
+}
+
+const isPromiseConstructor = (node: AstNode): boolean => {
+  if (node.type !== "NewExpression") return false
+  const callee = getNodeField(node, "callee")
+  return callee?.type === "Identifier" && getStringField(callee, "name") === "Promise"
 }
 
 /**
@@ -858,7 +895,8 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans new `try/finally`, `async`, and `await` control flow in test files.
+     * Bans new `try/finally`, `async`, `await`, and Promise-chain control
+     * flow in test files.
      *
      * Tests should model resource lifetime with Effect scopes so cleanup runs
      * through finalizers, composes with `it.live` / `Effect.scoped`, and stays
@@ -911,6 +949,31 @@ const plugin: Plugin = {
             context.report({
               message:
                 "Do not use `await` in tests. Stay in Effect with `yield*`, `it.live`, and scoped resources instead of Promise control flow.",
+              node,
+            })
+          },
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const method = promiseChainMethodName(node)
+            if (method !== undefined) {
+              context.report({
+                message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Stay in Effect with \`yield*\`, \`it.live\`, and scoped resources instead.`,
+                node,
+              })
+              return
+            }
+            const staticMethod = promiseStaticMethodName(node)
+            if (staticMethod === undefined) return
+            context.report({
+              message: `Do not use \`Promise.${staticMethod}(...)\` in tests. Stay in Effect with \`Effect.succeed\`, \`Effect.fail\`, \`Deferred\`, and scoped resources instead.`,
+              node,
+            })
+          },
+          NewExpression(node) {
+            if (!isAstNode(node) || !isPromiseConstructor(node)) return
+            context.report({
+              message:
+                "Do not construct raw Promises in tests. Use `Deferred`, `Effect.sleep`, `Effect.async`, or an explicit Effect boundary instead.",
               node,
             })
           },

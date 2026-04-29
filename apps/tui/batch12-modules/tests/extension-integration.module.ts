@@ -361,7 +361,7 @@ export default defineClientExtension("@test/b", {
               },
             } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
             runtime: {
-              run: () => Promise.reject(new Error("no transport in test")),
+              run: () => Effect.runPromise(Effect.fail(new Error("no transport in test"))),
             } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
             currentSession: () => ({
               sessionId: SessionId.make("test-session-id"),

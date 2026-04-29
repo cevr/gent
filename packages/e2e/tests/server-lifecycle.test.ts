@@ -129,9 +129,12 @@ describe("server lifecycle", () => {
           expect(server2._tag).toBe("attached")
 
           const baseUrl = server2.url.replace("/rpc", "")
-          const identity = yield* Effect.tryPromise(() =>
-            fetch(`${baseUrl}/_gent/identity`).then((r) => r.json()),
-          ).pipe(Effect.mapError((e) => new Error(String(e))))
+          const response = yield* Effect.tryPromise(() => fetch(`${baseUrl}/_gent/identity`)).pipe(
+            Effect.mapError((e) => new Error(String(e))),
+          )
+          const identity = yield* Effect.tryPromise(() => response.json()).pipe(
+            Effect.mapError((e) => new Error(String(e))),
+          )
           expect((identity as { pid: number }).pid).toBe(pid1)
         }),
       ),

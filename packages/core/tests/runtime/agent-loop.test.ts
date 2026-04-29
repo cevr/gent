@@ -1300,12 +1300,7 @@ describe("concurrency", () => {
                 maxRunning = Math.max(maxRunning, running)
                 events.push(`start:${name}`)
               })
-              yield* Effect.promise(
-                () =>
-                  new Promise<void>((resolve) => {
-                    setTimeout(resolve, 1)
-                  }),
-              )
+              yield* Effect.sleep(1)
               yield* Effect.sync(() => {
                 events.push(`end:${name}`)
                 running -= 1

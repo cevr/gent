@@ -735,6 +735,20 @@ not migration-era optimism.
     leak fixed in-batch.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 12 implemented:
+  - Extended `gent/no-promise-control-flow-in-tests` to reject Promise-chain
+    methods, raw Promise constructors, and `Promise.resolve/reject` in active
+    test files and migration test modules.
+  - Migrated active test helpers and fixtures to Effect scopes, `Deferred`,
+    `Effect.sleep`, `Effect.yieldNow`, and explicit runtime boundaries.
+  - Added/updated invalid fixtures for the widened Promise control-flow rule.
+  - Focused gate: `bun test packages/tooling/tests/fixtures.test.ts apps/tui/tests/file-refs.test.ts apps/tui/tests/shell.test.ts apps/tui/tests/external-editor.test.ts --preload ./apps/tui/node_modules/@opentui/solid/scripts/preload.ts --timeout 30000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd991-6d88-7520-a33b-5c887528120a`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt:
+    `/tmp/counsel/personal-gent-860892a9/20260429-140804-codex-to-claude-395009/claude.md`;
+    P1 raw Promise loophole and P2 formatting/count issues fixed in-batch.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

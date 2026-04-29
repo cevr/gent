@@ -30,27 +30,36 @@ const waitForRunning = (
   },
   expectedRestartCount: number,
   timeoutMs = 15_000,
-): Effect.Effect<void> =>
-  Effect.promise(
-    () =>
-      new Promise((resolve, reject) => {
+): Effect.Effect<void, Error> =>
+  Effect.gen(function* () {
+    const done = yield* Deferred.make<void, Error>()
+    yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
         const timeout = setTimeout(() => {
-          unsubscribe()
           const state = worker.getState()
-          reject(
-            new Error(
-              `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
+          Effect.runFork(
+            Deferred.fail(
+              done,
+              new Error(
+                `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
+              ),
             ),
           )
         }, timeoutMs)
         const unsubscribe = worker.subscribe((state) => {
           if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
+          Effect.runFork(Deferred.succeed(done, undefined))
+        })
+        return { timeout, unsubscribe }
+      }),
+      () => Deferred.await(done),
+      ({ timeout, unsubscribe }) =>
+        Effect.sync(() => {
           clearTimeout(timeout)
           unsubscribe()
-          resolve()
-        })
-      }),
-  )
+        }),
+    )
+  })
 
 describe("worker supervisor", () => {
   test("headless cli can attach via --connect", () => {
@@ -101,15 +110,21 @@ describe("worker supervisor", () => {
   }, 20_000)
 
   test("compiled binary launch resolves bun runtime and on-disk server entry", () => {
-    return WorkerSupervisorInternal.resolveWorkerLaunch({
-      sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",
-      execPath: "/repo/apps/tui/bin/gent",
-      sourceExists: (candidate) => Promise.resolve(candidate === "/repo/apps/server/src/main.ts"),
-      which: () => "/usr/local/bin/bun",
-    }).then((launch) => {
-      expect(launch.runtimePath).toBe("/usr/local/bin/bun")
-      expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
-    })
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const launch = yield* Effect.promise(() =>
+          WorkerSupervisorInternal.resolveWorkerLaunch({
+            sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",
+            execPath: "/repo/apps/tui/bin/gent",
+            sourceExists: (candidate) =>
+              Effect.runPromise(Effect.succeed(candidate === "/repo/apps/server/src/main.ts")),
+            which: () => "/usr/local/bin/bun",
+          }),
+        )
+        expect(launch.runtimePath).toBe("/usr/local/bin/bun")
+        expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
+      }),
+    )
   })
 
   test("restarts the worker on the same transport url", () => {

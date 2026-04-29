@@ -754,14 +754,8 @@ describe("SessionRuntime", () => {
   it.live("recordToolResult commands are serialized per session", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([])
-      let releaseFirstDelivery: () => void = () => {}
-      let markFirstDeliveryStarted: () => void = () => {}
-      const firstDeliveryStarted = new Promise<void>((resolve) => {
-        markFirstDeliveryStarted = resolve
-      })
-      const releaseDelivery = new Promise<void>((resolve) => {
-        releaseFirstDelivery = resolve
-      })
+      const firstDeliveryStarted = yield* Deferred.make<void>()
+      const releaseDelivery = yield* Deferred.make<void>()
       let deliveredToolResults = 0
       const eventPublisherLayer = Layer.effect(
         EventPublisher,
@@ -776,14 +770,13 @@ describe("SessionRuntime", () => {
                 ),
               )
           const deliver = (envelope: EventEnvelope) =>
-            Effect.promise(() => {
-              if (envelope.event._tag !== "ToolCallSucceeded") return Promise.resolve()
+            Effect.gen(function* () {
+              if (envelope.event._tag !== "ToolCallSucceeded") return
               deliveredToolResults++
               if (deliveredToolResults === 1) {
-                markFirstDeliveryStarted()
-                return releaseDelivery
+                yield* Deferred.succeed(firstDeliveryStarted, undefined)
+                yield* Deferred.await(releaseDelivery)
               }
-              return Promise.resolve()
             })
           return EventPublisher.of({
             append,
@@ -819,14 +812,14 @@ describe("SessionRuntime", () => {
             output: { value: "b" },
           })
           const firstFiber = yield* Effect.forkChild(sessionRuntime.dispatch(first))
-          yield* Effect.promise(() => firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
+          yield* Deferred.await(firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
           const secondFiber = yield* Effect.forkChild(sessionRuntime.dispatch(second))
           const earlySecond = yield* Fiber.join(secondFiber).pipe(
             Effect.timeoutOption("200 millis"),
           )
           expect(earlySecond._tag).toBe("None")
           expect(deliveredToolResults).toBe(1)
-          releaseFirstDelivery()
+          yield* Deferred.succeed(releaseDelivery, undefined)
           yield* Fiber.join(firstFiber)
           yield* Fiber.join(secondFiber)
           expect(deliveredToolResults).toBe(2)
@@ -836,24 +829,17 @@ describe("SessionRuntime", () => {
   )
   it.live("recordToolResult waits for the active turn mutation owner", () =>
     Effect.gen(function* () {
-      let markStreamStarted: () => void = () => {}
-      let releaseStream: () => void = () => {}
-      const streamStarted = new Promise<void>((resolve) => {
-        markStreamStarted = resolve
-      })
-      const streamReleased = new Promise<void>((resolve) => {
-        releaseStream = resolve
-      })
+      const streamStarted = yield* Deferred.make<void>()
+      const streamReleased = yield* Deferred.make<void>()
       const providerLayer = Layer.succeed(Provider, {
         stream: () =>
-          Effect.promise(() => {
-            markStreamStarted()
-            return streamReleased.then(() =>
-              Stream.fromIterable([
-                textDeltaPart("done"),
-                finishPart({ finishReason: "stop" }),
-              ] satisfies ProviderStreamPart[]),
-            )
+          Effect.gen(function* () {
+            yield* Deferred.succeed(streamStarted, undefined)
+            yield* Deferred.await(streamReleased)
+            return Stream.fromIterable([
+              textDeltaPart("done"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies ProviderStreamPart[])
           }),
         generate: () => Effect.succeed("test"),
       })
@@ -872,7 +858,7 @@ describe("SessionRuntime", () => {
               }),
             ),
           )
-          yield* Effect.promise(() => streamStarted).pipe(Effect.timeout("5 seconds"))
+          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
           const recordFiber = yield* Effect.forkChild(
             sessionRuntime.dispatch(
               recordToolResultCommand({
@@ -891,7 +877,7 @@ describe("SessionRuntime", () => {
           const messagesBeforeRelease = yield* storage.listMessages(branchId)
           expect(earlyRecord._tag).toBe("None")
           expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
-          releaseStream()
+          yield* Deferred.succeed(streamReleased, undefined)
           yield* Fiber.join(submitFiber)
           yield* Fiber.join(recordFiber)
           const messagesAfterRelease = yield* waitFor(
