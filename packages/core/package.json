@@ -131,6 +131,8 @@
     "./runtime/tracer": "./src/runtime/tracer.ts",
     "./runtime/tracer.js": "./src/runtime/tracer.ts",
     "./extensions/api": "./src/extensions/api.ts",
+    "./extensions/authoring": "./src/extensions/authoring.ts",
+    "./extensions/authoring.js": "./src/extensions/authoring.ts",
     "./server/build-fingerprint": "./src/server/build-fingerprint.ts",
     "./server/build-fingerprint.js": "./src/server/build-fingerprint.ts",
     "./server/connection-tracker": "./src/server/connection-tracker.ts",

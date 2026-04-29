@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
+import type * as AuthoringApi from "@gent/core/extensions/authoring"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
   action,
@@ -426,6 +427,50 @@ describe("Effect-purity locks (compile-time)", () => {
     })
 
     expect(ext.manifest.id as string).toBe("purity-positive")
+  })
+})
+
+describe("Stable authoring entrypoint locks (compile-time)", () => {
+  test("authoring entrypoint exposes happy-path helpers", () => {
+    const ext = defineExtension({
+      id: "authoring-lock",
+      tools: [
+        tool({
+          id: "authoring-tool",
+          description: "authoring",
+          params: NoInput,
+          execute: () => Effect.succeed("ok"),
+        }),
+      ],
+    }) satisfies AuthoringApi.GentExtension
+
+    type _Tool = AuthoringApi.ToolToken
+    type _Request = AuthoringApi.RequestToken
+    type _Action = AuthoringApi.ActionToken
+    type _HostContext = AuthoringApi.ExtensionHostContext
+    type _Actor = AuthoringApi.ActorRef<unknown, unknown>
+
+    void ext
+    expect(true).toBe(true)
+  })
+
+  test("authoring entrypoint does not expose runtime engines or provider plumbing", () => {
+    // @ts-expect-error — actor engine is runtime plumbing, not default authoring surface
+    type _BadActorEngine = AuthoringApi.ActorEngine
+    // @ts-expect-error — receptionist is runtime plumbing, not default authoring surface
+    type _BadReceptionist = AuthoringApi.Receptionist
+    // @ts-expect-error — provider auth internals belong to advanced/domain imports
+    type _BadProviderAuthInfo = AuthoringApi.ProviderAuthInfo
+    // @ts-expect-error — turn executor belongs to advanced driver imports
+    type _BadTurnExecutor = AuthoringApi.TurnExecutor
+    // @ts-expect-error — model driver contribution belongs to advanced driver imports
+    type _BadModelDriverContribution = AuthoringApi.ModelDriverContribution
+    // @ts-expect-error — host storage implementation details are never public authoring API
+    type _BadStorageError = AuthoringApi.StorageError
+    // @ts-expect-error — subprocess execution belongs to explicit utility imports
+    type _BadRunProcess = typeof AuthoringApi.runProcess
+
+    expect(true).toBe(true)
   })
 })
 

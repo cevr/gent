@@ -719,6 +719,22 @@ not migration-era optimism.
     findings.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 11 implemented:
+  - Added `@gent/core/extensions/authoring` as the smaller stable authoring
+    entrypoint for default extension authors.
+  - Kept advanced runtime/provider/process plumbing on explicit advanced
+    imports or the full-power `extensions/api` facade during migration.
+  - Added package subpath exports for `./extensions/authoring` and
+    `./extensions/authoring.js`.
+  - Added compile-time locks proving the stable entrypoint exposes happy-path
+    authoring helpers but not runtime engines, provider internals, driver
+    internals, storage details, or subprocess execution helpers.
+  - Focused gate: `bun test packages/core/tests/extensions/extension-surface-locks.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd983-76e7-7c82-8d39-78f6542d5222`; P2 `runProcess`
+    leak fixed in-batch.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition
