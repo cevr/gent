@@ -406,12 +406,12 @@ describe("ActorHost", () => {
   })
   it.live("fromResolvedWithPersistence round-trips state across host scopes", () =>
     Effect.gen(function* () {
-      // First wave: spawn, drive a few tells, snapshot via the periodic
+      // Initial runtime: spawn, drive a few tells, snapshot via the periodic
       // writer (writeInterval of 1ms guarantees the loop runs at least
       // once before scope close), tear down the host scope.
-      // Second wave: rebuild with the SAME storage layer + same profileId.
+      // Restored runtime: rebuild with the SAME storage layer + same profileId.
       // The actor's `restoredState` must be the encoded post-state from
-      // wave 1, so a fresh `Get` ask returns the accumulated hits — proving
+      // initial runtime, so a fresh `Get` ask returns the accumulated hits — proving
       // both load AND save halves of the wire-up actually run end-to-end.
       const profileId = "test-profile"
       const persistedBehavior = makePingBehavior("counter")
@@ -420,19 +420,19 @@ describe("ActorHost", () => {
       yield* Effect.gen(function* () {
         const ctx = yield* Layer.build(storageLayer)
         const storage = Context.get(ctx, ActorPersistenceStorage)
-        const wave1Layer = ActorHost.fromResolvedWithPersistence(resolved, {
+        const persistenceLayer = ActorHost.fromResolvedWithPersistence(resolved, {
           profileId,
           writeInterval: Duration.millis(1),
         }).pipe(
           Layer.provideMerge(ActorEngine.Live),
           Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
         )
-        // Wave 1 — drive state, force a snapshot write, close scope.
+        // Initial runtime — drive state, force a snapshot write, close scope.
         yield* Effect.gen(function* () {
-          const wave1Scope = yield* Scope.make()
-          const wave1Ctx = yield* Layer.buildWithScope(wave1Layer, wave1Scope)
-          const engine = Context.get(wave1Ctx, ActorEngine)
-          const reg = Context.get(wave1Ctx, Receptionist)
+          const initialScope = yield* Scope.make()
+          const initialCtx = yield* Layer.buildWithScope(persistenceLayer, initialScope)
+          const engine = Context.get(initialCtx, ActorEngine)
+          const reg = Context.get(initialCtx, Receptionist)
           const refs = yield* reg.find(PingService)
           const ref = refs[0] as ActorRef<PingMsg>
           yield* engine.tell(ref, PingMsg.Bump.make({}))
@@ -467,19 +467,19 @@ describe("ActorHost", () => {
             }
           })
           yield* waitForRow.pipe(Effect.timeout("2 seconds"))
-          yield* Scope.close(wave1Scope, Exit.void)
+          yield* Scope.close(initialScope, Exit.void)
         })
-        // Wave 2 — fresh scope, same storage. restoredState is read from
-        // the row written by wave 1's periodic writer.
+        // Restored runtime — fresh scope, same storage. restoredState is read from
+        // the row written by initial runtime's periodic writer.
         const observed = yield* Effect.gen(function* () {
-          const wave2Scope = yield* Scope.make()
-          const wave2Ctx = yield* Layer.buildWithScope(wave1Layer, wave2Scope)
-          const engine = Context.get(wave2Ctx, ActorEngine)
-          const reg = Context.get(wave2Ctx, Receptionist)
+          const restoredScope = yield* Scope.make()
+          const restoredCtx = yield* Layer.buildWithScope(persistenceLayer, restoredScope)
+          const engine = Context.get(restoredCtx, ActorEngine)
+          const reg = Context.get(restoredCtx, Receptionist)
           const refs = yield* reg.find(PingService)
           const ref = refs[0] as ActorRef<PingMsg>
           const hits = yield* engine.ask(ref, PingMsg.Get.make({}))
-          yield* Scope.close(wave2Scope, Exit.void)
+          yield* Scope.close(restoredScope, Exit.void)
           return hits
         })
         expect(observed).toBe(3)
@@ -741,10 +741,10 @@ describe("ActorHost", () => {
           Layer.provideMerge(ActorEngine.Live),
           Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
         )
-        const wave1Scope = yield* Scope.make()
-        const wave1Ctx = yield* Layer.buildWithScope(hostLayer, wave1Scope)
-        const engine = Context.get(wave1Ctx, ActorEngine)
-        const reg = Context.get(wave1Ctx, Receptionist)
+        const initialScope = yield* Scope.make()
+        const initialCtx = yield* Layer.buildWithScope(hostLayer, initialScope)
+        const engine = Context.get(initialCtx, ActorEngine)
+        const reg = Context.get(initialCtx, Receptionist)
         const refs = yield* reg.find(PingService)
         const ref = refs[0] as ActorRef<PingMsg>
         // Wait for the writer's first tick to land its row, so we
@@ -772,7 +772,7 @@ describe("ActorHost", () => {
         yield* engine.tell(ref, PingMsg.Bump.make({}))
         const drained = yield* engine.ask(ref, PingMsg.Get.make({}))
         expect(drained).toBe(3)
-        yield* Scope.close(wave1Scope, Exit.void)
+        yield* Scope.close(initialScope, Exit.void)
         const afterClose = yield* storage.loadActorState({
           profileId,
           persistenceKey: namespacedKey,

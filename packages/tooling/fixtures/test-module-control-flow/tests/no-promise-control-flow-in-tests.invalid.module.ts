@@ -1,6 +1,6 @@
 import { test } from "bun:test"
 
-test("batch12 module promise control flow is banned", async () => {
+test("test module promise control flow is banned", async () => {
   try {
     await Promise.resolve()
   } finally {
@@ -8,7 +8,7 @@ test("batch12 module promise control flow is banned", async () => {
   }
 })
 
-test("batch12 module promise chains are banned", () =>
+test("test module promise chains are banned", () =>
   Promise.resolve("x")
     .then((value) => value)
     .catch(() => "fallback")
