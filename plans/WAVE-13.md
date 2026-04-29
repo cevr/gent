@@ -1094,3 +1094,8 @@ bun run typecheck && bun run lint && bun run test
   - Gate: `bun run lint`, `bun run typecheck`, `bun run test`.
   - Codex review: `019dd707-f1c9-7d01-a937-c7e04a1292d0`; no P0/P1/P2 blockers.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-021844-codex-to-claude-34eb81/claude.md`; no P0/P1/P2 blockers.
+- Batch 3 complete.
+  - Gate: `bun test packages/core/tests/test-utils/failing-layers.test.ts`, `bun run typecheck`, `bun run lint`, `bun run test`.
+  - Codex review: `019dd70f-6a71-7c11-bb51-e0e94dacd3f8`; initial P1/P2 resolved in the same review round.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-022645-codex-to-claude-effb6f/claude.md`; no P0/P1/P2 blockers.
+  - Note: `FailingStorage` now overlays the focused storage tags derived from the same wrapped `StorageService`, so later failure-injection tests cannot bypass faults by yielding sub-tags directly.

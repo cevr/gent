@@ -19,6 +19,17 @@ import {
   matchesEventFilter,
   type EventStoreService,
 } from "../domain/event.js"
+export {
+  FailingCheckpointStorage,
+  FailingEventStore,
+  FailingInteractionStorage,
+  FailingStorage,
+  type CheckpointStorageOperation,
+  type EventStoreOperation,
+  type FailingLayerOptions,
+  type InteractionStorageOperation,
+  type StorageOperation,
+} from "./failing-layers.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
