@@ -23,6 +23,133 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { AgentName } from "@gent/core/domain/agent"
 import { messageToInfo } from "../../src/server/session-utils"
 import { repairSqliteForeignKeyOrphans } from "../../src/storage/sqlite-repair"
+
+interface SchemaRow {
+  type: string
+  name: string
+  tbl_name: string
+  sql: string | null
+}
+
+const schemaProjection = Effect.fn("schemaProjection")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<SchemaRow>`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_schema
+    WHERE name NOT LIKE ${"sqlite_%"}
+      AND name NOT LIKE ${"messages_fts_%"}
+      AND name != ${"messages_fts"}
+    ORDER BY type, name
+  `
+  return rows.map((row) => ({
+    ...row,
+    sql: row.sql?.replace(/\s+/g, " ").trim() ?? null,
+  }))
+})
+
+const createLegacyStorageSchema = (dbPath: string) =>
+  Effect.sync(() => {
+    const db = new Database(dbPath)
+    db.run(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        cwd TEXT,
+        reasoning_level TEXT,
+        active_branch_id TEXT,
+        parent_session_id TEXT,
+        parent_branch_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `)
+    db.run(`
+      CREATE TABLE branches (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        parent_branch_id TEXT,
+        parent_message_id TEXT,
+        name TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `)
+    db.run(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        parts TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        turn_duration_ms INTEGER
+      )
+    `)
+    db.run(`
+      CREATE TABLE content_chunks (
+        id TEXT PRIMARY KEY,
+        part_type TEXT NOT NULL,
+        part_json TEXT NOT NULL
+      )
+    `)
+    db.run(`
+      CREATE TABLE message_chunks (
+        message_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        chunk_id TEXT NOT NULL,
+        PRIMARY KEY (message_id, ordinal)
+      )
+    `)
+    db.run(`
+      CREATE TABLE events (
+        id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        branch_id TEXT,
+        event_tag TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
+    db.run(`
+      CREATE TABLE actor_inbox (
+        command_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        command_kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        last_error TEXT
+      )
+    `)
+    db.run(`
+      CREATE TABLE agent_loop_checkpoints (
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        state_tag TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, branch_id)
+      )
+    `)
+    db.run(`
+      CREATE TABLE interaction_requests (
+        request_id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        params_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      )
+    `)
+    db.close()
+  })
+
 describe("Storage", () => {
   describe("Sessions", () => {
     it.live("creates and retrieves a session", () =>
@@ -1127,6 +1254,26 @@ describe("Storage", () => {
             Effect.sync(() => {
               rmSync(dir, { recursive: true, force: true })
             }),
+        )
+      }),
+    )
+    it.live("migrated legacy schema matches fresh schema", () =>
+      Effect.gen(function* () {
+        const freshSchema = yield* schemaProjection().pipe(Effect.provide(Storage.TestWithSql()))
+        const dir = mkdtempSync(join(tmpdir(), "gent-schema-equivalence-"))
+        const dbPath = join(dir, "gent.db")
+        yield* Effect.acquireUseRelease(
+          createLegacyStorageSchema(dbPath),
+          () =>
+            Effect.gen(function* () {
+              const migratedLayer = Storage.LiveWithSql(dbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              const migratedSchema = yield* schemaProjection().pipe(Effect.provide(migratedLayer))
+              expect(migratedSchema).toEqual(freshSchema)
+            }),
+          () => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
         )
       }),
     )
