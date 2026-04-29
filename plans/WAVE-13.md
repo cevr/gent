@@ -1109,3 +1109,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd727-1b9e-7cd2-bc1a-6827986d5fd8`; no P0/P1/P2 blockers.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-025237-codex-to-claude-e7fe89/claude.md`; no P0/P1/P2 blockers.
   - Note: SQLite startup now sets WAL/NORMAL/busy-timeout/autocheckpoint pragmas; message FTS rebuild is version-gated through `storage_meta` instead of running on every boot.
+- Batch 6 complete.
+  - Gate: `bun test packages/core/tests/runtime/agent-loop-commands.test.ts packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/external-turn.test.ts --timeout 20000`, `bun test packages/core/tests/runtime/agent-turn-response-collectors.test.ts packages/core/tests/runtime/agent-loop-commands.test.ts --timeout 20000`, `bun run typecheck`, `bun run lint`, `bun run test`.
+  - Codex review: `019dd732-8bcc-7721-bcc8-475d1f645997`; initial collector-test P2 resolved in the same review round.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-030515-codex-to-claude-b0beec/claude.md`; initial collector-test/dead-usage P2 resolved in the same review round.
+  - Note: Batch 6 deliberately narrowed the first carve to command schemas/helpers and turn-response collectors; recovery/phase extraction remains explicit follow-up work for Batch 7+ rather than a half-moved surface.

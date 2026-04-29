@@ -19,7 +19,6 @@ import {
   AgentName,
   AgentRunError,
   DEFAULT_AGENT_NAME,
-  RunSpecSchema,
   resolveAgentDriver,
   resolveAgentModel,
   type AgentRunOverrides,
@@ -32,7 +31,6 @@ import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import {
   AgentSwitched,
   StreamStarted,
-  StreamChunk as EventStreamChunk,
   StreamEnded,
   ToolCallStarted,
   ToolCallSucceeded,
@@ -54,7 +52,13 @@ import {
   type ReasoningPart,
   ToolResultPart,
 } from "../../domain/message.js"
-import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
+import {
+  MessageId,
+  ToolCallId,
+  type ActorCommandId,
+  type BranchId,
+  type SessionId,
+} from "../../domain/ids.js"
 import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -68,17 +72,12 @@ import { Storage, type StorageError, type StorageService } from "../../storage/s
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import {
   Provider,
-  ProviderError,
+  type ProviderError,
   providerRequestFromMessages,
   type ProviderStreamPart,
   type ProviderService,
 } from "../../providers/provider.js"
-import {
-  normalizeResponseParts,
-  projectResponsePartsToMessageParts,
-} from "../../providers/ai-transcript.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import { hasMessage } from "../../domain/guards.js"
 import { withRetry } from "../retry"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
@@ -124,7 +123,6 @@ import {
   projectRuntimeState,
   type AgentLoopState,
   type LoopQueueState,
-  type AssistantDraft,
   type LoopRuntimeState,
   type LoopState,
   QueuedTurnItemSchema,
@@ -140,35 +138,35 @@ import {
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
 import { compileSystemPrompt } from "../../domain/prompt.js"
-import * as Response from "effect/unstable/ai/Response"
+import type * as Response from "effect/unstable/ai/Response"
+import {
+  AgentLoopError,
+  SteerCommand,
+  assistantMessageIdForCommand,
+  makeCommandId,
+  toolCallIdForCommand,
+  toolResultMessageIdForCommand,
+  type ApplySteerCommand,
+  type InvokeToolCommand,
+  type LoopCommand,
+  type RecordToolResultCommand,
+  type RespondInteractionCommand,
+  type RunTurnCommand,
+  type SubmitTurnCommand,
+} from "./agent-loop.commands.js"
+import {
+  collectExternalTurnResponse,
+  collectFailedModelTurnResponse,
+  collectModelTurnResponse,
+  emptyTurnMetrics,
+  formatStreamErrorMessage,
+  type ActiveStreamHandle,
+  type CollectedTurnResponse,
+  type PublishEvent,
+  type TurnMetrics,
+} from "./turn-response/collectors.js"
+export { AgentLoopError, SteerCommand }
 
-// ============================================================================
-// Turn Phases (inlined from agent-loop-phases.ts)
-// ============================================================================
-
-const formatStreamErrorMessage = (streamError: unknown) => {
-  if (streamError instanceof Error) return streamError.message
-  if (hasMessage(streamError)) return streamError.message
-  return String(streamError)
-}
-
-const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
-  switch (stopReason) {
-    case "stop":
-    case "length":
-    case "content-filter":
-    case "tool-calls":
-    case "error":
-    case "pause":
-    case "other":
-    case "unknown":
-      return stopReason
-    default:
-      return "unknown"
-  }
-}
-
-type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never>
 type CommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
   | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
@@ -235,13 +233,6 @@ const persistMessageReceived = (params: {
       return { _tag: "changed" as const, result: params.message, envelope }
     }),
   })
-
-const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
-const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
-const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.make(`${commandId}:assistant`)
-const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.make(`${commandId}:tool-result`)
 
 const recordToolResultPhase = (params: {
   storage: StorageService
@@ -313,41 +304,12 @@ const recordToolResultPhase = (params: {
     })
   })
 
-export type ActiveStreamHandle = {
-  abortController: AbortController
-  interruptDeferred: Deferred.Deferred<void>
-  interruptedRef: Ref.Ref<boolean>
-}
-
-/** Mutable accumulator for per-turn wide event fields. */
-export type TurnMetrics = {
-  agent: AgentNameType
-  model: string
-  inputTokens: number
-  outputTokens: number
-  toolCallCount: number
-}
-
-export const emptyTurnMetrics = (): TurnMetrics => ({
-  agent: DEFAULT_AGENT_NAME,
-  model: "",
-  inputTokens: 0,
-  outputTokens: 0,
-  toolCallCount: 0,
-})
-
 interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
   tools: ReadonlyArray<ToolToken>
 }
 
 type AssistantResponsePart = TextPart | ReasoningPart | ImagePart | ToolCallPart
-
-interface TurnResponseMessages {
-  readonly assistant: ReadonlyArray<AssistantResponsePart>
-  readonly tool: ReadonlyArray<ToolResultPart>
-  readonly usage?: AssistantDraft["usage"]
-}
 
 const toolCallsFromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>,
@@ -637,403 +599,6 @@ const resolveTurnContext = (params: {
       driver: dispatchAgent.driver,
       driverSource: driverResolution.source,
     }
-  })
-
-interface CollectedTurnResponse {
-  readonly responseParts: ReadonlyArray<Response.AnyPart>
-  readonly messageProjection: TurnResponseMessages
-  readonly interrupted: boolean
-  readonly streamFailed: boolean
-  readonly driverKind: "model" | "external"
-}
-
-interface ExternalTurnUsage {
-  readonly inputTokens?: number | undefined
-  readonly outputTokens?: number | undefined
-}
-
-const isModelFinishUsage = (
-  usage: Response.FinishPart["usage"] | ExternalTurnUsage,
-): usage is Response.FinishPart["usage"] =>
-  typeof usage.inputTokens === "object" || typeof usage.outputTokens === "object"
-
-const finishedUsage = (
-  usage: Response.FinishPart["usage"] | ExternalTurnUsage,
-): AssistantDraft["usage"] | undefined => {
-  if (usage === undefined) return undefined
-  if (!isModelFinishUsage(usage)) {
-    return {
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
-    }
-  }
-  return {
-    inputTokens: usage.inputTokens?.total ?? 0,
-    outputTokens: usage.outputTokens?.total ?? 0,
-  }
-}
-
-const collectNormalizedResponse = (params: {
-  responseParts: ReadonlyArray<Response.AnyPart>
-  streamFailed: boolean
-  interrupted: boolean
-  driverKind: "model" | "external"
-}): CollectedTurnResponse => {
-  const normalized = normalizeResponseParts(params.responseParts)
-  const messages = projectResponsePartsToMessageParts(normalized)
-  const usage = normalized
-    .filter((part): part is Response.FinishPart => part.type === "finish")
-    .map((part) => finishedUsage(part.usage))
-    .find((part) => part !== undefined)
-
-  return {
-    responseParts: normalized,
-    messageProjection: {
-      assistant: messages.assistant,
-      tool: messages.tool,
-      ...(usage !== undefined ? { usage } : {}),
-    },
-    interrupted: params.interrupted,
-    streamFailed: params.streamFailed,
-    driverKind: params.driverKind,
-  }
-}
-
-const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
-  switch (part.type) {
-    case "text":
-      return part.text.length > 0
-    case "text-delta":
-      return part.delta.length > 0
-    case "reasoning":
-      return part.text.length > 0
-    case "reasoning-delta":
-      return part.delta.length > 0
-    case "file":
-    case "tool-call":
-    case "tool-approval-request":
-      return true
-    case "tool-result":
-      return part.preliminary !== true
-    default:
-      return false
-  }
-}
-
-const collectModelTurnResponse = (params: {
-  turnStream: Stream.Stream<ProviderStreamPart, ProviderError>
-  publishEvent: PublishEvent
-  sessionId: SessionId
-  branchId: BranchId
-  modelId: string
-  activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
-  retryPreOutputFailures?: boolean
-}) =>
-  Effect.gen(function* () {
-    const responseParts: Response.AnyPart[] = []
-    let hasObservableOutput = false
-
-    const streamFailed = yield* Stream.runForEach(
-      params.turnStream.pipe(
-        Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
-      ),
-      (part) =>
-        Effect.gen(function* () {
-          if (part.type === "error") {
-            return yield* new ProviderError({
-              message: formatStreamErrorMessage(part.error),
-              model: params.modelId,
-              cause: part.error,
-            })
-          }
-          responseParts.push(part)
-          hasObservableOutput = hasObservableOutput || isObservableModelOutputPart(part)
-          if (part.type === "text-delta") {
-            yield* params
-              .publishEvent(
-                new EventStreamChunk({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  chunk: part.delta,
-                }),
-              )
-              .pipe(Effect.orDie)
-          }
-        }),
-    ).pipe(
-      Effect.as(false),
-      Effect.catchTag("ProviderError", (streamError) =>
-        Effect.gen(function* () {
-          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-          if (interrupted) return false
-          if (params.retryPreOutputFailures === true && !hasObservableOutput) {
-            return yield* streamError
-          }
-          yield* Effect.logWarning("stream error, persisting partial output").pipe(
-            Effect.annotateLogs({ error: String(streamError) }),
-          )
-          yield* params
-            .publishEvent(
-              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
-            )
-            .pipe(Effect.orDie)
-          yield* params
-            .publishEvent(
-              ErrorOccurred.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                error: params.formatStreamError(streamError),
-              }),
-            )
-            .pipe(Effect.orDie)
-          return true
-        }),
-      ),
-    )
-
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    return collectNormalizedResponse({
-      responseParts,
-      streamFailed,
-      interrupted,
-      driverKind: "model",
-    })
-  })
-
-const collectFailedModelTurnResponse = (params: {
-  streamError: ProviderError
-  publishEvent: PublishEvent
-  sessionId: SessionId
-  branchId: BranchId
-  activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
-}) =>
-  Effect.gen(function* () {
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    if (!interrupted) {
-      yield* Effect.logWarning("stream error before output, retries exhausted").pipe(
-        Effect.annotateLogs({ error: String(params.streamError) }),
-      )
-      yield* params
-        .publishEvent(StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }))
-        .pipe(Effect.orDie)
-      yield* params
-        .publishEvent(
-          ErrorOccurred.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            error: params.formatStreamError(params.streamError),
-          }),
-        )
-        .pipe(Effect.orDie)
-    }
-
-    return collectNormalizedResponse({
-      responseParts: [],
-      streamFailed: !interrupted,
-      interrupted,
-      driverKind: "model",
-    })
-  })
-
-const collectExternalTurnResponse = (params: {
-  turnStream: Stream.Stream<TurnEvent, TurnError>
-  publishEvent: PublishEvent
-  sessionId: SessionId
-  branchId: BranchId
-  activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: TurnError) => string
-}) =>
-  Effect.gen(function* () {
-    const responseParts: Response.AnyPart[] = []
-    // External drivers emit `ToolCompleted`/`ToolFailed` without the
-    // `toolName` (ACP's status-update payload doesn't carry it). Track
-    // name by id from `tool-call`/`tool-started` so completion events
-    // and persisted `tool-result` parts carry the real tool name
-    // instead of a hardcoded "external".
-    const toolNamesById = new Map<string, string>()
-    const toolCallIdsSeen = new Set<string>()
-
-    const streamFailed = yield* Stream.runForEach(
-      params.turnStream.pipe(
-        Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
-      ),
-      (event) =>
-        Effect.gen(function* () {
-          switch (event._tag) {
-            case "text-delta":
-              responseParts.push(Response.makePart("text", { text: event.text }))
-              yield* params
-                .publishEvent(
-                  new EventStreamChunk({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    chunk: event.text,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            case "reasoning-delta":
-              responseParts.push(Response.makePart("reasoning", { text: event.text }))
-              return
-            case "tool-call":
-              toolNamesById.set(event.toolCallId, event.toolName)
-              if (!toolCallIdsSeen.has(event.toolCallId)) {
-                toolCallIdsSeen.add(event.toolCallId)
-                responseParts.push(
-                  Response.makePart("tool-call", {
-                    id: event.toolCallId,
-                    name: event.toolName,
-                    params: event.input,
-                    providerExecuted: false,
-                  }),
-                )
-              }
-              return
-            case "tool-started":
-              toolNamesById.set(event.toolCallId, event.toolName)
-              if (!toolCallIdsSeen.has(event.toolCallId)) {
-                toolCallIdsSeen.add(event.toolCallId)
-                responseParts.push(
-                  Response.makePart("tool-call", {
-                    id: event.toolCallId,
-                    name: event.toolName,
-                    params: event.input ?? {},
-                    providerExecuted: false,
-                  }),
-                )
-              }
-              yield* params
-                .publishEvent(
-                  ToolCallStarted.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName: event.toolName,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            case "tool-completed": {
-              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
-              const output = event.output ?? null
-              responseParts.push(
-                Response.makePart("tool-result", {
-                  id: event.toolCallId,
-                  name: toolName,
-                  result: output,
-                  isFailure: false,
-                  providerExecuted: false,
-                  // `encodedResult` is what `projectResponsePartsToMessageParts`
-                  // reads into `ToolResultPart.output.value` — must mirror
-                  // `result` or the stored tool message loses the output.
-                  encodedResult: output,
-                  preliminary: false,
-                }),
-              )
-              yield* params
-                .publishEvent(
-                  ToolCallSucceeded.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            }
-            case "tool-failed": {
-              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
-              // Mirror the model-driver failure shape from tool-runner: the
-              // canonical `error-json` value is a discriminated object
-              // `{ error: string }`. Downstream consumers (prompt
-              // reconstruction, TUI) expect this structure regardless of
-              // driver kind.
-              const failurePayload = { error: event.error }
-              responseParts.push(
-                Response.makePart("tool-result", {
-                  id: event.toolCallId,
-                  name: toolName,
-                  result: failurePayload,
-                  isFailure: true,
-                  providerExecuted: false,
-                  encodedResult: failurePayload,
-                  preliminary: false,
-                }),
-              )
-              yield* params
-                .publishEvent(
-                  ToolCallFailed.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName,
-                    output: event.error,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            }
-            case "finished":
-              responseParts.push(
-                Response.makePart("finish", {
-                  reason: toResponseFinishReason(event.stopReason),
-                  usage: new Response.Usage({
-                    inputTokens: {
-                      uncached: undefined,
-                      total: event.usage?.inputTokens,
-                      cacheRead: undefined,
-                      cacheWrite: undefined,
-                    },
-                    outputTokens: {
-                      total: event.usage?.outputTokens,
-                      text: undefined,
-                      reasoning: undefined,
-                    },
-                  }),
-                  response: undefined,
-                }),
-              )
-              return
-          }
-        }),
-    ).pipe(
-      Effect.as(false),
-      Effect.catchTag("TurnError", (streamError) =>
-        Effect.gen(function* () {
-          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-          if (interrupted) return false
-          yield* Effect.logWarning("stream error, persisting partial output").pipe(
-            Effect.annotateLogs({ error: String(streamError) }),
-          )
-          yield* params
-            .publishEvent(
-              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
-            )
-            .pipe(Effect.orDie)
-          yield* params
-            .publishEvent(
-              ErrorOccurred.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                error: params.formatStreamError(streamError),
-              }),
-            )
-            .pipe(Effect.orDie)
-          return true
-        }),
-      ),
-    )
-
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    return collectNormalizedResponse({
-      responseParts,
-      streamFailed,
-      interrupted,
-      driverKind: "external",
-    })
   })
 
 /** InteractionPendingError enriched with the toolCallId that triggered it */
@@ -1702,81 +1267,6 @@ const finalizeTurnPhase = (params: {
       )
     }
   })
-
-// Agent Loop Error
-
-export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
-
-// Steer Command lives in `domain/steer.ts` so transport-contract and runtime
-// can both import without taking a dependency on each other. Re-exported here
-// for backwards-compatible call sites that already import from agent-loop.
-import { SteerCommand } from "../../domain/steer.js"
-export { SteerCommand }
-
-const QueuedTurnCommandOptionFields = {
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  interactive: Schema.optional(Schema.Boolean),
-}
-
-const LoopTargetFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-const SubmitTurnCommand = Schema.TaggedStruct("SubmitTurn", {
-  message: Message,
-  ...QueuedTurnCommandOptionFields,
-})
-type SubmitTurnCommand = typeof SubmitTurnCommand.Type
-
-const RunTurnCommand = Schema.TaggedStruct("RunTurn", {
-  message: Message,
-  ...QueuedTurnCommandOptionFields,
-})
-type RunTurnCommand = typeof RunTurnCommand.Type
-
-const ApplySteerCommand = Schema.TaggedStruct("ApplySteer", {
-  command: SteerCommand,
-})
-type ApplySteerCommand = typeof ApplySteerCommand.Type
-
-const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
-  ...LoopTargetFields,
-  requestId: Schema.String,
-})
-type RespondInteractionCommand = typeof RespondInteractionCommand.Type
-
-const RecordToolResultCommand = Schema.TaggedStruct("RecordToolResult", {
-  ...LoopTargetFields,
-  commandId: Schema.optional(ActorCommandId),
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  output: Schema.Unknown,
-  isError: Schema.optional(Schema.Boolean),
-})
-type RecordToolResultCommand = typeof RecordToolResultCommand.Type
-
-const InvokeToolCommand = Schema.TaggedStruct("InvokeTool", {
-  ...LoopTargetFields,
-  commandId: Schema.optional(ActorCommandId),
-  toolName: Schema.String,
-  input: Schema.Unknown,
-})
-type InvokeToolCommand = typeof InvokeToolCommand.Type
-
-const LoopCommand = Schema.Union([
-  SubmitTurnCommand,
-  RunTurnCommand,
-  ApplySteerCommand,
-  RespondInteractionCommand,
-  RecordToolResultCommand,
-  InvokeToolCommand,
-])
-type LoopCommand = typeof LoopCommand.Type
 
 // Agent Loop Context
 
