@@ -21,9 +21,8 @@
 
 import { Effect, Schema } from "effect"
 import {
-  behavior,
-  defineExtension,
   defineResource,
+  defineStatefulExtension,
   isRecord,
   ref,
   TaggedEnumClass,
@@ -686,10 +685,10 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
 const EXTENSION_ID = AUTO_EXTENSION_ID
 
-export const AutoExtension = defineExtension({
+export const AutoExtension = defineStatefulExtension({
   id: EXTENSION_ID,
   tools: [AutoCheckpointTool],
-  actors: [behavior(autoBehavior)],
+  actor: autoBehavior,
   rpc: [
     AutoRpc.StartAuto,
     AutoRpc.RequestHandoff,

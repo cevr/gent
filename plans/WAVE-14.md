@@ -684,6 +684,25 @@ not migration-era optimism.
     findings.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 9 implemented:
+  - Added progressive extension helper kits:
+    `defineToolExtension`, `defineStatefulExtension`, and
+    `defineUiExtension`.
+  - Preserved exact client facet typing for helper-authored shared artifacts,
+    including stateful helpers that lower into TUI client modules.
+  - Ported `AutoExtension` to `defineStatefulExtension` as the stateful helper
+    proof case.
+  - Added core regression coverage proving helper-authored extensions compile
+    into the normal typed contribution buckets.
+  - Added TUI regression coverage proving client-bearing stateful helper
+    artifacts lower through `defineClientExtension`.
+  - Focused gate: `bun test packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/auto.test.ts apps/tui/tests/extension-client-facets.test.ts`.
+  - Focused transient rerun: `bun test packages/core/tests/utils/run-process.test.ts --timeout 30000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd973-cc6f-7790-a75f-e73a88850012`; P2 helper client
+    typing gap fixed in-batch.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

@@ -53,6 +53,7 @@ import type {
   ExtensionContributions,
   ExtensionReactions,
 } from "../domain/contribution.js"
+import type { Behavior } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionToken } from "../domain/capability/action.js"
 import type { RequestToken } from "../domain/capability/request.js"
@@ -325,6 +326,19 @@ export interface DefineExtensionInput<Client = unknown> {
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
 }
 
+export type DefineToolExtensionInput<Client = unknown> = Pick<
+  DefineExtensionInput<Client>,
+  "id" | "client" | "tools" | "commands" | "rpc" | "reactions" | "resources" | "agents"
+>
+
+export type DefineStatefulExtensionInput<Client = unknown> = DefineToolExtensionInput<Client> & {
+  readonly actor: Behavior<unknown, unknown, never> | AnyBehavior
+}
+
+export type DefineUiExtensionInput<Client> = DefineToolExtensionInput<Client> & {
+  readonly client: Client
+}
+
 /**
  * Resolve a single bucket field — accepts literal array, sync factory, or
  * Effect-returning factory. Errors are annotated with the bucket name so
@@ -517,6 +531,9 @@ export function defineExtension(
 export function defineExtension<Client>(
   params: DefineExtensionInput<Client> & { readonly client: Client },
 ): GentExtension & { readonly client: Client }
+export function defineExtension<Client>(
+  params: DefineExtensionInput<Client>,
+): GentExtension & { readonly client?: Client }
 export function defineExtension(
   params: DefineExtensionInput,
 ): GentExtension & { readonly client?: unknown } {
@@ -555,3 +572,44 @@ export function defineExtension(
       }),
   }
 }
+
+/** Define an extension whose primary surface is tools/commands/RPC. */
+export function defineToolExtension(
+  params: DefineToolExtensionInput & { readonly client?: undefined },
+): GentExtension
+export function defineToolExtension<Client>(
+  params: DefineToolExtensionInput<Client> & { readonly client: Client },
+): GentExtension & { readonly client: Client }
+export function defineToolExtension<Client>(
+  params: DefineToolExtensionInput<Client>,
+): GentExtension & { readonly client?: Client }
+export function defineToolExtension(
+  params: DefineToolExtensionInput,
+): GentExtension & { readonly client?: unknown } {
+  return defineExtension(params)
+}
+
+/** Define an extension that owns one stateful actor plus optional surfaces. */
+export function defineStatefulExtension(
+  params: DefineStatefulExtensionInput & { readonly client?: undefined },
+): GentExtension
+export function defineStatefulExtension<Client>(
+  params: DefineStatefulExtensionInput<Client> & { readonly client: Client },
+): GentExtension & { readonly client: Client }
+export function defineStatefulExtension<Client>(
+  params: DefineStatefulExtensionInput<Client>,
+): GentExtension & { readonly client?: Client }
+export function defineStatefulExtension(
+  params: DefineStatefulExtensionInput,
+): GentExtension & { readonly client?: unknown } {
+  return defineExtension({
+    ...params,
+    actors: [params.actor as AnyBehavior],
+  })
+}
+
+/** Define an extension whose primary surface is a client facet. */
+export const defineUiExtension = <Client>(
+  params: DefineUiExtensionInput<Client>,
+): GentExtension & { readonly client: Client } =>
+  defineExtension(params) as GentExtension & { readonly client: Client }

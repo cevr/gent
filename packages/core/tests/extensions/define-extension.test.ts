@@ -11,7 +11,15 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  defineStatefulExtension,
+  defineToolExtension,
+  defineUiExtension,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
 import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
@@ -22,6 +30,8 @@ import { compileExtensionReactions } from "../../src/runtime/extensions/extensio
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { AgentName } from "@gent/core/domain/agent"
+import { ServiceKey, type Behavior } from "../../src/domain/actor"
+import { TaggedEnumClass } from "../../src/domain/schema-tagged-enum-class"
 
 const stubHostCtx = {
   sessionId: SessionId.make("test-session"),
@@ -45,6 +55,20 @@ const stubProjectionCtx = {
 }
 
 const setupOf = (ext: GentExtension) => ext.setup(testSetupCtx())
+const HelperMsg = TaggedEnumClass("HelperMsg", {
+  Get: TaggedEnumClass.askVariant<number>()({}),
+})
+type HelperMsg = Schema.Schema.Type<typeof HelperMsg>
+const HelperKey = ServiceKey<HelperMsg>("helper")
+const helperBehavior: Behavior<HelperMsg, { readonly count: number }, never> = {
+  initialState: { count: 1 },
+  serviceKey: HelperKey,
+  receive: (msg, state, ctx) =>
+    Effect.gen(function* () {
+      if (msg._tag === "Get") yield* ctx.reply(state.count)
+      return state
+    }),
+}
 
 describe("defineExtension", () => {
   it.live("empty extension produces empty contribution buckets", () =>
@@ -246,6 +270,50 @@ describe("defineExtension", () => {
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("tools factory failed: nope")
       }
+    }),
+  )
+
+  it.live("progressive helpers compile into normal contribution buckets", () =>
+    Effect.gen(function* () {
+      const readSnapshot = request({
+        id: "read-snapshot",
+        extensionId: ExtensionId.make("helper-state"),
+        intent: "read",
+        input: Schema.Struct({}),
+        output: Schema.Number,
+        execute: () => Effect.succeed(1),
+      })
+      const toolExt = defineToolExtension({
+        id: "helper-tool",
+        tools: [
+          tool({
+            id: "helper-tool-call",
+            description: "helper tool",
+            params: Schema.Struct({}),
+            execute: () => Effect.succeed("ok"),
+          }),
+        ],
+      })
+      const statefulExt = defineStatefulExtension({
+        id: "helper-state",
+        actor: helperBehavior,
+        rpc: [readSnapshot],
+      })
+      const uiClient = { setup: Effect.succeed([]) }
+      const uiExt = defineUiExtension({
+        id: "helper-ui",
+        client: uiClient,
+      })
+
+      const toolContribs = yield* setupOf(toolExt)
+      const statefulContribs = yield* setupOf(statefulExt)
+      const uiContribs = yield* setupOf(uiExt)
+
+      expect(toolContribs.tools?.map((t) => String(t.id))).toEqual(["helper-tool-call"])
+      expect(statefulContribs.actors).toHaveLength(1)
+      expect(statefulContribs.rpc?.map((r) => String(r.id))).toEqual(["read-snapshot"])
+      expect(uiExt.client).toBe(uiClient)
+      expect(uiContribs).toEqual({})
     }),
   )
 })
