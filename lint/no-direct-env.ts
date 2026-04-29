@@ -740,7 +740,7 @@ const plugin: Plugin = {
      *   - `brandCwdScope`        → `packages/core/src/runtime/session-profile.ts`
      *   - `brandEphemeralScope`  → `packages/core/src/runtime/composer.ts`
      *     (the only sanctioned ephemeral-profile factory; `agent-runner.ts`
-     *     calls it via `RuntimeComposer.ephemeral(...).build()`)
+     *     calls it via `buildEphemeralRuntime(...)`)
      *
      * The rule also exempts the `scope-brands.ts` module itself (where the
      * functions are defined) and tests.

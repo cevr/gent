@@ -771,6 +771,32 @@ not migration-era optimism.
     `/tmp/counsel/personal-gent-860892a9/20260429-142328-codex-to-claude-a28e4c/claude.md`;
     P2 top-level runtime/helper duplication/erased tool-effect notes fixed
     in-batch.
+- Batch 14 implemented:
+  - Replaced the fluent `RuntimeComposer` API with explicit
+    `buildEphemeralRuntime({ parent, parentServices, overrides,
+extensionLayers })`.
+  - Kept storage sub-Tag omission, EventPublisher/BuiltinEventSink family
+    omission, `Layer.CurrentMemoMap` stripping, `Layer.fresh`, child override
+    merge-last behavior, and `ServerProfile` proof-of-origin.
+  - Tightened override slot types so each child-owned service family must
+    provide its expected service instead of relying on an unconstrained
+    generic builder claim.
+  - Updated scope-brand tests for cross-scope rejection, override-family
+    typing, storage sub-Tag omission, event-publisher family omission,
+    finalizer attachment, and parent memo-map replacement.
+  - Updated `AGENTS.md`, `ARCHITECTURE.md`, and runtime comments that still
+    described the deleted fluent API.
+  - Focused gate: `bun test packages/core/tests/runtime/scope-brands.test.ts packages/core/tests/runtime/agent-runner.test.ts --timeout 30000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Gate note: full test initially hit transient subprocess timeouts in
+    `tests/utils/run-process.test.ts` and `tests/extensions/exec-tools/bash.test.ts`;
+    both focused files passed, and the repeated full test passed after
+    stopping the timed-out counsel process.
+  - Codex review: `019dd9a9-a8a2-7122-82a5-8365c85f5ddd`; P2 override typing,
+    type-fence coverage, memo-map coverage, and stale docs fixed in-batch.
+  - Okra counsel attempt:
+    `/tmp/counsel/personal-gent-860892a9/20260429-143435-codex-to-claude-285ba8`;
+    timed out with no usable findings and was stopped to unblock the gate.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

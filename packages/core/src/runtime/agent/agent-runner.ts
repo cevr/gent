@@ -65,7 +65,7 @@ import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
-import { RuntimeComposer } from "../composer.js"
+import { buildEphemeralRuntime } from "../composer.js"
 import { runWithBuiltLayer } from "../run-with-built-layer.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
@@ -455,15 +455,14 @@ const makeSharedRunnerHelpers = (
 }
 
 /**
- * Build the layer for an ephemeral child run via {@link RuntimeComposer}.
+ * Build the layer for an ephemeral child run.
  *
  * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
  * registry/actor/resource/event-bus shape stays identical — extensions don't
  * "see" a different runtime when invoked from a child agent. Local-only
  * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
- * services) are declared via `.own(...)` so the composer derives the
- * parent-omit set from the same list — no hand-maintained `Context.omit`
- * drift bug.
+ * services) are declared as explicit override families, so the parent-omit set
+ * stays local to the runtime builder.
  */
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
@@ -542,15 +541,13 @@ const buildEphemeralLayer = (params: {
       ),
     ),
   )
-  // withOverrides maps each named field to ALL Tags that should be omitted
-  // from the parent (e.g., storage → Storage + 6 sub-Tags). This makes
-  // the sub-Tag problem structural — adding a new sub-Tag updates one
-  // mapping in the compositor, not every callsite.
-  const composed = RuntimeComposer.ephemeral({
+  // Each override family maps to all Tags that should be omitted from the
+  // parent (e.g. storage -> Storage + focused sub-Tags). Adding a new storage
+  // sub-Tag updates the explicit builder, not every ephemeral call site.
+  const composed = buildEphemeralRuntime({
     parent: params.parentProfile,
     parentServices: params.parentServices,
-  })
-    .withOverrides({
+    overrides: {
       storage: storageLayer,
       eventStore: eventStoreLayer,
       eventPublisher: eventPublisherLayer,
@@ -559,9 +556,9 @@ const buildEphemeralLayer = (params: {
       resourceManager: ResourceManagerLive,
       toolRunner: toolRunnerLayer,
       sessionRuntime: sessionRuntimeLayer,
-    })
-    .merge(extensionLayers)
-    .build()
+    },
+    extensionLayers,
+  })
 
   return composed.layer
 }
@@ -645,9 +642,8 @@ const runEphemeralAgent = (params: {
   const sessionId = SessionId.make(Bun.randomUUIDv7())
   const branchId = BranchId.make(Bun.randomUUIDv7())
   const normalizedRunSpec = params.runSpec
-  // The composer derives the parent-omit set from its `.own(...)`
-  // declarations — the 14-item hand-maintained list is gone; adding a new
-  // owned service requires editing only one place (`buildEphemeralLayer`).
+  // The ephemeral runtime builder owns the parent-omit set; adding a new
+  // child-owned service requires editing one composition root.
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
     parentServices: params.parentServices,
@@ -786,11 +782,10 @@ const runEphemeralAgent = (params: {
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
-    // `RuntimeComposer.build()` already wraps the merged layer in
-    // `Layer.fresh` and strips `Layer.CurrentMemoMap` from the forwarded
-    // parent context, so child-local layers are constructed against the
-    // ephemeral dependencies instead of being reused from the parent's
-    // memo map.
+    // `buildEphemeralRuntime()` wraps the merged layer in `Layer.fresh` and
+    // strips `Layer.CurrentMemoMap` from the forwarded parent context, so
+    // child-local layers are constructed against ephemeral dependencies instead
+    // of being reused from the parent's memo map.
     const { success, reasoning } = yield* runWithBuiltLayer(ephemeralLayer)(childRun).pipe(
       Effect.scoped,
     )
@@ -865,7 +860,7 @@ export const InProcessRunner = (
       const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
       // Server-scoped parent profile — type-level proof of origin for the
-      // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
+      // ephemeral runtime builder.
       const parentProfile = yield* ServerProfileService
 
       // Capture full parent context — no manual enumeration needed
@@ -1046,7 +1041,7 @@ export const SubprocessRunner = (
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
       // Server-scoped parent profile — type-level proof of origin for the
-      // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
+      // ephemeral runtime builder.
       const parentProfile = yield* ServerProfileService
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 

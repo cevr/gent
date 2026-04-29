@@ -85,7 +85,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
     ResourceManagerLive,
-    // Server-scoped profile brand for `RuntimeComposer.ephemeral(...)` —
+    // Server-scoped profile brand for ephemeral runtime construction —
     // tests don't construct a real server composition root, so the test
     // layer fakes the brand with an empty extension set.
     ServerProfileService.Test(),

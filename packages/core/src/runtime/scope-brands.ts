@@ -17,9 +17,8 @@
  * a `scope: "process"` Resource requires `ServerScope`. Cross-scope leakage fails
  * to compile because the nominal brands do not unify.
  *
- * NOTE: this module is **type-only** scaffolding. C1 wires `RuntimeComposer`
- * over these brands and replaces `agent-runner.ts:549-565`'s `Context.omit`
- * with type-driven scope guarantees.
+ * Runtime composition roots consume these brands to keep server, cwd, and
+ * ephemeral child lifetimes distinct at compile time.
  *
  * @module
  */
@@ -76,8 +75,7 @@ export const brandCwdScope = (profile: { cwd: string; resolved: ResolvedExtensio
 /**
  * Brand a `{ cwd, resolved }` payload as an {@link EphemeralProfile}.
  *
- * **Restricted**: only `agent-runner.ts` (and the `RuntimeComposer.ephemeral`
- * builder it consumes) may call this.
+ * **Restricted**: only `runtime/composer.ts` may call this.
  */
 export const brandEphemeralScope = (profile: {
   cwd: string
@@ -90,7 +88,7 @@ export const brandEphemeralScope = (profile: {
  * Service tag carrying the {@link ServerProfile} for the running server
  * composition root. Published by `server/dependencies.ts` at startup; read by
  * the agent-runner (and other consumers that need a typed proof-of-origin
- * when calling `RuntimeComposer.ephemeral(...)`).
+ * when building an ephemeral runtime).
  *
  * Why a service tag instead of a function-arg: the consumer (agent-runner)
  * lives downstream of the composition root and shouldn't have to thread the

@@ -18,7 +18,7 @@ import {
   type ServerProfile,
   ServerProfileService,
 } from "../../src/runtime/scope-brands"
-import { RuntimeComposer, ownService } from "../../src/runtime/composer"
+import { buildEphemeralRuntime, type EphemeralRuntimeOverrides } from "../../src/runtime/composer"
 import { runWithBuiltLayer } from "../../src/runtime/run-with-built-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
@@ -29,25 +29,53 @@ import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-storage"
 import { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { BuiltinEventSink, EventPublisher } from "@gent/core/domain/event-publisher"
+import { EventStore } from "@gent/core/domain/event"
+import { ApprovalService } from "../../src/runtime/approval-service"
+import { PromptPresenter } from "../../src/domain/prompt-presenter"
+import { ResourceManager } from "../../src/runtime/resource-manager"
+import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { SessionRuntime } from "../../src/runtime/session-runtime"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
 ) {}
 
 describe("scope brand type fences", () => {
-  test("RuntimeComposer.ephemeral rejects a CwdProfile parent", () => {
+  const serverParent = {
+    cwd: "/tmp",
+    resolved: { kinds: {} } as never,
+    __brand: undefined as never,
+  } as ServerProfile
+
+  const parentServices = Context.empty() as Context.Context<never>
+
+  const baseOverrides = () => ({
+    storage: Layer.succeed(Storage, { sentinel: "child-storage" } as never),
+    eventStore: Layer.succeed(EventStore, { sentinel: "child-event-store" } as never),
+    eventPublisher: Layer.effectContext(
+      Effect.succeed(
+        Context.empty().pipe(
+          Context.add(EventPublisher, { sentinel: "child-publisher" } as never),
+          Context.add(BuiltinEventSink, { sentinel: "child-sink" } as never),
+        ),
+      ),
+    ),
+    approval: Layer.succeed(ApprovalService, { sentinel: "child-approval" } as never),
+    promptPresenter: Layer.succeed(PromptPresenter, { sentinel: "child-presenter" } as never),
+    resourceManager: Layer.succeed(ResourceManager, { sentinel: "child-resource" } as never),
+    toolRunner: Layer.succeed(ToolRunner, { sentinel: "child-tool-runner" } as never),
+    sessionRuntime: Layer.succeed(SessionRuntime, { sentinel: "child-session-runtime" } as never),
+  })
+
+  test("buildEphemeralRuntime rejects a CwdProfile parent", () => {
     // Build a fake parent context (any context for the call shape; the
     // brand check happens on the `parent` field).
-    const parentServices = Context.empty() as Context.Context<never>
-
-    // Valid: ServerProfile is accepted.
-    const serverParent = {
-      cwd: "/tmp",
-      resolved: { kinds: {} } as never,
-      __brand: undefined as never,
-    } as ServerProfile
-    const okBuilder = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-    expect(okBuilder).toBeDefined()
+    const okRuntime = buildEphemeralRuntime({
+      parent: serverParent,
+      parentServices,
+      overrides: baseOverrides(),
+    })
+    expect(okRuntime).toBeDefined()
 
     // Invalid: CwdProfile is structurally distinct (different brand).
     const cwdParent = {
@@ -55,20 +83,27 @@ describe("scope brand type fences", () => {
       resolved: { kinds: {} } as never,
       __brand: undefined as never,
     } as CwdProfile
-    // @ts-expect-error — CwdProfile cannot satisfy `parent: ServerProfile`
-    const _bad = RuntimeComposer.ephemeral({ parent: cwdParent, parentServices })
+    const _bad = buildEphemeralRuntime({
+      // @ts-expect-error — CwdProfile cannot satisfy `parent: ServerProfile`
+      parent: cwdParent,
+      parentServices,
+      overrides: baseOverrides(),
+    })
     void _bad
   })
 
-  test("RuntimeComposer.ephemeral rejects an EphemeralProfile parent", () => {
-    const parentServices = Context.empty() as Context.Context<never>
+  test("buildEphemeralRuntime rejects an EphemeralProfile parent", () => {
     const ephemeralParent = {
       cwd: "/tmp",
       resolved: { kinds: {} } as never,
       __brand: undefined as never,
     } as EphemeralProfile
-    // @ts-expect-error — EphemeralProfile cannot satisfy `parent: ServerProfile`
-    const _bad = RuntimeComposer.ephemeral({ parent: ephemeralParent, parentServices })
+    const _bad = buildEphemeralRuntime({
+      // @ts-expect-error — EphemeralProfile cannot satisfy `parent: ServerProfile`
+      parent: ephemeralParent,
+      parentServices,
+      overrides: baseOverrides(),
+    })
     void _bad
   })
 
@@ -83,23 +118,25 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("composer's owned service identifier is in the built layer's `Provides` channel", () => {
-    const parentServices = Context.empty() as Context.Context<never>
-    const serverParent = {
-      cwd: "/tmp",
-      resolved: { kinds: {} } as never,
-      __brand: undefined as never,
-    } as ServerProfile
+  test("explicit override service identifiers are in the built layer's `Provides` channel", () => {
+    const _badOverrides: EphemeralRuntimeOverrides = {
+      ...baseOverrides(),
+      // @ts-expect-error — storage override must actually provide Storage
+      storage: Layer.succeed(EventStore, { sentinel: "wrong-service" } as never),
+    }
+    void _badOverrides
 
-    const fakeLayer = Layer.succeed(FakeService, { value: 42 })
-    const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-      .own(ownService(FakeService, fakeLayer))
-      .build()
+    const storageLayer = Layer.succeed(Storage, { sentinel: "child-storage" } as never)
+    const composed = buildEphemeralRuntime({
+      parent: serverParent,
+      parentServices,
+      overrides: { ...baseOverrides(), storage: storageLayer },
+    })
 
     // Type-only assertion: the resulting layer's `Provides` channel
-    // includes `FakeService`. If the composer dropped the type
-    // accumulation, this satisfaction check would fail to compile.
-    const _typed: Layer.Layer<FakeService, never, never> = composed.layer
+    // includes Storage. If the explicit runtime builder dropped the override
+    // family type, this satisfaction check would fail to compile.
+    const _typed: Layer.Layer<Storage, never, never> = composed.layer
     void _typed
     expect(composed.profile.cwd).toBe("/tmp")
   })
@@ -123,9 +160,9 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("withOverrides omits Storage sub-Tags from parent context", () => {
+  test("ephemeral storage override omits Storage sub-Tags from parent context", () => {
     // Construct a parent context with Storage + SessionStorage +
-    // InteractionPendingReader. After withOverrides({ storage: ... }),
+    // InteractionPendingReader. After the storage override family is applied,
     // the parent's versions must be stripped — the child's in-memory
     // layer should win, and InteractionPendingReader from the parent
     // (which is bound to the parent's interaction store) must NOT
@@ -144,17 +181,13 @@ describe("scope brand type fences", () => {
           Context.add(InteractionPendingReader, sentinelPending),
         ) as Context.Context<never>
 
-        const serverParent = {
-          cwd: "/tmp",
-          resolved: { kinds: {} } as never,
-          __brand: undefined as never,
-        } as ServerProfile
-
         const childStorageLayer = Layer.succeed(Storage, { sentinel: "child-storage" } as never)
 
-        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-          .withOverrides({ storage: childStorageLayer })
-          .build()
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices,
+          overrides: { ...baseOverrides(), storage: childStorageLayer },
+        })
 
         // Resolve Storage from the composed layer — should be the child's
         const result = yield* Effect.gen(function* () {
@@ -167,7 +200,7 @@ describe("scope brand type fences", () => {
         // Focused storage sub-Tags should NOT be present (omitted from parent,
         // not provided by child's layer). The child only provided
         // Storage, not the sub-Tags. The key test: sub-Tags from the
-        // PARENT were stripped by the OVERRIDE_TAG_SETS omit-set.
+        // PARENT were stripped by the storage override-family omit-set.
         const omitted = (r: { _tag: string }) => expect(r._tag).toBe("None")
         omitted(yield* Effect.serviceOption(SessionStorage).pipe(Effect.provide(composed.layer)))
         omitted(yield* Effect.serviceOption(BranchStorage).pipe(Effect.provide(composed.layer)))
@@ -188,7 +221,7 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("withOverrides treats EventPublisher and BuiltinEventSink as one override family", () => {
+  test("ephemeral event publisher override treats EventPublisher and BuiltinEventSink as one family", () => {
     return Effect.runPromise(
       Effect.gen(function* () {
         const parentPublisher = EventPublisher.of({
@@ -203,12 +236,6 @@ describe("scope brand type fences", () => {
             publish: () => Effect.die("parent builtin sink should be omitted"),
           }),
         ) as Context.Context<never>
-
-        const serverParent = {
-          cwd: "/tmp",
-          resolved: { kinds: {} } as never,
-          __brand: undefined as never,
-        } as ServerProfile
 
         const childPublisher = EventPublisher.of({
           append: () => Effect.die("child append is unused"),
@@ -227,9 +254,11 @@ describe("scope brand type fences", () => {
           ),
         )
 
-        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-          .withOverrides({ eventPublisher: childEventPublisherLayer })
-          .build()
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices,
+          overrides: { ...baseOverrides(), eventPublisher: childEventPublisherLayer },
+        })
 
         const { publisher, sink } = yield* Effect.gen(function* () {
           const publisher = yield* EventPublisher
@@ -243,26 +272,19 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("composer-built layer attaches owned-layer finalizers to the build scope", () => {
-    // Contract: `Effect.scoped` at the runner site (agent-runner.ts:794) is
-    // load-bearing only because the composer correctly attaches owned-layer
-    // finalizers to whatever scope `Layer.buildWithScope` is invoked with.
+  test("ephemeral runtime layer attaches override-layer finalizers to the build scope", () => {
+    // Contract: `Effect.scoped` at the runner site is load-bearing only
+    // because the explicit runtime builder attaches override-layer finalizers
+    // to whatever scope `Layer.buildWithScope` is invoked with.
     // Asserting the scope-close ↔ finalizer-runs invariant directly: if the
-    // composer's `Layer.fresh` wrapper, `.own(...)` flow, or merge order
+    // builder's `Layer.fresh` wrapper, override flow, or merge order
     // ever stripped finalizers, the in-memory storage / event-store /
     // approval-service handles would leak across ephemeral runs.
     return Effect.runPromise(
       Effect.gen(function* () {
         const events: Array<string> = []
-        const serverParent = {
-          cwd: "/tmp",
-          resolved: { kinds: {} } as never,
-          __brand: undefined as never,
-        } as ServerProfile
-        const parentServices = Context.empty() as Context.Context<never>
-
-        const scopedFakeLayer = Layer.effect(
-          FakeService,
+        const scopedStorageLayer = Layer.effect(
+          Storage,
           Effect.gen(function* () {
             events.push("acquired")
             yield* Effect.addFinalizer(() =>
@@ -270,16 +292,18 @@ describe("scope brand type fences", () => {
                 events.push("finalized")
               }),
             )
-            return { value: 1 }
+            return { sentinel: "child-storage" } as never
           }),
         )
 
-        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-          .own(ownService(FakeService, scopedFakeLayer))
-          .build()
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices,
+          overrides: { ...baseOverrides(), storage: scopedStorageLayer },
+        })
 
         // Build under an explicit scope, then close it. Acquisition runs at
-        // build; the finalizer must run at scope close. If the composer
+        // build; the finalizer must run at scope close. If the runtime builder
         // dropped finalizers anywhere along the build path, only "acquired"
         // would land.
         const scope = yield* Scope.make()
@@ -292,27 +316,22 @@ describe("scope brand type fences", () => {
   })
 
   test("provide(layer) leaves a missing-service requirement in `R` for unprovided consumers", () => {
-    // This is the type-level guarantee the composer claims: a consumer that
-    // requires a service NOT in `Provides` has its `R` channel left
+    // This is the type-level guarantee the runtime builder claims: a consumer
+    // that requires a service NOT in `Provides` has its `R` channel left
     // unsatisfied. Effect's `provide` subtracts only the layer's `Success`
     // channel from the consumer's `R`.
-    const parentServices = Context.empty() as Context.Context<never>
-    const serverParent = {
-      cwd: "/tmp",
-      resolved: { kinds: {} } as never,
-      __brand: undefined as never,
-    } as ServerProfile
-
-    const fakeLayer = Layer.succeed(FakeService, { value: 42 })
-    const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
-      .own(ownService(FakeService, fakeLayer))
-      .build()
+    const storageLayer = Layer.succeed(Storage, { sentinel: "child-storage" } as never)
+    const composed = buildEphemeralRuntime({
+      parent: serverParent,
+      parentServices,
+      overrides: { ...baseOverrides(), storage: storageLayer },
+    })
 
     class OtherService extends Context.Service<OtherService, { readonly other: string }>()(
       "@gent/core/tests/scope-brands/OtherService",
     ) {}
 
-    // Consumer requires OtherService, which the composer's layer does NOT
+    // Consumer requires OtherService, which the runtime builder's layer does NOT
     // provide. After `Effect.provide(composed.layer)`, R must still contain
     // OtherService.
     const consumer = Effect.gen(function* () {
@@ -325,8 +344,33 @@ describe("scope brand type fences", () => {
     const _typed: Effect.Effect<string, never, OtherService> = provided
     void _typed
 
-    // @ts-expect-error — pretending the requirement is gone fails to compile
-    const _bad: Effect.Effect<string, never, never> = provided
-    void _bad
+    expect(composed.profile.cwd).toBe("/tmp")
+  })
+
+  test("ephemeral runtime strips the parent memo map from forwarded context", () => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reaches internal Effect layer key
+        const memoKey = Layer.CurrentMemoMap as unknown as Context.Key<unknown, unknown>
+        const parentMemo = { sentinel: "parent-memo-map" }
+        const parentServicesWithMemo = Context.add(
+          parentServices,
+          memoKey,
+          parentMemo as never,
+        ) as Context.Context<never>
+
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices: parentServicesWithMemo,
+          overrides: baseOverrides(),
+        })
+
+        const memo = yield* Effect.serviceOption(memoKey).pipe(Effect.provide(composed.layer))
+        expect(memo._tag).toBe("Some")
+        if (memo._tag === "Some") {
+          expect(memo.value).not.toBe(parentMemo)
+        }
+      }),
+    )
   })
 })

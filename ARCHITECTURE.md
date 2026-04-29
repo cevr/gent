@@ -390,9 +390,13 @@ After W10-PhaseB collapsed the old FSM resource slot and the new `actors:` bucke
 - TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/task-tools` is the canonical event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
-**Compositor `withOverrides`**:
+**Ephemeral runtime builder**:
 
-`RuntimeComposer.ephemeral().withOverrides({...})` (`runtime/composer.ts`) accepts named override fields for sub-Tag-aware ephemeral layer construction. Each field maps one override slot (e.g. `provider`, `eventStore`, `storage`) to a concrete Tag + layer. `.own(...)` remains the mechanism for fully-owned per-run services (belt); `.withOverrides(...)` handles targeted service substitutions (suspenders).
+`buildEphemeralRuntime({...})` (`runtime/composer.ts`) accepts explicit override
+families for sub-Tag-aware ephemeral layer construction. Each field maps one
+child-owned service family, such as `storage`, `eventStore`, or
+`eventPublisher`, to a required layer while the builder omits the corresponding
+parent Tags before merging child layers last.
 
 ## Testing
 

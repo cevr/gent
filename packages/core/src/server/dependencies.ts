@@ -133,8 +133,8 @@ export const createDependencies = (config: DependenciesConfig) => {
       launchSessionProfileSeed = profile
       const baseSectionsLayer = Layer.succeed(BasePromptSectionsTag, runtime.baseSections)
       // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
-      // can construct an EphemeralProfile via RuntimeComposer without forging
-      // the brand themselves. Only this composition root may call
+      // can construct an EphemeralProfile through the runtime builder without
+      // forging the brand themselves. Only this composition root may call
       // brandServerScope (lint-fenced).
       const serverProfileLayer = Layer.succeed(
         ServerProfileService,
