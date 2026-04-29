@@ -1,8 +1,9 @@
 import { describe, expect, test, it } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Cause, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
+import { SqlClient } from "effect/unstable/sql"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -192,8 +193,13 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   )
 }
 const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
-const checkpointStorageLayer = (options?: { failUpsertOn?: number; failRemoveOn?: number }) => {
+const checkpointStorageLayer = (options?: {
+  failUpsertOn?: number
+  failGetOn?: number
+  failRemoveOn?: number
+}) => {
   let upsertCount = 0
+  let getCount = 0
   let removeCount = 0
   const records = new Map<string, AgentLoopCheckpointRecord>()
   return Layer.succeed(CheckpointStorage, {
@@ -208,7 +214,16 @@ const checkpointStorageLayer = (options?: { failUpsertOn?: number; failRemoveOn?
         records.set(checkpointKey(record.sessionId, record.branchId), record)
         return record
       }),
-    get: (input) => Effect.succeed(records.get(checkpointKey(input.sessionId, input.branchId))),
+    get: (input) =>
+      Effect.gen(function* () {
+        getCount += 1
+        if (options?.failGetOn === getCount) {
+          return yield* new StorageError({
+            message: "checkpoint get failed",
+          })
+        }
+        return records.get(checkpointKey(input.sessionId, input.branchId))
+      }),
     list: () => Effect.succeed(Array.from(records.values())),
     remove: (input) =>
       Effect.gen(function* () {
@@ -2346,6 +2361,16 @@ describe("recovery", () => {
       yield* cs.upsert(record)
       return { session, branch, message }
     })
+  const collectRecoveryAbandoned = (sessionId: SessionId, branchId: BranchId) =>
+    Effect.gen(function* () {
+      const eventStore = yield* EventStore
+      const envelopes = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
+        Stream.filter((envelope) => envelope.event._tag === "AgentLoopRecoveryAbandoned"),
+        Stream.take(1),
+        Stream.runCollect,
+      )
+      return Array.from(envelopes, (envelope) => envelope.event)
+    })
   const toLegacyCheckpointJson = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map((item) => toLegacyCheckpointJson(item))
     if (typeof value !== "object" || value === null) return value
@@ -2473,7 +2498,7 @@ describe("recovery", () => {
       )
     }),
   )
-  it.live("discards incompatible checkpoint version and starts fresh", () =>
+  it.live("audits incompatible checkpoint version and starts fresh", () =>
     Effect.gen(function* () {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-stale-"))
       const dbPath = path.join(dir, "data.db")
@@ -2515,6 +2540,124 @@ describe("recovery", () => {
                   branchId: running.message.branchId,
                 })
                 expect(checkpoint).toBeUndefined()
+                const events = yield* collectRecoveryAbandoned(
+                  running.message.sessionId,
+                  running.message.branchId,
+                )
+                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+                  expect(events[0].reason).toBe("checkpoint-version-mismatch")
+                }
+              }).pipe(Effect.provide(layer)),
+            )
+          }),
+        () =>
+          Effect.sync(() => {
+            fs.rmSync(dir, { recursive: true, force: true })
+          }),
+      )
+    }),
+  )
+  it.live("audits undecodable checkpoint and starts fresh", () =>
+    Effect.gen(function* () {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-bad-checkpoint-"))
+      const dbPath = path.join(dir, "data.db")
+      yield* Effect.acquireUseRelease(
+        Effect.void,
+        () =>
+          Effect.gen(function* () {
+            const { message } = createSessionState()
+            const running = buildRunningState(
+              { currentAgent: AgentName.make("cowork") },
+              { message },
+            )
+            const record = yield* buildLoopCheckpointRecord({
+              sessionId: running.message.sessionId,
+              branchId: running.message.branchId,
+              state: running,
+              queue: emptyLoopQueueState(),
+            })
+            const badRecord = { ...record, stateJson: '{"state":{"_tag":"Nope"}}' }
+            const providerCalls = Ref.makeUnsafe(0)
+            const layer = makeRecoveryLayer({ dbPath, providerCalls })
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                yield* seedCheckpoint({
+                  state: running,
+                  queue: emptyLoopQueueState(),
+                  checkpointRecord: badRecord,
+                })
+                const agentLoop = yield* AgentLoop
+                const state = yield* agentLoop.getState({
+                  sessionId: running.message.sessionId,
+                  branchId: running.message.branchId,
+                })
+                expect(state._tag).toBe("Idle")
+                expect(yield* Ref.get(providerCalls)).toBe(0)
+                const cs = yield* CheckpointStorage
+                const checkpoint = yield* cs.get({
+                  sessionId: running.message.sessionId,
+                  branchId: running.message.branchId,
+                })
+                expect(checkpoint).toBeUndefined()
+                const events = yield* collectRecoveryAbandoned(
+                  running.message.sessionId,
+                  running.message.branchId,
+                )
+                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+                  expect(events[0].reason).toBe("checkpoint-decode-failed")
+                }
+              }).pipe(Effect.provide(layer)),
+            )
+          }),
+        () =>
+          Effect.sync(() => {
+            fs.rmSync(dir, { recursive: true, force: true })
+          }),
+      )
+    }),
+  )
+  it.live("fails closed when checkpoint read fails", () =>
+    Effect.gen(function* () {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-checkpoint-read-fail-"))
+      const dbPath = path.join(dir, "data.db")
+      yield* Effect.acquireUseRelease(
+        Effect.void,
+        () =>
+          Effect.gen(function* () {
+            const { message } = createSessionState()
+            const running = buildRunningState(
+              { currentAgent: AgentName.make("cowork") },
+              { message },
+            )
+            const providerCalls = Ref.makeUnsafe(0)
+            const layer = makeRecoveryLayer({ dbPath, providerCalls })
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
+                const sql = yield* SqlClient.SqlClient
+                yield* sql`DROP TABLE agent_loop_checkpoints`
+                const agentLoop = yield* AgentLoop
+                const exit = yield* agentLoop
+                  .getState({
+                    sessionId: running.message.sessionId,
+                    branchId: running.message.branchId,
+                  })
+                  .pipe(Effect.exit)
+                expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit)) {
+                  expect(Cause.pretty(exit.cause)).toContain("Failed to read agent loop checkpoint")
+                }
+                expect(yield* Ref.get(providerCalls)).toBe(0)
+                const events = yield* collectRecoveryAbandoned(
+                  running.message.sessionId,
+                  running.message.branchId,
+                )
+                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+                  expect(events[0].reason).toBe("checkpoint-read-failed")
+                }
               }).pipe(Effect.provide(layer)),
             )
           }),

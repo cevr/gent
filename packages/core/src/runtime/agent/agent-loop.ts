@@ -40,6 +40,8 @@ import {
   ProviderRetrying,
   TurnCompleted,
   TurnRecoveryApplied,
+  AgentLoopRecoveryAbandoned,
+  type RecoveryAbandonReason,
   type AgentEvent,
   type EventEnvelope,
 } from "../../domain/event.js"
@@ -104,6 +106,7 @@ import {
   AGENT_LOOP_CHECKPOINT_VERSION,
   buildLoopCheckpointRecord,
   decodeLoopCheckpointState,
+  RecoveryOutcome,
   shouldRetainLoopCheckpoint,
 } from "./agent-loop.checkpoint.js"
 import {
@@ -1373,7 +1376,7 @@ type LoopHandle = {
   /** Apply a driver event under the side-mutation semaphore. */
   dispatch: (event: LoopDriverEvent) => Effect.Effect<void, AgentLoopError>
   /** Recover from persisted checkpoint, then start the initial turn fiber if Running. */
-  start: Effect.Effect<void>
+  start: Effect.Effect<void, AgentLoopError>
   /** Resolves once the loop scope is closed. */
   awaitExit: Effect.Effect<void>
   resourceManager: ResourceManagerService
@@ -2417,29 +2420,98 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 )
               })
 
+            const publishRecoveryAbandoned = (params: {
+              reason: RecoveryAbandonReason
+              detail?: string
+            }) =>
+              publishEvent(
+                AgentLoopRecoveryAbandoned.make({
+                  sessionId,
+                  branchId,
+                  reason: params.reason,
+                  ...(params.detail !== undefined ? { detail: params.detail } : {}),
+                }),
+              )
+
+            const failRecovery = (params: {
+              reason: RecoveryAbandonReason
+              message: string
+              cause: unknown
+            }) =>
+              publishRecoveryAbandoned({
+                reason: params.reason,
+                detail: String(params.cause),
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new AgentLoopError({
+                      message: params.message,
+                      cause: params.cause,
+                    }),
+                  ),
+                ),
+              )
+
+            const removeAbandonedCheckpoint = (params: {
+              reason: RecoveryAbandonReason
+              detail?: string
+            }) =>
+              publishRecoveryAbandoned(params).pipe(
+                Effect.andThen(
+                  checkpointStorage.remove({ sessionId, branchId }).pipe(
+                    Effect.catchEager((error) =>
+                      failRecovery({
+                        reason: "checkpoint-remove-failed",
+                        message: "Failed to remove abandoned agent loop checkpoint",
+                        cause: error,
+                      }),
+                    ),
+                  ),
+                ),
+              )
+
             // Recovery + initial fork. Replaces `Machine.spawn`'s
             // `lifecycle.recovery.resolve` + auto-start. Idempotent — guarded
             // by `started`.
-            const start = Effect.gen(function* () {
+            const resolveRecovery = Effect.gen(function* () {
               if (started) return
               started = true
 
-              const record = yield* checkpointStorage
-                .get({ sessionId, branchId })
-                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
-              if (record === undefined) return
-              if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-                yield* checkpointStorage
-                  .remove({ sessionId, branchId })
-                  .pipe(Effect.catchEager(() => Effect.void))
-                return
+              const record = yield* checkpointStorage.get({ sessionId, branchId }).pipe(
+                Effect.catchCause((cause) =>
+                  failRecovery({
+                    reason: "checkpoint-read-failed",
+                    message: "Failed to read agent loop checkpoint",
+                    cause: Cause.squash(cause),
+                  }),
+                ),
+              )
+              if (record === undefined) {
+                return RecoveryOutcome.NoCheckpoint.make({})
               }
-              const decoded = yield* Effect.option(decodeLoopCheckpointState(record.stateJson))
+              if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
+                yield* removeAbandonedCheckpoint({
+                  reason: "checkpoint-version-mismatch",
+                  detail: `expected=${AGENT_LOOP_CHECKPOINT_VERSION} actual=${record.version}`,
+                })
+                return RecoveryOutcome.Abandoned.make({
+                  reason: "checkpoint-version-mismatch",
+                  detail: `expected=${AGENT_LOOP_CHECKPOINT_VERSION} actual=${record.version}`,
+                })
+              }
+              const decoded = yield* decodeLoopCheckpointState(record.stateJson).pipe(
+                Effect.map(Option.some),
+                Effect.catchCause((cause) =>
+                  removeAbandonedCheckpoint({
+                    reason: "checkpoint-decode-failed",
+                    detail: Cause.pretty(cause),
+                  }).pipe(Effect.as(Option.none())),
+                ),
+              )
               if (Option.isNone(decoded)) {
-                yield* checkpointStorage
-                  .remove({ sessionId, branchId })
-                  .pipe(Effect.catchEager(() => Effect.void))
-                return
+                return RecoveryOutcome.Abandoned.make({
+                  reason: "checkpoint-decode-failed",
+                })
               }
               const recovered = yield* makeRecoveryDecision({
                 checkpoint: decoded.value,
@@ -2449,9 +2521,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 publishEvent: publishEventOrDie,
                 sessionId,
                 branchId,
-              }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopRecoveryDecision>())))
+              }).pipe(
+                Effect.catchEager((error) =>
+                  failRecovery({
+                    reason: "recovery-decision-failed",
+                    message: "Failed to recover agent loop checkpoint",
+                    cause: error,
+                  }),
+                ),
+              )
 
-              if (Option.isNone(recovered)) return
+              if (Option.isNone(recovered)) return RecoveryOutcome.NoCheckpoint.make({})
 
               yield* SubscriptionRef.update(loopRef, (s) => ({
                 ...s,
@@ -2462,7 +2542,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               if (recovered.value.state._tag === "Running") {
                 yield* forkTurn(recovered.value.state as RunningState)
               }
+              return RecoveryOutcome.Recovered.make({
+                stateTag: recovered.value.state._tag,
+              })
             }).pipe(Effect.withSpan("AgentLoop.recovery.resolve"))
+
+            const start = resolveRecovery.pipe(Effect.asVoid)
 
             return {
               activeStreamRef,
@@ -2568,6 +2653,31 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           return loops.get(key)
         })
 
+        const publishRecoveryProbeAbandoned = (
+          sessionId: SessionId,
+          branchId: BranchId,
+          reason: RecoveryAbandonReason,
+          detail: string,
+        ) =>
+          eventPublisher
+            .publish(
+              AgentLoopRecoveryAbandoned.make({
+                sessionId,
+                branchId,
+                reason,
+                detail,
+              }),
+            )
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new AgentLoopError({
+                    message: "Failed to publish AgentLoopRecoveryAbandoned",
+                    cause: error,
+                  }),
+              ),
+            )
+
         const findOrRestoreLoop = Effect.fn("AgentLoop.findOrRestoreLoop")(function* (
           sessionId: SessionId,
           branchId: BranchId,
@@ -2577,7 +2687,26 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           if (existing !== undefined) return existing
 
           const checkpoint = Option.getOrUndefined(
-            yield* Effect.option(checkpointStorage.get({ sessionId, branchId })),
+            yield* checkpointStorage.get({ sessionId, branchId }).pipe(
+              Effect.map((record) => (record === undefined ? Option.none() : Option.some(record))),
+              Effect.catchCause((cause) =>
+                publishRecoveryProbeAbandoned(
+                  sessionId,
+                  branchId,
+                  "checkpoint-read-failed",
+                  Cause.pretty(cause),
+                ).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new AgentLoopError({
+                        message: "Failed to read agent loop checkpoint",
+                        cause: Cause.squash(cause),
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           )
           if (checkpoint === undefined) return undefined
 

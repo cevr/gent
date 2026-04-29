@@ -1114,3 +1114,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd732-8bcc-7721-bcc8-475d1f645997`; initial collector-test P2 resolved in the same review round.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-030515-codex-to-claude-b0beec/claude.md`; initial collector-test/dead-usage P2 resolved in the same review round.
   - Note: Batch 6 deliberately narrowed the first carve to command schemas/helpers and turn-response collectors; recovery/phase extraction remains explicit follow-up work for Batch 7+ rather than a half-moved surface.
+- Batch 7 complete.
+  - Gate: `bun test packages/core/tests/runtime/agent-loop.test.ts --timeout 20000`, `bun run typecheck`, `bun run lint`, `bun run test`.
+  - Codex review: `019dd73e-865d-7853-ad48-d4a32112f413`; no P0/P1/P2 blockers.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-031822-codex-to-claude-55029a/claude.md`; no P0/P1/P2 blockers.
+  - Note: recovery now emits `AgentLoopRecoveryAbandoned` for checkpoint read/version/decode abandonment and fails closed on fatal checkpoint reads; `RecoveryOutcome` is a real typed result of recovery resolution rather than a discarded marker.

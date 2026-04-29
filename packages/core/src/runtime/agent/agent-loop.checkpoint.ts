@@ -1,5 +1,7 @@
 import { Clock, Effect, Schema } from "effect"
+import { RecoveryAbandonReason } from "../../domain/event.js"
 import { BranchId, SessionId } from "../../domain/ids.js"
+import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { LoopState, LoopQueueState } from "./agent-loop.state.js"
 
 export const AGENT_LOOP_CHECKPOINT_VERSION = 1
@@ -12,6 +14,18 @@ export type AgentLoopCheckpointState = typeof AgentLoopCheckpointState.Type
 
 export const AgentLoopCheckpointJson = Schema.fromJsonString(AgentLoopCheckpointState)
 const UnknownJson = Schema.fromJsonString(Schema.Unknown)
+
+export const RecoveryOutcome = TaggedEnumClass("RecoveryOutcome", {
+  NoCheckpoint: {},
+  Recovered: {
+    stateTag: Schema.String,
+  },
+  Abandoned: {
+    reason: RecoveryAbandonReason,
+    detail: Schema.optional(Schema.String),
+  },
+})
+export type RecoveryOutcome = typeof RecoveryOutcome.Type
 
 export const AgentLoopCheckpointRecord = Schema.Struct({
   sessionId: SessionId,
