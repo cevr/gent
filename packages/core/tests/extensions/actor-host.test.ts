@@ -23,6 +23,7 @@ import {
   Schema,
   SchemaGetter,
   Scope,
+  Stream,
 } from "effect"
 import { ActorEngine } from "@gent/core/runtime/extensions/actor-engine"
 import {
@@ -137,6 +138,114 @@ describe("ActorHost", () => {
         }).pipe(Effect.provide(layer)),
       )
       expect(observed).toBe(2)
+    }),
+  )
+  it.live("host restarts a defected actor and records the death", () =>
+    Effect.gen(function* () {
+      const PoisonMsg = TaggedEnumClass("HostPoisonMsg", {
+        Die: {},
+        Ping: TaggedEnumClass.askVariant<number>()({}),
+      })
+      type PoisonMsg = Schema.Schema.Type<typeof PoisonMsg>
+      const PoisonKey = ServiceKey<PoisonMsg>("host-poison-service")
+      const poisonBehavior: Behavior<PoisonMsg, null, never> = {
+        initialState: null,
+        serviceKey: PoisonKey,
+        supervision: { restart: "always", maxRestarts: 1 },
+        receive: (msg, _state, ctx) =>
+          Effect.gen(function* () {
+            if (msg._tag === "Die") return yield* Effect.die("host-poisoned" as const)
+            yield* ctx.reply(1)
+            return null
+          }) as Effect.Effect<null, never, never>,
+      }
+      const resolved = makeResolved([
+        makeLoaded("@test/poison", [
+          poisonBehavior as unknown as Behavior<PingMsg, PingState, never>,
+        ]),
+      ])
+      const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const reg = yield* Receptionist
+          const hostFailures = yield* ActorHostFailures
+          const refs = yield* reg.find(PoisonKey)
+          const ref = refs[0] as ActorRef<PoisonMsg>
+          const sawReplacement = yield* Deferred.make<ActorRef<PoisonMsg>>()
+          yield* reg.subscribe(PoisonKey).pipe(
+            Stream.tap((nextRefs) => {
+              const replacement = nextRefs.find((nextRef) => nextRef.id !== ref.id)
+              return replacement === undefined
+                ? Effect.void
+                : Deferred.succeed(sawReplacement, replacement)
+            }),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+          yield* engine.tell(ref, PoisonMsg.Die.make({}))
+          const replacement = yield* Deferred.await(sawReplacement).pipe(Effect.timeout("1 second"))
+          const pong = yield* engine.ask(replacement, PoisonMsg.Ping.make({}))
+          const failures = yield* hostFailures.snapshot
+          expect(pong).toBe(1)
+          expect(
+            failures.some(
+              (failure) =>
+                failure.extensionId === "@test/poison" && failure.error.includes("host-poisoned"),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("host quarantines an actor after its restart budget is exhausted", () =>
+    Effect.gen(function* () {
+      const PoisonMsg = TaggedEnumClass("HostQuarantineMsg", { Die: {} })
+      type PoisonMsg = Schema.Schema.Type<typeof PoisonMsg>
+      const PoisonKey = ServiceKey<PoisonMsg>("host-quarantine-service")
+      const poisonBehavior: Behavior<PoisonMsg, null, never> = {
+        initialState: null,
+        serviceKey: PoisonKey,
+        supervision: { restart: "always", maxRestarts: 0 },
+        receive: () =>
+          Effect.gen(function* () {
+            return yield* Effect.die("quarantine-me" as const)
+          }) as Effect.Effect<null, never, never>,
+      }
+      const resolved = makeResolved([
+        makeLoaded("@test/quarantine", [
+          poisonBehavior as unknown as Behavior<PingMsg, PingState, never>,
+        ]),
+      ])
+      const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const reg = yield* Receptionist
+          const hostFailures = yield* ActorHostFailures
+          const refs = yield* reg.find(PoisonKey)
+          const ref = refs[0] as ActorRef<PoisonMsg>
+          const sawEmpty = yield* Deferred.make<void>()
+          yield* reg.subscribe(PoisonKey).pipe(
+            Stream.tap((nextRefs) =>
+              nextRefs.length === 0 ? Deferred.succeed(sawEmpty, undefined) : Effect.void,
+            ),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+          yield* engine.tell(ref, PoisonMsg.Die.make({}))
+          yield* Deferred.await(sawEmpty).pipe(Effect.timeout("1 second"))
+          const afterDeath = yield* reg.find(PoisonKey)
+          const failures = yield* hostFailures.snapshot
+          expect(afterDeath).toEqual([])
+          expect(
+            failures.some(
+              (failure) =>
+                failure.extensionId === "@test/quarantine" && failure.error.includes("quarantined"),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.provide(layer)),
+      )
     }),
   )
   it.live("host-scope teardown interrupts spawned actor fibers", () =>

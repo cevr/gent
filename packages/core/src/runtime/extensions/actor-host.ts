@@ -18,13 +18,13 @@
 
 import { Cause, Context, Effect, Layer, Ref, Schedule } from "effect"
 import type { Duration } from "effect"
-import type { Behavior, JsonValueT } from "../../domain/actor.js"
+import type { ActorTerminated, Behavior, JsonValueT } from "../../domain/actor.js"
 import { parseJsonUnknown } from "../../domain/guards.js"
 import {
   ActorPersistenceStorage,
   type ActorPersistenceStorageService,
 } from "../../storage/actor-persistence-storage.js"
-import { ActorEngine } from "./actor-engine.js"
+import { ActorEngine, type ActorEngineService, type SpawnOptions } from "./actor-engine.js"
 import type { ResolvedExtensions } from "./registry.js"
 
 export interface ActorSpawnFailure {
@@ -156,6 +156,67 @@ const recordActorHostFailure = (
 const extensionIdFromPersistenceKey = (persistenceKey: string): string =>
   parseNamespacedPersistenceKey(persistenceKey)?.extensionId ?? "actor-host"
 
+const maxRestartsFor = <M, S>(behavior: Behavior<M, S, never>): number => {
+  if (behavior.supervision?.restart === "never") return 0
+  return behavior.supervision?.maxRestarts ?? 3
+}
+
+type RestoreDecision =
+  | { readonly status: "spawn"; readonly options?: SpawnOptions }
+  | { readonly status: "skip" }
+
+const spawnSupervisedBehavior = <M, S>(
+  engine: ActorEngineService,
+  failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
+  extensionId: string,
+  behavior: Behavior<M, S, never>,
+  restoreOptions: () => Effect.Effect<RestoreDecision>,
+): Effect.Effect<void> => {
+  const spawnAttempt: (remainingRestarts: number) => Effect.Effect<void> = (remainingRestarts) =>
+    Effect.gen(function* () {
+      const restored = yield* restoreOptions()
+      if (restored.status === "skip") return
+      const onExit = (terminated: ActorTerminated): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if (terminated.interrupted) return
+          yield* recordActorHostFailure(
+            failuresRef,
+            extensionId,
+            `actor terminated: ${terminated.cause}`,
+            "actor-host.actor.terminated",
+            {
+              actorId: terminated.actorId,
+              defect: terminated.defect,
+              ...(terminated.persistenceKey === undefined
+                ? {}
+                : { persistenceKey: terminated.persistenceKey }),
+            },
+          )
+          if (remainingRestarts <= 0) {
+            yield* recordActorHostFailure(
+              failuresRef,
+              extensionId,
+              `actor quarantined after restart budget exhausted: ${terminated.cause}`,
+              "actor-host.actor.quarantined",
+              {
+                actorId: terminated.actorId,
+                defect: terminated.defect,
+                ...(terminated.persistenceKey === undefined
+                  ? {}
+                  : { persistenceKey: terminated.persistenceKey }),
+              },
+            )
+            return
+          }
+          yield* spawnAttempt(remainingRestarts - 1)
+        })
+      yield* engine
+        .spawn(behavior, { ...restored.options, onExit })
+        .pipe(Effect.catchCause((cause) => recordSpawnFailure(failuresRef, extensionId, cause)))
+    })
+  return spawnAttempt(maxRestartsFor(behavior))
+}
+
 const spawnWithoutPersistence = (
   resolved: ResolvedExtensions,
   failuresRef: Ref.Ref<ReadonlyArray<ActorSpawnFailure>>,
@@ -166,11 +227,9 @@ const spawnWithoutPersistence = (
       const behaviors = ext.contributions.actors ?? []
       for (const behavior of behaviors) {
         const namespaced = withNamespacedPersistenceKey(behavior, ext.manifest.id)
-        yield* engine
-          .spawn(namespaced)
-          .pipe(
-            Effect.catchCause((cause) => recordSpawnFailure(failuresRef, ext.manifest.id, cause)),
-          )
+        yield* spawnSupervisedBehavior(engine, failuresRef, ext.manifest.id, namespaced, () =>
+          Effect.succeed({ status: "spawn" }),
+        )
       }
     }
   })
@@ -271,23 +330,24 @@ const spawnWithPersistence = (
       const behaviors = ext.contributions.actors ?? []
       for (const behavior of behaviors) {
         const namespaced = withNamespacedPersistenceKey(behavior, ext.manifest.id)
-        const restored = yield* loadRestoredState(
-          storage,
-          failuresRef,
-          persistence.profileId,
-          ext.manifest.id,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erase Behavior generics for the load helper; persistence schema pin is on the engine side
-          namespaced as Behavior<unknown, unknown, never>,
+        yield* spawnSupervisedBehavior(engine, failuresRef, ext.manifest.id, namespaced, () =>
+          loadRestoredState(
+            storage,
+            failuresRef,
+            persistence.profileId,
+            ext.manifest.id,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erase Behavior generics for the load helper; persistence schema pin is on the engine side
+            namespaced as Behavior<unknown, unknown, never>,
+          ).pipe(
+            Effect.map((nextRestored): RestoreDecision => {
+              if (nextRestored.status === "failed") return { status: "skip" }
+              if (nextRestored.status === "restored") {
+                return { status: "spawn", options: { restoredState: nextRestored.state } }
+              }
+              return { status: "spawn" }
+            }),
+          ),
         )
-        if (restored.status === "failed") continue
-        yield* engine
-          .spawn(
-            namespaced,
-            restored.status === "restored" ? { restoredState: restored.state } : undefined,
-          )
-          .pipe(
-            Effect.catchCause((cause) => recordSpawnFailure(failuresRef, ext.manifest.id, cause)),
-          )
       }
     }
   })

@@ -58,6 +58,7 @@ import {
   ActorPersistenceKeyCollision,
   ActorRestoreError,
   ActorSnapshotError,
+  ActorTerminated,
   type ActorContext,
   type ActorRef,
   type ActorView,
@@ -155,6 +156,7 @@ export interface SpawnOptions {
    * ephemeral or `restoredState` is `undefined`.
    */
   readonly restoredState?: JsonValueT
+  readonly onExit?: (terminated: ActorTerminated) => Effect.Effect<void>
 }
 
 export interface ActorEngineService {
@@ -482,8 +484,9 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             )
 
             // On fiber exit (interrupt or defect): drop the mailbox entry,
-            // free the persistence-key claim, and unregister from the
-            // Receptionist so dead refs do not leak into discovery results.
+            // free the persistence-key claim, unregister from the
+            // Receptionist so dead refs do not leak into discovery results,
+            // then notify the host-level supervisor.
             const cleanup = Effect.gen(function* () {
               yield* Ref.update(mailboxes, (m) => {
                 const next = new Map(m)
@@ -498,7 +501,28 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               }
             })
 
-            yield* Effect.forkIn(loop.pipe(Effect.ensuring(cleanup)), runtimeScope)
+            const supervisedLoop = Effect.exit(loop).pipe(
+              Effect.flatMap((exit) =>
+                Effect.gen(function* () {
+                  yield* cleanup
+                  if (exit._tag === "Success") return
+                  const cause = exit.cause
+                  const interrupted = Cause.hasInterruptsOnly(cause)
+                  const terminated = new ActorTerminated({
+                    actorId: id,
+                    ...(persistence === undefined ? {} : { persistenceKey: persistence.key }),
+                    interrupted,
+                    defect: Cause.hasDies(cause),
+                    cause: String(Cause.squash(cause)),
+                  })
+                  if (options?.onExit !== undefined) {
+                    yield* options.onExit(terminated)
+                  }
+                }),
+              ),
+            )
+
+            yield* Effect.forkIn(supervisedLoop, runtimeScope)
             return ref
           }).pipe((eff) => {
             // Backstop for the leak window between the persistence-key

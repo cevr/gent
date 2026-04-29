@@ -184,6 +184,21 @@ export interface PersistenceConfig<S> {
   readonly state: Schema.Codec<S, JsonValueT>
 }
 
+export const ActorRestartPolicy = Schema.Union([Schema.Literal("never"), Schema.Literal("always")])
+export type ActorRestartPolicy = typeof ActorRestartPolicy.Type
+
+/**
+ * Optional supervision policy for host-spawned actors.
+ *
+ * `always` is the actor-model default: defects kill the current actor
+ * fiber and the owning host decides whether to restart or quarantine.
+ * `never` is for single-shot / intentionally terminal actors.
+ */
+export interface ActorSupervision {
+  readonly restart?: ActorRestartPolicy
+  readonly maxRestarts?: number
+}
+
 /**
  * Behavior — the unit an extension declares and the engine spawns.
  *
@@ -203,6 +218,7 @@ export interface Behavior<M, S, R = never> {
   readonly view?: (state: S) => ActorView
   readonly serviceKey?: ServiceKey<M>
   readonly persistence?: PersistenceConfig<S>
+  readonly supervision?: ActorSupervision
 }
 
 /**
@@ -246,6 +262,14 @@ export class ActorSnapshotError extends Schema.TaggedErrorClass<ActorSnapshotErr
     cause: Schema.Unknown,
   },
 ) {}
+
+export class ActorTerminated extends Schema.TaggedErrorClass<ActorTerminated>()("ActorTerminated", {
+  actorId: ActorId,
+  persistenceKey: Schema.optional(Schema.String),
+  interrupted: Schema.Boolean,
+  defect: Schema.Boolean,
+  cause: Schema.String,
+}) {}
 
 /**
  * Raised by `ActorEngine.spawn` when two durable behaviors in the

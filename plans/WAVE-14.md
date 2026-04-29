@@ -224,11 +224,10 @@ unregistration is not enough.
 **Changes**:
 | File | Change |
 | ---- | ------ |
-| `packages/core/src/domain/actor.ts` | Add restart policy, actor health, and death/quarantine schemas. |
-| `packages/core/src/runtime/extensions/actor-host.ts` | Own supervisor policy and status propagation. |
-| `packages/core/src/runtime/extensions/actor-engine.ts` | Report actor death to host; support restartable spawn cells. |
-| `packages/core/tests/runtime/actor-engine.test.ts` | Defect -> death record -> restart/quarantine tests. |
-| `packages/core/tests/extensions/actor-host.test.ts` | Extension health reflects actor crash loops. |
+| `packages/core/src/domain/actor.ts` | Add optional behavior supervision policy and typed actor termination event. |
+| `packages/core/src/runtime/extensions/actor-engine.ts` | Report actor death to host through spawn options after cleanup/unregister. |
+| `packages/core/src/runtime/extensions/actor-host.ts` | Own restart budget and quarantine policy for host-spawned actors. |
+| `packages/core/tests/extensions/actor-host.test.ts` | Prove defect restart and restart-budget quarantine. |
 
 **Verification**:
 
@@ -616,6 +615,23 @@ not migration-era optimism.
   - Gate note: one first full-gate run hit a transient
     `tests/utils/run-process.test.ts` timeout; the focused file, `bun run test`,
     and the repeated full gate all passed without code changes.
+- Batch 5 implemented:
+  - Added optional `Behavior.supervision` with `"always"` / `"never"` restart
+    policy and max-restart budget.
+  - Added typed `ActorTerminated` exit reporting from `ActorEngine.spawn` after
+    mailbox cleanup, persistence claim release, and receptionist unregister.
+  - Changed `ActorHost` to own actor restart/quarantine decisions, recording
+    actor deaths and exhausted restart budgets through `ActorHostFailures`.
+  - Preserved durable restore fail-closed semantics: corrupt rows still skip
+    the actor instead of restarting from initial state.
+  - Added host-level tests proving a defected actor is replaced and a
+    zero-budget actor is quarantined.
+  - Focused gate: `bun test packages/core/tests/runtime/actor-engine.test.ts packages/core/tests/extensions/actor-host.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd956-ec6f-7c71-bbb4-e620f301a2d1`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition
