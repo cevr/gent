@@ -581,6 +581,23 @@ not migration-era optimism.
     persist failure fixed in-batch.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 3 implemented:
+  - Added `resolveExistingSessionBranch` as the shared durable target resolver
+    for `(sessionId, branchId)` pairs.
+  - Changed `SessionRuntime` dispatch, queue, state, metrics, and watch
+    boundaries to reject missing or cross-session branches before touching
+    loop state.
+  - Changed `InteractionCommands.respond` to validate the branch target before
+    storing resolutions, waking runtime state, resolving storage, or publishing
+    `InteractionResolved`.
+  - Added runtime regression coverage for cross-session branch dispatch and
+    missing-branch reads.
+  - Focused gate: `bun test packages/core/tests/runtime/session-runtime.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd92e-528b-7083-8ee6-87cee1bdbf70`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

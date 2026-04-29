@@ -334,6 +334,26 @@ const createCwdSessionBranch = Effect.gen(function* () {
   yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
+const createSessionBranchWithIds = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) =>
+  Effect.gen(function* () {
+    const storage = yield* Storage
+    const now = new Date()
+    yield* storage.createSession(
+      new Session({
+        id: input.sessionId,
+        name: `Runtime Test ${input.sessionId}`,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    yield* storage.createBranch(
+      new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: now }),
+    )
+    return input
+  })
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
@@ -402,6 +422,60 @@ const makeInteractionProviderLayer = () => {
   })
 }
 describe("SessionRuntime", () => {
+  it.live("dispatch rejects a branch that belongs to another session", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const first = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("runtime-target-first"),
+            branchId: BranchId.make("runtime-target-first-branch"),
+          })
+          const second = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("runtime-target-second"),
+            branchId: BranchId.make("runtime-target-second-branch"),
+          })
+          const exit = yield* Effect.exit(
+            sessionRuntime.dispatch(
+              sendUserMessageCommand({
+                sessionId: first.sessionId,
+                branchId: second.branchId,
+                content: "wrong branch",
+              }),
+            ),
+          )
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          }
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("runtime reads reject missing branches instead of returning idle state", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId } = yield* createSessionBranch
+          const exit = yield* Effect.exit(
+            sessionRuntime.getState({
+              sessionId,
+              branchId: BranchId.make("runtime-target-missing-branch"),
+            }),
+          )
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          }
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
   it.live("control-plane dispatch checks session existence without resolving profiles", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([])

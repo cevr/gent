@@ -1,11 +1,11 @@
 import { Effect, type Context } from "effect"
 import type { PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
-import type { Session } from "../domain/message.js"
+import type { Branch, Session } from "../domain/message.js"
 import type { AgentName } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import type { StorageError, StorageService } from "../storage/sqlite-storage.js"
+import { StorageError, type StorageService } from "../storage/sqlite-storage.js"
 import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
@@ -46,6 +46,13 @@ export interface SessionMissing {
 }
 
 export type ResolvedSessionEnvironment = SessionFound | SessionMissing
+
+export interface ExistingSessionBranch {
+  readonly session: Session
+  readonly branch: Branch
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
@@ -191,4 +198,32 @@ export const resolveSessionEnvironmentOrFail = (
   Effect.gen(function* () {
     const session = yield* params.storage.getSession(params.sessionId)
     return yield* buildResolvedSessionEnvironment({ ...params, session })
+  })
+
+export const resolveExistingSessionBranch = (params: {
+  readonly storage: StorageService
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}): Effect.Effect<ExistingSessionBranch, StorageError> =>
+  Effect.gen(function* () {
+    const session = yield* params.storage.getSession(params.sessionId)
+    if (session === undefined) {
+      return yield* new StorageError({
+        message: `Session not found: ${params.sessionId}`,
+      })
+    }
+
+    const branch = yield* params.storage.getBranch(params.branchId)
+    if (branch === undefined || branch.sessionId !== params.sessionId) {
+      return yield* new StorageError({
+        message: `Branch not found for session: ${params.sessionId}/${params.branchId}`,
+      })
+    }
+
+    return {
+      session,
+      branch,
+      sessionId: session.id,
+      branchId: branch.id,
+    }
   })

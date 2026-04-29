@@ -32,7 +32,11 @@ import { Receptionist } from "./extensions/receptionist.js"
 import { ExtensionRuntime } from "./extensions/resource-host/extension-runtime.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
-import { AllowAllPermission, resolveSessionEnvironmentOrFail } from "./session-runtime-context.js"
+import {
+  AllowAllPermission,
+  resolveExistingSessionBranch,
+  resolveSessionEnvironmentOrFail,
+} from "./session-runtime-context.js"
 import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
@@ -361,27 +365,18 @@ const makeLiveSessionRuntime: Effect.Effect<
     receptionist,
   })
 
-  // Every public session-scoped boundary (dispatch + reads) MUST
-  // validate durable existence before proceeding. In-memory tombstones do not
-  // survive restart — a read for a deleted session would otherwise fall through
-  // to "return idle" in the agent-loop and hide the ghost.
-  const requireSessionExists = (target: SessionRuntimeTarget) =>
-    storage.getSession(target.sessionId).pipe(
+  // Every public session-scoped boundary (dispatch + reads) MUST validate the
+  // durable `(sessionId, branchId)` target before proceeding. In-memory
+  // tombstones do not survive restart, and branch ids are globally addressable
+  // enough that session-only checks hide cross-session mistakes.
+  const requireSessionBranch = (target: SessionRuntimeTarget) =>
+    resolveExistingSessionBranch({ storage, ...target }).pipe(
       Effect.mapError(
         (cause) =>
           new SessionRuntimeError({
-            message: `Session lookup failed: ${target.sessionId}`,
+            message: cause.message,
             cause,
           }),
-      ),
-      Effect.flatMap((session) =>
-        session === undefined
-          ? Effect.fail(
-              new SessionRuntimeError({
-                message: `Session not found: ${target.sessionId}`,
-              }),
-            )
-          : Effect.succeed(session),
       ),
     )
 
@@ -389,7 +384,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     command: RuntimeCommand,
   ) {
     const target = runtimeCommandTarget(command)
-    yield* requireSessionExists(target)
+    yield* requireSessionBranch(target)
 
     switch (command._tag) {
       case "SendUserMessage": {
@@ -524,27 +519,27 @@ const makeLiveSessionRuntime: Effect.Effect<
       ),
 
     drainQueuedMessages: (input) =>
-      requireSessionExists(input).pipe(
+      requireSessionBranch(input).pipe(
         Effect.flatMap(() => agentLoop.drainQueue(input)),
         Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
       ),
 
     getQueuedMessages: (input) =>
-      requireSessionExists(input).pipe(
+      requireSessionBranch(input).pipe(
         Effect.flatMap(() => agentLoop.getQueue(input)),
         Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
       ),
 
     getState: (input) =>
       Effect.gen(function* () {
-        yield* requireSessionExists(input)
+        yield* requireSessionBranch(input)
         const loopState = yield* agentLoop.getState(input)
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
     getMetrics: (input) =>
       Effect.gen(function* () {
-        yield* requireSessionExists(input)
+        yield* requireSessionBranch(input)
         const envelopes = yield* storage
           .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
           .pipe(Effect.catchEager(() => Effect.succeed([])))
@@ -596,7 +591,7 @@ const makeLiveSessionRuntime: Effect.Effect<
 
     watchState: (input) =>
       Effect.gen(function* () {
-        yield* requireSessionExists(input)
+        yield* requireSessionBranch(input)
         return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
