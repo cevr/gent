@@ -553,6 +553,69 @@ describe("ActorHost", () => {
       expect(failures.some((f) => f.error.includes("persist write failed"))).toBe(true)
     }),
   )
+  it.live("durable ask reply waits for mutation-boundary persistence", () =>
+    Effect.gen(function* () {
+      const CommitMsg = TaggedEnumClass("CommitMsg", {
+        Inc: TaggedEnumClass.askVariant<number>()({}),
+      })
+      type CommitMsg = Schema.Schema.Type<typeof CommitMsg>
+      const CommitState = Schema.Struct({ hits: Schema.Number })
+      const CommitKey = ServiceKey<CommitMsg>("commit-service")
+      const commitBehavior: Behavior<CommitMsg, { readonly hits: number }, never> = {
+        initialState: { hits: 0 },
+        serviceKey: CommitKey,
+        persistence: { key: "commit", state: CommitState },
+        receive: (_msg, state, ctx) =>
+          Effect.gen(function* () {
+            const next = { hits: state.hits + 1 }
+            yield* ctx.reply(next.hits)
+            return next
+          }),
+      }
+      const profileId = "test-commit-boundary"
+      const failingStorage: ActorPersistenceStorageService = {
+        saveActorState: () =>
+          Effect.fail(new StorageError({ message: "intentional actor save failure" })),
+        loadActorState: () => Effect.succeed(undefined),
+        listActorStatesForProfile: () => Effect.succeed([]),
+        deleteActorStatesForProfile: () => Effect.void,
+      }
+      const resolved = makeResolved([
+        makeLoaded("@test/commit-boundary", [
+          commitBehavior as unknown as Behavior<PingMsg, PingState, never>,
+        ]),
+      ])
+      const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+        profileId,
+        writeInterval: Duration.minutes(5),
+      }).pipe(
+        Layer.provideMerge(ActorEngine.Live),
+        Layer.provideMerge(ActorPersistenceStorage.fromStorage(failingStorage)),
+      )
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* ActorEngine
+          const reg = yield* Receptionist
+          const hostFailures = yield* ActorHostFailures
+          const refs = yield* reg.find(CommitKey)
+          const ref = refs[0] as ActorRef<CommitMsg>
+          const reply = yield* engine
+            .ask(ref, CommitMsg.Inc.make({}), { askMs: 50 })
+            .pipe(Effect.option, Effect.timeout("1 second"))
+          const failures = yield* hostFailures.snapshot
+          return { reply, failures }
+        }).pipe(Effect.provide(hostLayer)),
+      )
+      expect(outcome.reply._tag).toBe("None")
+      expect(
+        outcome.failures.some(
+          (failure) =>
+            failure.extensionId === "@test/commit-boundary" &&
+            failure.error.includes("persist write failed"),
+        ),
+      ).toBe(true)
+    }),
+  )
   it.live("snapshot encode failure records the owner while healthy actors still persist", () =>
     Effect.gen(function* () {
       const profileId = "test-snapshot-settled"
@@ -600,6 +663,50 @@ describe("ActorHost", () => {
             (f) =>
               f.extensionId === "@test/bad-snapshot" &&
               f.error.includes(namespacePersistenceKey("@test/bad-snapshot", "bad")),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.scoped)
+    }),
+  )
+  it.live("mutation-boundary encode failure is recorded immediately", () =>
+    Effect.gen(function* () {
+      const profileId = "test-commit-encode-failure"
+      const badBehavior = makeRejectedSnapshotBehavior("bad")
+      const resolved = makeResolved([makeLoaded("@test/bad-commit", [badBehavior])])
+      const storageLayer = Storage.MemoryWithSql()
+      yield* Effect.gen(function* () {
+        const ctx = yield* Layer.build(storageLayer)
+        const storage = Context.get(ctx, ActorPersistenceStorage)
+        const hostLayer = ActorHost.fromResolvedWithPersistence(resolved, {
+          profileId,
+          writeInterval: Duration.minutes(5),
+        }).pipe(
+          Layer.provideMerge(ActorEngine.Live),
+          Layer.provideMerge(Layer.succeed(ActorPersistenceStorage, storage)),
+        )
+        const failures = yield* Effect.gen(function* () {
+          const hostScope = yield* Scope.make()
+          const hostCtx = yield* Layer.buildWithScope(hostLayer, hostScope)
+          const engine = Context.get(hostCtx, ActorEngine)
+          const refs = yield* Context.get(hostCtx, Receptionist).find(PingService)
+          const ref = refs[0] as ActorRef<PingMsg>
+          yield* engine.tell(ref, PingMsg.Bump.make({}))
+          const drained = yield* engine.ask(ref, PingMsg.Get.make({}))
+          expect(drained).toBe(1)
+          const snapshot = yield* Context.get(hostCtx, ActorHostFailures).snapshot
+          yield* Scope.close(hostScope, Exit.void)
+          return snapshot
+        }).pipe(Effect.scoped)
+        const row = yield* storage.loadActorState({
+          profileId,
+          persistenceKey: namespacePersistenceKey("@test/bad-commit", "bad"),
+        })
+        expect(row).toBeUndefined()
+        expect(
+          failures.some(
+            (failure) =>
+              failure.extensionId === "@test/bad-commit" &&
+              failure.error.includes(namespacePersistenceKey("@test/bad-commit", "bad")),
           ),
         ).toBe(true)
       }).pipe(Effect.scoped)

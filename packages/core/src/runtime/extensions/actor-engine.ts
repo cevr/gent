@@ -43,6 +43,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Equal,
   Exit,
   Layer,
   Queue,
@@ -157,6 +158,11 @@ export interface SpawnOptions {
    */
   readonly restoredState?: JsonValueT
   readonly onExit?: (terminated: ActorTerminated) => Effect.Effect<void>
+  readonly onCommitFailure?: (error: ActorSnapshotError) => Effect.Effect<void>
+  readonly onStateCommitted?: (dump: {
+    readonly persistenceKey: string
+    readonly state: JsonValueT
+  }) => Effect.Effect<void, unknown>
 }
 
 export interface ActorEngineService {
@@ -406,23 +412,29 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             }
 
             const replyFor =
-              (askId: string | undefined): ActorContext<M>["reply"] =>
+              (
+                askId: string | undefined,
+                pendingReplies: Array<Effect.Effect<void>>,
+              ): ActorContext<M>["reply"] =>
               (answer: unknown): Effect.Effect<void> =>
                 Effect.gen(function* () {
                   if (askId === undefined) return
                   const pending = yield* Ref.get(pendingAsks).pipe(Effect.map((m) => m.get(askId)))
                   if (pending === undefined) return
-                  yield* pending.resolve(answer)
+                  pendingReplies.push(pending.resolve(answer))
                 })
 
-            const ctxFor = (askId: string | undefined): ActorContext<M> => ({
+            const ctxFor = (
+              askId: string | undefined,
+              pendingReplies: Array<Effect.Effect<void>>,
+            ): ActorContext<M> => ({
               self: ref,
               tell: <N>(target: ActorRef<N>, msg: N) => tell(target, msg),
               ask: <N, ReplyMsg extends N & AskBranded<unknown>>(
                 target: ActorRef<N>,
                 msg: ReplyMsg,
               ) => ask(target, msg),
-              reply: replyFor(askId),
+              reply: replyFor(askId, pendingReplies),
               find: <N>(key: ServiceKey<N>): Effect.Effect<ReadonlyArray<ActorRef<N>>> =>
                 receptionist.find(key),
               findOne: <N>(key: ServiceKey<N>): Effect.Effect<ActorRef<N> | undefined> =>
@@ -450,15 +462,38 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
               const env = yield* Queue.take(queue)
               yield* stateSemaphore.withPermits(1)(
                 Effect.gen(function* () {
+                  const pendingReplies: Array<Effect.Effect<void>> = []
                   const state = yield* SubscriptionRef.get(stateChannel)
                   const next = yield* behavior.receive(
                     receiveMsg(env.msg),
                     state,
-                    ctxFor(env.askId),
+                    ctxFor(env.askId, pendingReplies),
                   )
                   // Single write — `SubscriptionRef.set` updates the
                   // current value AND notifies subscribers atomically.
                   yield* SubscriptionRef.set(stateChannel, next)
+                  if (
+                    persistence !== undefined &&
+                    options?.onStateCommitted !== undefined &&
+                    !Equal.equals(state, next)
+                  ) {
+                    const encoded = yield* Schema.encodeUnknownEffect(persistence.state)(next).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new ActorSnapshotError({ persistenceKey: persistence.key, cause }),
+                      ),
+                      Effect.tapError((error) =>
+                        options?.onCommitFailure === undefined
+                          ? Effect.void
+                          : options.onCommitFailure(error),
+                      ),
+                    )
+                    yield* options.onStateCommitted({
+                      persistenceKey: persistence.key,
+                      state: encoded,
+                    })
+                  }
+                  yield* Effect.all(pendingReplies, { discard: true })
                 }),
               )
             })
@@ -468,12 +503,12 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             // log + escalate so the fiber dies — subsequent asks observe
             // ActorAskTimeout instead of silently hanging.
             const loop: Effect.Effect<void, never> = step.pipe(
-              Effect.catchCause((cause: Cause.Cause<never>) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
+              Effect.catchCause((cause: Cause.Cause<unknown>) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 if (Cause.hasDies(cause)) {
                   return Effect.logError("actor.receive.defect").pipe(
                     Effect.annotateLogs({ actorId: id, defect: String(Cause.squash(cause)) }),
-                    Effect.andThen(Effect.failCause(cause)),
+                    Effect.andThen(Effect.die(Cause.squash(cause))),
                   )
                 }
                 return Effect.logWarning("actor.receive.failed").pipe(

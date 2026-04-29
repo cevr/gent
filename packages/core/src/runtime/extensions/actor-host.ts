@@ -171,6 +171,8 @@ const spawnSupervisedBehavior = <M, S>(
   extensionId: string,
   behavior: Behavior<M, S, never>,
   restoreOptions: () => Effect.Effect<RestoreDecision>,
+  onCommitFailure?: SpawnOptions["onCommitFailure"],
+  onStateCommitted?: SpawnOptions["onStateCommitted"],
 ): Effect.Effect<void> => {
   const spawnAttempt: (remainingRestarts: number) => Effect.Effect<void> = (remainingRestarts) =>
     Effect.gen(function* () {
@@ -211,7 +213,7 @@ const spawnSupervisedBehavior = <M, S>(
           yield* spawnAttempt(remainingRestarts - 1)
         })
       yield* engine
-        .spawn(behavior, { ...restored.options, onExit })
+        .spawn(behavior, { ...restored.options, onExit, onCommitFailure, onStateCommitted })
         .pipe(Effect.catchCause((cause) => recordSpawnFailure(failuresRef, extensionId, cause)))
     })
   return spawnAttempt(maxRestartsFor(behavior))
@@ -326,27 +328,60 @@ const spawnWithPersistence = (
   Effect.gen(function* () {
     const engine = yield* ActorEngine
     const storage = yield* ActorPersistenceStorage
+    const recordCommitEncodeFailure: SpawnOptions["onCommitFailure"] = (error) =>
+      recordActorHostFailure(
+        failuresRef,
+        extensionIdFromPersistenceKey(error.persistenceKey),
+        `snapshot failed for ${error.persistenceKey}: ${String(error.cause)}`,
+        "actor-host.snapshot.failed",
+        { persistenceKey: error.persistenceKey },
+      )
+    const saveCommittedState: SpawnOptions["onStateCommitted"] = ({ persistenceKey, state }) =>
+      storage
+        .saveActorState({
+          profileId: persistence.profileId,
+          persistenceKey,
+          stateJson: JSON.stringify(state),
+        })
+        .pipe(
+          Effect.tapError((error) =>
+            recordActorHostFailure(
+              failuresRef,
+              extensionIdFromPersistenceKey(persistenceKey),
+              `persist write failed for ${persistenceKey}: ${String(error)}`,
+              "actor-host.persist.write-failed",
+              { persistenceKey },
+            ),
+          ),
+        )
     for (const ext of resolved.extensions) {
       const behaviors = ext.contributions.actors ?? []
       for (const behavior of behaviors) {
         const namespaced = withNamespacedPersistenceKey(behavior, ext.manifest.id)
-        yield* spawnSupervisedBehavior(engine, failuresRef, ext.manifest.id, namespaced, () =>
-          loadRestoredState(
-            storage,
-            failuresRef,
-            persistence.profileId,
-            ext.manifest.id,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erase Behavior generics for the load helper; persistence schema pin is on the engine side
-            namespaced as Behavior<unknown, unknown, never>,
-          ).pipe(
-            Effect.map((nextRestored): RestoreDecision => {
-              if (nextRestored.status === "failed") return { status: "skip" }
-              if (nextRestored.status === "restored") {
-                return { status: "spawn", options: { restoredState: nextRestored.state } }
-              }
-              return { status: "spawn" }
-            }),
-          ),
+        yield* spawnSupervisedBehavior(
+          engine,
+          failuresRef,
+          ext.manifest.id,
+          namespaced,
+          () =>
+            loadRestoredState(
+              storage,
+              failuresRef,
+              persistence.profileId,
+              ext.manifest.id,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erase Behavior generics for the load helper; persistence schema pin is on the engine side
+              namespaced as Behavior<unknown, unknown, never>,
+            ).pipe(
+              Effect.map((nextRestored): RestoreDecision => {
+                if (nextRestored.status === "failed") return { status: "skip" }
+                if (nextRestored.status === "restored") {
+                  return { status: "spawn", options: { restoredState: nextRestored.state } }
+                }
+                return { status: "spawn" }
+              }),
+            ),
+          recordCommitEncodeFailure,
+          saveCommittedState,
         )
       }
     }

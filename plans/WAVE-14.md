@@ -243,11 +243,9 @@ state commit when the actor is declared durable.
 **Changes**:
 | File | Change |
 | ---- | ------ |
-| `packages/core/src/runtime/extensions/actor-engine.ts` | Return committed state snapshots after successful durable receives or call host commit hook. |
-| `packages/core/src/runtime/extensions/actor-host.ts` | Replace periodic-only persistence with write-through/journaled commits; keep snapshots as compaction. |
-| `packages/core/src/storage/actor-persistence-storage.ts` | Add commit/journal API if current save API is insufficient. |
-| `packages/core/tests/extensions/actor-host.test.ts` | Crash-before-periodic-write restore test. |
-| `packages/e2e/tests/actor-persistence.test.ts` | Worker crash/restart durable state acceptance test if feasible. |
+| `packages/core/src/runtime/extensions/actor-engine.ts` | Buffer replies until after durable state commit and report commit encode failures. |
+| `packages/core/src/runtime/extensions/actor-host.ts` | Wire mutation-boundary commits to `ActorPersistenceStorage.saveActorState`; keep periodic/finalizer snapshots as compaction and graceful-shutdown backup. |
+| `packages/core/tests/extensions/actor-host.test.ts` | Prove ask replies wait for mutation-boundary persistence and encode failures are immediately visible. |
 
 **Verification**:
 
@@ -630,6 +628,26 @@ not migration-era optimism.
   - Full gate: `bun run typecheck && bun run lint && bun run test`.
   - Codex review: `019dd956-ec6f-7c71-bbb4-e620f301a2d1`; no P0/P1/P2
     findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
+- Batch 6 implemented:
+  - Changed `ActorContext.reply` delivery so ask replies are buffered during
+    `receive` and released only after state update plus durable commit.
+  - Added `SpawnOptions.onStateCommitted` for durable write-through after a
+    changed durable state encodes successfully.
+  - Added `SpawnOptions.onCommitFailure` so mutation-boundary encode failures
+    are recorded through host health immediately, not only by a later periodic
+    snapshot.
+  - Wired `ActorHost.fromResolvedWithPersistence` to save committed durable
+    rows through `ActorPersistenceStorage.saveActorState`, while preserving
+    periodic/finalizer snapshots as backup/compaction.
+  - Added regression coverage proving failed mutation-boundary persistence
+    withholds an ask reply and records `ActorHostFailures`, and proving encode
+    failure is immediately visible.
+  - Focused gate: `bun test packages/core/tests/runtime/actor-engine.test.ts packages/core/tests/extensions/actor-host.test.ts packages/core/tests/runtime/actor-persistence.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd95e-2382-7560-92cc-be93e0971dab`; P2 immediate
+    encode-failure visibility fixed in-batch.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
 - P0 findings: none.
