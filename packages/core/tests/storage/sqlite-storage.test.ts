@@ -1,12 +1,13 @@
 import { describe, it, expect, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { Database } from "bun:sqlite"
-import { Effect, Exit, Layer, Ref } from "effect"
+import { Cause, Effect, Exit, Layer, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { mkdtempSync, rmSync } from "node:fs"
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import {
   Session,
   Branch,
@@ -21,6 +22,7 @@ import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { messageToInfo } from "../../src/server/session-utils"
+import { repairSqliteForeignKeyOrphans } from "../../src/storage/sqlite-repair"
 describe("Storage", () => {
   describe("Sessions", () => {
     it.live("creates and retrieves a session", () =>
@@ -866,6 +868,40 @@ describe("Storage", () => {
                 ["missing-session", "legacy-extension", "{}", 16],
               )
               db.close()
+              const unpreparedDbPath = join(dir, "unprepared.db")
+              copyFileSync(dbPath, unpreparedDbPath)
+              const unpreparedLayer = Storage.LiveWithSql(unpreparedDbPath).pipe(
+                Layer.provide(BunFileSystem.layer),
+                Layer.provide(BunServices.layer),
+              )
+              const unpreparedOpen = yield* Effect.exit(
+                Effect.gen(function* () {
+                  yield* Storage
+                }).pipe(Effect.provide(unpreparedLayer)),
+              )
+              expect(unpreparedOpen._tag).toBe("Failure")
+              if (unpreparedOpen._tag === "Failure") {
+                const fail = unpreparedOpen.cause.reasons.find(Cause.isFailReason)
+                expect(fail?.error).toBeInstanceOf(StorageError)
+                expect(fail?.error.message).toContain("SQLite foreign key integrity check failed")
+              }
+              const orphanBeforeRepair = new Database(unpreparedDbPath)
+              const orphanBeforeRepairRows = orphanBeforeRepair
+                .query<{ count: number }, []>(
+                  `SELECT COUNT(*) as count FROM branches WHERE id = 'orphan-branch'`,
+                )
+                .all()
+              expect(orphanBeforeRepairRows[0]?.count).toBe(1)
+              const retiredBeforeRepairRows = orphanBeforeRepair
+                .query<{ count: number }, []>(
+                  `SELECT COUNT(*) as count FROM sqlite_schema WHERE type = 'table' AND name = 'extension_state'`,
+                )
+                .all()
+              expect(retiredBeforeRepairRows[0]?.count).toBe(1)
+              orphanBeforeRepair.close()
+              yield* repairSqliteForeignKeyOrphans.pipe(
+                Effect.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))),
+              )
               const layer = Storage.LiveWithSql(dbPath).pipe(
                 Layer.provide(BunFileSystem.layer),
                 Layer.provide(BunServices.layer),

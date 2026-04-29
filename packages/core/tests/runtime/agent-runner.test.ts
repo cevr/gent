@@ -391,7 +391,7 @@ describe("AgentRunner", () => {
   )
   it.live("rolls back durable child session when spawn event append fails", () =>
     Effect.gen(function* () {
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = Layer.orDie(Storage.TestWithSql())
       const failingPublisherLayer = Layer.succeed(EventPublisher, {
         append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
         deliver: () => Effect.void,
@@ -599,7 +599,7 @@ describe("AgentRunner", () => {
   )
   it.live("ephemeral helper runs mirror child tool events into the parent store", () =>
     Effect.gen(function* () {
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = Layer.orDie(Storage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
@@ -1080,7 +1080,7 @@ describe("session depth guard", () => {
 })
 describe("ephemeral service propagation", () => {
   const makeEphemeralLayer = (providerLayer: Layer.Layer<Provider>) => {
-    const storageLayer = Storage.TestWithSql()
+    const storageLayer = Layer.orDie(Storage.TestWithSql())
     const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
@@ -1161,7 +1161,7 @@ describe("ephemeral service propagation", () => {
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = Layer.orDie(Storage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(

@@ -517,41 +517,6 @@ const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex
   yield* Effect.forEach(messages, (message) => indexMessageSearch(message), { discard: true })
 })
 
-const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql.withTransaction(
-    Effect.gen(function* () {
-      yield* sql`DELETE FROM branches WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM messages WHERE branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM messages WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = messages.branch_id AND branches.session_id != messages.session_id)`
-      yield* sql`DELETE FROM message_chunks WHERE message_id NOT IN (SELECT id FROM messages)`
-      yield* sql`DELETE FROM message_chunks WHERE chunk_id NOT IN (SELECT id FROM content_chunks)`
-      yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-      yield* sql`DELETE FROM events WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND EXISTS (SELECT 1 FROM branches WHERE branches.id = events.branch_id AND branches.session_id != events.session_id)`
-      yield* sql`DELETE FROM actor_inbox WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM actor_inbox WHERE branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`DELETE FROM actor_inbox WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = actor_inbox.branch_id AND branches.session_id != actor_inbox.session_id)`
-      yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM agent_loop_checkpoints WHERE branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`DELETE FROM agent_loop_checkpoints WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = agent_loop_checkpoints.branch_id AND branches.session_id != agent_loop_checkpoints.session_id)`
-      yield* sql`DELETE FROM interaction_requests WHERE session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`DELETE FROM interaction_requests WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = interaction_requests.branch_id AND branches.session_id != interaction_requests.session_id)`
-      yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND active_branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.active_branch_id AND branches.session_id = sessions.id)`
-      yield* sql`UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IS NOT NULL AND parent_session_id NOT IN (SELECT id FROM sessions)`
-      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_session_id IS NULL`
-      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND parent_branch_id NOT IN (SELECT id FROM branches)`
-      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.parent_branch_id AND branches.session_id = sessions.parent_session_id)`
-      yield* sql`UPDATE branches SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches AS parent WHERE parent.id = branches.parent_branch_id AND parent.session_id = branches.session_id)`
-    }),
-  )
-})
-
 const dropRetiredTables = Effect.fn("Storage.dropRetiredTables")(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql.unsafe(`DROP INDEX IF EXISTS idx_todos_branch`).pipe(Effect.ignoreCause)
@@ -855,15 +820,16 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
     parent: string
     fkid: number
   }>`PRAGMA foreign_key_check`
+  const activeRows = rows.filter((row) => row.table !== "extension_state" && row.table !== "todos")
 
-  if (rows.length === 0) return
+  if (activeRows.length === 0) return
 
-  const details = rows
+  const details = activeRows
     .slice(0, 10)
     .map((row) => `${row.table}:${row.rowid ?? "unknown"} -> ${row.parent}#${row.fkid}`)
     .join(", ")
   return yield* new StorageError({
-    message: `SQLite foreign key integrity check failed after repair: ${details}`,
+    message: `SQLite foreign key integrity check failed: ${details}`,
   })
 })
 
@@ -1034,10 +1000,9 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
-  yield* dropRetiredTables()
-  yield* repairForeignKeyOrphans()
   yield* migrateForeignKeyConstraints()
   yield* assertForeignKeyIntegrity()
+  yield* dropRetiredTables()
 
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   yield* sql.unsafe(
@@ -1708,8 +1673,13 @@ const makeStorageImpl = Effect.gen(function* () {
   } satisfies StorageService
 })
 
+const mapStartupError = (error: unknown): StorageError =>
+  Schema.is(StorageError)(error)
+    ? error
+    : new StorageError({ message: "Failed to initialize SQLite storage", cause: error })
+
 const makeStorage = Effect.gen(function* () {
-  yield* Effect.orDie(initSchema)
+  yield* initSchema.pipe(Effect.mapError(mapStartupError))
   return yield* makeStorageImpl
 })
 
@@ -1795,7 +1765,11 @@ export class Storage extends Context.Service<Storage, StorageService>()(
 ) {
   static Live = (
     dbPath: string,
-  ): Layer.Layer<Storage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+  ): Layer.Layer<
+    Storage,
+    StorageError | PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  > =>
     Layer.effect(
       Storage,
       Effect.gen(function* () {
@@ -1827,7 +1801,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | EventStorage
     | RelationshipStorage
     | ActorPersistenceStorage,
-    PlatformError.PlatformError,
+    StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
     const base = Layer.effect(
@@ -1851,7 +1825,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     )
   }
 
-  static Memory = (): Layer.Layer<Storage> =>
+  static Memory = (): Layer.Layer<Storage, StorageError> =>
     Layer.effect(Storage, makeStorage).pipe(Layer.provide(memorySqliteClientLayer))
 
   /** Memory layer that also exposes SqlClient and focused storage services */
@@ -1866,7 +1840,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ActorPersistenceStorage
+    | ActorPersistenceStorage,
+    StorageError
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(memorySqliteClientLayer),
@@ -1882,7 +1857,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     )
   }
 
-  static Test = (): Layer.Layer<Storage> => Storage.Memory()
+  static Test = (): Layer.Layer<Storage, StorageError> => Storage.Memory()
 
   /** Test layer that also exposes SqlClient and focused storage services */
   static TestWithSql = (): Layer.Layer<
@@ -1896,6 +1871,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | ActorPersistenceStorage
+    | ActorPersistenceStorage,
+    StorageError
   > => Storage.MemoryWithSql()
 }

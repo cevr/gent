@@ -265,8 +265,9 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       })
 
       const activeExtensions = reconciled.resolved.extensions
+      const storageLayer = Layer.orDie(Storage.TestWithSql())
       const baseLayer = Layer.mergeAll(
-        Storage.TestWithSql(),
+        storageLayer,
         EventStore.Memory,
         ExtensionRegistry.fromResolved(reconciled.resolved),
         turnControlLayer,

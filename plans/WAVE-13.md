@@ -1099,3 +1099,8 @@ bun run typecheck && bun run lint && bun run test
   - Codex review: `019dd70f-6a71-7c11-bb51-e0e94dacd3f8`; initial P1/P2 resolved in the same review round.
   - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-022645-codex-to-claude-effb6f/claude.md`; no P0/P1/P2 blockers.
   - Note: `FailingStorage` now overlays the focused storage tags derived from the same wrapped `StorageService`, so later failure-injection tests cannot bypass faults by yielding sub-tags directly.
+- Batch 4 complete.
+  - Gate: `bun test packages/core/tests/storage/sqlite-storage.test.ts --timeout 20000`, `bun run typecheck`, `bun run lint`, `bun test packages/core/tests/utils/run-process.test.ts --timeout 20000`, `bun run test`.
+  - Codex review: `019dd718-1618-7a20-8a1b-4328df8df694`; initial P1/P2 findings resolved in the same review round.
+  - Okra counsel: `/tmp/counsel/personal-gent-860892a9/20260429-023613-codex-to-claude-42e8a8/claude.md`; initial typed-failure and repair-surface findings addressed.
+  - Note: startup no longer repairs or drops retired tables before failing closed; explicit FK orphan repair lives in internal-only `packages/core/src/storage/sqlite-repair.ts`.

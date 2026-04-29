@@ -153,7 +153,7 @@ const makeExecutorExtension = (overrides?: {
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
   const turnControl = ExtensionTurnControl.Test()
-  const storage = Storage.Test()
+  const storage = Layer.orDie(Storage.Test())
   const resolved = { extensions: [extension] } as unknown as ResolvedExtensions
   // Build the actor runtime stack: `ActorEngine.Live` provides engine +
   // Receptionist; `ActorHost.fromResolved` spawns contributed behaviors;
