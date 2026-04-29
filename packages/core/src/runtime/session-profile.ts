@@ -38,7 +38,7 @@ import {
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
-import { resolveProfileRuntime } from "./profile.js"
+import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
 import { runWithBuiltLayer } from "./run-with-built-layer.js"
 import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
 
@@ -77,6 +77,7 @@ export interface SessionProfileCacheConfig {
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>
   readonly extensions: ReadonlyArray<GentExtension>
+  readonly initialProfiles?: ReadonlyArray<SessionProfile>
 }
 
 export interface SessionProfileCacheService {
@@ -103,13 +104,16 @@ export class SessionProfileCache extends Context.Service<
     Layer.effect(
       SessionProfileCache,
       Effect.gen(function* () {
-        const cacheRef = yield* Ref.make<Map<string, SessionProfile>>(new Map())
-        const initSemaphore = yield* Semaphore.make(1)
         const configService = yield* ConfigService
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
         const actorPersistenceStorage = yield* ActorPersistenceStorage
+        const initialCache = new Map<string, SessionProfile>(
+          (config.initialProfiles ?? []).map((profile) => [pathSvc.resolve(profile.cwd), profile]),
+        )
+        const cacheRef = yield* Ref.make<Map<string, SessionProfile>>(initialCache)
+        const initSemaphore = yield* Semaphore.make(1)
         // Capture server scope — extension lifecycle (onShutdown) ties to this
         const serverScope = yield* Scope.Scope
 
@@ -149,27 +153,12 @@ export class SessionProfileCache extends Context.Service<
                 : {}),
             }).pipe(Effect.provideService(Scope.Scope, serverScope))
 
-            const { profile: profileData } = runtime
-
-            const profile: SessionProfile = {
-              cwd: profileData.cwd,
-              extensions: profileData.resolved.extensions,
-              resolved: profileData.resolved,
-              layerContext: runtime.layerContext,
-              permissionService: runtime.permissionService,
-              registryService: runtime.registryService,
-              driverRegistryService: runtime.driverRegistryService,
-              extensionRuntime: runtime.extensionRuntime,
-              actorEngine: runtime.actorEngine,
-              receptionist: runtime.receptionist,
-              baseSections: runtime.baseSections,
-              instructions: profileData.instructions,
-            }
+            const profile = sessionProfileFromRuntime(runtime)
 
             yield* Effect.logInfo("session-profile.initialized").pipe(
               Effect.annotateLogs({
-                cwd: profileData.cwd,
-                extensionCount: profileData.resolved.extensions.length,
+                cwd: profile.cwd,
+                extensionCount: profile.resolved.extensions.length,
                 sectionCount: runtime.baseSections.length,
               }),
             )
@@ -260,3 +249,28 @@ export class SessionProfileCache extends Context.Service<
     })
   }
 }
+
+export const sessionProfileFromRuntime = (runtime: {
+  readonly profile: RuntimeProfile
+  readonly layerContext: Context.Context<never>
+  readonly permissionService: PermissionService
+  readonly registryService: ExtensionRegistryService
+  readonly driverRegistryService: DriverRegistryService
+  readonly extensionRuntime: ExtensionRuntimeService
+  readonly actorEngine: ActorEngineService
+  readonly receptionist: ReceptionistService
+  readonly baseSections: ReadonlyArray<PromptSection>
+}): SessionProfile => ({
+  cwd: runtime.profile.cwd,
+  extensions: runtime.profile.resolved.extensions,
+  resolved: runtime.profile.resolved,
+  layerContext: runtime.layerContext,
+  permissionService: runtime.permissionService,
+  registryService: runtime.registryService,
+  driverRegistryService: runtime.driverRegistryService,
+  extensionRuntime: runtime.extensionRuntime,
+  actorEngine: runtime.actorEngine,
+  receptionist: runtime.receptionist,
+  baseSections: runtime.baseSections,
+  instructions: runtime.profile.instructions,
+})

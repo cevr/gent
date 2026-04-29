@@ -27,7 +27,11 @@ import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { makeEventPublisherRouter } from "./event-publisher.js"
 import { SessionCommands } from "./session-commands.js"
-import { SessionProfileCache } from "../runtime/session-profile.js"
+import {
+  SessionProfileCache,
+  sessionProfileFromRuntime,
+  type SessionProfile,
+} from "../runtime/session-profile.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
 
@@ -78,6 +82,7 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
 })
 
 export const createDependencies = (config: DependenciesConfig) => {
+  let launchSessionProfileSeed: SessionProfile | undefined
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
     home: config.home,
@@ -104,8 +109,9 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
 
-  // Resolve and build the profile runtime once. Server startup and per-cwd
-  // profile cache now share the same profile runtime helper.
+  // Resolve and build the launch cwd profile runtime once. Server startup and
+  // SessionProfileCache share this same profile so launch cwd actor persistence
+  // has a single owner.
   const profileLayers = Layer.unwrap(
     Effect.gen(function* () {
       const runtime = yield* resolveProfileRuntime({
@@ -123,6 +129,8 @@ export const createDependencies = (config: DependenciesConfig) => {
           : {}),
         scheduledJobEnv: scheduledJobEnv(config),
       })
+      const profile = sessionProfileFromRuntime(runtime)
+      launchSessionProfileSeed = profile
       const baseSectionsLayer = Layer.succeed(BasePromptSectionsTag, runtime.baseSections)
       // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
       // can construct an EphemeralProfile via RuntimeComposer without forging
@@ -130,7 +138,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       // brandServerScope (lint-fenced).
       const serverProfileLayer = Layer.succeed(
         ServerProfileService,
-        brandServerScope({ cwd: runtime.profile.cwd, resolved: runtime.profile.resolved }),
+        brandServerScope({ cwd: profile.cwd, resolved: profile.resolved }),
       )
       return Layer.mergeAll(
         Layer.succeedContext(runtime.layerContext),
@@ -296,16 +304,25 @@ export const createDependencies = (config: DependenciesConfig) => {
       }),
     ).pipe(
       Layer.provideMerge(
-        SessionProfileCache.Live({
-          home: config.home,
-          platform: config.platform,
-          shell: config.shell,
-          osVersion: config.osVersion,
-          disabledExtensions: config.disabledExtensions,
-          scheduledJobCommand: config.scheduledJobCommand,
-          scheduledJobEnv: scheduledJobEnv(config),
-          extensions: config.extensions,
-        }),
+        Layer.unwrap(
+          Effect.sync(() => {
+            const launchProfile = launchSessionProfileSeed
+            if (launchProfile === undefined) {
+              throw new Error("Launch session profile seed was not initialized")
+            }
+            return SessionProfileCache.Live({
+              home: config.home,
+              platform: config.platform,
+              shell: config.shell,
+              osVersion: config.osVersion,
+              disabledExtensions: config.disabledExtensions,
+              scheduledJobCommand: config.scheduledJobCommand,
+              scheduledJobEnv: scheduledJobEnv(config),
+              extensions: config.extensions,
+              initialProfiles: [launchProfile],
+            })
+          }),
+        ),
       ),
     ),
     allDeps,

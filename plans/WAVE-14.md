@@ -206,15 +206,13 @@ durable actor rows.
 **Changes**:
 | File | Change |
 | ---- | ------ |
-| `packages/core/src/server/dependencies.ts` | Insert launch-cwd profile into `SessionProfileCache` or remove the duplicate launch-cwd actor runtime. |
-| `packages/core/src/runtime/session-profile.ts` | Enforce one profile runtime per cwd owner. |
-| `packages/core/src/runtime/profile.ts` | Make actor persistence ownership explicit in profile construction. |
-| `packages/core/tests/runtime/session-runtime-context.test.ts` | Prove launch-cwd sessions share one profile runtime. |
-| `packages/core/tests/extensions/actor-host.test.ts` | Prove durable actor rows have one active owner. |
+| `packages/core/src/server/dependencies.ts` | Seed `SessionProfileCache` with the launch-cwd profile built by startup. |
+| `packages/core/src/runtime/session-profile.ts` | Accept canonicalized initial profiles and share profile construction from resolved runtimes. |
+| `packages/core/tests/runtime/session-profile.test.ts` | Prove launch-cwd cache resolution returns the seeded profile instead of rebuilding that cwd. |
 
 **Verification**:
 
-- Profile/session-runtime and actor-host tests.
+- Focused profile cache test.
 - Full gate.
 - One Codex review plus one Okra counsel attempt.
 
@@ -598,6 +596,26 @@ not migration-era optimism.
     findings.
   - Okra counsel attempt: one `okra counsel --deep` run was started and killed
     by the 180s batch timeout with no usable output.
+- Batch 4 implemented:
+  - Added `SessionProfileCacheConfig.initialProfiles` and canonicalized initial
+    cache keys with `Path.resolve`, so launch-cwd aliases reuse the seeded
+    profile.
+  - Extracted `sessionProfileFromRuntime` so startup and lazy cwd resolution
+    build identical `SessionProfile` values from the resolved runtime owner.
+  - Changed `createDependencies` to seed `SessionProfileCache` from the launch
+    profile built during server startup, preventing a second actor host/runtime
+    owner for the launch cwd.
+  - Added `SessionProfileCache` coverage proving `cache.resolve(join(cwd, "."))`
+    returns the seeded launch profile by identity instead of rebuilding.
+  - Focused gate: `bun test packages/core/tests/runtime/session-profile.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd94c-9d9b-7ec2-a103-211118468ec2`; no P0/P1/P2
+    findings.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output.
+  - Gate note: one first full-gate run hit a transient
+    `tests/utils/run-process.test.ts` timeout; the focused file, `bun run test`,
+    and the repeated full gate all passed without code changes.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition
