@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Fiber, Schema, Stream } from "effect"
+import { Cause, Effect, Fiber, Schema, Stream } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core/domain/ids"
+import { ExtensionId, InteractionRequestId } from "@gent/core/domain/ids"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
@@ -108,6 +108,103 @@ describe("interaction.respondInteraction", () => {
                   (part) =>
                     part.type === "tool-result" &&
                     JSON.stringify(part.output.value).includes("ship it"),
+                ),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "rejects stale request ids without consuming the pending interaction",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finalReply = "approval resumed after stale response"
+          const { layer: providerLayer } = yield* Provider.Sequence([
+            toolCallStep("approval_probe", { text: "approve deploy?" }),
+            textStep(finalReply),
+          ])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "run approval probe",
+          })
+
+          const interactions = Array.from(yield* Fiber.join(interactionFiber))
+          const presented = interactions[0]?.event
+          expect(presented?._tag).toBe("InteractionPresented")
+          if (presented?._tag !== "InteractionPresented") return
+
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "waiting interaction runtime state before stale response",
+          )
+
+          const staleExit = yield* Effect.exit(
+            client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: InteractionRequestId.make("req-stale-rpc-1"),
+              approved: false,
+              notes: "wrong dialog",
+            }),
+          )
+          expect(staleExit._tag).toBe("Failure")
+          if (staleExit._tag === "Failure") {
+            expect(Cause.pretty(staleExit.cause)).toContain("InteractionRequestMismatchError")
+          }
+
+          const parked = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(parked.runtime._tag).toBe("WaitingForInteraction")
+
+          yield* client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: presented.requestId,
+            approved: true,
+            notes: "real approval",
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === finalReply),
+              ),
+            5_000,
+            "assistant reply after correct interaction response",
+          )
+
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "tool" &&
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    JSON.stringify(part.output.value).includes("real approval"),
                 ),
             ),
           ).toBe(true)

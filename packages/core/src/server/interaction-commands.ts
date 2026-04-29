@@ -2,6 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
+import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { SessionRuntime, respondInteractionCommand } from "../runtime/session-runtime.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
 import type { AppServiceError } from "./errors.js"
@@ -33,6 +34,20 @@ export class InteractionCommands extends Context.Service<
         respond: Effect.fn("InteractionCommands.respond")(function* (
           input: RespondInteractionInput,
         ) {
+          const pendingRequestId = approvalService.pendingRequestId(input)
+          if (pendingRequestId !== input.requestId) {
+            return yield* new InteractionRequestMismatchError({
+              message:
+                pendingRequestId === undefined
+                  ? "No pending interaction request exists for this session branch"
+                  : "Interaction response requestId does not match the pending request",
+              expectedRequestId: pendingRequestId,
+              actualRequestId: input.requestId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+            })
+          }
+
           // 1. Store resolution so re-entering present() finds it
           approvalService.storeResolution(input.requestId, {
             approved: input.approved,

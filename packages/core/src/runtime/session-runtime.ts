@@ -10,7 +10,14 @@ import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
 import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
+import {
+  ActorCommandId,
+  BranchId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "../domain/ids.js"
 import { Message, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -164,7 +171,7 @@ export type ApplySteerCommand = typeof ApplySteerCommand.Type
 
 export const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
   ...RuntimeCommandTargetFields,
-  requestId: Schema.String,
+  requestId: InteractionRequestId,
 })
 export type RespondInteractionCommand = typeof RespondInteractionCommand.Type
 
@@ -286,7 +293,9 @@ export const applySteerCommand = (command: SteerCommandType): ApplySteerCommand 
 })
 
 export const respondInteractionCommand = (
-  input: Pick<SessionRuntimeTarget, "sessionId" | "branchId"> & { requestId: string },
+  input: Pick<SessionRuntimeTarget, "sessionId" | "branchId"> & {
+    requestId: InteractionRequestId
+  },
 ): RespondInteractionCommand => ({
   _tag: "RespondInteraction",
   ...input,

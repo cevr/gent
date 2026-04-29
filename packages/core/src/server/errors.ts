@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { EventStoreError } from "../domain/event.js"
+import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ProviderError } from "../providers/provider.js"
 import { SessionRuntimeErrorSchema, type SessionRuntimeError } from "../runtime/session-runtime.js"
@@ -27,6 +28,7 @@ export type GentRpcError =
   | ExtensionProtocolError
   | PlatformErrorSchema
   | EventStoreError
+  | InteractionRequestMismatchError
   | NotFoundError
   | InvalidStateError
 
@@ -41,6 +43,7 @@ export const GentRpcError = Schema.Union([
   ExtensionProtocolError,
   PlatformErrorSchema,
   EventStoreError,
+  InteractionRequestMismatchError,
   NotFoundError,
   InvalidStateError,
 ])

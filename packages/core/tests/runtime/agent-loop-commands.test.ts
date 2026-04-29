@@ -8,7 +8,7 @@ import {
   assistantMessageIdForCommand,
   toolResultMessageIdForCommand,
 } from "../../src/runtime/agent/agent-loop.commands"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, InteractionRequestId, MessageId, SessionId } from "@gent/core/domain/ids"
 
 const sessionId = SessionId.make("command-session")
 const branchId = BranchId.make("command-branch")
@@ -53,7 +53,12 @@ describe("agent loop commands", () => {
     const inputs = [
       { _tag: "RunTurn", message: messageInput },
       { _tag: "ApplySteer", command: { _tag: "Cancel", sessionId, branchId } },
-      { _tag: "RespondInteraction", sessionId, branchId, requestId: "request-1" },
+      {
+        _tag: "RespondInteraction",
+        sessionId,
+        branchId,
+        requestId: InteractionRequestId.make("request-1"),
+      },
       {
         _tag: "RecordToolResult",
         sessionId,

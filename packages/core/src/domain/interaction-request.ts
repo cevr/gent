@@ -47,6 +47,16 @@ export class InteractionPendingError extends Schema.TaggedErrorClass<Interaction
   branchId: BranchId,
 }) {}
 
+export class InteractionRequestMismatchError extends Schema.TaggedErrorClass<InteractionRequestMismatchError>(
+  "@gent/core/domain/interaction-request/InteractionRequestMismatchError",
+)("InteractionRequestMismatchError", {
+  message: Schema.String,
+  expectedRequestId: Schema.optional(InteractionRequestId),
+  actualRequestId: InteractionRequestId,
+  sessionId: SessionId,
+  branchId: BranchId,
+}) {}
+
 // ============================================================================
 // Durable interaction record
 // ============================================================================
@@ -103,6 +113,10 @@ export interface InteractionService {
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
+  readonly pendingRequestId: (ctx: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => InteractionRequestId | undefined
   readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Store a resolution for cold-mode resumption (keyed by requestId) */
   readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
@@ -201,6 +215,8 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
         branchId: ctx.branchId,
       })
     }),
+
+    pendingRequestId: (ctx) => pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
 
     respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
       if (config.storage !== undefined) {

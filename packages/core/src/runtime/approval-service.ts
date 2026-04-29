@@ -28,6 +28,10 @@ export interface ApprovalServiceShape {
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
+  readonly pendingRequestId: (ctx: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => InteractionRequestId | undefined
   /** Store a resolution for cold-mode resumption */
   readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
   /** Mark a request as resolved in storage */
@@ -50,6 +54,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       const interaction = makeApprovalInteractionService(eventPublisher)
       return {
         present: interaction.present,
+        pendingRequestId: interaction.pendingRequestId,
         storeResolution: interaction.storeResolution,
         respond: interaction.respond,
         rehydrate: interaction.rehydrate,
@@ -67,6 +72,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         const interaction = makeApprovalInteractionService(eventPublisher, storage)
         return {
           present: interaction.present,
+          pendingRequestId: interaction.pendingRequestId,
           storeResolution: interaction.storeResolution,
           respond: interaction.respond,
           rehydrate: interaction.rehydrate,
@@ -83,6 +89,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       const isAskUser = meta?.["type"] === "ask-user"
       return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
     },
+    pendingRequestId: () => undefined,
     storeResolution: () => {},
     respond: () => Effect.void,
     rehydrate: () => Effect.void,
@@ -95,6 +102,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         const decision = queue.shift() ?? { approved: true }
         return Effect.succeed(decision)
       },
+      pendingRequestId: () => undefined,
       storeResolution: () => {},
       respond: () => Effect.void,
       rehydrate: () => Effect.void,

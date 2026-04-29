@@ -545,7 +545,24 @@ not migration-era optimism.
 ## Current Status
 
 - Wave 14 plan created from independent five-lane Codex audit.
-- No implementation batches started.
+- Batch 1 implemented:
+  - Branded interaction response ids across session runtime, agent loop command
+    schema, loop driver events, and waiting state.
+  - Added `InteractionRequestMismatchError` and an approval-service
+    `pendingRequestId` boundary so RPC responses reject stale ids before
+    storing resolutions, waking loops, resolving storage, or publishing
+    `InteractionResolved`.
+  - Added loop-level stale response guard so direct loop dispatch leaves the
+    branch in `WaitingForInteraction` when ids do not match.
+  - Added direct loop, loop-command schema, session-runtime, and RPC acceptance
+    coverage for the stale-id invariant.
+  - Focused gate: `bun test packages/core/tests/runtime/agent-loop-commands.test.ts packages/core/tests/server/interaction-commands.test.ts packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/session-runtime.test.ts --timeout 20000`.
+  - Full gate: `bun run typecheck && bun run lint && bun run test`.
+  - Codex review: `019dd91d-afec-7a41-8856-a789c71244fd`; P2 branded
+    `AgentLoop.respondInteraction` gap fixed in-batch.
+  - Okra counsel attempt: one `okra counsel --deep` run was started and killed
+    by the 180s batch timeout with no usable output, matching the documented
+    counsel instability risk.
 - P0 findings: none.
 - P1 findings: interaction invariants, actor ownership/supervision/durability,
   extension authoring split/public surface breadth, runtime composition

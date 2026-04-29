@@ -55,6 +55,7 @@ import {
   ToolResultPart,
 } from "../../domain/message.js"
 import {
+  InteractionRequestId,
   MessageId,
   ToolCallId,
   type ActorCommandId,
@@ -1336,7 +1337,7 @@ const LoopDriverEvent = TaggedEnumClass("LoopDriverEvent", {
   Start: { item: QueuedTurnItemSchema },
   Interrupt: {},
   SwitchAgent: { agent: AgentName },
-  InteractionResponded: { requestId: Schema.String },
+  InteractionResponded: { requestId: InteractionRequestId },
 })
 type LoopDriverEvent = Schema.Schema.Type<typeof LoopDriverEvent>
 
@@ -1598,7 +1599,7 @@ export interface AgentLoopService {
   readonly respondInteraction: (input: {
     sessionId: SessionId
     branchId: BranchId
-    requestId: string
+    requestId: InteractionRequestId
   }) => Effect.Effect<void, AgentLoopError>
   readonly recordToolResult: (input: {
     commandId?: ActorCommandId
@@ -1953,7 +1954,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const TurnOutcome = TaggedEnumClass("TurnOutcome", {
               Done: {},
               InteractionRequested: {
-                pendingRequestId: Schema.String,
+                pendingRequestId: InteractionRequestId,
                 pendingToolCallId: Schema.String,
                 currentTurnAgent: AgentName,
               },
@@ -2385,6 +2386,19 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       }
                       case "InteractionResponded": {
                         if (state._tag !== "WaitingForInteraction") return
+                        if (event.requestId !== state.pendingRequestId) {
+                          yield* Effect.logWarning(
+                            "Ignoring stale interaction response for non-pending request",
+                          ).pipe(
+                            Effect.annotateLogs({
+                              sessionId: state.message.sessionId,
+                              branchId: state.message.branchId,
+                              expectedRequestId: state.pendingRequestId,
+                              actualRequestId: event.requestId,
+                            }),
+                          )
+                          return
+                        }
                         // Clear stale interrupt before resuming the suspended turn.
                         yield* Ref.set(interruptedRef, false)
                         // Preserve `startedAtMs` so turn-duration metrics

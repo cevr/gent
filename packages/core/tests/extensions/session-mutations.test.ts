@@ -233,6 +233,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
     } as unknown as MakeExtensionHostContextDeps["receptionist"],
     approvalService: {
       present: die("ApprovalService"),
+      pendingRequestId: () => undefined,
       storeResolution: die("ApprovalService"),
       respond: die("ApprovalService"),
       rehydrate: die("ApprovalService"),

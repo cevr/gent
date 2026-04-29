@@ -426,7 +426,7 @@ describe("SessionRuntime", () => {
             respondInteractionCommand({
               sessionId,
               branchId,
-              requestId: "req-not-waiting",
+              requestId: InteractionRequestId.make("req-not-waiting"),
             }),
           )
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
@@ -1026,7 +1026,7 @@ describe("SessionRuntime", () => {
             respondInteractionCommand({
               sessionId,
               branchId,
-              requestId: "req-test-1",
+              requestId: InteractionRequestId.make("req-test-1"),
             }),
           )
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))

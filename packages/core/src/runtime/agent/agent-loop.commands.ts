@@ -1,7 +1,14 @@
 import { Schema } from "effect"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
-import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
+import {
+  ActorCommandId,
+  BranchId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 
 export { SteerCommand }
@@ -41,7 +48,7 @@ export type ApplySteerCommand = typeof ApplySteerCommand.Type
 
 export const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
   ...LoopTargetFields,
-  requestId: Schema.String,
+  requestId: InteractionRequestId,
 })
 export type RespondInteractionCommand = typeof RespondInteractionCommand.Type
 

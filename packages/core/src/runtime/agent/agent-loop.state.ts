@@ -19,6 +19,10 @@ import {
   type QueueEntryInfo,
 } from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
+import {
+  InteractionRequestId,
+  type InteractionRequestId as InteractionRequestIdType,
+} from "../../domain/ids.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
 
@@ -243,7 +247,7 @@ export const LoopState = TaggedEnumClass("LoopState", {
   WaitingForInteraction: {
     ...RunningTurnFields,
     currentTurnAgent: AgentName,
-    pendingRequestId: Schema.String,
+    pendingRequestId: InteractionRequestId,
     pendingToolCallId: Schema.String,
   },
 })
@@ -301,7 +305,7 @@ export const buildRunningState = (
 export const toWaitingForInteractionState = (params: {
   state: RunningState
   currentTurnAgent: AgentNameType
-  pendingRequestId: string
+  pendingRequestId: InteractionRequestIdType
   pendingToolCallId: string
 }): WaitingForInteractionState =>
   LoopState.WaitingForInteraction.make({

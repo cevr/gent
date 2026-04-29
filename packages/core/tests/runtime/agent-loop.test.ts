@@ -1781,7 +1781,50 @@ describe("interaction", () => {
           yield* agentLoop.respondInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
-            requestId: "req-test-1",
+            requestId: InteractionRequestId.make("req-test-1"),
+          })
+          yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+          expect(Ref.getUnsafe(callCount)).toBe(2)
+          yield* Fiber.join(fiber)
+        }).pipe(Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("stale interaction response does not resume a different pending request", () =>
+    Effect.gen(function* () {
+      const callCount = Ref.makeUnsafe(0)
+      const resolution = Deferred.makeUnsafe<void>()
+      const tool = makeInteractionTool(callCount, resolution)
+      const layer = makeInteractionRecordingLayer([tool])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const fiber = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeIntMessage("stale interaction")),
+          )
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "WaitingForInteraction",
+          )
+          yield* agentLoop.respondInteraction({
+            sessionId: intSessionId,
+            branchId: intBranchId,
+            requestId: InteractionRequestId.make("req-stale-1"),
+          })
+
+          const state = yield* agentLoop.getState({
+            sessionId: intSessionId,
+            branchId: intBranchId,
+          })
+          expect(state._tag).toBe("WaitingForInteraction")
+          expect(Ref.getUnsafe(callCount)).toBe(1)
+          expect(yield* Deferred.isDone(resolution)).toBe(false)
+
+          yield* agentLoop.respondInteraction({
+            sessionId: intSessionId,
+            branchId: intBranchId,
+            requestId: InteractionRequestId.make("req-test-1"),
           })
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           expect(Ref.getUnsafe(callCount)).toBe(2)
@@ -1858,7 +1901,7 @@ describe("interaction", () => {
           yield* agentLoop.respondInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
-            requestId: "nonexistent",
+            requestId: InteractionRequestId.make("nonexistent"),
           })
           const state = yield* agentLoop.getState({
             sessionId: intSessionId,
@@ -1916,7 +1959,7 @@ describe("interaction", () => {
           yield* agentLoop.respondInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
-            requestId: "req-test-1",
+            requestId: InteractionRequestId.make("req-test-1"),
           })
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           expect(Ref.getUnsafe(callCount)).toBe(2)
