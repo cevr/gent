@@ -122,8 +122,8 @@ export const HostApprovalServiceRef = Context.Reference<ApprovalServiceShape>(
   {
     defaultValue: () => ({
       present: unavailable("ApprovalService"),
-      pendingRequestId: () => Effect.succeed(undefined),
-      storeResolution: () => Effect.void,
+      pendingRequestId: unavailable("ApprovalService"),
+      storeResolution: unavailable("ApprovalService"),
       respond: unavailable("ApprovalService"),
       rehydrate: unavailable("ApprovalService"),
     }),
