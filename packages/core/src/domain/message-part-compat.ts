@@ -39,6 +39,11 @@ export interface MessagePartsDisplayTextOptions {
 const truncateDisplayText = (text: string, max: number): string =>
   text.length > max ? text.slice(0, max) + "…" : text
 
+const stringifyDisplayValue = (value: unknown): string => {
+  const encoded = JSON.stringify(value)
+  return encoded === undefined ? String(value) : encoded
+}
+
 export const messagePartText = (part: MessagePart): string | undefined =>
   part.type === "text" ? part.text : undefined
 
@@ -134,6 +139,10 @@ export const messagePartsToolResultParts = (
 ): ReadonlyArray<ToolResultPart> =>
   parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
 
+/**
+ * Human-readable transcript display. Renders user-visible text plus tool
+ * calls/results; reasoning and images stay available through focused helpers.
+ */
 export const messagePartsDisplayText = (
   parts: ReadonlyArray<MessagePart>,
   options: MessagePartsDisplayTextOptions = {},
@@ -152,7 +161,7 @@ export const messagePartsDisplayText = (
     if (toolCall !== undefined) {
       chunks.push(
         `### tool: ${toolCall.toolName}\n${truncateDisplayText(
-          JSON.stringify(toolCall.input),
+          stringifyDisplayValue(toolCall.input),
           maxToolChars,
         )}`,
       )

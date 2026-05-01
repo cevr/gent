@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
-import { truncate, renderSessionTree } from "@gent/extensions/session-tools/read-session"
+import {
+  truncate,
+  renderMessageParts,
+  renderSessionTree,
+} from "@gent/extensions/session-tools/read-session"
 import { messagePartsDisplayText } from "@gent/core/domain/message-part-compat"
 import {
   TextPart,
@@ -22,6 +26,11 @@ describe("truncate", () => {
 })
 
 describe("messagePartsDisplayText", () => {
+  test("read-session subpath keeps renderMessageParts compatibility export", () => {
+    const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
+    expect(renderMessageParts(parts)).toBe(messagePartsDisplayText(parts))
+  })
+
   test("text part → text content", () => {
     const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
     expect(messagePartsDisplayText(parts)).toBe("hello world")
@@ -39,6 +48,18 @@ describe("messagePartsDisplayText", () => {
     const result = messagePartsDisplayText(parts)
     expect(result).toContain("### tool: read")
     expect(result).toContain("/tmp/test.txt")
+  })
+
+  test("tool-call part with undefined input renders without throwing", () => {
+    const parts: MessagePart[] = [
+      new ToolCallPart({
+        type: "tool-call",
+        toolCallId: ToolCallId.make("tc1"),
+        toolName: "read",
+        input: undefined,
+      }),
+    ]
+    expect(messagePartsDisplayText(parts)).toBe("### tool: read\nundefined")
   })
 
   test("tool-result part → 'result: {truncated output}'", () => {

@@ -48,6 +48,9 @@ export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s
 }
 
+export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
+  messagePartsDisplayText(parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
+
 export function renderSessionTree(
   branches: ReadonlyArray<{ branch: Branch; messages: ReadonlyArray<Message> }>,
   targetBranchId: string | undefined,
@@ -67,7 +70,7 @@ export function renderSessionTree(
     for (const msg of messages) {
       const ts = msg.createdAt.toISOString()
       lines.push(`\n## ${msg.role} (${ts})`)
-      const content = messagePartsDisplayText(msg.parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
+      const content = renderMessageParts(msg.parts)
       if (content.length > 0) {
         lines.push(content)
       }
