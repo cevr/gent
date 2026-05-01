@@ -11,6 +11,17 @@ Effect `Tool`, `Toolkit`, `LanguageModel`, `Model`, `Response`, `Rpc`, `Layer`,
 `Context`, `Ref`, `SubscriptionRef`, and `Semaphore` as the primitives, and
 only retain Gent code where it owns product semantics.
 
+The two north stars are:
+
+1. Use Effect and Effect AI as the platform. Gent should not own parallel
+   abstractions for tools, models, prompts, chat history, RPC, service
+   composition, storage transactions, or typed concurrency when Effect already
+   provides them.
+2. Use the actor model as the runtime shape. Durable session/branch work,
+   extension state, prompt/tool policy producers, and long-lived coordination
+   should be actors or actor-adjacent services, not ad hoc maps, hook arrays, or
+   per-call service bundles.
+
 ## Scope
 
 - In: assumptions, bridges, DTOs, wrappers, and manual concurrency layers that
@@ -48,14 +59,16 @@ For narrow commits, run a focused test first, then `bun run gate`.
 
 ## Research Lanes
 
-| Lane                  | Agent                                  | Result                                                                          |
-| --------------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| Provider / Effect AI  | `019de44c-fb3c-7843-8c9c-2244b8c46fe5` | Dead request bridges, `ProviderResolution` wrapper.                             |
-| Transport / DTO       | `019de44c-fb79-70b2-9ab2-b84f61b4f40a` | `MessageInfo`, namespaced SDK mirror, session tree projection.                  |
-| Services / Layers     | `019de44c-fb8b-7e21-8e34-069e54c0324e` | Manual server contexts, duplicated `SessionProfile`, stale event router handle. |
-| Runtime / Concurrency | `019de44c-fb9f-7151-b217-6d7bd0095d4a` | Interaction `Map`s, queue mutation semaphore, event delivery queue/ack worker.  |
-| Extension API         | `019de44c-fbb0-7633-9bc6-9df50fed2f0b` | `ToolToken` parallel substrate, `tool-schema.ts`, resource descriptors.         |
-| Storage / Persistence | local follow-up                        | Storage rewrite is allowed where it deletes transport/read-model indirection.   |
+| Lane                  | Agent                                  | Result                                                                           |
+| --------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
+| Provider / Effect AI  | `019de44c-fb3c-7843-8c9c-2244b8c46fe5` | Dead request bridges, `ProviderResolution` wrapper.                              |
+| Transport / DTO       | `019de44c-fb79-70b2-9ab2-b84f61b4f40a` | `MessageInfo`, namespaced SDK mirror, session tree projection.                   |
+| Services / Layers     | `019de44c-fb8b-7e21-8e34-069e54c0324e` | Manual server contexts, duplicated `SessionProfile`, stale event router handle.  |
+| Runtime / Concurrency | `019de44c-fb9f-7151-b217-6d7bd0095d4a` | Interaction `Map`s, queue mutation semaphore, event delivery queue/ack worker.   |
+| Extension API         | `019de44c-fbb0-7633-9bc6-9df50fed2f0b` | `ToolToken` parallel substrate, `tool-schema.ts`, resource descriptors.          |
+| Storage / Persistence | local follow-up                        | Storage rewrite is allowed where it deletes transport/read-model indirection.    |
+| Actor North Star      | local follow-up                        | Session loops and extension hooks should collapse toward actor protocols.        |
+| Effect AI North Star  | local follow-up                        | Prompt/history/response tracking should use Effect AI primitives where possible. |
 
 ## Accepted Findings
 
@@ -193,6 +206,45 @@ For narrow commits, run a focused test first, then `bun run gate`.
   and
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Ref.ts:426-434`.
 
+### Actor North Star
+
+- `AgentLoop` currently owns an in-memory registry of session/branch loop
+  handles and per-loop mutation semaphores at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:513-540`.
+  The lifecycle manager then allocates, registers, starts, watches, cleans up,
+  terminates, and restores loop handles at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1412-1613`.
+  That is actor-system work; the durable session/branch loop should become an
+  actor protocol if the existing `ActorEngine` can own mailbox, state,
+  subscription, and lifecycle semantics.
+- `AgentLoopService` exposes tell/ask/watch-shaped methods at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:394-459`,
+  while `ActorEngineService` already exposes `spawn`, `tell`, typed `ask`,
+  `snapshot`, and `subscribeState` at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-engine.ts:171-231`.
+  A deeper simplification should make `SessionRuntime` talk to a
+  `SessionLoopActor` instead of preserving a second loop registry.
+- Upstream Effect cluster `Entity` models a named actor type with an RPC
+  protocol, mailbox settings, client lookup, and sharding layer at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/cluster/Entity.ts:50-180`.
+  Gent should not duplicate a cluster/distributed actor system. The immediate
+  path is to actorize local session loops on the existing engine; the deeper
+  audit must decide whether the local engine should later become an adapter over
+  `Entity`/`Rpc` rather than a permanent fork.
+- `SessionRuntime.dispatch` currently validates a target, resolves a session
+  environment, normalizes message input, constructs a domain message, then calls
+  `agentLoop.submit` at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:383-501`.
+  After loop actorization, that surface should be a thin RPC/actor command
+  adapter: validate transport input, then tell/ask the owning session actor.
+- Extension reactions compile into ordered arrays of hook handlers at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:226-290`,
+  and execute by iterating those arrays at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:292-520`.
+  Some hooks are pure projections and can remain folds, but long-lived stateful
+  reactions should be actors with `view` projections or messages, not another
+  runtime beside actors.
+
 ### Storage / Persistence Rewrite Allowance
 
 - `StorageService` is a broad legacy facade at
@@ -221,6 +273,26 @@ extras` shape at
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:585-622`.
   New migrations belong here, with rollback-free idempotent startup behavior and
   dedicated tests against an old-shape database fixture.
+
+### Effect AI North Star
+
+- `ProviderRequest` still carries local `messages`, `systemPrompt`, and
+  `tools` fields at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:160-178`.
+  After native tool/model migration, the next audit should decide whether the
+  provider boundary can accept upstream `Prompt.Prompt`, `Toolkit`, and
+  `LanguageModel` options directly instead of reconstructing them from Gent
+  DTOs on each call.
+- Upstream `Chat` already owns stateful history, streaming/generate entrypoints,
+  and toolkit-aware options at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Chat.ts:93-238`.
+  Gent should only keep its durable event/message storage if it adds product
+  semantics; provider runtime should not reimplement chat history or response
+  correlation for model providers.
+- Upstream `ResponseIdTracker` tracks response ids across prompt parts at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/ResponseIdTracker.ts:22-94`.
+  Any local previous-response or transcript correlation logic should be audited
+  against it before adding another provider-specific bridge.
 
 ## Commit Wave
 
@@ -427,6 +499,38 @@ extras` shape at
 - Focused queue/watch runtime tests.
 - `bun run gate`
 
+### Commit 12.5: `refactor(runtime): make session loops actor-owned`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `packages/core/src/runtime/agent/agent-loop.commands.ts` | Promote the existing loop command union into the `SessionLoopActor` protocol or extract the actor protocol beside it. |
+| `packages/core/src/runtime/agent/agent-loop.state.ts` | Keep the loop state as actor state; delete duplicate handle/queue state once actor state owns it. |
+| `packages/core/src/runtime/agent/agent-loop.ts` | Replace `loopsRef`, `mutationSemaphoresRef`, loop handles, and watcher scope with actor spawn/find/tell/ask/subscribeState. |
+| `packages/core/src/runtime/session-runtime.ts` | Dispatch to the session loop actor; keep only transport validation and command construction. |
+| `packages/core/tests/runtime/**` | Prove submit, steer, queue, watch, terminate, and restore through the actor protocol. |
+
+**Verification**:
+
+- Focused agent-loop actor tests.
+- SessionRuntime RPC acceptance tests.
+- `bun run gate`
+
+### Commit 12.6: `refactor(extensions): actorize stateful reactions`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `packages/core/src/domain/extension.ts` | Separate pure projection hooks from stateful runtime reactions. |
+| `packages/core/src/runtime/extensions/extension-reactions.ts` | Keep pure folds only; route stateful turn/message/tool events through actor messages or actor views. |
+| `packages/extensions/src/**` | Migrate stateful reaction contributors to behaviors where they maintain state or lifecycle. |
+| `packages/core/tests/extensions/**` | Prove actor view projection and reaction ordering semantics. |
+
+**Verification**:
+
+- Focused extension reaction/actor-view tests.
+- `bun run gate`
+
 ### Commit 13: `refactor(resources): author resources as effect services`
 
 **Changes**:
@@ -458,6 +562,36 @@ extras` shape at
 - Server dependency/profile tests.
 - `bun run gate`
 
+### Commit 15: `refactor(ai): make prompt and chat primitives effect-native`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `packages/core/src/providers/provider.ts` | Move provider entrypoints toward `Prompt.Prompt`, `Toolkit`, `LanguageModel`, and `Chat` primitives after native tools/models land. |
+| `packages/core/src/providers/ai-transcript.ts` | Delete or shrink transcript conversion once upstream `Prompt`/`Response` values cross the provider boundary. |
+| `packages/core/src/runtime/agent/phases/turn.ts` | Build Effect AI prompts/toolkits at the turn boundary and stop reconstructing provider-local DTOs. |
+| `packages/core/tests/providers/**` | Prove Anthropic/OpenAI structured output and response-id behavior with upstream codecs. |
+
+**Verification**:
+
+- Provider transcript/schema regression tests.
+- Focused turn streaming tests.
+- `bun run gate`
+
+### Commit 16: `audit(actor): decide local engine versus effect cluster`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `plans/WAVE-16.md` | Add the decision record: keep local `ActorEngine` as the in-process actor model, wrap it over Effect cluster primitives, or migrate selected actor classes to `Entity`. |
+| `packages/core/src/runtime/extensions/actor-engine.ts` | Only change if the audit proves an immediate simplification; otherwise document the adapter boundary. |
+| `packages/core/tests/runtime/extensions/**` | Preserve ask/tell/snapshot/restart semantics as executable evidence. |
+
+**Verification**:
+
+- Actor engine tests.
+- `bun run gate`
+
 ## Review Checkpoints
 
 - After Commit 2: quick review for event semantics before touching interaction state.
@@ -466,7 +600,14 @@ extras` shape at
   transport/session read-model deletion.
 - After Commit 8: review provider/model semantics before native tool migration.
 - After Commit 10: review tool migration and delete any temporary adapter seams.
-- After Commit 14: final recursive audit against this plan plus `effect-smol`.
+- After Commit 12.5: review whether the actorized loop removed enough custom
+  registry/lifecycle code to continue, or whether the next step is Effect
+  cluster alignment.
+- After Commit 12.6: review whether any stateful reaction remains outside an
+  actor without a principled reason.
+- After Commit 15: review whether provider prompt/history semantics are now
+  Effect AI native.
+- After Commit 16: final recursive audit against this plan plus `effect-smol`.
 
 ## Completion Rule
 
