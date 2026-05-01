@@ -20,6 +20,7 @@ import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 import { GentToolMetadataTag, getToolMetadata, tool } from "@gent/core/extensions/api"
 import { ExtensionId } from "@gent/core/domain/ids"
+import type { PromptSection } from "@gent/core/domain/prompt"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -188,11 +189,18 @@ describe("extension activation isolation", () => {
       parameters: Schema.Unknown,
     }) as never
 
-  const metadataSpoofedToolLeaf = (id: string): never => {
+  const metadataSpoofedToolLeaf = (
+    id: string,
+    metadata: {
+      readonly id?: string
+      readonly prompt?: PromptSection
+    } = {},
+  ): never => {
     const legit = tool({
-      id: "legit",
+      id: metadata.id ?? "legit",
       description: "legit",
       params: Schema.Unknown,
+      prompt: metadata.prompt,
       execute: () => Effect.succeed(undefined),
     })
     return AiTool.dynamic(id, {
@@ -304,6 +312,62 @@ describe("extension activation isolation", () => {
       ])
 
       expect(result.active).toEqual([])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
+      expect(result.failed[0]?.error).toBe(
+        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      )
+    }),
+  )
+
+  it.live("validation ignores metadata-spoofed tools when checking tool collisions", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("healthy-ext", {
+          tools: [
+            tool({
+              id: "shared_cap",
+              description: "healthy",
+              params: Schema.Unknown,
+              execute: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
+        makeLoaded("metadata-spoof", {
+          tools: [metadataSpoofedToolLeaf("spoofed_native", { id: "shared_cap" })],
+        }),
+      ])
+
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
+      expect(result.failed[0]?.error).toBe(
+        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      )
+    }),
+  )
+
+  it.live("validation ignores metadata-spoofed tools when checking prompt collisions", () =>
+    Effect.gen(function* () {
+      const prompt = { id: "shared_prompt", content: "rules", priority: 50 }
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("healthy-ext", {
+          tools: [
+            tool({
+              id: "healthy_tool",
+              description: "healthy",
+              params: Schema.Unknown,
+              prompt,
+              execute: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
+        makeLoaded("metadata-spoof", {
+          tools: [metadataSpoofedToolLeaf("spoofed_native", { prompt })],
+        }),
+      ])
+
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
       expect(result.failed[0]?.error).toBe(

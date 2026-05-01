@@ -13,11 +13,7 @@ import {
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
-import {
-  getToolMetadata,
-  getToolMetadataOption,
-  isToolToken,
-} from "../../domain/capability/tool.js"
+import { getToolMetadata, isToolToken } from "../../domain/capability/tool.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -262,7 +258,7 @@ export const collectValidationFailures = (
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
-    (cap) => getToolMetadataOption(cap)?.id,
+    (cap) => (isToolToken(cap) ? getToolMetadata(cap).id : undefined),
     "tool",
   )
   collectScopedCollisions(
@@ -295,7 +291,9 @@ export const collectValidationFailures = (
   collectScopedCollisions(
     (cs) =>
       [
-        ...(cs.tools ?? []).map((tool) => getToolMetadataOption(tool)?.prompt),
+        ...(cs.tools ?? []).map((tool) =>
+          isToolToken(tool) ? getToolMetadata(tool).prompt : undefined,
+        ),
         ...(cs.commands ?? []).map((command) => command.prompt),
         ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
       ].filter((p): p is PromptSection => p !== undefined),
