@@ -112,21 +112,54 @@ const tableColumns = Effect.fn("TaskStorage.tableColumns")(function* (
   return new Set(rows.map((row) => row.name))
 })
 
-const tableNeedsReset = Effect.fn("TaskStorage.tableNeedsReset")(function* (
+const tableHasForeignKey = Effect.fn("TaskStorage.tableHasForeignKey")(function* (
   sql: SqlClient.SqlClient,
   table: "tasks" | "task_deps",
-  requiredColumns: ReadonlyArray<string>,
+  parentTable: string,
+  fromColumns: ReadonlyArray<string>,
 ) {
-  const columns = yield* tableColumns(sql, table)
+  const rows = yield* sql.unsafe<{
+    id: number
+    table: string
+    from: string
+  }>(`PRAGMA foreign_key_list(${table})`)
+  const ids = new Map<number, Set<string>>()
+  for (const row of rows) {
+    if (row.table !== parentTable) continue
+    const columns = ids.get(row.id) ?? new Set<string>()
+    columns.add(row.from)
+    ids.set(row.id, columns)
+  }
+  return Array.from(ids.values()).some((columns) =>
+    fromColumns.every((column) => columns.has(column)),
+  )
+})
+
+const tasksTableNeedsReset = Effect.fn("TaskStorage.tasksTableNeedsReset")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  const columns = yield* tableColumns(sql, "tasks")
   if (columns.size === 0) return false
-  return requiredColumns.some((column) => !columns.has(column))
+  if (requiredTaskColumns.some((column) => !columns.has(column))) return true
+  return !(yield* tableHasForeignKey(sql, "tasks", "branches", ["branch_id", "session_id"]))
+})
+
+const taskDepsTableNeedsReset = Effect.fn("TaskStorage.taskDepsTableNeedsReset")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  const columns = yield* tableColumns(sql, "task_deps")
+  if (columns.size === 0) return false
+  if (requiredTaskDepColumns.some((column) => !columns.has(column))) return true
+  const hasTaskFk = yield* tableHasForeignKey(sql, "task_deps", "tasks", ["task_id"])
+  const hasBlockedByFk = yield* tableHasForeignKey(sql, "task_deps", "tasks", ["blocked_by_id"])
+  return !hasTaskFk || !hasBlockedByFk
 })
 
 const resetIncompatibleTaskTables = Effect.fn("TaskStorage.resetIncompatibleTaskTables")(function* (
   sql: SqlClient.SqlClient,
 ) {
-  const resetTasks = yield* tableNeedsReset(sql, "tasks", requiredTaskColumns)
-  const resetTaskDeps = yield* tableNeedsReset(sql, "task_deps", requiredTaskDepColumns)
+  const resetTasks = yield* tasksTableNeedsReset(sql)
+  const resetTaskDeps = yield* taskDepsTableNeedsReset(sql)
   if (!resetTasks && !resetTaskDeps) return
 
   yield* Effect.acquireUseRelease(

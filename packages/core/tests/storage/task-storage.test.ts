@@ -55,20 +55,59 @@ const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof T
 }
 
 describe("Task Storage", () => {
-  it.live("resets incompatible extension-owned tables", () => {
+  it.live("resets extension-owned tables with stale foreign keys", () => {
     const dir = mkdtempSync(join(tmpdir(), "gent-task-storage-"))
     const dbPath = join(dir, "gent.sqlite")
     const db = new Database(dbPath)
     db.run(`CREATE TABLE storage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
     db.run(`INSERT INTO storage_meta (key, value) VALUES (?, ?)`, ["core_schema_version", "1"])
     db.run(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        cwd TEXT,
+        reasoning_level TEXT,
+        active_branch_id TEXT,
+        parent_session_id TEXT,
+        parent_branch_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL),
+        FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
+        FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
+      )
+    `)
+    db.run(`
+      CREATE TABLE branches (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        parent_branch_id TEXT,
+        parent_message_id TEXT,
+        name TEXT,
+        summary TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (id, session_id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
+      )
+    `)
+    db.run(`
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
         branch_id TEXT NOT NULL,
         subject TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        owner TEXT,
+        agent_type TEXT,
+        prompt TEXT,
+        cwd TEXT,
+        metadata TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       )
     `)
     db.run(`
@@ -78,9 +117,19 @@ describe("Task Storage", () => {
         PRIMARY KEY (task_id, blocked_by_id)
       )
     `)
+    db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
+      "retired-session",
+      0,
+      0,
+    ])
+    db.run(`INSERT INTO branches (id, session_id, created_at) VALUES (?, ?, ?)`, [
+      "retired-branch",
+      "retired-session",
+      0,
+    ])
     db.run(
-      `INSERT INTO tasks (id, session_id, branch_id, subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      ["retired-task", "s1", "b1", "stale", 0, 0],
+      `INSERT INTO tasks (id, session_id, branch_id, subject, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ["retired-task", "retired-session", "retired-branch", "stale", "pending", 0, 0],
     )
     db.close()
 
@@ -92,9 +141,13 @@ describe("Task Storage", () => {
 
     return Effect.gen(function* () {
       const { storage } = yield* setup
+      const hostStorage = yield* Storage
       const sql = yield* SqlClient.SqlClient
 
       const taskColumns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(tasks)`)
+      const taskForeignKeys = yield* sql.unsafe<{ table: string; from: string }>(
+        `PRAGMA foreign_key_list(tasks)`,
+      )
       expect(taskColumns.map((column) => column.name)).toEqual([
         "id",
         "session_id",
@@ -110,6 +163,12 @@ describe("Task Storage", () => {
         "created_at",
         "updated_at",
       ])
+      expect(taskForeignKeys).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ table: "branches", from: "branch_id" }),
+          expect.objectContaining({ table: "branches", from: "session_id" }),
+        ]),
+      )
       expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
 
       const task = makeTask("t1", { cwd: "/tmp", metadata: { current: true } })
@@ -117,6 +176,13 @@ describe("Task Storage", () => {
       const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got?.cwd).toBe("/tmp")
       expect(got?.metadata).toEqual({ current: true })
+      yield* hostStorage.deleteBranch(BranchId.make("b1"))
+      expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
+
+      const rejected = yield* Effect.flip(
+        storage.createTask(makeTask("missing-branch", { branchId: BranchId.make("missing") })),
+      )
+      expect(rejected._tag).toBe("TaskStorageError")
     }).pipe(
       Effect.provide(layer),
       Effect.ensuring(Effect.sync(() => rmSync(dir, { recursive: true, force: true }))),
