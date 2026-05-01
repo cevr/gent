@@ -23,6 +23,7 @@ import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
+import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
@@ -421,6 +422,11 @@ describe("Provider model resolution", () => {
       expect(toolkit).toBeDefined()
       expect(Object.keys(toolkit?.tools ?? {})).toEqual(["echo"])
       expect(toolkit?.tools["echo"]?.name).toBe("echo")
+      const advertisedTool = toolkit?.tools["echo"]
+      expect(advertisedTool).toBeDefined()
+      if (advertisedTool !== undefined) {
+        expect(() => toCodecAnthropic(advertisedTool.parametersSchema)).not.toThrow()
+      }
       const collected = Array.from(parts)
       expect(collected).toHaveLength(2)
       expect(collected[0]).toEqual(

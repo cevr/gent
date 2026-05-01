@@ -226,13 +226,10 @@ export interface ProviderService {
 
 // ── Tool Conversion (Capability → canonical Tool / advertise-only Toolkit) ──
 
-// Tool JSON schema conversion — canonical implementation in domain/tool-schema.ts
-import { buildToolJsonSchema } from "../domain/tool-schema.js"
-
 const toCapabilityTool = (capability: ToolToken): AiTool.Any =>
   AiTool.dynamic(capability.id, {
     description: capability.description ?? "",
-    parameters: buildToolJsonSchema(capability),
+    parameters: capability.input,
   })
 
 const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
