@@ -29,7 +29,7 @@
  * @module
  */
 import { Schema, type Effect, type Layer, type Stream } from "effect"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
 import type { ToolToken } from "./capability/tool.js"
@@ -78,10 +78,14 @@ export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError
   },
 ) {}
 
-/** Upstream Effect AI model/layer returned by a model driver's `resolveModel`.
+/** Upstream Effect AI model returned by a model driver's `resolveModel`.
  *  It must be fully self-contained: auth, tool naming, cache control, and
  *  model metadata are all baked in. */
-export type ProviderResolution = Layer.Layer<LanguageModel.LanguageModel>
+export type ProviderResolution = Layer.Layer<
+  LanguageModel.LanguageModel | AiModel.ProviderName | AiModel.ModelName
+> & {
+  readonly provider: string
+}
 
 /** Hints passed from the agent loop into `resolveModel`. Drivers bake these
  *  into their provider Config layer (e.g. `AnthropicLanguageModel.Config.max_tokens`). */

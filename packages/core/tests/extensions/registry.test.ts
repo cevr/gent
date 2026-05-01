@@ -1,5 +1,6 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
@@ -37,7 +38,12 @@ const makeAgent = (
 const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
   name: name ?? providerId,
-  resolveModel: (_modelName) => Layer.empty as never,
+  resolveModel: (modelName) =>
+    AiModel.make(
+      providerId,
+      modelName,
+      Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+    ),
 })
 // Static prompt sections live on capability leaf `prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.

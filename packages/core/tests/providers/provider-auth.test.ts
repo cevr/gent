@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "@gent/core/domain/ids"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
@@ -11,10 +12,15 @@ import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 const pendingCallbacks = new Map<string, (code?: string) => string>()
+const stubModel = AiModel.make(
+  "test",
+  "model",
+  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+)
 const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
-  resolveModel: () => Layer.empty as never,
+  resolveModel: () => stubModel,
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
@@ -44,7 +50,7 @@ const oauthProvider: ModelDriverContribution = {
 const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
-  resolveModel: () => Layer.empty as never,
+  resolveModel: () => stubModel,
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
@@ -52,7 +58,7 @@ const noopProvider: ModelDriverContribution = {
 const persistDuringAuthorizeProvider: ModelDriverContribution = {
   id: "persisting",
   name: "Persisting",
-  resolveModel: () => Layer.empty as never,
+  resolveModel: () => stubModel,
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
     authorize: (ctx) =>

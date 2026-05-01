@@ -659,7 +659,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
             request.driverId,
           )
           const result = yield* LanguageModel.generateText({ prompt: request.prompt }).pipe(
-            // @effect-diagnostics-next-line strictEffectProvide:off
+            // @effect-diagnostics-next-line strictEffectProvide:off provider model boundary
             Effect.provide(model),
             Effect.mapError(
               (error: unknown) =>

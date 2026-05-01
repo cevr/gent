@@ -68,6 +68,8 @@ const failingLanguageModel: LanguageModel.Service = {
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
+const modelFromService = (provider: string, service: LanguageModel.Service): ProviderResolution =>
+  AiModel.make(provider, "model", Layer.succeed(LanguageModel.LanguageModel, service))
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,
@@ -373,7 +375,7 @@ describe("Provider model resolution", () => {
         id: "tools-live",
         name: "ToolsLive",
         resolveModel: () =>
-          Layer.succeed(LanguageModel.LanguageModel, {
+          modelFromService("tools-live", {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -470,7 +472,7 @@ describe("Provider model resolution", () => {
         id: "typed-toolkit-live",
         name: "TypedToolkitLive",
         resolveModel: () =>
-          Layer.succeed(LanguageModel.LanguageModel, {
+          modelFromService("typed-toolkit-live", {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -553,7 +555,7 @@ describe("Provider model resolution", () => {
         id: "typed-message-toolkit-live",
         name: "TypedMessageToolkitLive",
         resolveModel: () =>
-          Layer.succeed(LanguageModel.LanguageModel, {
+          modelFromService("typed-message-toolkit-live", {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -620,7 +622,7 @@ describe("Provider model resolution", () => {
         id: "prompt-live",
         name: "PromptLive",
         resolveModel: () =>
-          Layer.succeed(LanguageModel.LanguageModel, {
+          modelFromService("prompt-live", {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -751,7 +753,7 @@ describe("Provider model resolution", () => {
       const causeProvider: ModelDriverContribution = {
         id: "cause-stream",
         name: "CauseStream",
-        resolveModel: () => Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
+        resolveModel: () => modelFromService("cause-stream", causeProvidingModel),
       }
       const layer = buildProviderLayer([makeExt("cause-stream-ext", [causeProvider])])
       const result = yield* Effect.exit(
@@ -794,7 +796,7 @@ describe("Provider model resolution", () => {
       const causeProvider: ModelDriverContribution = {
         id: "cause-generate",
         name: "CauseGenerate",
-        resolveModel: () => Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
+        resolveModel: () => modelFromService("cause-generate", causeProvidingModel),
       }
       const layer = buildProviderLayer([makeExt("cause-generate-ext", [causeProvider])])
       const result = yield* Effect.exit(

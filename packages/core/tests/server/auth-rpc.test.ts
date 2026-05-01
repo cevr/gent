@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -48,12 +49,17 @@ const failingReadAuthStoreLayer = Layer.succeed(
     list: () => Effect.succeed([]),
   }),
 ).pipe((storageLayer) => Layer.provide(AuthStore.Live, storageLayer))
+const stubModel = AiModel.make(
+  "test",
+  "model",
+  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+)
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()
   const oauthProvider: ModelDriverContribution = {
     id: "persisting-oauth",
     name: "Persisting OAuth",
-    resolveModel: () => Layer.empty as never,
+    resolveModel: () => stubModel,
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
       authorize: (ctx) =>
@@ -74,7 +80,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const authorizePersistProvider: ModelDriverContribution = {
     id: "persisting-authorize",
     name: "Persisting Authorize",
-    resolveModel: () => Layer.empty as never,
+    resolveModel: () => stubModel,
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
       authorize: (ctx) =>

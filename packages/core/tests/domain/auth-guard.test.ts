@@ -14,18 +14,22 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Effect, Layer, Schema } from "effect"
-import type { LanguageModel } from "effect/unstable/ai"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { ProviderId } from "@gent/core/domain/model"
 
-const stubLayer = Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>
+const stubModel = AiModel.make(
+  "test",
+  "model",
+  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+)
 
 const testProviders: ModelDriverContribution[] = [
-  { id: "anthropic", name: "Anthropic", resolveModel: () => stubLayer },
-  { id: "openai", name: "OpenAI", resolveModel: () => stubLayer },
-  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => stubLayer },
-  { id: "google", name: "Google", resolveModel: () => stubLayer },
-  { id: "mistral", name: "Mistral", resolveModel: () => stubLayer },
+  { id: "anthropic", name: "Anthropic", resolveModel: () => stubModel },
+  { id: "openai", name: "OpenAI", resolveModel: () => stubModel },
+  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => stubModel },
+  { id: "google", name: "Google", resolveModel: () => stubModel },
+  { id: "mistral", name: "Mistral", resolveModel: () => stubModel },
 ]
 
 const testAgents = [

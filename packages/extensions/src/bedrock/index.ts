@@ -2,12 +2,13 @@ import {
   defineExtension,
   ProviderAuthError,
   type ModelDriverContribution,
+  type ProviderResolution,
 } from "@gent/core/extensions/api"
 
 const bedrockProvider: ModelDriverContribution = {
   id: "bedrock",
   name: "AWS Bedrock",
-  resolveModel: () => {
+  resolveModel: (): ProviderResolution => {
     // Fail closed via `ProviderAuthError` so the resolver does not wrap
     // the throw as a transient `ProviderError` and retry it. There is no
     // `@effect/ai` Bedrock provider at beta.47, so the contribution stays
