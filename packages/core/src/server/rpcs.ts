@@ -56,7 +56,6 @@ export {
   ForkBranchInput,
   ForkBranchResult,
   SendMessageInput,
-  MessageInfo,
   ListMessagesInput,
   GetSessionSnapshotInput,
   SessionSnapshot,

@@ -351,20 +351,19 @@ the service they need.
 - Delete `messageToInfo` and event-to-transport remapping.
 - Verify message/session snapshot tests, then `bun run gate`.
 
-Status: completed in two reviewable commits. The first removed server-side
-message transport conversion and e2e-verified the runtime boundary; the second
-migrated SDK/TUI consumers to domain `Message` while keeping `MessageInfo` as a
-compatibility export.
+Status: completed in two reviewable commits, then tightened for the no-users
+experimental stance. The first removed server-side message transport conversion
+and e2e-verified the runtime boundary; the second migrated SDK/TUI consumers to
+domain `Message`; the follow-up deleted the `MessageInfo` compatibility export.
 
 **Commit 4.2: `refactor(storage): collapse message content storage`**
 
-- Add an idempotent migration from legacy `messages.parts` to the single
-  surviving content representation.
-- Drop or ignore the duplicate field through table rebuild if needed.
+- Treat the database as disposable: no legacy migration path, no old-shape
+  fixture, no startup repair of retired message blobs.
+- Remove `messages.parts` from fresh schema and all read/write SQL.
 - Remove `legacyPartsJson`.
-- Add an old-shape database fixture proving migration, readback, search
-  indexing, and `MessageReceived` event backfill.
-- Verify storage migration tests, message/search tests, then `bun run gate`.
+- Delete storage tests that exist only to preserve old DB shapes.
+- Verify storage and search tests, then `bun run gate`.
 
 **Commit 4.3: `refactor(sessions): own session tree projection in one layer`**
 

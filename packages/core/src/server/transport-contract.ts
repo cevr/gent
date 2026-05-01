@@ -210,10 +210,6 @@ export const SendMessageInput = Schema.Struct({
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
-export const MessageInfo = Message
-export type MessageInfo = Message
-export type MessageInfoReadonly = Message
-
 export const ListMessagesInput = Schema.Struct({
   branchId: BranchId,
 })

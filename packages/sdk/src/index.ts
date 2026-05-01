@@ -6,7 +6,6 @@ export { Message } from "@gent/core/domain/message.js"
 export {
   SessionInfo,
   BranchInfo,
-  MessageInfo,
   SessionSnapshot,
   SlashCommandInfo,
   DriverInfo,
@@ -16,7 +15,6 @@ export {
 export type {
   GentLifecycle,
   ConnectionState,
-  MessageInfoReadonly,
   BranchTreeNode,
   SessionRuntime,
   CreateSessionResult,
