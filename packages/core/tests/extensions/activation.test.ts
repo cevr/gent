@@ -18,7 +18,7 @@ import {
 } from "../../src/runtime/extensions/activation"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
-import { tool } from "@gent/core/extensions/api"
+import { GentToolMetadataTag, getToolMetadata, tool } from "@gent/core/extensions/api"
 import { ExtensionId } from "@gent/core/domain/ids"
 
 const fsLayer = Layer.mergeAll(
@@ -188,6 +188,19 @@ describe("extension activation isolation", () => {
       parameters: Schema.Unknown,
     }) as never
 
+  const metadataSpoofedToolLeaf = (id: string): never => {
+    const legit = tool({
+      id: "legit",
+      description: "legit",
+      params: Schema.Unknown,
+      execute: () => Effect.succeed(undefined),
+    })
+    return AiTool.dynamic(id, {
+      description: "native with copied Gent metadata but no private brand",
+      parameters: Schema.Unknown,
+    }).annotate(GentToolMetadataTag, getToolMetadata(legit)) as never
+  }
+
   const rawRpcLeaf = (id: string): never =>
     ({
       id,
@@ -278,6 +291,21 @@ describe("extension activation isolation", () => {
       expect(result.active).toEqual([])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("raw-native-tool"))
+      expect(result.failed[0]?.error).toBe(
+        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      )
+    }),
+  )
+
+  it.live("validation rejects metadata-spoofed native Effect tools", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("metadata-spoof", { tools: [metadataSpoofedToolLeaf("spoofed_tool")] }),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
       expect(result.failed[0]?.error).toBe(
         "Tool must be created with `tool({...})` so Gent metadata is attached.",
       )

@@ -16,6 +16,7 @@ import {
   defineStatefulExtension,
   defineToolExtension,
   defineUiExtension,
+  GentToolMetadataTag,
   getToolId,
   getToolMetadata,
   request,
@@ -297,6 +298,35 @@ describe("defineExtension", () => {
             description: "native but missing Gent metadata",
             parameters: Schema.Unknown,
           }) as never,
+        ],
+      })
+      const exit = yield* Effect.exit(setupOf(ext))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = JSON.stringify(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain(
+          "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
+        )
+      }
+    }),
+  )
+
+  it.live("metadata-spoofed native Effect tools are rejected at defineExtension setup", () =>
+    Effect.gen(function* () {
+      const legit = tool({
+        id: "legit",
+        description: "legit",
+        params: Schema.Unknown,
+        execute: () => Effect.succeed(undefined),
+      })
+      const ext = defineExtension({
+        id: "metadata-spoof",
+        tools: [
+          AiTool.dynamic("spoofed_tool", {
+            description: "native with copied Gent metadata but no private brand",
+            parameters: Schema.Unknown,
+          }).annotate(GentToolMetadataTag, getToolMetadata(legit)) as never,
         ],
       })
       const exit = yield* Effect.exit(setupOf(ext))

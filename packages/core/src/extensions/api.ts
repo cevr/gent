@@ -61,7 +61,6 @@ import {
   getToolEffect,
   getToolId,
   getToolMetadata,
-  getToolMetadataOption,
   isToolToken,
   type ToolToken,
 } from "../domain/capability/tool.js"
@@ -449,10 +448,10 @@ const checkBucketIds = (
  */
 const checkToolDescriptions = (tools: ReadonlyArray<ToolToken>): string | undefined => {
   for (const [i, cap] of tools.entries()) {
-    const metadata = getToolMetadataOption(cap)
-    if (metadata === undefined) {
+    if (!isToolToken(cap)) {
       return `tools[${i}]: tool must be created with \`tool({...})\` so Gent metadata is attached`
     }
+    const metadata = getToolMetadata(cap)
     if (cap.description === undefined || cap.description === "") {
       return `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
     }

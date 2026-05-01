@@ -13,7 +13,11 @@ import {
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
-import { getToolMetadataOption } from "../../domain/capability/tool.js"
+import {
+  getToolMetadata,
+  getToolMetadataOption,
+  isToolToken,
+} from "../../domain/capability/tool.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -304,11 +308,11 @@ export const collectValidationFailures = (
   // becomes "why is the model dumb?" rot later.
   for (const ext of extensions) {
     for (const cap of modelCapabilities(ext.contributions)) {
-      const metadata = getToolMetadataOption(cap)
-      if (metadata === undefined) {
+      if (!isToolToken(cap)) {
         addFailure(ext, "Tool must be created with `tool({...})` so Gent metadata is attached.")
         continue
       }
+      const metadata = getToolMetadata(cap)
       const trimmed = (cap.description ?? "").trim()
       if (trimmed.length === 0) {
         addFailure(
