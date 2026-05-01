@@ -190,6 +190,21 @@ describe("Storage", () => {
         const dbPath = join(dir, "gent.db")
         const db = new Database(dbPath)
         db.run(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE branches (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+          )
+        `)
+        db.run(`
           CREATE TABLE messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -202,10 +217,56 @@ describe("Storage", () => {
             metadata TEXT
           )
         `)
+        db.run(`
+          CREATE TABLE tasks (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            owner TEXT,
+            agent_type TEXT,
+            prompt TEXT,
+            cwd TEXT,
+            metadata TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `)
+        db.run(`
+          CREATE TABLE task_deps (
+            task_id TEXT NOT NULL,
+            blocked_by_id TEXT NOT NULL,
+            PRIMARY KEY (task_id, blocked_by_id),
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
+          )
+        `)
+        db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
+          "retired-session",
+          0,
+          0,
+        ])
+        db.run(`INSERT INTO branches (id, session_id, created_at) VALUES (?, ?, ?)`, [
+          "retired-branch",
+          "retired-session",
+          0,
+        ])
         db.run(
           `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
           ["retired-message", "retired-session", "retired-branch", "user", "[]", 0],
         )
+        db.run(
+          `INSERT INTO tasks (id, session_id, branch_id, subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ["retired-task", "retired-session", "retired-branch", "old task", 0, 0],
+        )
+        db.run(`INSERT INTO task_deps (task_id, blocked_by_id) VALUES (?, ?)`, [
+          "retired-task",
+          "retired-task",
+        ])
         db.close()
 
         const layer = Storage.LiveWithSql(dbPath).pipe(
@@ -216,6 +277,11 @@ describe("Storage", () => {
           const storage = yield* Storage
           const sql = yield* SqlClient.SqlClient
           const columns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(messages)`)
+          const tables = yield* sql<{ name: string }>`
+            SELECT name FROM sqlite_schema WHERE type = ${"table"} AND name NOT LIKE ${"sqlite_%"}
+          `
+          expect(tables.map((table) => table.name)).not.toContain("tasks")
+          expect(tables.map((table) => table.name)).not.toContain("task_deps")
           expect(columns.map((column) => column.name)).not.toContain("parts")
           yield* storage.createSession(
             new Session({

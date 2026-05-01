@@ -352,6 +352,52 @@ const tableExists = Effect.fn("Storage.tableExists")(function* (table: string) {
   return rows.length > 0
 })
 
+const quoteIdentifier = (name: string): string => `"${name.replaceAll(`"`, `""`)}"`
+
+const dropStorageObjects = Effect.fn("Storage.dropStorageObjects")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const objects = yield* sql<{
+    name: string
+    type: "table" | "trigger" | "view"
+    sql: string | null
+  }>`SELECT name, type, sql FROM sqlite_schema WHERE type IN (${"table"}, ${"trigger"}, ${"view"})`
+
+  const appObjects = objects.filter((object) => !object.name.startsWith("sqlite_"))
+  const triggers = appObjects.filter((object) => object.type === "trigger")
+  const views = appObjects.filter((object) => object.type === "view")
+  const virtualTables = appObjects.filter(
+    (object) => object.type === "table" && object.sql?.startsWith("CREATE VIRTUAL TABLE"),
+  )
+  const virtualShadowPrefixes = virtualTables.map((table) => `${table.name}_`)
+  const tables = appObjects.filter(
+    (object) =>
+      object.type === "table" &&
+      !virtualTables.some((table) => table.name === object.name) &&
+      !virtualShadowPrefixes.some((prefix) => object.name.startsWith(prefix)),
+  )
+
+  yield* Effect.forEach(
+    triggers,
+    (trigger) => sql.unsafe(`DROP TRIGGER IF EXISTS ${quoteIdentifier(trigger.name)}`),
+    { discard: true },
+  )
+  yield* Effect.forEach(
+    views,
+    (view) => sql.unsafe(`DROP VIEW IF EXISTS ${quoteIdentifier(view.name)}`),
+    { discard: true },
+  )
+  yield* Effect.forEach(
+    virtualTables,
+    (table) => sql.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(table.name)}`),
+    { discard: true },
+  )
+  yield* Effect.forEach(
+    tables,
+    (table) => sql.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(table.name)}`),
+    { discard: true },
+  )
+})
+
 const resetIncompatibleMessagePartsSchema = Effect.fn(
   "Storage.resetIncompatibleMessagePartsSchema",
 )(function* () {
@@ -364,24 +410,7 @@ const resetIncompatibleMessagePartsSchema = Effect.fn(
 
   yield* Effect.acquireUseRelease(
     sql.unsafe(`PRAGMA foreign_keys = OFF`),
-    () =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          yield* sql.unsafe(`DROP TRIGGER IF EXISTS messages_fts_ai`).pipe(Effect.ignoreCause)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`).pipe(Effect.ignoreCause)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS actor_inbox`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS agent_loop_checkpoints`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS interaction_requests`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS actor_persistence`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS events`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS message_chunks`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS content_chunks`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS messages`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS branches`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS sessions`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS storage_meta`)
-        }),
-      ),
+    () => sql.withTransaction(dropStorageObjects()),
     () => sql.unsafe(`PRAGMA foreign_keys = ON`),
   )
 })
