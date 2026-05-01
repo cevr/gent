@@ -1,15 +1,10 @@
-import { Context, Deferred, Effect, Exit, Layer, Queue } from "effect"
+import { Context, Deferred, Effect, Layer, Queue } from "effect"
 import {
   BuiltinEventSink,
   EventPublisher,
   type EventPublisherService,
 } from "../domain/event-publisher.js"
-import {
-  EventStore,
-  type EventEnvelope,
-  type EventStoreError,
-  type EventStoreService,
-} from "../domain/event.js"
+import { EventStore, type EventEnvelope, type EventStoreService } from "../domain/event.js"
 
 // ── Inner publisher logic ──
 
@@ -23,12 +18,11 @@ interface InnerPublisherDeps {
 const deliverInner = (envelope: EventEnvelope, deps: InnerPublisherDeps) =>
   deps.baseEventStore.broadcast(envelope)
 
-const makeSerializedDeliver = (
-  deliver: (envelope: EventEnvelope) => Effect.Effect<void, EventStoreError>,
-) =>
+const makeSerializedDeliver = (deliver: (envelope: EventEnvelope) => Effect.Effect<void>) =>
   Effect.gen(function* () {
     const queue = yield* Queue.unbounded<DeliveryJob>()
     const delivered = new Set<EventEnvelope["id"]>()
+    const maxDeliveredIds = 1024
     yield* Queue.take(queue).pipe(
       Effect.flatMap((job) =>
         Effect.gen(function* () {
@@ -36,13 +30,13 @@ const makeSerializedDeliver = (
             yield* Deferred.succeed(job.ack, void 0)
             return
           }
-          const exit = yield* Effect.exit(deliver(job.envelope))
-          if (Exit.isSuccess(exit)) {
-            delivered.add(job.envelope.id)
-            yield* Deferred.succeed(job.ack, void 0)
-            return
+          yield* deliver(job.envelope)
+          delivered.add(job.envelope.id)
+          if (delivered.size > maxDeliveredIds) {
+            const oldest = delivered.values().next().value
+            if (oldest !== undefined) delivered.delete(oldest)
           }
-          yield* Deferred.failCause(job.ack, exit.cause)
+          yield* Deferred.succeed(job.ack, void 0)
         }),
       ),
       Effect.forever,
@@ -51,7 +45,7 @@ const makeSerializedDeliver = (
 
     return (envelope: EventEnvelope) =>
       Effect.gen(function* () {
-        const ack = yield* Deferred.make<void, EventStoreError>()
+        const ack = yield* Deferred.make<void>()
         yield* Queue.offer(queue, { envelope, ack })
         yield* Deferred.await(ack)
       })
@@ -59,7 +53,7 @@ const makeSerializedDeliver = (
 
 type DeliveryJob = {
   readonly envelope: EventEnvelope
-  readonly ack: Deferred.Deferred<void, EventStoreError>
+  readonly ack: Deferred.Deferred<void>
 }
 
 const makePublisherContext = (publisher: EventPublisherService) =>
@@ -91,7 +85,6 @@ export const EventPublisherLive: Layer.Layer<EventPublisher | BuiltinEventSink, 
               const envelope = yield* baseEventStore.append(event)
               yield* deliver(envelope)
             }),
-          terminateSession: (_sessionId) => Effect.void,
         }),
       )
     }),

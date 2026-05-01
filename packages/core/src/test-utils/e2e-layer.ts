@@ -243,10 +243,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         providerAuthLive,
         Layer.provide(FallbackFileIndexLive, BunServices.layer),
         ResourceManagerLive,
-        // SessionCwdRegistry — fast (sessionId → cwd) cache used by the
-        // per-cwd EventPublisher router (). Tests use the in-memory
-        // Test variant — there is no SessionProfileCache wired here, so
-        // the eventual router will fall back to its primary-cwd path.
+        // SessionCwdRegistry — fast (sessionId → cwd) cache. Tests use the
+        // in-memory Test variant.
         SessionCwdRegistry.Test(),
         SessionCommands.SessionRuntimeTerminatorLive,
         ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),

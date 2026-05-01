@@ -173,9 +173,8 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerLive = Provider.Debug({ delayMs: 10 })
   }
 
-  // SessionCwdRegistry — fast (sessionId → cwd) cache for the per-cwd
-  // EventPublisher router. Registry writes happen at session creation; reads
-  // fall back to Storage on cache miss.
+  // SessionCwdRegistry — fast (sessionId → cwd) cache. Registry writes happen
+  // at session creation; reads fall back to Storage on cache miss.
   const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
 
   const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)

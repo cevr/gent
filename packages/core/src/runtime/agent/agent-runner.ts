@@ -509,7 +509,6 @@ const buildEphemeralLayer = (params: {
         append: (event) => baseEventStore.append(event),
         deliver: (envelope) => baseEventStore.broadcast(envelope),
         publish: (event) => baseEventStore.publish(event),
-        terminateSession: () => Effect.void,
       })
       return Context.empty().pipe(
         Context.add(EventPublisher, publisher),

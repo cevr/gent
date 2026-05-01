@@ -1,6 +1,5 @@
 /**
- * SessionCwdRegistry — fast `sessionId → cwd` lookup for the per-cwd
- * EventPublisher router.
+ * SessionCwdRegistry — fast `sessionId → cwd` lookup.
  *
  * The router needs to know which `SessionProfile` (= which cwd) an event
  * belongs to so it can dispatch through THAT profile, not the server's

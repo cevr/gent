@@ -204,8 +204,8 @@ describe("GentClient transport contract", () => {
                 .pipe(Effect.mapError((error) => new Error(String(error))))
 
               // Each session's snapshot must contain ONLY its own user message.
-              // A regression where the per-cwd EventPublisher router fans out
-              // events to the wrong session's stream would surface here.
+              // A regression where event-store fanout sends events to the wrong
+              // session's stream would surface here.
               //
               // Wait until BOTH sessions have observed their own message before
               // running absence checks. If we only checked A first, a delayed

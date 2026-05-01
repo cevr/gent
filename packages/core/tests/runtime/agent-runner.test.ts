@@ -396,7 +396,6 @@ describe("AgentRunner", () => {
         append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
         deliver: () => Effect.void,
         publish: () => Effect.fail(new EventStoreError({ message: "spawn publish failed" })),
-        terminateSession: () => Effect.void,
       })
       const deps = Layer.mergeAll(
         storageLayer,

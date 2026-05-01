@@ -228,7 +228,6 @@ describe("scope brand type fences", () => {
           append: () => Effect.die("parent append should be omitted"),
           deliver: () => Effect.die("parent deliver should be omitted"),
           publish: () => Effect.die("parent publish should be omitted"),
-          terminateSession: () => Effect.die("parent terminate should be omitted"),
         })
         const parentServices = Context.empty().pipe(
           Context.add(EventPublisher, parentPublisher),
@@ -241,7 +240,6 @@ describe("scope brand type fences", () => {
           append: () => Effect.die("child append is unused"),
           deliver: () => Effect.void,
           publish: () => Effect.void,
-          terminateSession: () => Effect.void,
         })
         const childEventPublisherLayer = Layer.effectContext(
           Effect.succeed(

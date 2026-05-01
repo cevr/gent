@@ -379,46 +379,6 @@ const makeLayerWithEventPublisher = (
     Layer.merge(deps, providedEventPublisherLayer),
   )
 }
-const makePublisherFailingFirstMatchingDelivery = (
-  matches: (event: AgentEvent) => boolean,
-  delivered: string[],
-) =>
-  Layer.effect(
-    EventPublisher,
-    Effect.gen(function* () {
-      const storage = yield* Storage
-      let failed = false
-      const append = (event: AgentEvent) =>
-        storage
-          .appendEvent(event)
-          .pipe(
-            Effect.mapError(
-              (error) => new EventStoreError({ message: error.message, cause: error }),
-            ),
-          )
-      const deliver = (envelope: EventEnvelope) =>
-        Effect.gen(function* () {
-          const event = envelope.event
-          delivered.push(
-            event._tag === "MessageReceived" ? `${event._tag}:${event.message.role}` : event._tag,
-          )
-          if (!failed && matches(event)) {
-            failed = true
-            return yield* new EventStoreError({ message: "deliver failed" })
-          }
-        })
-      return EventPublisher.of({
-        append,
-        deliver,
-        publish: (event) =>
-          Effect.gen(function* () {
-            const envelope = yield* append(event)
-            yield* deliver(envelope)
-          }),
-        terminateSession: () => Effect.void,
-      })
-    }),
-  )
 const parityExternalAgent = AgentDefinition.make({
   name: "test-external-parity" as never,
   driver: ExternalDriverRef.make({ id: "test-parity-driver" }),
@@ -789,7 +749,6 @@ describe("streaming", () => {
               ),
         deliver: () => Effect.void,
         publish: () => Effect.void,
-        terminateSession: () => Effect.void,
       })
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
@@ -816,7 +775,6 @@ describe("streaming", () => {
               ),
         deliver: () => Effect.void,
         publish: () => Effect.void,
-        terminateSession: () => Effect.void,
       })
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
@@ -826,43 +784,6 @@ describe("streaming", () => {
         const user = yield* storage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
-    }),
-  )
-  it.live("retries committed user event delivery without duplicating the durable event", () =>
-    Effect.gen(function* () {
-      const providerLayer = scriptedProvider([
-        [textDeltaPart("after retry"), finishPart({ finishReason: "stop" })],
-      ])
-      const delivered: string[] = []
-      const failingPublisherLayer = makePublisherFailingFirstMatchingDelivery(
-        (event) => event._tag === "MessageReceived" && event.message.role === "user",
-        delivered,
-      )
-      yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
-        const message = makeMessage("retry-assistant-session", "retry-assistant-branch", "hello")
-        const firstExit = yield* Effect.exit(runAgentLoop(agentLoop, message))
-        yield* waitForPhase(
-          agentLoop,
-          { sessionId: message.sessionId, branchId: message.branchId },
-          "Idle",
-        )
-        yield* runAgentLoop(agentLoop, message)
-        const events = yield* storage.listEvents({
-          sessionId: message.sessionId,
-          branchId: message.branchId,
-        })
-        const userReceived = events.filter(
-          (envelope) =>
-            envelope.event._tag === "MessageReceived" && envelope.event.message.id === message.id,
-        )
-        expect(firstExit._tag).toBe("Failure")
-        expect(userReceived).toHaveLength(1)
-        expect(
-          delivered.filter((tag) => tag === "MessageReceived:user").length,
-        ).toBeGreaterThanOrEqual(2)
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )

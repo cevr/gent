@@ -1,5 +1,5 @@
 import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
-import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import {
   SessionCwdRegistry,
@@ -163,11 +163,9 @@ const forgetDeletedSessionRuntimeState = Effect.fn(
   "SessionCommands.forgetDeletedSessionRuntimeState",
 )(function* (input: {
   readonly sessionId: SessionId
-  readonly eventPublisher: EventPublisherService
   readonly eventStore: EventStoreService
   readonly sessionCwdRegistry: SessionCwdRegistryService
 }) {
-  yield* input.eventPublisher.terminateSession(input.sessionId)
   yield* input.eventStore.removeSession(input.sessionId)
   yield* input.sessionCwdRegistry.forget(input.sessionId)
 })
@@ -322,12 +320,7 @@ const makeSessionMutationsService: Effect.Effect<
   const forgetDeletedSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.forgetDeletedSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* forgetDeletedSessionRuntimeState({
-      sessionId,
-      eventPublisher,
-      eventStore,
-      sessionCwdRegistry,
-    })
+    yield* forgetDeletedSessionRuntimeState({ sessionId, eventStore, sessionCwdRegistry })
   })
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
@@ -794,12 +787,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             Effect.gen(function* () {
               yield* sessionStorage.createSession(session)
               yield* branchStorage.createBranch(branch)
-              // Pre-record the (sessionId → cwd) binding BEFORE the first event
-              // publish so the per-cwd EventPublisher router can dispatch the
-              // SessionStarted pulse to the right SessionProfile without falling
-              // back to a storage read. `input.cwd` is optional in the schema for
-              // legacy callers; sessions without a cwd fall through to the
-              // server's primary cwd routing in the publisher.
+              // Pre-record the (sessionId → cwd) binding before the first event
+              // so runtime/profile lookup can resolve the session cwd without
+              // falling back to a storage read. `input.cwd` is optional in the
+              // schema for legacy callers.
               if (input.cwd !== undefined) {
                 yield* sessionCwdRegistry.record(sessionId, input.cwd)
               }

@@ -57,7 +57,6 @@ const failingPublisherLayer = Layer.succeed(EventPublisher, {
   append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
   deliver: () => Effect.void,
   publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-  terminateSession: () => Effect.void,
 })
 
 const failingSessionCommandsLayer = () => {
@@ -69,44 +68,6 @@ const failingSessionCommandsLayer = () => {
     SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     failingPublisherLayer,
-    Provider.Debug(),
-    ExtensionRuntime.Test(),
-    ActorEngine.Live,
-    SessionCwdRegistry.Test(),
-  )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
-}
-
-const postCommitFailingSessionCommandsLayer = () => {
-  const storageLayer = Storage.MemoryWithSql()
-  const eventStoreLayer = EventStore.Memory
-  const postCommitFailingPublisherLayer = Layer.effect(
-    EventPublisher,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      return EventPublisher.of({
-        append: (event) => eventStore.append(event),
-        deliver: () => Effect.fail(new EventStoreError({ message: "deliver failed" })),
-        publish: (event) =>
-          Effect.gen(function* () {
-            const envelope = yield* eventStore.append(event)
-            yield* Effect.fail(new EventStoreError({ message: "deliver failed" }))
-            return envelope
-          }),
-        terminateSession: () => Effect.void,
-      })
-    }),
-  ).pipe(Layer.provide(eventStoreLayer))
-  const deps = Layer.mergeAll(
-    storageLayer,
-    subTagLayers(storageLayer),
-    SessionRuntime.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
-    eventStoreLayer,
-    postCommitFailingPublisherLayer,
     Provider.Debug(),
     ExtensionRuntime.Test(),
     ActorEngine.Live,
@@ -650,18 +611,6 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
-  )
-
-  it.live("does not roll back committed rows when post-commit delivery fails", () =>
-    Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const sessions = yield* SessionStorage
-
-      const exit = yield* Effect.exit(commands.createSession({ cwd: "/tmp/post-commit" }))
-
-      expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions()).toHaveLength(1)
-    }).pipe(Effect.provide(postCommitFailingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
   it.live("deletes only non-active branches owned by the session", () =>

@@ -70,16 +70,14 @@ describe("EventPublisher", () => {
             broadcasted.push(envelope.event._tag)
           }),
         publish: () => Effect.void,
-        subscribe: () => Effect.void as never,
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
         removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, baseLayer)
-      yield* Effect.promise(() =>
-        Effect.gen(function* () {
-          const publisher = yield* EventPublisher
-          yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-        }).pipe(Effect.provide(layer), Effect.runPromise),
-      )
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+      }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.OuterEvent])
       expect(broadcasted).toEqual([TAG.OuterEvent])
     }),
@@ -100,23 +98,21 @@ describe("EventPublisher", () => {
             yield* Deferred.await(releaseBroadcast)
           }),
         publish: () => Effect.void,
-        subscribe: () => Effect.void as never,
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
         removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
-      yield* Effect.promise(() =>
-        Effect.gen(function* () {
-          const publisher = yield* EventPublisher
-          const fiber = yield* Effect.forkScoped(
-            publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
-          )
-          yield* Deferred.await(broadcastStarted)
-          const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("50 millis"))
-          expect(early._tag).toBe("None")
-          yield* Deferred.succeed(releaseBroadcast, void 0)
-          yield* Fiber.join(fiber)
-        }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise),
-      )
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        const fiber = yield* Effect.forkScoped(
+          publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
+        )
+        yield* Deferred.await(broadcastStarted)
+        const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("50 millis"))
+        expect(early._tag).toBe("None")
+        yield* Deferred.succeed(releaseBroadcast, void 0)
+        yield* Fiber.join(fiber)
+      }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
   it.live("deliver serializes duplicate committed envelopes", () =>
@@ -138,23 +134,21 @@ describe("EventPublisher", () => {
             yield* Deferred.await(releaseFirstBroadcast)
           }),
         publish: () => Effect.void,
-        subscribe: () => Effect.void as never,
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
         removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
-      yield* Effect.promise(() =>
-        Effect.gen(function* () {
-          const publisher = yield* EventPublisher
-          const first = yield* Effect.forkScoped(publisher.deliver(envelope))
-          yield* Deferred.await(firstBroadcastStarted)
-          const second = yield* Effect.forkScoped(publisher.deliver(envelope))
-          expect(yield* Ref.get(broadcastCount)).toBe(1)
-          yield* Deferred.succeed(releaseFirstBroadcast, void 0)
-          yield* Fiber.join(first)
-          yield* Fiber.join(second)
-          expect(yield* Ref.get(broadcastCount)).toBe(1)
-        }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise),
-      )
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        const first = yield* Effect.forkScoped(publisher.deliver(envelope))
+        yield* Deferred.await(firstBroadcastStarted)
+        const second = yield* Effect.forkScoped(publisher.deliver(envelope))
+        expect(yield* Ref.get(broadcastCount)).toBe(1)
+        yield* Deferred.succeed(releaseFirstBroadcast, void 0)
+        yield* Fiber.join(first)
+        yield* Fiber.join(second)
+        expect(yield* Ref.get(broadcastCount)).toBe(1)
+      }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
 })
@@ -176,16 +170,14 @@ describe("EventPublisher server layer", () => {
             broadcasted.push(envelope.event._tag)
           }),
         publish: () => Effect.void,
-        subscribe: () => Effect.void as never,
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
         removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, baseLayer)
-      yield* Effect.promise(() =>
-        Effect.gen(function* () {
-          const publisher = yield* EventPublisher
-          yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
-        }).pipe(Effect.provide(layer), Effect.runPromise),
-      )
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
+      }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.FallbackEvent])
       expect(broadcasted).toEqual([TAG.FallbackEvent])
     }),
