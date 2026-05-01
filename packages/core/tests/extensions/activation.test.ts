@@ -1,6 +1,7 @@
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Schema } from "effect"
+import * as AiTool from "effect/unstable/ai/Tool"
 import * as Fs from "node:fs"
 import * as NodePath from "node:path"
 import * as Os from "node:os"
@@ -181,6 +182,12 @@ describe("extension activation isolation", () => {
       execute: () => Effect.succeed(undefined),
     }) as never
 
+  const rawNativeToolLeaf = (id: string): never =>
+    AiTool.dynamic(id, {
+      description: "native but missing Gent metadata",
+      parameters: Schema.Unknown,
+    }) as never
+
   const rawRpcLeaf = (id: string): never =>
     ({
       id,
@@ -259,6 +266,21 @@ describe("extension activation isolation", () => {
       expect(result.active).toEqual([])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("blank-desc"))
+    }),
+  )
+
+  it.live("validation rejects native Effect tools without Gent metadata", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("raw-native-tool", { tools: [rawNativeToolLeaf("raw_tool")] }),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("raw-native-tool"))
+      expect(result.failed[0]?.error).toBe(
+        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      )
     }),
   )
 

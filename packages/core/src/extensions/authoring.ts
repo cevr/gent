@@ -42,6 +42,8 @@ export {
   getToolId,
   getToolEffect,
   getToolMetadata,
+  getToolMetadataOption,
+  isToolToken,
   tool,
   GentToolMetadataTag,
   type ToolCapabilityContext,

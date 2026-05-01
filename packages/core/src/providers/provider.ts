@@ -1,5 +1,5 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import type { ToolToken } from "../domain/capability/tool.js"
+import { getToolId, type ToolToken } from "../domain/capability/tool.js"
 import type { Message } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
@@ -246,7 +246,7 @@ function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.WithHandler<Pr
   const toolsRecord: ProviderToolMap = {}
 
   for (const capability of tools) {
-    toolsRecord[capability.name] = capability
+    toolsRecord[String(getToolId(capability))] = capability
   }
 
   return makeAdvertiseOnlyToolkit(toolsRecord)

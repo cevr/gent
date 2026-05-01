@@ -61,6 +61,8 @@ import {
   getToolEffect,
   getToolId,
   getToolMetadata,
+  getToolMetadataOption,
+  isToolToken,
   type ToolToken,
 } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
@@ -220,6 +222,8 @@ export {
   getToolId,
   getToolEffect,
   getToolMetadata,
+  getToolMetadataOption,
+  isToolToken,
   tool,
   GentToolMetadataTag,
   type ToolCapabilityContext,
@@ -430,7 +434,7 @@ const checkBucketIds = (
   capIds: Map<string, string>,
 ): string | undefined => {
   for (const [i, cap] of entries.entries()) {
-    const id = "parametersSchema" in cap ? getToolId(cap) : cap.id
+    const id = isToolToken(cap) ? getToolId(cap) : cap.id
     if (capIds.has(id)) {
       return `${bucket}[${i}] (${id}): duplicate id within extension (also at ${capIds.get(id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
     }
@@ -445,10 +449,13 @@ const checkBucketIds = (
  */
 const checkToolDescriptions = (tools: ReadonlyArray<ToolToken>): string | undefined => {
   for (const [i, cap] of tools.entries()) {
-    if (cap.description === undefined || cap.description === "") {
-      return `tools[${i}] (${getToolId(cap)}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
+    const metadata = getToolMetadataOption(cap)
+    if (metadata === undefined) {
+      return `tools[${i}]: tool must be created with \`tool({...})\` so Gent metadata is attached`
     }
-    getToolMetadata(cap)
+    if (cap.description === undefined || cap.description === "") {
+      return `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
+    }
   }
   return undefined
 }

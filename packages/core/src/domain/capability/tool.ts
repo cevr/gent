@@ -7,13 +7,11 @@
  * `Effect`, and the action/request-only fields (`surface`, `intent`,
  * `input`, `output`) are forbidden.
  *
- * Replaces the previous two-step `tool(defineTool({...}))` pattern. The
- * old `defineTool` carrier dies in .
+ * Replaces the previous two-step `tool(defineTool({...}))` pattern.
  *
- * Lowering: produces a branded `ToolToken` with the author-supplied `intent`
- * (default `"write"`). Read-only tools (`fs-tools/read.ts`, `grep.ts`,
- * `glob.ts`) pass `intent: "read"` so future read-only sub-agent gates can
- * filter honestly.
+ * Lowering: produces a branded native Effect AI tool annotated with Gent
+ * metadata. Runtime code reads Gent-only fields from that annotation instead
+ * of widening Effect's tool surface.
  *
  * @module
  */
@@ -26,7 +24,7 @@ import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { ToolNeed } from "../tool.js"
 
-declare const ToolTokenBrand: unique symbol
+const ToolTokenBrand: unique symbol = Symbol("@gent/core/ToolToken")
 declare const ToolTokenType: unique symbol
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
@@ -53,7 +51,7 @@ export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefine
  * fields from the annotation instead of widening Effect's tool surface.
  */
 export type ToolToken<Input = unknown, Output = unknown, Error = unknown> = AiTool.Any & {
-  readonly [ToolTokenBrand]?: true
+  readonly [ToolTokenBrand]: true
   readonly [ToolTokenType]?: {
     readonly input: Input
     readonly output: Output
@@ -61,10 +59,21 @@ export type ToolToken<Input = unknown, Output = unknown, Error = unknown> = AiTo
   }
 }
 
+export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
+  Context.get(tool.annotations, GentToolMetadataTag)
+
+export const isToolToken = (value: unknown): value is ToolToken => {
+  if (typeof value !== "object" || value === null || !("annotations" in value)) {
+    return false
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime-loaded extension values are unknown; metadata annotation is the Gent tool brand.
+  return getToolMetadataOption(value as AiTool.Any) !== undefined
+}
+
 export const getToolMetadata = <Input, Output, Error>(
   tool: ToolToken<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error> => {
-  const metadata = Context.get(tool.annotations, GentToolMetadataTag)
+  const metadata = getToolMetadataOption(tool)
   if (metadata === undefined) {
     throw new Error(`Tool "${tool.name}" is missing Gent metadata`)
   }
@@ -105,9 +114,10 @@ export interface ToolInput<
   /** Sent to the LLM as part of the tool schema — describes what the tool does. */
   readonly description: string
   /** Read vs write. Defaults to `"write"`. Read-only tools (e.g. `fs-tools/read`,
-   *  `grep`, `glob`) should pass `intent: "read"` so that future read-only
-   *  sub-agent gates can filter honestly. */
+   *  `grep`, `glob`) should pass `intent: "read"`. */
   readonly intent?: "read" | "write"
+  /** Marks a write tool as destructive for Effect AI provider metadata. */
+  readonly destructive?: boolean
   /**
    * Schema for `execute` input. Must have no context requirement so the
    * LLM-bridge can decode JSON synchronously without resolving services.
@@ -144,9 +154,6 @@ export interface ToolInput<
 
 /**
  * Lower a `ToolInput` to a `ToolToken` with `intent: "write"` by default.
- *
- * Generic over `<Params, Result, Error, Deps>` so authors keep their
- * The legacy `defineTool` carrier was deleted in .
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
@@ -185,8 +192,8 @@ export const tool = <
   })
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.intent === "read")
-    .annotate(AiTool.Destructive, metadata.intent === "write")
+    .annotate(AiTool.Destructive, input.destructive === true)
+  const branded = Object.assign(native, { [ToolTokenBrand]: true as const })
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- `tool` brands Effect's native Tool with a compile-time-only Gent marker.
-  return native as ToolToken<Schema.Schema.Type<Params>, Result, Error>
+  return branded
 }

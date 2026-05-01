@@ -9,10 +9,20 @@
  *    request tokens carry a ref.
  */
 import { describe, expect, test } from "bun:test"
-import { Effect, Schema } from "effect"
-import { action, getToolId, ref, request, tool } from "@gent/core/extensions/api"
+import { Context, Effect, Schema } from "effect"
+import * as AiTool from "effect/unstable/ai/Tool"
+import {
+  action,
+  getToolId,
+  getToolMetadata,
+  isToolToken,
+  ref,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
 import type { CommandId, RpcId, ToolId } from "@gent/core/domain/ids"
 import { ExtensionId } from "@gent/core/domain/ids"
+import { PermissionRule } from "@gent/core/domain/permission"
 
 describe("ref(token)", () => {
   test("factories brand emitted bucket ids while accepting author strings", () => {
@@ -48,6 +58,53 @@ describe("ref(token)", () => {
       "test.action",
       "test.read",
     ])
+  })
+
+  test("tool lowers to a native Effect AI tool with Gent metadata annotations", () => {
+    const params = Schema.Struct({ x: Schema.String })
+    const rule = new PermissionRule({ tool: "test.tool", action: "deny" })
+    const prompt = { id: "tool.prompt", content: "Use carefully.", priority: 42 }
+    const token = tool({
+      id: "test.tool",
+      description: "ephemeral",
+      intent: "read",
+      destructive: true,
+      params,
+      needs: [{ tag: "fs", access: "read" }],
+      promptSnippet: "short",
+      promptGuidelines: ["be precise"],
+      interactive: true,
+      permissionRules: [rule],
+      prompt,
+      execute: () => Effect.succeed("ok"),
+    })
+
+    expect(isToolToken(token)).toBe(true)
+    expect(Context.get(token.annotations, AiTool.Readonly)).toBe(true)
+    expect(Context.get(token.annotations, AiTool.Destructive)).toBe(true)
+
+    const metadata = getToolMetadata(token)
+    expect(metadata.id).toBe(getToolId(token))
+    expect(metadata.intent).toBe("read")
+    expect(metadata.input).toBe(params)
+    expect(metadata.needs).toEqual([{ tag: "fs", access: "read" }])
+    expect(metadata.promptSnippet).toBe("short")
+    expect(metadata.promptGuidelines).toEqual(["be precise"])
+    expect(metadata.interactive).toBe(true)
+    expect(metadata.permissionRules).toEqual([rule])
+    expect(metadata.prompt).toEqual(prompt)
+  })
+
+  test("write intent is not marked destructive unless requested", () => {
+    const token = tool({
+      id: "test.write",
+      description: "write without destructive side effects",
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed("ok"),
+    })
+
+    expect(Context.get(token.annotations, AiTool.Readonly)).toBe(false)
+    expect(Context.get(token.annotations, AiTool.Destructive)).toBe(false)
   })
 
   test("returns the typed ref for a request token, preserving id + intent + schema identity", () => {

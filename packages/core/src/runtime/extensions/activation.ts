@@ -13,7 +13,7 @@ import {
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
-import { getToolId, getToolMetadata } from "../../domain/capability/tool.js"
+import { getToolMetadataOption } from "../../domain/capability/tool.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -227,7 +227,7 @@ export const collectValidationFailures = (
 
   const collectScopedCollisions = <T>(
     pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
-    getKey: (item: T) => string,
+    getKey: (item: T) => string | undefined,
     label: string,
   ) => {
     const byScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
@@ -236,6 +236,7 @@ export const collectValidationFailures = (
       const seen = new Set<string>()
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
+        if (key === undefined) continue
         if (seen.has(key)) continue
         seen.add(key)
         const existing = scopeMap.get(key) ?? []
@@ -257,7 +258,7 @@ export const collectValidationFailures = (
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
-    (cap) => getToolId(cap),
+    (cap) => getToolMetadataOption(cap)?.id,
     "tool",
   )
   collectScopedCollisions(
@@ -290,7 +291,7 @@ export const collectValidationFailures = (
   collectScopedCollisions(
     (cs) =>
       [
-        ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),
+        ...(cs.tools ?? []).map((tool) => getToolMetadataOption(tool)?.prompt),
         ...(cs.commands ?? []).map((command) => command.prompt),
         ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
       ].filter((p): p is PromptSection => p !== undefined),
@@ -300,14 +301,19 @@ export const collectValidationFailures = (
 
   // Model tools MUST declare a non-empty description — the
   // string is sent to the LLM as part of the tool schema, so empty/missing
-  // becomes "why is the model dumb?" rot later. Codex ADVISORY on .
+  // becomes "why is the model dumb?" rot later.
   for (const ext of extensions) {
     for (const cap of modelCapabilities(ext.contributions)) {
+      const metadata = getToolMetadataOption(cap)
+      if (metadata === undefined) {
+        addFailure(ext, "Tool must be created with `tool({...})` so Gent metadata is attached.")
+        continue
+      }
       const trimmed = (cap.description ?? "").trim()
       if (trimmed.length === 0) {
         addFailure(
           ext,
-          `Tool "${getToolId(cap)}" is missing a non-empty description (the LLM tool schema requires one).`,
+          `Tool "${metadata.id}" is missing a non-empty description (the LLM tool schema requires one).`,
         )
       }
     }

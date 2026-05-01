@@ -24,7 +24,12 @@ import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import type { ActionToken } from "../../domain/capability/action.js"
 import type { RequestToken } from "../../domain/capability/request.js"
-import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
+import {
+  getToolId,
+  getToolMetadata,
+  isToolToken,
+  type ToolToken,
+} from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
@@ -358,7 +363,7 @@ export const resolveExtensions = (
   // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
-    const prompt = "parametersSchema" in cap ? getToolMetadata(cap).prompt : cap.prompt
+    const prompt = isToolToken(cap) ? getToolMetadata(cap).prompt : cap.prompt
     if (prompt) promptSectionsMap.set(prompt.id, prompt)
   }
 
@@ -367,8 +372,7 @@ export const resolveExtensions = (
   // builtin denies.
   const permissionRules: PermissionRule[] = []
   for (const { capability: cap } of capabilityWinners.values()) {
-    const rules =
-      "parametersSchema" in cap ? getToolMetadata(cap).permissionRules : cap.permissionRules
+    const rules = isToolToken(cap) ? getToolMetadata(cap).permissionRules : cap.permissionRules
     if (rules) permissionRules.push(...rules)
   }
 
