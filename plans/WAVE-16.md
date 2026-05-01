@@ -181,12 +181,13 @@ the service they need.
 
 - Domain `Message` exists at
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/message.ts:82-100`,
-  but transport recreates it as `MessageInfo` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:213-232`.
-- The message bridge is in
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-utils.ts:34-48`
-  and
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts:131-151`.
+  and transport now returns it directly from
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:224-228`
+  plus `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs/message.ts:12-15`.
+- The message transport bridge is deleted. The remaining conversion at
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts:114-140`
+  is only the UI view-model projection from domain `Message` into rendered
+  message-list items.
 - Domain and transport session tree shapes duplicate each other at
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/message.ts:153-158`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:64-99`,

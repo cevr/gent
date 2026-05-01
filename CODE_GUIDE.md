@@ -310,7 +310,7 @@ Wraps RPC client with:
 
 Main view. Contains:
 
-- `messages` signal — built from `MessageInfo[]`
+- `messages` signal — built from domain `Message[]`
 - Event handlers — update messages on `StreamChunk`, `ToolCallStarted`, etc.
 - `handleSubmit` — sends message via client
 - `inputState` — state machine for input modes
