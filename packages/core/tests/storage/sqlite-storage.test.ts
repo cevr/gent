@@ -245,6 +245,15 @@ describe("Storage", () => {
             FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
           )
         `)
+        db.run(`CREATE VIRTUAL TABLE retired_fts USING fts5(content)`)
+        db.run(`CREATE VIEW retired_message_view AS SELECT id FROM messages`)
+        db.run(`
+          CREATE TRIGGER retired_message_touch
+          AFTER INSERT ON messages
+          BEGIN
+            INSERT INTO retired_fts(content) VALUES (new.id);
+          END
+        `)
         db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
           "retired-session",
           0,
@@ -267,6 +276,7 @@ describe("Storage", () => {
           "retired-task",
           "retired-task",
         ])
+        db.run(`INSERT INTO retired_fts(content) VALUES (?)`, ["old index"])
         db.close()
 
         const layer = Storage.LiveWithSql(dbPath).pipe(
@@ -280,8 +290,12 @@ describe("Storage", () => {
           const tables = yield* sql<{ name: string }>`
             SELECT name FROM sqlite_schema WHERE type = ${"table"} AND name NOT LIKE ${"sqlite_%"}
           `
+          const foreignKeys = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
           expect(tables.map((table) => table.name)).not.toContain("tasks")
           expect(tables.map((table) => table.name)).not.toContain("task_deps")
+          expect(tables.map((table) => table.name)).not.toContain("retired_fts")
+          expect(tables.some((table) => table.name.startsWith("retired_fts_"))).toBe(false)
+          expect(foreignKeys[0]?.foreign_keys).toBe(1)
           expect(columns.map((column) => column.name)).not.toContain("parts")
           yield* storage.createSession(
             new Session({
