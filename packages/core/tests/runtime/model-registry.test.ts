@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { AuthStore, AuthStoreError } from "../../src/domain/auth-store.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
@@ -10,7 +10,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry.js"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
 import { waitFor } from "../../src/test-utils/fixtures.js"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import * as AiError from "effect/unstable/ai/AiError"
+import { failingLanguageModel } from "../helpers/failing-language-model.js"
 
 const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
 const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
@@ -62,35 +62,8 @@ const passThroughDrivers = DriverRegistry.fromResolved({
   externalDrivers: new Map(),
 })
 
-const unusedLanguageModel = {
-  generateText: () =>
-    Effect.fail(
-      AiError.make({
-        module: "Test",
-        method: "generateText",
-        reason: new AiError.UnknownError({ description: "unused" }),
-      }),
-    ) as never,
-  generateObject: () =>
-    Effect.fail(
-      AiError.make({
-        module: "Test",
-        method: "generateObject",
-        reason: new AiError.UnknownError({ description: "unused" }),
-      }),
-    ) as never,
-  streamText: () =>
-    Stream.fail(
-      AiError.make({
-        module: "Test",
-        method: "streamText",
-        reason: new AiError.UnknownError({ description: "unused" }),
-      }),
-    ) as never,
-} as unknown as LanguageModel.Service
-
 const unusedResolution = (): ProviderResolution =>
-  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, unusedLanguageModel))
+  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 
 const authLayer = Layer.succeed(AuthStore, {
   get: () => Effect.succeed(undefined),

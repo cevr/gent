@@ -51,6 +51,7 @@ const assertProviderResolutionRejectsBareLayer = () => {
   const resolution: ProviderResolution = bareLayer
   return resolution
 }
+// Keep the negative assertion reachable so TypeScript checks the body.
 void assertProviderResolutionRejectsBareLayer
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
@@ -363,22 +364,6 @@ describe("Provider model resolution", () => {
               readonly disableToolCallResolution?: boolean
               readonly toolkit?: AiToolkit.WithHandler<Record<string, AiTool.Any>>
             }>({
-              generateText: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateText",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
-              generateObject: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateObject",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
               streamText: (options) => {
                 captured = {
                   disableToolCallResolution: options.disableToolCallResolution,
@@ -465,22 +450,6 @@ describe("Provider model resolution", () => {
             makeLanguageModel<{
               readonly toolkit?: AiToolkit.WithHandler<TypedTools>
             }>({
-              generateText: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateText",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
-              generateObject: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateObject",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
               streamText: (options) => {
                 capturedToolkit = options.toolkit
                 return Stream.fromIterable([
@@ -553,22 +522,6 @@ describe("Provider model resolution", () => {
             makeLanguageModel<{
               readonly toolkit?: AiToolkit.WithHandler<TypedTools>
             }>({
-              generateText: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateText",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
-              generateObject: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateObject",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
               streamText: (options) => {
                 capturedToolkit = options.toolkit
                 return Stream.fromIterable([
@@ -625,22 +578,6 @@ describe("Provider model resolution", () => {
             makeLanguageModel<{
               readonly prompt?: Prompt.Prompt
             }>({
-              generateText: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateText",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
-              generateObject: () =>
-                Effect.fail(
-                  AiError.make({
-                    module: "Test",
-                    method: "generateObject",
-                    reason: new AiError.UnknownError({ description: "unused" }),
-                  }),
-                ),
               streamText: (options) => {
                 capturedPrompt = options.prompt
                 return Stream.fromIterable([
