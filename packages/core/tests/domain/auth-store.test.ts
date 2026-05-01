@@ -5,7 +5,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { AuthApi, AuthInfo, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Logger, Schema } from "effect"
 
 describe("AuthStore", () => {
   const AuthInfoJson = Schema.fromJsonString(AuthInfo)
@@ -86,6 +86,12 @@ describe("AuthStore", () => {
   )
 
   it.live("delete failure while discarding invalid auth stays non-fatal", () => {
+    const logMessages: string[] = []
+    const captureLogger = Logger.make(({ message }) => {
+      logMessages.push(
+        Array.isArray(message) ? message.map((entry) => String(entry)).join(" ") : String(message),
+      )
+    })
     const failingStorage = Layer.succeed(AuthStorage, {
       get: (provider: string) => Effect.succeed(provider === "openai" ? "sk-raw" : undefined),
       set: () => Effect.void,
@@ -95,8 +101,10 @@ describe("AuthStore", () => {
 
     return Effect.gen(function* () {
       const auth = yield* AuthStore
-      const result = yield* auth.get("openai")
+      const result = yield* auth.get("openai").pipe(Effect.provide(Logger.layer([captureLogger])))
       expect(result).toBeUndefined()
+      expect(logMessages).toContain("failed to discard invalid auth info")
+      expect(logMessages).not.toContain("discarded invalid auth info")
       const providers = yield* auth.list()
       expect(providers).toEqual(["openai"])
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))

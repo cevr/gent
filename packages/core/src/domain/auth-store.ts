@@ -90,7 +90,8 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
             Effect.logWarning("failed to discard invalid auth info").pipe(
               Effect.annotateLogs({
                 provider,
-                cause: String(deleteCause),
+                cause: String(cause),
+                deleteCause: String(deleteCause),
               }),
               Effect.as(false),
             ),
