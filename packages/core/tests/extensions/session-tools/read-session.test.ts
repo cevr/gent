@@ -1,9 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import {
-  truncate,
-  renderMessageParts,
-  renderSessionTree,
-} from "@gent/extensions/session-tools/read-session"
+import { truncate, renderSessionTree } from "@gent/extensions/session-tools/read-session"
+import { messagePartsDisplayText } from "@gent/core/domain/message-part-compat"
 import {
   TextPart,
   ToolCallPart,
@@ -24,10 +21,10 @@ describe("truncate", () => {
   })
 })
 
-describe("renderMessageParts", () => {
+describe("messagePartsDisplayText", () => {
   test("text part → text content", () => {
     const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
-    expect(renderMessageParts(parts)).toBe("hello world")
+    expect(messagePartsDisplayText(parts)).toBe("hello world")
   })
 
   test("tool-call part → '### tool: name' header + truncated input", () => {
@@ -39,7 +36,7 @@ describe("renderMessageParts", () => {
         input: { path: "/tmp/test.txt" },
       }),
     ]
-    const result = renderMessageParts(parts)
+    const result = messagePartsDisplayText(parts)
     expect(result).toContain("### tool: read")
     expect(result).toContain("/tmp/test.txt")
   })
@@ -53,7 +50,7 @@ describe("renderMessageParts", () => {
         output: { type: "json", value: "file contents here" },
       }),
     ]
-    const result = renderMessageParts(parts)
+    const result = messagePartsDisplayText(parts)
     expect(result).toContain("result: file contents here")
   })
 
@@ -67,7 +64,7 @@ describe("renderMessageParts", () => {
         input: { command: "ls" },
       }),
     ]
-    const result = renderMessageParts(parts)
+    const result = messagePartsDisplayText(parts)
     expect(result).toContain("start")
     expect(result).toContain("### tool: bash")
     expect(result.indexOf("start")).toBeLessThan(result.indexOf("### tool: bash"))

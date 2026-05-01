@@ -32,6 +32,13 @@ export interface ToolResultPartProjection {
   readonly isError: boolean
 }
 
+export interface MessagePartsDisplayTextOptions {
+  readonly maxToolChars?: number
+}
+
+const truncateDisplayText = (text: string, max: number): string =>
+  text.length > max ? text.slice(0, max) + "…" : text
+
 export const messagePartText = (part: MessagePart): string | undefined =>
   part.type === "text" ? part.text : undefined
 
@@ -126,6 +133,40 @@ export const messagePartsToolResultParts = (
   parts: ReadonlyArray<MessagePart>,
 ): ReadonlyArray<ToolResultPart> =>
   parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
+
+export const messagePartsDisplayText = (
+  parts: ReadonlyArray<MessagePart>,
+  options: MessagePartsDisplayTextOptions = {},
+): string => {
+  const maxToolChars = options.maxToolChars ?? 500
+  const chunks: string[] = []
+
+  for (const part of parts) {
+    const text = messagePartText(part)
+    if (text !== undefined) {
+      chunks.push(text)
+      continue
+    }
+
+    const toolCall = messagePartToolCall(part)
+    if (toolCall !== undefined) {
+      chunks.push(
+        `### tool: ${toolCall.toolName}\n${truncateDisplayText(
+          JSON.stringify(toolCall.input),
+          maxToolChars,
+        )}`,
+      )
+      continue
+    }
+
+    const toolResult = messagePartToolResult(part)
+    if (toolResult !== undefined) {
+      chunks.push(`result: ${truncateDisplayText(toolResult.text, maxToolChars)}`)
+    }
+  }
+
+  return chunks.join("\n")
+}
 
 export const stringifySearchValue = (value: unknown): string => {
   if (typeof value === "string") return value

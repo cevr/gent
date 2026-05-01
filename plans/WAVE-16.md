@@ -290,6 +290,15 @@ the service they need.
 
 **Commit 2.4: `refactor(ai): make prompt and chat primitives effect-native`**
 
+- Status: in progress across reviewable sub-commits.
+- Completed:
+  - `8bfc8366` deletes the custom provider request bridge.
+  - `53463864` centralizes Effect `Prompt` / `Response` compatibility.
+  - `438bb1f8` centralizes transcript part projections.
+  - `a678239f` and `d4f4089d` move search indexing onto the projection module
+    while preserving raw image media type indexing.
+  - `a5c3e098` and `1b52a26b` migrate runtime, extension, and acceptance-test
+    message-part reads to projection helpers.
 - Move provider entrypoints toward `Prompt.Prompt`, `Toolkit`,
   `LanguageModel`, and `Chat`.
 - Shrink or delete `packages/core/src/providers/ai-transcript.ts` once upstream

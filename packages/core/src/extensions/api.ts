@@ -185,6 +185,7 @@ export {
   messagePartText,
   messagePartToolCall,
   messagePartToolResult,
+  messagePartsDisplayText,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsReasoningLines,
@@ -195,6 +196,7 @@ export {
   messagePartsToolResults,
   stringifySearchValue,
   type ImagePartProjection,
+  type MessagePartsDisplayTextOptions,
   type ToolCallPartProjection,
   type ToolResultPartProjection,
 } from "../domain/message-part-compat.js"

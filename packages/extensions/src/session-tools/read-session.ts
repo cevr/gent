@@ -3,15 +3,12 @@ import {
   AgentName,
   headTailChars,
   makeRunSpec,
-  messagePartText,
-  messagePartToolCall,
-  messagePartToolResult,
+  messagePartsDisplayText,
   SessionId,
   tool,
   ToolNeeds,
   type Branch,
   type Message,
-  type MessagePart,
 } from "@gent/core/extensions/api"
 
 // Read Session Error
@@ -51,31 +48,6 @@ export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s
 }
 
-export function renderMessageParts(parts: ReadonlyArray<MessagePart>): string {
-  const chunks: string[] = []
-  for (const part of parts) {
-    const text = messagePartText(part)
-    if (text !== undefined) {
-      chunks.push(text)
-      continue
-    }
-
-    const toolCall = messagePartToolCall(part)
-    if (toolCall !== undefined) {
-      chunks.push(
-        `### tool: ${toolCall.toolName}\n${truncate(JSON.stringify(toolCall.input), MAX_TOOL_ARG_CHARS)}`,
-      )
-      continue
-    }
-
-    const toolResult = messagePartToolResult(part)
-    if (toolResult !== undefined) {
-      chunks.push(`result: ${truncate(toolResult.text, MAX_TOOL_ARG_CHARS)}`)
-    }
-  }
-  return chunks.join("\n")
-}
-
 export function renderSessionTree(
   branches: ReadonlyArray<{ branch: Branch; messages: ReadonlyArray<Message> }>,
   targetBranchId: string | undefined,
@@ -95,7 +67,7 @@ export function renderSessionTree(
     for (const msg of messages) {
       const ts = msg.createdAt.toISOString()
       lines.push(`\n## ${msg.role} (${ts})`)
-      const content = renderMessageParts(msg.parts)
+      const content = messagePartsDisplayText(msg.parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
       if (content.length > 0) {
         lines.push(content)
       }
