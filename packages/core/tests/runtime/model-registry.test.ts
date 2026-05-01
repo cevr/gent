@@ -27,18 +27,6 @@ const remoteCatalog = {
   },
 }
 
-const legacyCatalog = {
-  openai: {
-    models: {
-      "gpt-4.1": {
-        name: "GPT-4.1",
-        cost: { input: 2, output: 8 },
-        limit: { context: 256_000 },
-      },
-    },
-  },
-}
-
 const mixedRemoteCatalog = {
   openai: {
     models: {
@@ -207,31 +195,6 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
-  it.live("loads legacy raw catalog cache and rewrites it to canonical models", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const tmpDir = yield* fs.makeTempDirectoryScoped()
-        const cachePath = path.join(tmpDir, ".gent/models.json")
-        yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
-        yield* fs.writeFileString(cachePath, JSON.stringify(legacyCatalog))
-
-        const registry = yield* loadRegistry(tmpDir, JSON.stringify({}))
-        const models = yield* registry.list()
-        const rewritten = yield* fs.readFileString(cachePath)
-        const decoded = Schema.decodeUnknownSync(CachedModelsJson)(rewritten)
-
-        expect(models).toHaveLength(1)
-        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
-        expect(Array.isArray(decoded)).toBe(true)
-        expect(decoded).toHaveLength(1)
-        expect(decoded[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
-        expect(rewritten.includes('"openai":{"models"')).toBe(false)
-      }),
-    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-  )
-
   it.live("refresh writes canonical model cache instead of raw remote payload", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -394,7 +357,7 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
-  it.live("startup refresh keeps legacy cache available until remote canonical cache lands", () =>
+  it.live("startup refresh keeps canonical cache available until remote cache lands", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -404,7 +367,17 @@ describe("ModelRegistry", () => {
         const tmpDir = yield* fs.makeTempDirectoryScoped()
         const cachePath = path.join(tmpDir, ".gent/models.json")
         yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
-        yield* fs.writeFileString(cachePath, JSON.stringify(legacyCatalog))
+        yield* fs.writeFileString(
+          cachePath,
+          encodeCachedModels([
+            Model.make({
+              id: ModelId.make("openai/gpt-4.1"),
+              name: "GPT-4.1",
+              provider: ProviderId.make("openai"),
+              contextLength: 256_000,
+            }),
+          ]),
+        )
 
         const registry = yield* loadDeferredRegistry(tmpDir, started, response)
         yield* Deferred.await(started)

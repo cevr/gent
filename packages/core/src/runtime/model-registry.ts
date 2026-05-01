@@ -35,7 +35,6 @@ type JsonRecord = Record<string, unknown>
 const CacheLoad = TaggedEnumClass("ModelRegistry/CacheLoad", {
   Missing: {},
   Canonical: { models: Schema.Array(Model) },
-  Legacy: { models: Schema.Array(Model) },
 })
 type CacheLoad = Schema.Schema.Type<typeof CacheLoad>
 
@@ -94,11 +93,7 @@ const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
       return CacheLoad.Canonical.make({ models: canonical.value })
     }
 
-    const json = decodeJson(content)
-    if (json._tag === "None") return CacheLoad.Missing.make({})
-    const legacyModels = parseModelsDev(json.value)
-    if (legacyModels.length === 0) return CacheLoad.Missing.make({})
-    return CacheLoad.Legacy.make({ models: legacyModels })
+    return CacheLoad.Missing.make({})
   },
   Effect.catchEager(() => Effect.succeed(CacheLoad.Missing.make({}))),
 )
@@ -161,10 +156,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
 
       const loadFromDisk = Effect.gen(function* () {
         const cache = yield* readCachedModels(fs, cachePath)
-        if (cache._tag === "Legacy") {
-          yield* writeCachedModels(fs, path, cachePath, cache.models)
-        }
-        if (cache._tag === "Canonical" || cache._tag === "Legacy") {
+        if (cache._tag === "Canonical") {
           return cache.models
         }
         return [] as readonly Model[]

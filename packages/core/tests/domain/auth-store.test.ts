@@ -3,11 +3,15 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
+import { AuthApi, AuthInfo, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 
 describe("AuthStore", () => {
+  const AuthInfoJson = Schema.fromJsonString(AuthInfo)
+  const encodeAuthInfo = Schema.encodeSync(AuthInfoJson)
+  const apiJson = (key: string) => encodeAuthInfo(new AuthApi({ type: "api", key }))
+
   const storeLayer = (initial: Record<string, string> = {}) =>
     Layer.provide(AuthStore.Live, AuthStorage.Test(initial))
 
@@ -21,20 +25,15 @@ describe("AuthStore", () => {
   it.live("stored API key is retrievable", () =>
     AuthStore.use((auth) => auth.get("anthropic")).pipe(
       Effect.tap((result) => Effect.sync(() => expect(result?.type).toBe("api"))),
-      Effect.provide(storeLayer({ anthropic: "sk-test-key" })),
+      Effect.provide(storeLayer({ anthropic: apiJson("sk-test-key") })),
     ),
   )
 
-  it.live("legacy OAuth JSON decodes as OAuth, not an API key", () =>
+  it.live("old OAuth JSON fails closed", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
-      const result = yield* auth.get("openai")
-      expect(result?.type).toBe("oauth")
-      if (result?.type === "oauth") {
-        expect(result.access).toBe("access-token")
-        expect(result.refresh).toBe("refresh-token")
-        expect(result.accountId).toBe("account-1")
-      }
+      const result = yield* Effect.exit(auth.get("openai"))
+      expect(result._tag).toBe("Failure")
     }).pipe(
       Effect.provide(
         storeLayer({
@@ -45,12 +44,11 @@ describe("AuthStore", () => {
     ),
   )
 
-  it.live("raw string fallback is reserved for raw API keys", () =>
+  it.live("invalid auth payloads fail closed", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
-      const rawKey = yield* auth.get("openai")
-      expect(rawKey?.type).toBe("api")
-      if (rawKey?.type === "api") expect(rawKey.key).toBe("sk-raw")
+      const rawKey = yield* Effect.exit(auth.get("openai"))
+      expect(rawKey._tag).toBe("Failure")
 
       const invalidJson = yield* Effect.exit(auth.get("broken"))
       expect(invalidJson._tag).toBe("Failure")
@@ -98,7 +96,7 @@ describe("AuthStore", () => {
           expect(Object.keys(result)).toContain("openai")
         }),
       ),
-      Effect.provide(storeLayer({ anthropic: "key1", openai: "key2" })),
+      Effect.provide(storeLayer({ anthropic: apiJson("key1"), openai: apiJson("key2") })),
     ),
   )
 

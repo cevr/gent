@@ -78,12 +78,10 @@ import {
 import type { TurnError, TurnEvent } from "@gent/core/domain/driver"
 import {
   buildLoopCheckpointRecord,
-  decodeLoopCheckpointState,
   type AgentLoopCheckpointRecord,
 } from "../../src/runtime/agent/agent-loop.checkpoint"
 import {
   appendFollowUpQueueState,
-  appendSteeringItem,
   buildRunningState,
   emptyLoopQueueState,
   LoopState,
@@ -2331,47 +2329,6 @@ describe("recovery", () => {
       )
       return Array.from(envelopes, (envelope) => envelope.event)
     })
-  const toLegacyCheckpointJson = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map((item) => toLegacyCheckpointJson(item))
-    if (typeof value !== "object" || value === null) return value
-    const record = value as Record<string, unknown>
-    const entries = Object.fromEntries(
-      Object.entries(record).map(([key, entry]) => [key, toLegacyCheckpointJson(entry)]),
-    )
-    if (
-      (entries["_tag"] === "regular" || entries["_tag"] === "interjection") &&
-      typeof entries["id"] === "string" &&
-      typeof entries["sessionId"] === "string" &&
-      typeof entries["branchId"] === "string" &&
-      Array.isArray(entries["parts"])
-    ) {
-      const { _tag, ...legacy } = entries
-      return { ...legacy, kind: _tag }
-    }
-    return entries
-  }
-  it.live("decodes v1 checkpoints with legacy message kind markers", () =>
-    Effect.gen(function* () {
-      const { message } = createSessionState()
-      const interjection = Message.Interjection.make({
-        id: MessageId.make("legacy-interjection"),
-        sessionId: message.sessionId,
-        branchId: message.branchId,
-        role: "user",
-        parts: [new TextPart({ type: "text", text: "legacy steer" })],
-        createdAt: new Date(),
-      })
-      const record = yield* buildLoopCheckpointRecord({
-        sessionId: message.sessionId,
-        branchId: message.branchId,
-        state: LoopState.Idle.make({ currentAgent: AgentName.make("cowork") }),
-        queue: appendSteeringItem(emptyLoopQueueState(), { message: interjection }),
-      })
-      const legacyJson = JSON.stringify(toLegacyCheckpointJson(JSON.parse(record.stateJson)))
-      const decoded = yield* decodeLoopCheckpointState(legacyJson)
-      expect(decoded.queue.steering[0]?.message._tag).toBe("interjection")
-    }),
-  )
   it.live("recovers from Running checkpoint and completes the turn", () =>
     Effect.gen(function* () {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-running-"))

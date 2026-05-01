@@ -6,7 +6,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { AuthGuard, ListAuthProvidersPayload } from "@gent/core/domain/auth-guard"
 import { AuthGuardLive } from "@gent/core/runtime/auth-guard-live"
-import { AuthApi, AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
+import { AuthApi, AuthInfo, AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -89,6 +89,10 @@ const helperAgentRegistryLayer = Layer.merge(
 )
 
 describe("AuthGuard", () => {
+  const AuthInfoJson = Schema.fromJsonString(AuthInfo)
+  const encodeAuthInfo = Schema.encodeSync(AuthInfoJson)
+  const apiJson = (key: string) => encodeAuthInfo(new AuthApi({ type: "api", key }))
+
   it.live("requiredProviders include cowork + deepwork providers", () => {
     const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
@@ -120,7 +124,12 @@ describe("AuthGuard", () => {
   it.live("missingRequiredProviders clears when keys are present", () => {
     const layer = AuthGuardLive.pipe(
       Layer.provide(AuthStore.Live),
-      Layer.provide(AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" })),
+      Layer.provide(
+        AuthStorage.Test({
+          openai: apiJson("sk-openai"),
+          anthropic: apiJson("sk-anthropic"),
+        }),
+      ),
       Layer.provide(testRegistryLayer),
     )
     return Effect.gen(function* () {

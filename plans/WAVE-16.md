@@ -104,6 +104,41 @@ obligation to old local databases. If an old table shape keeps a DTO mirror
 alive, delete the old shape and reset the database instead of preserving startup
 migrations or old-shape fixtures.
 
+### Deprecation And Compatibility Deletion
+
+Gent is experimental and has no installed-user compatibility contract. Wave 16
+therefore includes an explicit deletion pass for code whose only purpose is to
+preserve old local state or transitional names. The replacement rule is simple:
+current schemas decode current data; stale local files, caches, checkpoints, and
+tables are invalid and may be reset or ignored.
+
+Accepted deletion targets from the audit:
+
+- Auth file shims:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/auth-store.ts`
+  must decode only current `AuthInfo` JSON. Plain API-key strings and
+  pre-discriminator OAuth JSON are invalid.
+- Model cache shims:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/model-registry.ts`
+  must read only canonical cached `Model[]`. Raw `models.dev` cache payloads
+  are not rewritten.
+- Agent-loop checkpoint shims:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts`
+  must decode only current checkpoint state. Old message-kind marker rewrites
+  are deleted.
+- Storage migration shims:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts` and
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools-storage.ts`
+  should reset incompatible local state instead of migrating old table shapes.
+- Event tag shims:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts`
+  should stop translating retired `Subagent*` event tags.
+- Transitional names:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/message-part-compat.ts`
+  and the `AgentSpec` alias in
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/agent.ts` should
+  either become current names or disappear.
+
 ### Composition
 
 Effect `Layer` and `Context` are the composition model. Gent should not pass
