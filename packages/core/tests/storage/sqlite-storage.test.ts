@@ -181,6 +181,72 @@ describe("Storage", () => {
         }).pipe(Effect.provide(layer))
       }),
     )
+    it.scoped("resets retired message parts schemas before accepting writes", () =>
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-storage-retired-parts-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        )
+        const dbPath = join(dir, "gent.db")
+        const db = new Database(dbPath)
+        db.run(`
+          CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            kind TEXT,
+            role TEXT NOT NULL,
+            parts TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            turn_duration_ms INTEGER,
+            metadata TEXT
+          )
+        `)
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ["retired-message", "retired-session", "retired-branch", "user", "[]", 0],
+        )
+        db.close()
+
+        const layer = Storage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* Storage
+          const sql = yield* SqlClient.SqlClient
+          const columns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(messages)`)
+          expect(columns.map((column) => column.name)).not.toContain("parts")
+          yield* storage.createSession(
+            new Session({
+              id: SessionId.make("reset-session"),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: BranchId.make("reset-branch"),
+              sessionId: SessionId.make("reset-session"),
+              createdAt: new Date(),
+            }),
+          )
+          yield* storage.createMessage(
+            Message.Regular.make({
+              id: "reset-message",
+              sessionId: SessionId.make("reset-session"),
+              branchId: BranchId.make("reset-branch"),
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "fresh write" })],
+              createdAt: new Date(),
+            }),
+          )
+          const messages = yield* storage.listMessages(BranchId.make("reset-branch"))
+          expect(messages).toHaveLength(1)
+          expect(messages[0]?.parts).toEqual([new TextPart({ type: "text", text: "fresh write" })])
+        }).pipe(Effect.provide(layer))
+      }),
+    )
     it.scoped("does not rebuild current-version FTS projection on every startup", () =>
       Effect.gen(function* () {
         const dir = yield* Effect.acquireRelease(

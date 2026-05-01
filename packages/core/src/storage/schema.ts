@@ -352,6 +352,40 @@ const tableExists = Effect.fn("Storage.tableExists")(function* (table: string) {
   return rows.length > 0
 })
 
+const resetIncompatibleMessagePartsSchema = Effect.fn(
+  "Storage.resetIncompatibleMessagePartsSchema",
+)(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const hasMessages = yield* tableExists("messages")
+  if (!hasMessages) return
+
+  const columns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(messages)`)
+  if (!columns.some((column) => column.name === "parts")) return
+
+  yield* Effect.acquireUseRelease(
+    sql.unsafe(`PRAGMA foreign_keys = OFF`),
+    () =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql.unsafe(`DROP TRIGGER IF EXISTS messages_fts_ai`).pipe(Effect.ignoreCause)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`).pipe(Effect.ignoreCause)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS actor_inbox`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS agent_loop_checkpoints`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS interaction_requests`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS actor_persistence`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS events`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS message_chunks`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS content_chunks`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS messages`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS branches`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS sessions`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS storage_meta`)
+        }),
+      ),
+    () => sql.unsafe(`PRAGMA foreign_keys = ON`),
+  )
+})
+
 const getStorageMeta = Effect.fn("Storage.getStorageMeta")(function* (key: string) {
   const sql = yield* SqlClient.SqlClient
   const rows = yield* sql<{
@@ -414,6 +448,8 @@ const repairDuplicatePendingInteractions = Effect.fn("Storage.repairDuplicatePen
 
 export const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
+
+  yield* resetIncompatibleMessagePartsSchema()
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS sessions (

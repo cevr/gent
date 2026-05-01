@@ -363,6 +363,10 @@ domain `Message`; the follow-up deleted the `MessageInfo` compatibility export.
 
 **Commit 4.2: `refactor(storage): collapse message content storage`**
 
+Status: completed in `0841bfee`, then tightened after review so retired
+`messages.parts` databases reset runtime storage on startup instead of carrying
+a half-old table shape forward.
+
 - Treat the database as disposable: no legacy migration path, no old-shape
   fixture, no startup repair of retired message blobs.
 - Remove `messages.parts` from fresh schema and all read/write SQL.

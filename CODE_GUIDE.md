@@ -60,21 +60,23 @@ How data persists. Single file, no ORM.
 
 ### 2.1 SQLite Schema
 
-**Read:** `packages/storage/src/sqlite-storage.ts` (lines 84–157)
+**Read:** `packages/core/src/storage/schema.ts`
 
-Tables: sessions, branches, messages, todos, tasks.
+Tables: sessions, branches, messages, content_chunks, message_chunks, events, actor_inbox,
+agent_loop_checkpoints, interaction_requests, actor_persistence.
 
-**Hint:** `parts` column stores JSON string. Must decode after parsing:
-
-```typescript
-const parts = decodeMessageParts(JSON.parse(row.parts))
+```sql
+-- Message parts are content-addressed chunks, not a JSON blob on messages.
+SELECT c.part_json
+FROM message_chunks mc
+JOIN content_chunks c ON c.id = mc.chunk_id
+WHERE mc.message_id = ?
+ORDER BY mc.ordinal ASC
 ```
-
-This is because `JSON.parse` returns plain objects, not Schema.Class instances.
 
 ### 2.2 Storage Service
 
-**Read:** `packages/storage/src/sqlite-storage.ts` (full file)
+**Read:** `packages/core/src/storage/sqlite-storage.ts` (full file)
 
 Service pattern: `Storage` is a `Context.Tag`, `Storage.Live(dbPath)` returns a Layer.
 
@@ -406,7 +408,7 @@ Core concepts:
 
 Data layer:
 
-- [ ] `packages/storage/src/sqlite-storage.ts`
+- [ ] `packages/core/src/storage/sqlite-storage.ts`
 
 Provider layer:
 

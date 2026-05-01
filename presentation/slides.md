@@ -798,7 +798,7 @@ SQLite via bun:sqlite — no ORM, no config
 Single SQLite file at `~/.gent/data.db`
 
 ```ts
-// packages/storage/src/sqlite-storage.ts
+// packages/core/src/storage/sqlite-storage.ts
 
 export interface StorageService {
   // Sessions
@@ -823,21 +823,24 @@ export interface StorageService {
 
 ---
 
-# JSON ↔ Schema Roundtrip
+# Chunked Message Content
 
-Critical pattern: MessageParts are stored as JSON, decoded via Schema
+Message rows own metadata; content lives in ordered chunk references.
 
-```ts {all|1-6|8-13|all}
-// Encoding: Message → SQLite
-const encodeMessageParts = Schema.encodeSync(Schema.parseJson(Schema.Array(MessagePart)))
-// INSERT INTO messages (..., parts) VALUES (..., ?)
-db.run(sql, [encodeMessageParts(message.parts)])
+```sql {all|1-4|6-11|all}
+INSERT INTO messages (id, session_id, branch_id, role, created_at)
+VALUES (?, ?, ?, ?, ?);
 
-// Decoding: SQLite → Message (reconstructs class instances)
-const decodeMessageParts = Schema.decodeUnknownSync(Schema.parseJson(Schema.Array(MessagePart)))
-const row = db.get("SELECT * FROM messages WHERE id = ?", [id])
-const parts = decodeMessageParts(row.parts)
-// parts[0] instanceof TextPart === true ✓
+INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?);
+
+INSERT INTO message_chunks (message_id, ordinal, chunk_id)
+VALUES (?, ?, ?);
+
+SELECT c.part_json
+FROM message_chunks mc
+JOIN content_chunks c ON c.id = mc.chunk_id
+WHERE mc.message_id = ?
+ORDER BY mc.ordinal ASC;
 ```
 
 <v-click>
