@@ -3,6 +3,9 @@ import {
   AgentName,
   headTailChars,
   makeRunSpec,
+  messagePartText,
+  messagePartToolCall,
+  messagePartToolResult,
   SessionId,
   tool,
   ToolNeeds,
@@ -51,25 +54,23 @@ export function truncate(s: string, max: number): string {
 export function renderMessageParts(parts: ReadonlyArray<MessagePart>): string {
   const chunks: string[] = []
   for (const part of parts) {
-    switch (part.type) {
-      case "text":
-        chunks.push(part.text)
-        break
-      case "tool-call":
-        chunks.push(
-          `### tool: ${part.toolName}\n${truncate(JSON.stringify(part.input), MAX_TOOL_ARG_CHARS)}`,
-        )
-        break
-      case "tool-result": {
-        let output = ""
-        if (part.output !== undefined) {
-          if (typeof part.output.value === "string") output = part.output.value
-          else output = JSON.stringify(part.output.value)
-        }
-        chunks.push(`result: ${truncate(output, MAX_TOOL_ARG_CHARS)}`)
-        break
-      }
-      // Skip reasoning, image
+    const text = messagePartText(part)
+    if (text !== undefined) {
+      chunks.push(text)
+      continue
+    }
+
+    const toolCall = messagePartToolCall(part)
+    if (toolCall !== undefined) {
+      chunks.push(
+        `### tool: ${toolCall.toolName}\n${truncate(JSON.stringify(toolCall.input), MAX_TOOL_ARG_CHARS)}`,
+      )
+      continue
+    }
+
+    const toolResult = messagePartToolResult(part)
+    if (toolResult !== undefined) {
+      chunks.push(`result: ${truncate(toolResult.text, MAX_TOOL_ARG_CHARS)}`)
     }
   }
   return chunks.join("\n")

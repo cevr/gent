@@ -26,7 +26,6 @@ import {
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract.js"
-import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
 import type { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
 import type { PermissionRule } from "@gent/core/domain/permission.js"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
@@ -38,6 +37,13 @@ import type {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message.js"
+import {
+  messagePartsImages,
+  messagePartsReasoning,
+  messagePartsText,
+  messagePartsToolCalls,
+  messagePartsToolResults,
+} from "@gent/core/domain/message-part-compat.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import {
   makeNamespacedClient,
@@ -101,17 +107,11 @@ export type GentRpcError = GentRpcClientError
 // ---------------------------------------------------------------------------
 
 export function extractText(parts: readonly MessagePart[]): string {
-  return parts
-    .filter((p): p is TextPart => p.type === "text")
-    .map((p) => p.text)
-    .join("")
+  return messagePartsText(parts)
 }
 
 export function extractReasoning(parts: readonly MessagePart[]): string {
-  return parts
-    .filter((p): p is ReasoningPart => p.type === "reasoning")
-    .map((p) => p.text)
-    .join("")
+  return messagePartsReasoning(parts)
 }
 
 export interface ImageInfo {
@@ -119,12 +119,8 @@ export interface ImageInfo {
 }
 
 export function extractImages(parts: readonly MessagePart[]): ImageInfo[] {
-  return parts
-    .filter((p): p is ImagePart => p.type === "image")
-    .map((p) => ({ mediaType: p.mediaType ?? "image" }))
+  return messagePartsImages(parts).map((image) => ({ mediaType: image.mediaType }))
 }
-
-type ImagePart = { type: "image"; image: string; mediaType?: string }
 
 export interface ExtractedToolCall {
   id: string
@@ -136,16 +132,14 @@ export interface ExtractedToolCall {
 }
 
 export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCall[] {
-  return parts
-    .filter((p): p is ToolCallPart => p.type === "tool-call")
-    .map((tc) => ({
-      id: tc.toolCallId,
-      toolName: tc.toolName,
-      status: "completed" as const,
-      input: tc.input,
-      summary: undefined,
-      output: undefined,
-    }))
+  return messagePartsToolCalls(parts).map((tc) => ({
+    id: tc.id,
+    toolName: tc.toolName,
+    status: "completed" as const,
+    input: tc.input,
+    summary: undefined,
+    output: undefined,
+  }))
 }
 
 export function buildToolResultMap(
@@ -155,15 +149,12 @@ export function buildToolResultMap(
 
   for (const msg of messages) {
     if (msg.role === "tool") {
-      for (const part of msg.parts) {
-        if (part.type === "tool-result") {
-          const result = part as ToolResultPart
-          resultMap.set(result.toolCallId, {
-            summary: summarizeOutput(result.output),
-            output: stringifyOutput(result.output.value),
-            isError: result.output.type === "error-json",
-          })
-        }
+      for (const result of messagePartsToolResults(msg.parts)) {
+        resultMap.set(result.id, {
+          summary: result.summary,
+          output: result.text,
+          isError: result.isError,
+        })
       }
     }
   }
@@ -175,21 +166,19 @@ export function extractToolCallsWithResults(
   parts: readonly MessagePart[],
   resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
 ): ExtractedToolCall[] {
-  return parts
-    .filter((p): p is ToolCallPart => p.type === "tool-call")
-    .map((tc) => {
-      const result = resultMap.get(tc.toolCallId)
-      let status: ExtractedToolCall["status"] = "running"
-      if (result !== undefined) status = result.isError ? "error" : "completed"
-      return {
-        id: tc.toolCallId,
-        toolName: tc.toolName,
-        status,
-        input: tc.input,
-        summary: result?.summary,
-        output: result?.output,
-      }
-    })
+  return messagePartsToolCalls(parts).map((tc) => {
+    const result = resultMap.get(tc.id)
+    let status: ExtractedToolCall["status"] = "running"
+    if (result !== undefined) status = result.isError ? "error" : "completed"
+    return {
+      id: tc.id,
+      toolName: tc.toolName,
+      status,
+      input: tc.input,
+      summary: result?.summary,
+      output: result?.output,
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

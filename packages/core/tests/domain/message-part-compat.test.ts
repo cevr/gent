@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test"
 import {
   assistantMessagePartToResponsePart,
   messagePartToPromptPart,
+  messagePartsImages,
+  messagePartsReasoning,
+  messagePartsText,
+  messagePartsToolCalls,
+  messagePartsToolResults,
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
   toolResultPartToResponsePart,
@@ -12,6 +17,45 @@ import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("message part compatibility", () => {
+  test("projects Gent transcript parts without exposing persisted field names", () => {
+    const toolCallId = ToolCallId.make("tc-projection")
+    const parts = [
+      new TextPart({ type: "text", text: "hello" }),
+      new ImagePart({ type: "image", image: "data:image/png;base64,abc" }),
+      new ToolCallPart({
+        type: "tool-call",
+        toolCallId,
+        toolName: "read",
+        input: { path: "README.md" },
+      }),
+      new ToolResultPart({
+        type: "tool-result",
+        toolCallId,
+        toolName: "read",
+        output: { type: "json", value: { ok: true } },
+      }),
+    ]
+
+    expect(messagePartsText(parts)).toBe("hello")
+    expect(messagePartsReasoning(parts)).toBe("")
+    expect(messagePartsImages(parts)).toEqual([
+      { image: "data:image/png;base64,abc", mediaType: "image" },
+    ])
+    expect(messagePartsToolCalls(parts)).toEqual([
+      { id: "tc-projection", toolName: "read", input: { path: "README.md" } },
+    ])
+    expect(messagePartsToolResults(parts)).toEqual([
+      {
+        id: "tc-projection",
+        toolName: "read",
+        value: { ok: true },
+        summary: '{"ok":true}',
+        text: '{\n  "ok": true\n}',
+        isError: false,
+      },
+    ])
+  })
+
   test("maps Gent images to Effect prompt file parts", () => {
     const promptPart = messagePartToPromptPart(
       new ImagePart({

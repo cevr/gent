@@ -13,6 +13,12 @@ import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { Message as DomainMessage } from "@gent/core/domain/message.js"
 import {
+  messagePartImage,
+  messagePartReasoning,
+  messagePartText,
+  messagePartToolCall,
+} from "@gent/core/domain/message-part-compat.js"
+import {
   extractText,
   extractReasoning,
   extractImages,
@@ -67,38 +73,40 @@ const buildSegments = (
 ): AssistantSegment[] => {
   const segments: AssistantSegment[] = []
   for (const part of parts) {
-    switch (part.type) {
-      case "text":
-        segments.push({ _tag: "text", content: (part as { text: string }).text })
-        break
-      case "reasoning":
-        segments.push({ _tag: "reasoning", content: (part as { text: string }).text })
-        break
-      case "image":
-        segments.push({
-          _tag: "image",
-          image: { mediaType: (part as { mediaType?: string }).mediaType ?? "image" },
-        })
-        break
-      case "tool-call": {
-        const tc = part as { toolCallId: string; toolName: string; input: unknown }
-        const result = resultMap.get(tc.toolCallId)
-        let tcStatus: "running" | "completed" | "error" = "running"
-        if (result !== undefined) tcStatus = result.isError ? "error" : "completed"
-        segments.push({
-          _tag: "tool-call",
-          toolCall: {
-            id: tc.toolCallId,
-            toolName: tc.toolName,
-            status: tcStatus,
-            input: tc.input,
-            summary: result?.summary,
-            output: result?.output,
-          },
-        })
-        break
-      }
-      // tool-result parts are handled via resultMap join
+    const text = messagePartText(part)
+    if (text !== undefined) {
+      segments.push({ _tag: "text", content: text })
+      continue
+    }
+
+    const reasoning = messagePartReasoning(part)
+    if (reasoning !== undefined) {
+      segments.push({ _tag: "reasoning", content: reasoning })
+      continue
+    }
+
+    const image = messagePartImage(part)
+    if (image !== undefined) {
+      segments.push({ _tag: "image", image: { mediaType: image.mediaType } })
+      continue
+    }
+
+    const tc = messagePartToolCall(part)
+    if (tc !== undefined) {
+      const result = resultMap.get(tc.id)
+      let tcStatus: "running" | "completed" | "error" = "running"
+      if (result !== undefined) tcStatus = result.isError ? "error" : "completed"
+      segments.push({
+        _tag: "tool-call",
+        toolCall: {
+          id: tc.id,
+          toolName: tc.toolName,
+          status: tcStatus,
+          input: tc.input,
+          summary: result?.summary,
+          output: result?.output,
+        },
+      })
     }
   }
   return segments

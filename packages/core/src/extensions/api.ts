@@ -178,6 +178,21 @@ export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "..
 export { AuthMethod } from "../domain/auth-method.js"
 export { AuthOauth } from "../domain/auth-store.js"
 export { type Message, type MessagePart, MessageMetadata, type Branch } from "../domain/message.js"
+export {
+  messagePartImage,
+  messagePartReasoning,
+  messagePartText,
+  messagePartToolCall,
+  messagePartToolResult,
+  messagePartsImages,
+  messagePartsReasoning,
+  messagePartsText,
+  messagePartsToolCalls,
+  messagePartsToolResults,
+  type ImagePartProjection,
+  type ToolCallPartProjection,
+  type ToolResultPartProjection,
+} from "../domain/message-part-compat.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
 export {

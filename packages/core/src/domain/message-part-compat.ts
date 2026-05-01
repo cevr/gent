@@ -1,6 +1,7 @@
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "./ids.js"
+import { stringifyOutput, summarizeOutput } from "./tool-output.js"
 import {
   ImagePart,
   ReasoningPart,
@@ -9,6 +10,91 @@ import {
   ToolResultPart,
   type MessagePart,
 } from "./message.js"
+
+export interface ImagePartProjection {
+  readonly image: string
+  readonly mediaType: string
+}
+
+export interface ToolCallPartProjection {
+  readonly id: string
+  readonly toolName: string
+  readonly input: unknown
+}
+
+export interface ToolResultPartProjection {
+  readonly id: string
+  readonly toolName: string
+  readonly value: unknown
+  readonly summary: string
+  readonly text: string
+  readonly isError: boolean
+}
+
+export const messagePartText = (part: MessagePart): string | undefined =>
+  part.type === "text" ? part.text : undefined
+
+export const messagePartReasoning = (part: MessagePart): string | undefined =>
+  part.type === "reasoning" ? part.text : undefined
+
+export const messagePartImage = (part: MessagePart): ImagePartProjection | undefined =>
+  part.type === "image"
+    ? {
+        image: part.image,
+        mediaType: part.mediaType ?? "image",
+      }
+    : undefined
+
+export const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined =>
+  part.type === "tool-call"
+    ? {
+        id: part.toolCallId,
+        toolName: part.toolName,
+        input: part.input,
+      }
+    : undefined
+
+export const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined =>
+  part.type === "tool-result"
+    ? {
+        id: part.toolCallId,
+        toolName: part.toolName,
+        value: part.output.value,
+        summary: summarizeOutput(part.output),
+        text: stringifyOutput(part.output.value),
+        isError: part.output.type === "error-json",
+      }
+    : undefined
+
+export const messagePartsText = (parts: ReadonlyArray<MessagePart>): string =>
+  parts.flatMap((part) => messagePartText(part) ?? []).join("")
+
+export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
+  parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
+
+export const messagePartsImages = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ImagePartProjection> =>
+  parts.flatMap((part) => {
+    const image = messagePartImage(part)
+    return image === undefined ? [] : [image]
+  })
+
+export const messagePartsToolCalls = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ToolCallPartProjection> =>
+  parts.flatMap((part) => {
+    const toolCall = messagePartToolCall(part)
+    return toolCall === undefined ? [] : [toolCall]
+  })
+
+export const messagePartsToolResults = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ToolResultPartProjection> =>
+  parts.flatMap((part) => {
+    const toolResult = messagePartToolResult(part)
+    return toolResult === undefined ? [] : [toolResult]
+  })
 
 export const fileDataFromImage = (part: ImagePart): string | URL => {
   if (part.image.startsWith("data:")) return part.image
