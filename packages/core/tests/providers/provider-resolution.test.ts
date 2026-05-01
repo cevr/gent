@@ -51,7 +51,8 @@ const assertProviderResolutionRejectsBareLayer = () => {
   const resolution: ProviderResolution = bareLayer
   return resolution
 }
-// Keep the negative assertion reachable so TypeScript checks the body.
+// If ProviderResolution ever stops requiring Model.make metadata, this
+// assignment compiles and @ts-expect-error flips the guard red.
 void assertProviderResolutionRejectsBareLayer
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
