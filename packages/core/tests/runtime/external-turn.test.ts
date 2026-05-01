@@ -17,6 +17,11 @@ import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider, finishPart } from "@gent/core/providers/provider"
 import { ImagePart, Message, TextPart } from "@gent/core/domain/message"
+import {
+  messagePartsText,
+  messagePartsToolCallParts,
+  messagePartsToolResultParts,
+} from "@gent/core/domain/message-part-compat"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import {
@@ -509,9 +514,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           const storage = yield* Storage
           const messages = yield* storage.listMessages(e2eBranchId)
           // The assistant message should contain the text emitted by the executor.
-          const allText = messages.flatMap((m) =>
-            m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])),
-          )
+          const allText = messages.map((m) => messagePartsText(m.parts))
           const combined = allText.join("")
           expect(combined).toContain(expectedText)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
@@ -603,12 +606,8 @@ describe("ExternalDriverContribution end-to-end", () => {
           })
           const storage = yield* Storage
           const messages = yield* storage.listMessages(e2eBranchId)
-          const toolCallParts = messages.flatMap((m) =>
-            m.parts.flatMap((p) => (p.type === "tool-call" ? [p] : [])),
-          )
-          const toolResultParts = messages.flatMap((m) =>
-            m.parts.flatMap((p) => (p.type === "tool-result" ? [p] : [])),
-          )
+          const toolCallParts = messages.flatMap((m) => messagePartsToolCallParts(m.parts))
+          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("read_file")
           expect(toolResultParts.length).toBe(1)
@@ -696,9 +695,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           })
           const storage = yield* Storage
           const messages = yield* storage.listMessages(e2eBranchId)
-          const toolResultParts = messages.flatMap((m) =>
-            m.parts.flatMap((p) => (p.type === "tool-result" ? [p] : [])),
-          )
+          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
           expect(toolResultParts.length).toBe(1)
           expect(toolResultParts[0]?.toolName).toBe("bash")
           expect(toolResultParts[0]?.output.type).toBe("error-json")
@@ -794,9 +791,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           })
           const storage = yield* Storage
           const messages = yield* storage.listMessages(e2eBranchId)
-          const toolCallParts = messages.flatMap((m) =>
-            m.parts.flatMap((p) => (p.type === "tool-call" ? [p] : [])),
-          )
+          const toolCallParts = messages.flatMap((m) => messagePartsToolCallParts(m.parts))
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("write_file")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),

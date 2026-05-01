@@ -8,6 +8,7 @@ import {
   type ExtensionHostContext,
   type Message,
   type TurnAfterInput,
+  messagePartsTextLines,
   ref,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
@@ -61,10 +62,7 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages
     .slice(-20)
     .map((m) => {
-      const text = m.parts
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
+      const text = messagePartsTextLines(m.parts).join("\n")
       return text !== "" ? `${m.role}: ${text}` : ""
     })
     .filter((line) => line.length > 0)
