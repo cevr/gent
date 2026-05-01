@@ -112,7 +112,9 @@ describe("AuthStore", () => {
       const failureLog = logEntries.find(
         (entry) => messageText(entry.message) === "failed to discard invalid auth info",
       )
-      expect(String(failureLog?.annotations["cause"])).toContain("AuthStoreError")
+      expect(String(failureLog?.annotations["cause"])).toContain(
+        "AuthStoreError: Failed to decode auth info",
+      )
       expect(String(failureLog?.annotations["deleteCause"])).toContain(
         "AuthStorageError: delete failed",
       )
