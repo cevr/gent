@@ -4,41 +4,54 @@ import {
   messagePartToPromptPart,
   messagePartsImages,
   messagePartsReasoning,
+  messagePartsReasoningLines,
   messagePartsSearchText,
   messagePartsText,
+  messagePartsTextLines,
+  messagePartsToolCallParts,
   messagePartsToolCalls,
+  messagePartsToolResultParts,
   messagePartsToolResults,
+  messageSingleText,
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
   toolResultPartToResponsePart,
 } from "@gent/core/domain/message-part-compat"
 import { ToolCallId } from "@gent/core/domain/ids"
-import { ImagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import {
+  ImagePart,
+  ReasoningPart,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+} from "@gent/core/domain/message"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("message part compatibility", () => {
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
-    const parts = [
-      new TextPart({ type: "text", text: "hello" }),
-      new ImagePart({ type: "image", image: "data:image/png;base64,abc" }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId,
-        toolName: "read",
-        input: { path: "README.md" },
-      }),
-      new ToolResultPart({
-        type: "tool-result",
-        toolCallId,
-        toolName: "read",
-        output: { type: "json", value: { ok: true } },
-      }),
-    ]
+    const textPart = new TextPart({ type: "text", text: "hello" })
+    const imagePart = new ImagePart({ type: "image", image: "data:image/png;base64,abc" })
+    const toolCallPart = new ToolCallPart({
+      type: "tool-call",
+      toolCallId,
+      toolName: "read",
+      input: { path: "README.md" },
+    })
+    const toolResultPart = new ToolResultPart({
+      type: "tool-result",
+      toolCallId,
+      toolName: "read",
+      output: { type: "json", value: { ok: true } },
+    })
+    const parts = [textPart, imagePart, toolCallPart, toolResultPart]
 
     expect(messagePartsText(parts)).toBe("hello")
+    expect(messagePartsTextLines(parts)).toEqual(["hello"])
+    expect(messageSingleText(parts)).toBeUndefined()
     expect(messagePartsReasoning(parts)).toBe("")
+    expect(messagePartsReasoningLines(parts)).toEqual([])
     expect(messagePartsImages(parts)).toEqual([
       { image: "data:image/png;base64,abc", mediaType: "image", rawMediaType: undefined },
     ])
@@ -55,9 +68,26 @@ describe("message part compatibility", () => {
         isError: false,
       },
     ])
+    expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
+    expect(messagePartsToolResultParts(parts)).toEqual([toolResultPart])
     expect(messagePartsSearchText(parts)).toBe(
       'hello\ndata:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
     )
+  })
+
+  test("preserves line-oriented text and reasoning projections", () => {
+    const first = new TextPart({ type: "text", text: "one" })
+    const parts = [
+      first,
+      new ReasoningPart({ type: "reasoning", text: "think" }),
+      new TextPart({ type: "text", text: "two" }),
+    ]
+
+    expect(messageSingleText([first])).toBe("one")
+    expect(messagePartsText(parts)).toBe("onetwo")
+    expect(messagePartsTextLines(parts)).toEqual(["one", "two"])
+    expect(messagePartsReasoning(parts)).toBe("think")
+    expect(messagePartsReasoningLines(parts)).toEqual(["think"])
   })
 
   test("maps Gent images to Effect prompt file parts", () => {

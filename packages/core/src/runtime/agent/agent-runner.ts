@@ -49,6 +49,10 @@ import {
   RunSpecSchema,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
+import {
+  messagePartsReasoningLines,
+  messagePartsTextLines,
+} from "../../domain/message-part-compat.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
@@ -146,11 +150,8 @@ const latestAssistantContent = (messages: ReadonlyArray<Message>) => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg === undefined || msg.role !== "assistant") continue
-    const text = msg.parts.find((p) => p.type === "text")?.text ?? ""
-    const reasoning = msg.parts
-      .filter((p) => p.type === "reasoning")
-      .map((p) => (p as { text: string }).text)
-      .join("\n")
+    const text = messagePartsTextLines(msg.parts)[0] ?? ""
+    const reasoning = messagePartsReasoningLines(msg.parts).join("\n")
     return { text, reasoning }
   }
   return { text: "", reasoning: "" }

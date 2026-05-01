@@ -1,13 +1,15 @@
 import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
+import { type Message, type ToolResultPart } from "../../domain/message.js"
 import {
-  type ReasoningPart,
-  type Message,
-  type TextPart,
-  type ToolCallPart,
-  type ToolResultPart,
-} from "../../domain/message.js"
+  messagePartsReasoning,
+  messagePartsText,
+  messagePartsTextLines,
+  messagePartsToolCallParts,
+  messagePartsToolResultParts,
+  messageSingleText,
+} from "../../domain/message-part-compat.js"
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"
@@ -139,16 +141,11 @@ export const resolveReasoning = (
 }
 
 export const getSingleText = (message: Message): string | undefined => {
-  if (message.parts.length !== 1) return undefined
-  const [part] = message.parts
-  return part?.type === "text" ? part.text : undefined
+  return messageSingleText(message.parts)
 }
 
 export const messageText = (message: Message): string =>
-  message.parts
-    .filter((part): part is TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
+  messagePartsTextLines(message.parts).join("\n")
 
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:assistant:${step}`)
@@ -157,16 +154,10 @@ export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): Mess
   MessageId.make(`${messageId}:tool-result:${step}`)
 
 export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
-  text: message.parts
-    .filter((part): part is TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join(""),
-  reasoning: message.parts
-    .filter((part): part is ReasoningPart => part.type === "reasoning")
-    .map((part) => part.text)
-    .join(""),
-  toolCalls: message.parts.filter((part): part is ToolCallPart => part.type === "tool-call"),
+  text: messagePartsText(message.parts),
+  reasoning: messagePartsReasoning(message.parts),
+  toolCalls: messagePartsToolCallParts(message.parts),
 })
 
 export const toolResultsFromMessage = (message: Message): ReadonlyArray<ToolResultPart> =>
-  message.parts.filter((part): part is ToolResultPart => part.type === "tool-result")
+  messagePartsToolResultParts(message.parts)

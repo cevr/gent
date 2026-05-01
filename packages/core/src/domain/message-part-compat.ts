@@ -71,8 +71,28 @@ export const messagePartToolResult = (part: MessagePart): ToolResultPartProjecti
 export const messagePartsText = (parts: ReadonlyArray<MessagePart>): string =>
   parts.flatMap((part) => messagePartText(part) ?? []).join("")
 
+export const messagePartsTextLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
+  parts.flatMap((part) => {
+    const text = messagePartText(part)
+    return text === undefined ? [] : [text]
+  })
+
+export const messageSingleText = (parts: ReadonlyArray<MessagePart>): string | undefined => {
+  if (parts.length !== 1) return undefined
+  const [part] = parts
+  return part === undefined ? undefined : messagePartText(part)
+}
+
 export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
+
+export const messagePartsReasoningLines = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<string> =>
+  parts.flatMap((part) => {
+    const reasoning = messagePartReasoning(part)
+    return reasoning === undefined ? [] : [reasoning]
+  })
 
 export const messagePartsImages = (
   parts: ReadonlyArray<MessagePart>,
@@ -90,6 +110,10 @@ export const messagePartsToolCalls = (
     return toolCall === undefined ? [] : [toolCall]
   })
 
+export const messagePartsToolCallParts = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ToolCallPart> => parts.flatMap((part) => (part.type === "tool-call" ? [part] : []))
+
 export const messagePartsToolResults = (
   parts: ReadonlyArray<MessagePart>,
 ): ReadonlyArray<ToolResultPartProjection> =>
@@ -97,6 +121,11 @@ export const messagePartsToolResults = (
     const toolResult = messagePartToolResult(part)
     return toolResult === undefined ? [] : [toolResult]
   })
+
+export const messagePartsToolResultParts = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ToolResultPart> =>
+  parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
 
 export const stringifySearchValue = (value: unknown): string => {
   if (typeof value === "string") return value

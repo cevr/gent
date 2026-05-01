@@ -7,6 +7,7 @@ import {
 } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
+import { messagePartsTextLines } from "../domain/message-part-compat.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../domain/steer.js"
 import {
@@ -681,10 +682,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         const conversation = messages
           .slice(-50)
           .map((message) => {
-            const text = message.parts
-              .filter((part): part is TextPart => part.type === "text")
-              .map((part) => part.text)
-              .join("\n")
+            const text = messagePartsTextLines(message.parts).join("\n")
             return text !== "" ? `${message.role}: ${text}` : ""
           })
           .filter((line) => line.trim().length > 0)
