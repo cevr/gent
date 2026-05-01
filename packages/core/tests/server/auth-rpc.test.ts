@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -30,6 +30,7 @@ import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { failingLanguageModel } from "../helpers/failing-language-model"
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
   AuthStore.of({
@@ -52,7 +53,7 @@ const failingReadAuthStoreLayer = Layer.succeed(
 const stubModel = AiModel.make(
   "test",
   "model",
-  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
 )
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()

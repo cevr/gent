@@ -14,14 +14,15 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Effect, Layer, Schema } from "effect"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { ProviderId } from "@gent/core/domain/model"
+import { failingLanguageModel } from "../helpers/failing-language-model"
 
 const stubModel = AiModel.make(
   "test",
   "model",
-  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
 )
 
 const testProviders: ModelDriverContribution[] = [

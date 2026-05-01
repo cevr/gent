@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "@gent/core/domain/ids"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
@@ -11,11 +11,12 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { failingLanguageModel } from "../helpers/failing-language-model"
 const pendingCallbacks = new Map<string, (code?: string) => string>()
 const stubModel = AiModel.make(
   "test",
   "model",
-  Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
 )
 const oauthProvider: ModelDriverContribution = {
   id: "openai",

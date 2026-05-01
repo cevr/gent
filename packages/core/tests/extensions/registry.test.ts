@@ -1,6 +1,6 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
@@ -21,6 +21,7 @@ import {
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
+import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. Post- the
 // `tool({...})` factory rejects the legacy `{ name, params, execute }`
 // shape, so test fixtures here construct the lowered Capability literal.
@@ -42,7 +43,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
     AiModel.make(
       providerId,
       modelName,
-      Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>,
+      Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
     ),
 })
 // Static prompt sections live on capability leaf `prompt`. Build a synthetic

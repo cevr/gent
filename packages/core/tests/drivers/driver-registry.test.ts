@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Stream } from "effect"
-import { Model as AiModel, type LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -24,9 +24,10 @@ import type {
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 import { Model, ModelId, ProviderId } from "@gent/core/domain/model"
 import { ExtensionId } from "@gent/core/domain/ids"
+import { failingLanguageModel } from "../helpers/failing-language-model"
 const noopInvalidate = (): Effect.Effect<void> => Effect.void
 const stubResolution = (): ProviderResolution =>
-  AiModel.make("test", "model", Layer.empty as Layer.Layer<LanguageModel.LanguageModel>)
+  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 const makeModel = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,

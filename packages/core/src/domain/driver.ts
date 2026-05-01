@@ -84,6 +84,7 @@ export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError
 export type ProviderResolution = Layer.Layer<
   LanguageModel.LanguageModel | AiModel.ProviderName | AiModel.ModelName
 > & {
+  readonly "~effect/ai/Model": "~effect/ai/Model"
   readonly provider: string
 }
 
