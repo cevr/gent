@@ -4,6 +4,7 @@ import {
   messagePartToPromptPart,
   messagePartsImages,
   messagePartsReasoning,
+  messagePartsSearchText,
   messagePartsText,
   messagePartsToolCalls,
   messagePartsToolResults,
@@ -54,6 +55,9 @@ describe("message part compatibility", () => {
         isError: false,
       },
     ])
+    expect(messagePartsSearchText(parts)).toBe(
+      'hello\nimage data:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
+    )
   })
 
   test("maps Gent images to Effect prompt file parts", () => {

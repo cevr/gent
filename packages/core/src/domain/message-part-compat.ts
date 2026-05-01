@@ -96,6 +96,48 @@ export const messagePartsToolResults = (
     return toolResult === undefined ? [] : [toolResult]
   })
 
+export const stringifySearchValue = (value: unknown): string => {
+  if (typeof value === "string") return value
+  if (value === undefined) return ""
+  const encoded = JSON.stringify(value)
+  return encoded === undefined ? "" : encoded
+}
+
+export const messagePartSearchText = (part: MessagePart): string => {
+  const text = messagePartText(part)
+  if (text !== undefined) return text
+
+  const reasoning = messagePartReasoning(part)
+  if (reasoning !== undefined) return reasoning
+
+  const image = messagePartImage(part)
+  if (image !== undefined) {
+    return [image.mediaType, image.image].filter((value) => value !== "").join(" ")
+  }
+
+  const toolCall = messagePartToolCall(part)
+  if (toolCall !== undefined) {
+    return [toolCall.toolName, stringifySearchValue(toolCall.input)]
+      .filter((value) => value !== "")
+      .join(" ")
+  }
+
+  const toolResult = messagePartToolResult(part)
+  if (toolResult !== undefined) {
+    return [toolResult.toolName, stringifySearchValue(toolResult.value)]
+      .filter((value) => value !== "")
+      .join(" ")
+  }
+
+  return ""
+}
+
+export const messagePartsSearchText = (parts: ReadonlyArray<MessagePart>): string =>
+  parts
+    .map(messagePartSearchText)
+    .filter((text) => text.length > 0)
+    .join("\n")
+
 export const fileDataFromImage = (part: ImagePart): string | URL => {
   if (part.image.startsWith("data:")) return part.image
   try {

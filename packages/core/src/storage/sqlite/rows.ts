@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
 import { Message, Branch, MessagePart, MessageMetadata, Session } from "../../domain/message.js"
+import { messagePartsSearchText } from "../../domain/message-part-compat.js"
 import { AgentEvent } from "../../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
@@ -187,36 +188,7 @@ export const encodeStoredMessage = (message: Message) =>
 export const contentChunkId = (partJson: string): string =>
   createHash("sha256").update(partJson).digest("hex")
 
-export const stringifySearchValue = (value: unknown): string => {
-  if (typeof value === "string") return value
-  if (value === undefined) return ""
-  const encoded = JSON.stringify(value)
-  return encoded === undefined ? "" : encoded
-}
-
-export const messagePartSearchText = (part: MessagePart): string => {
-  switch (part.type) {
-    case "text":
-    case "reasoning":
-      return part.text
-    case "image":
-      return [part.mediaType, part.image].filter((value) => value !== undefined).join(" ")
-    case "tool-call":
-      return [part.toolName, stringifySearchValue(part.input)]
-        .filter((text) => text !== "")
-        .join(" ")
-    case "tool-result":
-      return [part.toolName, stringifySearchValue(part.output.value)]
-        .filter((text) => text !== "")
-        .join(" ")
-  }
-}
-
-export const messageSearchText = (parts: ReadonlyArray<MessagePart>): string =>
-  parts
-    .map(messagePartSearchText)
-    .filter((text) => text.length > 0)
-    .join("\n")
+export const messageSearchText = messagePartsSearchText
 
 export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
   const grouped = new Map<
