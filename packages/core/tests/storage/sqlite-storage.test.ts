@@ -1719,7 +1719,7 @@ describe("Storage", () => {
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'UnknownEvent', ${JSON.stringify({ _tag: "UnknownEvent", sessionId, branchId, toolCallId: ToolCallId.make("tc-1"), toolName: "bash" })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, '__test_unknown__', ${JSON.stringify({ _tag: "__test_unknown__", sessionId, branchId, toolCallId: ToolCallId.make("tc-1"), toolName: "bash" })}, ${Date.now()})`
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
         const events = yield* storage.listEvents({ sessionId, branchId })
         expect(events.length).toBe(2)
@@ -1741,11 +1741,11 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'UnknownEvent', ${JSON.stringify({ _tag: "UnknownEvent", sessionId, branchId })}, ${Date.now()})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${JSON.stringify({ _tag: "__test_unknown__", sessionId, branchId })}, ${Date.now()})`
         const latest = yield* storage.getLatestEvent({
           sessionId,
           branchId,
-          tags: ["UnknownEvent"],
+          tags: ["SessionStarted"],
         })
         expect(latest).toBeUndefined()
       }).pipe(Effect.provide(layer)),

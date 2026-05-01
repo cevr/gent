@@ -1,7 +1,7 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import type { Message, Session, Branch } from "../domain/message.js"
-import type { AgentEvent, EventEnvelope } from "../domain/event.js"
+import type { AgentEvent, AgentEventTag, EventEnvelope } from "../domain/event.js"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import type { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
@@ -93,12 +93,12 @@ export interface StorageService {
   readonly getLatestEventTag: (params: {
     sessionId: SessionId
     branchId: BranchId
-    tags: ReadonlyArray<string>
-  }) => Effect.Effect<string | undefined, StorageError>
+    tags: ReadonlyArray<AgentEventTag>
+  }) => Effect.Effect<AgentEventTag | undefined, StorageError>
   readonly getLatestEvent: (params: {
     sessionId: SessionId
     branchId: BranchId
-    tags: ReadonlyArray<string>
+    tags: ReadonlyArray<AgentEventTag>
   }) => Effect.Effect<AgentEvent | undefined, StorageError>
 
   // Session tree

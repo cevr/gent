@@ -6,7 +6,7 @@
 
 import type { Effect } from "effect"
 import { Context, Layer } from "effect"
-import type { AgentEvent, EventEnvelope } from "../domain/event.js"
+import type { AgentEvent, AgentEventTag, EventEnvelope } from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
 import type { StorageError } from "./sqlite-storage.js"
 
@@ -27,12 +27,12 @@ export interface EventStorageService {
   readonly getLatestEventTag: (params: {
     sessionId: SessionId
     branchId: BranchId
-    tags: ReadonlyArray<string>
-  }) => Effect.Effect<string | undefined, StorageError>
+    tags: ReadonlyArray<AgentEventTag>
+  }) => Effect.Effect<AgentEventTag | undefined, StorageError>
   readonly getLatestEvent: (params: {
     sessionId: SessionId
     branchId: BranchId
-    tags: ReadonlyArray<string>
+    tags: ReadonlyArray<AgentEventTag>
   }) => Effect.Effect<AgentEvent | undefined, StorageError>
 }
 
