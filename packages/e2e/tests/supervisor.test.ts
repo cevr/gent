@@ -310,20 +310,36 @@ describe("worker supervisor", () => {
             cwd: repoRoot,
           })
 
+          const firstTurnActive = yield* Deferred.make<void>()
+          yield* worker.client.session
+            .watchRuntime({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(
+              Stream.runForEach((state) =>
+                state._tag === "Running"
+                  ? Deferred.succeed(firstTurnActive, undefined).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            )
+
           yield* worker.client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "first turn",
           })
 
-          yield* waitFor(
-            worker.client.queue.get({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-            (snapshot) => snapshot.followUp.length === 0 && snapshot.steering.length === 0,
-            15_000,
-            "first turn acceptance before restart setup",
+          yield* waitDeferred(firstTurnActive).pipe(
+            Effect.timeoutOption("15 seconds"),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new Error("first turn did not enter running before restart setup")),
+                onSome: Effect.succeed,
+              }),
+            ),
           )
 
           yield* worker.client.message.send({

@@ -25,7 +25,7 @@ import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
-import { makeEventPublisherRouter } from "./event-publisher.js"
+import { EventPublisherLive } from "./event-publisher.js"
 import { SessionCommands } from "./session-commands.js"
 import {
   SessionProfileCache,
@@ -178,20 +178,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // fall back to Storage on cache miss.
   const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
 
-  // Per-cwd EventPublisher router — dispatches events through the correct
-  // cwd profile. The handle receives the SessionProfileCache after it's constructed (breaks
-  // circular dep: EventPublisher → baseServicesLive → allDeps → SessionProfileCache).
-  const { handle: publisherRouterHandle, layer: eventPublisherRouterLayer } =
-    makeEventPublisherRouter()
-  const eventPublisherLive = Layer.provide(
-    eventPublisherRouterLayer,
-    Layer.mergeAll(
-      baseEventStoreLive,
-      extensionRegistryLive,
-      runtimePlatformLive,
-      sessionCwdRegistryLive,
-    ),
-  )
+  const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)
 
   const storageSubTags = subTagLayers(storageLive)
   const baseServicesLive = Layer.mergeAll(
@@ -294,36 +281,25 @@ export const createDependencies = (config: DependenciesConfig) => {
   ).pipe(Layer.provide(allDeps))
 
   // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
-  // After construction, wire the profile cache into the EventPublisher
-  // router handle so per-cwd dispatch can resolve profiles.
   const sessionProfileCacheLive = Layer.provide(
-    Layer.effectDiscard(
-      Effect.gen(function* () {
-        const cache = yield* SessionProfileCache
-        publisherRouterHandle.profileCache = cache
+    Layer.unwrap(
+      Effect.sync(() => {
+        const launchProfile = launchSessionProfileSeed
+        if (launchProfile === undefined) {
+          throw new Error("Launch session profile seed was not initialized")
+        }
+        return SessionProfileCache.Live({
+          home: config.home,
+          platform: config.platform,
+          shell: config.shell,
+          osVersion: config.osVersion,
+          disabledExtensions: config.disabledExtensions,
+          scheduledJobCommand: config.scheduledJobCommand,
+          scheduledJobEnv: scheduledJobEnv(config),
+          extensions: config.extensions,
+          initialProfiles: [launchProfile],
+        })
       }),
-    ).pipe(
-      Layer.provideMerge(
-        Layer.unwrap(
-          Effect.sync(() => {
-            const launchProfile = launchSessionProfileSeed
-            if (launchProfile === undefined) {
-              throw new Error("Launch session profile seed was not initialized")
-            }
-            return SessionProfileCache.Live({
-              home: config.home,
-              platform: config.platform,
-              shell: config.shell,
-              osVersion: config.osVersion,
-              disabledExtensions: config.disabledExtensions,
-              scheduledJobCommand: config.scheduledJobCommand,
-              scheduledJobEnv: scheduledJobEnv(config),
-              extensions: config.extensions,
-              initialProfiles: [launchProfile],
-            })
-          }),
-        ),
-      ),
     ),
     allDeps,
   )

@@ -3,9 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/event-publisher"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 // Real AgentEvent variants used as stand-ins for synthetic test fixtures.
 // Tests assert on `event._tag` strings; mapping each placeholder to a distinct
 // real tag keeps the test logic stable while passing schema validation
@@ -53,29 +51,6 @@ const makeEvent = (
 }
 // Tests reference these by their real tag names in expectations.
 const TAG = TAG_MAP satisfies Record<SyntheticTag, RealTag>
-const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
-  let nextId = 0
-  const append = (event: AgentEvent) =>
-    Effect.sync(() => {
-      onAppend?.(event)
-      nextId += 1
-      return {
-        id: EventId.make(nextId),
-        event,
-        createdAt: Date.now(),
-      } as EventEnvelope
-    })
-  return Layer.succeed(EventStore, {
-    append,
-    broadcast: () => Effect.void,
-    publish: (event: AgentEvent) =>
-      Effect.gen(function* () {
-        yield* append(event)
-      }),
-    subscribe: () => Effect.void as never,
-    removeSession: () => Effect.void,
-  })
-}
 // EventPublisher delivery is observable through EventStore append/broadcast.
 describe("EventPublisher", () => {
   it.live("normal publish appends and broadcasts the committed event", () =>
@@ -183,35 +158,36 @@ describe("EventPublisher", () => {
     }),
   )
 })
-describe("EventPublisher per-cwd router", () => {
-  it.live("unset handle persists event but skips runtime dispatch (fail closed)", () =>
+describe("EventPublisher server layer", () => {
+  it.live("published events persist and broadcast through the shared store", () =>
     Effect.gen(function* () {
       const persisted: string[] = []
-      const primaryCwd = "/primary"
-      const sessionB = SessionId.make("session-secondary")
-      const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
-      // Session maps to a different cwd, but handle is never set
-      const cwdRegistryLayer = SessionCwdRegistry.Test(new Map([[sessionB, "/other-cwd"]]))
-      const runtimePlatformLayer = RuntimePlatform.Test({
-        cwd: primaryCwd,
-        home: "/tmp",
-        platform: "test",
+      const broadcasted: string[] = []
+      let nextId = 0
+      const baseLayer = Layer.succeed(EventStore, {
+        append: (event: AgentEvent) =>
+          Effect.sync(() => {
+            persisted.push(event._tag)
+            nextId += 1
+            return { id: EventId.make(nextId), event, createdAt: Date.now() } as EventEnvelope
+          }),
+        broadcast: (envelope: EventEnvelope) =>
+          Effect.sync(() => {
+            broadcasted.push(envelope.event._tag)
+          }),
+        publish: () => Effect.void,
+        subscribe: () => Effect.void as never,
+        removeSession: () => Effect.void,
       })
-      const { layer: routerLayer } = makeEventPublisherRouter()
-      const layer = Layer.provide(
-        routerLayer,
-        Layer.mergeAll(baseLayer, cwdRegistryLayer, runtimePlatformLayer),
-      )
+      const layer = Layer.provide(EventPublisherLive, baseLayer)
       yield* Effect.promise(() =>
         Effect.gen(function* () {
           const publisher = yield* EventPublisher
-          // handle.profileCache is never set — event should persist but
-          // NOT fall through to the primary profile runtime.
           yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
         }).pipe(Effect.provide(layer), Effect.runPromise),
       )
-      // Event was persisted to storage
       expect(persisted).toEqual([TAG.FallbackEvent])
+      expect(broadcasted).toEqual([TAG.FallbackEvent])
     }),
   )
 })

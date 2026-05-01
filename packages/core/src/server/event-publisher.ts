@@ -6,17 +6,10 @@ import {
 } from "../domain/event-publisher.js"
 import {
   EventStore,
-  getEventSessionId,
   type EventEnvelope,
   type EventStoreError,
   type EventStoreService,
 } from "../domain/event.js"
-import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
-import type { SessionProfileCacheService } from "../runtime/session-profile.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
-
-const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
-  Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
 
 // ── Inner publisher logic ──
 
@@ -25,16 +18,10 @@ interface InnerPublisherDeps {
 }
 
 /**
- * Inner delivery logic. Broadcasts an already-durable event. Used by both `EventPublisherLive`
- * (single-profile, ephemeral children) and the router (per-cwd dispatch).
+ * Inner delivery logic. Broadcasts an already-durable event.
  */
 const deliverInner = (envelope: EventEnvelope, deps: InnerPublisherDeps) =>
   deps.baseEventStore.broadcast(envelope)
-
-type DeliveryJob = {
-  readonly envelope: EventEnvelope
-  readonly ack: Deferred.Deferred<void, EventStoreError>
-}
 
 const makeSerializedDeliver = (
   deliver: (envelope: EventEnvelope) => Effect.Effect<void, EventStoreError>,
@@ -70,6 +57,11 @@ const makeSerializedDeliver = (
       })
   })
 
+type DeliveryJob = {
+  readonly envelope: EventEnvelope
+  readonly ack: Deferred.Deferred<void, EventStoreError>
+}
+
 const makePublisherContext = (publisher: EventPublisherService) =>
   Context.empty().pipe(
     Context.add(EventPublisher, publisher),
@@ -81,10 +73,7 @@ const makePublisherContext = (publisher: EventPublisherService) =>
 // ── Single-profile EventPublisher (ephemeral children, tests) ──
 
 /**
- * EventPublisher for single-profile contexts (ephemeral children, tests).
- *
- * Yields ExtensionRegistry once at construction and dispatches all events
- * through the committed-event fanout.
+ * EventPublisher appends events to the store and broadcasts committed envelopes.
  */
 export const EventPublisherLive: Layer.Layer<EventPublisher | BuiltinEventSink, never, EventStore> =
   Layer.effectContext(
@@ -107,141 +96,3 @@ export const EventPublisherLive: Layer.Layer<EventPublisher | BuiltinEventSink, 
       )
     }),
   )
-
-// ── Per-cwd EventPublisher router (server composition root) ──
-
-/**
- * Mutable handle for late-binding SessionProfileCache into the router.
- *
- * Breaks the circular dependency: EventPublisher is in `baseServicesLive`
- * but SessionProfileCache depends on `allDeps` (which includes baseServicesLive).
- * The handle is set by `createDependencies` after profile cache construction.
- */
-export interface EventPublisherRouterHandle {
-  profileCache: SessionProfileCacheService | undefined
-}
-
-/**
- * Create a per-cwd EventPublisher router + a handle for late-binding
- * the SessionProfileCache.
- *
- * Dispatches events through the correct cwd profile.
- * Falls back to the primary cwd when the
- * session's cwd is unknown or matches the primary.
- *
- * Storage (EventStore.publish) is shared — events go into one store
- * regardless of cwd. Only the extension runtime dispatch is per-cwd.
- */
-export const makeEventPublisherRouter = (): {
-  readonly handle: EventPublisherRouterHandle
-  readonly layer: Layer.Layer<
-    EventPublisher | BuiltinEventSink,
-    never,
-    EventStore | SessionCwdRegistry | RuntimePlatform
-  >
-} => {
-  const handle: EventPublisherRouterHandle = { profileCache: undefined }
-
-  const layer = Layer.effectContext(
-    Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const cwdRegistry = yield* SessionCwdRegistry
-      const platform = yield* RuntimePlatform
-
-      const primaryCwd = platform.cwd
-      const primaryDeps: InnerPublisherDeps = {
-        baseEventStore,
-      }
-
-      const deliverToProfile = (envelope: EventEnvelope) =>
-        Effect.gen(function* () {
-          const event = envelope.event
-          const sessionId = getEventSessionId(event)
-          if (sessionId === undefined) {
-            yield* deliverInner(envelope, primaryDeps)
-            return
-          }
-
-          const sessionCwd = yield* cwdRegistry.lookup(sessionId).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                // Storage lookup failed — broadcast event but don't guess
-                // which runtime to dispatch to (fail-closed).
-                yield* baseEventStore.broadcast(envelope)
-                yield* logDeliveryFailure("event-publisher.cwd-lookup.failed", {
-                  sessionId,
-                  error: String(cause),
-                })
-                return "__cwd_lookup_failed__" as const
-              }),
-            ),
-          )
-
-          if (sessionCwd === "__cwd_lookup_failed__") return
-
-          if (sessionCwd === undefined || sessionCwd === primaryCwd) {
-            yield* deliverInner(envelope, primaryDeps)
-            return
-          }
-
-          // Different cwd — resolve per-cwd profile. If profile cache
-          // is unavailable or resolution fails, persist the event but
-          // skip runtime dispatch (fail closed). Falling back to the
-          // primary cwd's ExtensionRuntime would be silent wrong-runtime
-          // delivery.
-          if (handle.profileCache === undefined) {
-            yield* baseEventStore.broadcast(envelope)
-            yield* logDeliveryFailure("event-publisher.profile-cache.unavailable", {
-              sessionId,
-              sessionCwd,
-            })
-            return
-          }
-
-          const profile = yield* handle.profileCache.resolve(sessionCwd).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* logDeliveryFailure("event-publisher.profile-resolve.failed", {
-                  sessionId,
-                  sessionCwd,
-                  error: String(cause),
-                })
-                return undefined
-              }),
-            ),
-          )
-
-          if (profile === undefined) {
-            // Profile resolution failed — event is already durable, but
-            // runtime dispatch is unsafe. Still broadcast to live event
-            // subscribers.
-            yield* baseEventStore.broadcast(envelope)
-            return
-          }
-
-          const cwdDeps: InnerPublisherDeps = {
-            baseEventStore,
-          }
-
-          yield* deliverInner(envelope, cwdDeps)
-        })
-      const deliver = yield* makeSerializedDeliver(deliverToProfile)
-
-      return makePublisherContext(
-        EventPublisher.of({
-          append: (event) => baseEventStore.append(event),
-          deliver,
-          publish: (event) =>
-            Effect.gen(function* () {
-              const envelope = yield* baseEventStore.append(event)
-              yield* deliver(envelope)
-            }),
-
-          terminateSession: (_sessionId) => Effect.void,
-        }),
-      )
-    }),
-  )
-
-  return { handle, layer }
-}
