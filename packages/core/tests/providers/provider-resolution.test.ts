@@ -30,6 +30,7 @@ import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 const emptyAuthInfo: Record<string, AuthInfo> = {}
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage = {
@@ -39,37 +40,18 @@ const testAuthStorage = {
   list: () => Effect.succeed([] as ReadonlyArray<string>),
   listInfo: () => Effect.succeed(emptyAuthInfo),
 }
-const failingLanguageModel: LanguageModel.Service = {
-  generateText: (() =>
-    Effect.fail(
-      AiError.make({
-        module: "Test",
-        method: "generateText",
-        reason: new AiError.UnknownError({ description: "stub" }),
-      }),
-    )) as never,
-  generateObject: (() =>
-    Effect.fail(
-      AiError.make({
-        module: "Test",
-        method: "generateObject",
-        reason: new AiError.UnknownError({ description: "stub" }),
-      }),
-    )) as never,
-  streamText: (() =>
-    Stream.fail(
-      AiError.make({
-        module: "Test",
-        method: "streamText",
-        reason: new AiError.UnknownError({ description: "stub" }),
-      }),
-    )) as never,
-}
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 const modelFromService = (provider: string, service: LanguageModel.Service): ProviderResolution =>
   AiModel.make(provider, "model", Layer.succeed(LanguageModel.LanguageModel, service))
+const assertProviderResolutionRejectsBareLayer = () => {
+  const bareLayer = Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)
+  // @ts-expect-error ProviderResolution must come from Effect AI Model.make metadata.
+  const resolution: ProviderResolution = bareLayer
+  return resolution
+}
+void assertProviderResolutionRejectsBareLayer
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,
@@ -375,37 +357,43 @@ describe("Provider model resolution", () => {
         id: "tools-live",
         name: "ToolsLive",
         resolveModel: () =>
-          modelFromService("tools-live", {
-            generateText: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateText",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            generateObject: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateObject",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            streamText: (options: any) => {
-              captured = {
-                disableToolCallResolution: options.disableToolCallResolution,
-                toolkit: options.toolkit,
-              }
-              return Stream.fromIterable([
-                toolCallPart("echo", { text: "hi" }, { toolCallId: ToolCallId.make("tc-1") }),
-                finishPart({
-                  finishReason: "tool-calls",
-                  usage: { inputTokens: 10, outputTokens: 20 },
-                }),
-              ])
-            },
-          } as unknown as LanguageModel.Service),
+          modelFromService(
+            "tools-live",
+            makeLanguageModel<{
+              readonly disableToolCallResolution?: boolean
+              readonly toolkit?: AiToolkit.WithHandler<Record<string, AiTool.Any>>
+            }>({
+              generateText: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateText",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              generateObject: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateObject",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              streamText: (options) => {
+                captured = {
+                  disableToolCallResolution: options.disableToolCallResolution,
+                  toolkit: options.toolkit,
+                }
+                return Stream.fromIterable([
+                  toolCallPart("echo", { text: "hi" }, { toolCallId: ToolCallId.make("tc-1") }),
+                  finishPart({
+                    finishReason: "tool-calls",
+                    usage: { inputTokens: 10, outputTokens: 20 },
+                  }),
+                ])
+              },
+            }),
+          ),
       }
       const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
@@ -472,38 +460,43 @@ describe("Provider model resolution", () => {
         id: "typed-toolkit-live",
         name: "TypedToolkitLive",
         resolveModel: () =>
-          modelFromService("typed-toolkit-live", {
-            generateText: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateText",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            generateObject: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateObject",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            streamText: (options: any) => {
-              capturedToolkit = options.toolkit
-              return Stream.fromIterable([
-                toolCallPart(
-                  "typedEcho",
-                  { text: "hi" },
-                  { toolCallId: ToolCallId.make("typed-tc-1") },
+          modelFromService(
+            "typed-toolkit-live",
+            makeLanguageModel<{
+              readonly toolkit?: AiToolkit.WithHandler<TypedTools>
+            }>({
+              generateText: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateText",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
                 ),
-                finishPart({
-                  finishReason: "tool-calls",
-                  usage: { inputTokens: 1, outputTokens: 1 },
-                }),
-              ])
-            },
-          } as unknown as LanguageModel.Service),
+              generateObject: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateObject",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              streamText: (options) => {
+                capturedToolkit = options.toolkit
+                return Stream.fromIterable([
+                  toolCallPart(
+                    "typedEcho",
+                    { text: "hi" },
+                    { toolCallId: ToolCallId.make("typed-tc-1") },
+                  ),
+                  finishPart({
+                    finishReason: "tool-calls",
+                    usage: { inputTokens: 1, outputTokens: 1 },
+                  }),
+                ])
+              },
+            }),
+          ),
       }
       const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
@@ -555,38 +548,43 @@ describe("Provider model resolution", () => {
         id: "typed-message-toolkit-live",
         name: "TypedMessageToolkitLive",
         resolveModel: () =>
-          modelFromService("typed-message-toolkit-live", {
-            generateText: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateText",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            generateObject: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateObject",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            streamText: (options: any) => {
-              capturedToolkit = options.toolkit
-              return Stream.fromIterable([
-                toolCallPart(
-                  "typedEcho",
-                  { text: "from-message" },
-                  { toolCallId: ToolCallId.make("typed-tc-2") },
+          modelFromService(
+            "typed-message-toolkit-live",
+            makeLanguageModel<{
+              readonly toolkit?: AiToolkit.WithHandler<TypedTools>
+            }>({
+              generateText: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateText",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
                 ),
-                finishPart({
-                  finishReason: "tool-calls",
-                  usage: { inputTokens: 1, outputTokens: 1 },
-                }),
-              ])
-            },
-          } as unknown as LanguageModel.Service),
+              generateObject: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateObject",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              streamText: (options) => {
+                capturedToolkit = options.toolkit
+                return Stream.fromIterable([
+                  toolCallPart(
+                    "typedEcho",
+                    { text: "from-message" },
+                    { toolCallId: ToolCallId.make("typed-tc-2") },
+                  ),
+                  finishPart({
+                    finishReason: "tool-calls",
+                    usage: { inputTokens: 1, outputTokens: 1 },
+                  }),
+                ])
+              },
+            }),
+          ),
       }
       const layer = buildProviderLayer([
         makeExt("typed-message-toolkit-live-ext", [streamingProvider]),
@@ -622,33 +620,38 @@ describe("Provider model resolution", () => {
         id: "prompt-live",
         name: "PromptLive",
         resolveModel: () =>
-          modelFromService("prompt-live", {
-            generateText: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateText",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            generateObject: () =>
-              Effect.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "generateObject",
-                  reason: new AiError.UnknownError({ description: "unused" }),
-                }),
-              ),
-            streamText: (options: any) => {
-              capturedPrompt = options.prompt
-              return Stream.fromIterable([
-                finishPart({
-                  finishReason: "stop",
-                  usage: { inputTokens: 3, outputTokens: 1 },
-                }),
-              ])
-            },
-          } as unknown as LanguageModel.Service),
+          modelFromService(
+            "prompt-live",
+            makeLanguageModel<{
+              readonly prompt?: Prompt.Prompt
+            }>({
+              generateText: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateText",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              generateObject: () =>
+                Effect.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "generateObject",
+                    reason: new AiError.UnknownError({ description: "unused" }),
+                  }),
+                ),
+              streamText: (options) => {
+                capturedPrompt = options.prompt
+                return Stream.fromIterable([
+                  finishPart({
+                    finishReason: "stop",
+                    usage: { inputTokens: 3, outputTokens: 1 },
+                  }),
+                ])
+              },
+            }),
+          ),
       }
       const layer = buildProviderLayer([makeExt("prompt-live-ext", [streamingProvider])])
       yield* Effect.gen(function* () {
