@@ -40,7 +40,7 @@ describe("message part compatibility", () => {
     expect(messagePartsText(parts)).toBe("hello")
     expect(messagePartsReasoning(parts)).toBe("")
     expect(messagePartsImages(parts)).toEqual([
-      { image: "data:image/png;base64,abc", mediaType: "image" },
+      { image: "data:image/png;base64,abc", mediaType: "image", rawMediaType: undefined },
     ])
     expect(messagePartsToolCalls(parts)).toEqual([
       { id: "tc-projection", toolName: "read", input: { path: "README.md" } },
@@ -56,7 +56,7 @@ describe("message part compatibility", () => {
       },
     ])
     expect(messagePartsSearchText(parts)).toBe(
-      'hello\nimage data:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
+      'hello\ndata:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
     )
   })
 

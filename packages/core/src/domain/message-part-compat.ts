@@ -14,6 +14,7 @@ import {
 export interface ImagePartProjection {
   readonly image: string
   readonly mediaType: string
+  readonly rawMediaType: string | undefined
 }
 
 export interface ToolCallPartProjection {
@@ -42,6 +43,7 @@ export const messagePartImage = (part: MessagePart): ImagePartProjection | undef
     ? {
         image: part.image,
         mediaType: part.mediaType ?? "image",
+        rawMediaType: part.mediaType,
       }
     : undefined
 
@@ -112,7 +114,9 @@ export const messagePartSearchText = (part: MessagePart): string => {
 
   const image = messagePartImage(part)
   if (image !== undefined) {
-    return [image.mediaType, image.image].filter((value) => value !== "").join(" ")
+    return [image.rawMediaType, image.image]
+      .filter((value) => value !== undefined && value !== "")
+      .join(" ")
   }
 
   const toolCall = messagePartToolCall(part)
