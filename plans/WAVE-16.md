@@ -1,630 +1,423 @@
-# Planify: Wave 16 - Collapse Effect Beta Bridges
+# Planify: Wave 16 - Align Gent With Effect And Actors
 
-## Context
+## Thesis
 
-Wave 16 follows the Effect beta.59 schema failure fixed in
-`9affca78 fix: preserve effect tool schemas for providers`. That failure was a
-symptom of a larger pattern: Gent sometimes flattens Effect-native concepts
-into local DTOs, then rebuilds the Effect shape at the boundary. Against
-`effect-ts/effect-smol` beta.59, the correct direction is subtraction: keep
-Effect `Tool`, `Toolkit`, `LanguageModel`, `Model`, `Response`, `Rpc`, `Layer`,
-`Context`, `Ref`, `SubscriptionRef`, and `Semaphore` as the primitives, and
-only retain Gent code where it owns product semantics.
+Wave 16 started with the Effect beta.59 schema failure fixed in
+`9affca78 fix: preserve effect tool schemas for providers`. The bug was not an
+isolated provider issue. It exposed a larger design smell: Gent sometimes
+flattens Effect-native concepts into local DTOs, mutable registries, and
+adapter services, then rebuilds the original Effect shape later.
 
-The two north stars are:
+The wave goal is to remove that churn. Gent should be small because it stands
+on two platforms instead of competing with them:
 
-1. Use Effect and Effect AI as the platform. Gent should not own parallel
-   abstractions for tools, models, prompts, chat history, RPC, service
-   composition, storage transactions, or typed concurrency when Effect already
-   provides them.
-2. Use the actor model as the runtime shape. Durable session/branch work,
-   extension state, prompt/tool policy producers, and long-lived coordination
-   should be actors or actor-adjacent services, not ad hoc maps, hook arrays, or
-   per-call service bundles.
+1. **Effect is the platform.** Use Effect and Effect AI primitives for tools,
+   toolkits, models, prompts, chat history, RPC, layers, service context,
+   schemas, storage transactions, streams, refs, semaphores, and typed errors.
+2. **Actors are the runtime shape.** Long-lived coordination belongs in actors:
+   session/branch loops, extension state, prompt/tool-policy producers,
+   lifecycle state, and stateful reactions. Synchronous folds can remain plain
+   functions, but durable or live state should not hide in maps, hook arrays, or
+   per-call bundles.
 
-## Scope
+Gent owns product semantics: sessions, branches, transcripts, tool policy,
+permission decisions, extension authoring, storage durability, and the UI/RPC
+contract. Everything else should be borrowed from Effect or expressed as an
+actor.
 
-- In: assumptions, bridges, DTOs, wrappers, and manual concurrency layers that
-  duplicate Effect or Effect AI primitives.
-- In: changes that reduce public surface or collapse duplicated state while
-  preserving existing Gent behavior.
-- In: SQLite schema/data migrations and storage service rewrites when the
-  current shape is what keeps DTO mirrors or split read models alive.
-- In: commit-sized migrations with gate between commits.
-- Out: broad actor-engine deletion. The runtime audit found the actor engine
-  already uses `Queue`, `Deferred`, `SubscriptionRef`, `Scope`, and `Stream`
-  in load-bearing places.
-- Out: speculative replacement of every domain service tag. Audits found many
-  tags own real boundaries.
+## Principle Application
 
-## Principles
+| Principle                                                             | Consequence                                                                                                  |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/.brain/principles/correctness-over-pragmatism.md`         | Prefer structural migrations over compatibility wrappers. SQL migrations and broad rewrites are allowed.     |
+| `/Users/cvr/.brain/principles/redesign-from-first-principles.md`      | Redesign each boundary as if Effect AI beta.59 and the actor model had been day-one assumptions.             |
+| `/Users/cvr/.brain/principles/subtract-before-you-add.md`             | Delete no-op fields, DTO mirrors, bridge services, duplicate registries, and legacy storage columns first.   |
+| `/Users/cvr/.brain/principles/use-the-platform.md`                    | Use Effect `Tool`, `Toolkit`, `Model`, `Prompt`, `Chat`, `Rpc`, `Layer`, `Context`, `Ref`, and `Semaphore`.  |
+| `/Users/cvr/.brain/principles/boundary-discipline.md`                 | Validate at transport, storage, provider, and extension loading boundaries; trust domain classes internally. |
+| `/Users/cvr/.brain/principles/small-interface-deep-implementation.md` | Collapse shallow public contracts into fewer deeper services or actor protocols.                             |
+| `/Users/cvr/.brain/principles/fix-root-causes.md`                     | Treat incorrect bridges and unowned live state as root causes, not cleanup nits.                             |
 
-| Principle                                                             | Application                                                                                  |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `/Users/cvr/.brain/principles/correctness-over-pragmatism.md`         | Do not patch around beta drift; collapse the incorrect bridge.                               |
-| `/Users/cvr/.brain/principles/redesign-from-first-principles.md`      | Redesign each boundary as if Effect AI beta.59 primitives existed on day one.                |
-| `/Users/cvr/.brain/principles/subtract-before-you-add.md`             | Delete dead request fields, stale handles, DTO mirrors, and hand-rolled protocols first.     |
-| `/Users/cvr/.brain/principles/use-the-platform.md`                    | Prefer Effect `Tool`, `Toolkit`, `Model`, `Rpc`, `Layer`, `Context`, `Ref`, and `Semaphore`. |
-| `/Users/cvr/.brain/principles/boundary-discipline.md`                 | Validate at transport/storage boundaries; trust domain classes internally.                   |
-| `/Users/cvr/.brain/principles/small-interface-deep-implementation.md` | Hide Gent metadata behind narrow primitives instead of exporting shallow parallel contracts. |
-| `/Users/cvr/.brain/principles/fix-root-causes.md`                     | Treat unused bridges and unowned mutable state as root causes, not cleanup nits.             |
+## Execution Rules
 
-## Gate Command
+- Commit-sized migrations with `bun run gate` after each commit.
+- Focused tests first when the touched surface has a smaller faithful suite.
+- `bun run test:e2e` after provider, transport, storage, tool, and actor-loop
+  phases are done.
+- Mechanical migrations get delegated only after one manual before/after proves
+  the shape.
+- A finding can be rejected only with stronger counter-evidence written back
+  into this file.
 
-```bash
-bun run gate
-```
+## Already Landed
 
-For narrow commits, run a focused test first, then `bun run gate`.
+- `9affca78 fix: preserve effect tool schemas for providers`
+  - Provider tool conversion now passes Effect `Schema` into `AiTool.dynamic`
+    instead of raw JSON Schema.
+  - Regression proves Anthropic structured-output codec accepts advertised tool
+    parameters.
+- `81069950 refactor(provider): delete dead request bridges`
+  - Removed unused model-provider `abortSignal` and `providerOptions` request
+    fields.
 
-## Research Lanes
+## Target Architecture
 
-| Lane                  | Agent                                  | Result                                                                           |
-| --------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
-| Provider / Effect AI  | `019de44c-fb3c-7843-8c9c-2244b8c46fe5` | Dead request bridges, `ProviderResolution` wrapper.                              |
-| Transport / DTO       | `019de44c-fb79-70b2-9ab2-b84f61b4f40a` | `MessageInfo`, namespaced SDK mirror, session tree projection.                   |
-| Services / Layers     | `019de44c-fb8b-7e21-8e34-069e54c0324e` | Manual server contexts, duplicated `SessionProfile`, stale event router handle.  |
-| Runtime / Concurrency | `019de44c-fb9f-7151-b217-6d7bd0095d4a` | Interaction `Map`s, queue mutation semaphore, event delivery queue/ack worker.   |
-| Extension API         | `019de44c-fbb0-7633-9bc6-9df50fed2f0b` | `ToolToken` parallel substrate, `tool-schema.ts`, resource descriptors.          |
-| Storage / Persistence | local follow-up                        | Storage rewrite is allowed where it deletes transport/read-model indirection.    |
-| Actor North Star      | local follow-up                        | Session loops and extension hooks should collapse toward actor protocols.        |
-| Effect AI North Star  | local follow-up                        | Prompt/history/response tracking should use Effect AI primitives where possible. |
+### Provider And AI
 
-## Accepted Findings
+Provider code should speak Effect AI directly. The turn boundary should produce
+Effect AI `Prompt`, `Toolkit`, `Model` or `LanguageModel`, and options. Provider
+implementations should not receive local message/tool DTOs only to reconstruct
+the same Effect values.
 
-### Provider Bridges
+Gent-specific provider semantics that remain:
 
-- Local `ProviderRequest.abortSignal` exists at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:160-167`
-  and call sites pass it from
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/phases/turn.ts:748-765`,
-  but `Provider.stream` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:596-635`
-  never forwards it. The actual interruption is already owned by
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response/collectors.ts:164-167`.
-- Upstream `LanguageModel` options at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/LanguageModel.ts:251-299`
-  do not carry `AbortSignal`; stream interruption is the Effect `Stream` mechanism.
-- Local `ProviderRequest.providerOptions` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:160-178`
-  is not read in the provider call at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:613-622`.
-  Upstream provider metadata belongs on prompt/response parts, e.g.
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Prompt.ts:70-90`
-  and
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Response.ts:438-457`.
-- Local `ProviderResolution` is a one-field `{ layer }` wrapper at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts:81-85`.
-  Upstream already models provider/model/layer with `AiModel.Model` at
+- Model registry and pricing snapshots.
+- Auth selection and provider credential policy.
+- Transcript durability and UI event emission.
+- External driver support where the driver is not an Effect AI model.
+
+Everything else should prefer Effect AI primitives.
+
+### Runtime And Actors
+
+The session/branch agent loop is a durable actor in all but name. It owns a
+mailbox, state, queue, lifecycle, restore, terminate, watch, and ask/tell
+surface. It should become a session-loop actor protocol instead of a second
+runtime beside `ActorEngine`.
+
+Stateful extension behavior should follow the same rule. Pure hooks may stay as
+ordered folds. Anything with lifecycle, state, durable view, or long-lived
+coordination should become an actor with messages and optional `view`.
+
+The local `ActorEngine` stays for now because it already uses Effect primitives
+in load-bearing places. The wave must still audit whether it should eventually
+adapt to Effect cluster `Entity`/`Rpc`, rather than grow into a separate
+distributed actor framework.
+
+### Transport And Storage
+
+Transport should expose domain schema classes directly when the domain class is
+the contract. Separate DTOs survive only when they are explicit read models with
+different semantics.
+
+Storage rewrites and SQLite migrations are in scope. If an old table shape keeps
+a DTO mirror alive, migrate the data and remove the shape. Startup migrations
+must be idempotent and tested against old-shape database fixtures.
+
+### Composition
+
+Effect `Layer` and `Context` are the composition model. Gent should not pass
+service bundles through parameters, manually re-extract service snapshots from a
+built context, or duplicate server composition roots.
+
+Profile/runtime composition should provide a context; call sites should yield
+the service they need.
+
+## Evidence
+
+### Effect AI Bridges
+
+- Local provider request fields live at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:160-178`.
+  The previous schema bug came from rebuilding Effect tools at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:229-260`.
+- Upstream model/layer ownership exists in
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Model.ts:56-71`
   and
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Model.ts:123-180`.
+- Upstream `LanguageModel` stream/generate options own model calls at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/LanguageModel.ts:251-299`.
+- Upstream `Chat` owns stateful history and toolkit-aware generate/stream entry
+  points at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Chat.ts:93-238`.
+- Upstream `ResponseIdTracker` owns response-id correlation at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/ResponseIdTracker.ts:22-94`.
 
 ### Tool Substrate
 
-- Local `ToolToken` duplicates Effect AI `Tool` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts:38-52`,
-  local `ToolInput` duplicates authoring at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts:69-115`,
-  and `tool(...)` lowers through casts at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts:124-154`.
-- Provider conversion rebuilds Effect tools at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:229-260`.
-- Upstream `Tool` already owns identity, schemas, annotations, dependencies,
-  and approval metadata at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:175-260`,
-  while `Tool.make` and `Tool.dynamic` exist at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:1150-1314`.
-- Upstream `Toolkit` derives typed handlers, decodes params, encodes results,
-  and streams handler output at
+- Local `ToolToken`, `ToolInput`, and `tool(...)` live at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts:38-154`.
+- Local JSON-schema conversion lives at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/tool-schema.ts:11-60`.
+- Upstream `Tool` owns identity, schema, annotations, dependencies, and
+  approval metadata at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:175-260`.
+- Upstream `Tool.make`, `Tool.dynamic`, and `Tool.getJsonSchema` live at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:1150-1314`
+  and
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:1538-1599`.
+- Upstream `Toolkit` owns handler decoding and execution at
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Toolkit.ts:201-209`
   and
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Toolkit.ts:323-436`.
-- Local `tool-schema.ts` hand-rolls JSON schema flattening at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/tool-schema.ts:11-60`.
-  Upstream `Tool.getJsonSchema` exists at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Tool.ts:1538-1599`,
-  and provider-specific flattening belongs in codec transformers such as
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/OpenAiStructuredOutput.ts:60-88`.
 
-### Transport DTOs
+### Actor Runtime
 
-- Domain `Message` already exists at
+- `AgentLoopService` exposes tell/ask/watch-shaped methods at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:394-459`.
+- `AgentLoop` keeps loop handles and mutation semaphores in maps at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:513-540`.
+- Loop creation, start, cleanup, terminate, and restore live at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1412-1613`.
+- The existing actor engine already exposes `spawn`, `tell`, typed `ask`,
+  `snapshot`, and `subscribeState` at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-engine.ts:171-231`.
+- Upstream Effect cluster `Entity` models actor types, RPC protocols, mailbox
+  settings, client lookup, and sharding layers at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/cluster/Entity.ts:50-180`.
+
+### Extension Runtime
+
+- Extension reactions compile ordered hook arrays at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:226-290`.
+- Those reactions execute through manual loops at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:292-520`.
+- Actor views already contribute prompt sections and tool policy through
+  `ActorEngine`/`Receptionist` at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:413-458`.
+- The extension runtime service is currently a marker object at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/extension-runtime.ts:12-27`.
+
+### Transport And Storage
+
+- Domain `Message` exists at
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/message.ts:82-100`,
   but transport recreates it as `MessageInfo` at
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:213-232`.
-  The bridge is visible in
+- The message bridge is in
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-utils.ts:34-48`
   and
   `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts:131-151`.
-- Upstream RPC examples return `Schema.Class` directly at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/platform-node/test/fixtures/rpc-schemas.ts:8-18`
-  and assert class instances survive RPC at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/platform-node/test/fixtures/rpc-e2e.ts:32-45`.
-- SDK `GentNamespacedClient` manually mirrors the generated RPC client at
-  `/Users/cvr/Developer/personal/gent/packages/sdk/src/namespaced-client.ts:13-130`,
-  although `GentRpcs` already produces a typed generated client at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts:99-129`.
-  Upstream dotted RPC keys are callable directly at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/platform-node/test/fixtures/rpc-e2e.ts:48-52`.
-- Domain session tree shape exists at
+- Domain and transport session tree shapes duplicate each other at
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/message.ts:153-158`,
-  while transport defines and maps another tree at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:64-99`
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:64-99`,
   and
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handler-groups/session.ts:28-37`.
+- `StorageService` is a broad facade at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:25-145`.
+- Focused storage tags are derived from the broad facade at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:168-185`.
+- Live/memory/test storage assembly repeats the same shape at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:261-348`.
+- SQLite keeps legacy `messages.parts` while also storing chunked content at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:470-510`.
+- Message write encoding still produces `legacyPartsJson` at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts:177-184`.
+- Migration and repair hooks already live at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:341-391`
+  and
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:585-622`.
 
-### Layer / Context Wiring
+### Layer And RPC Composition
 
-- Server entrypoints duplicate composition by building `Context`s manually at
+- Server entrypoints duplicate manual context composition at
   `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts:113-137`
   and
   `/Users/cvr/Developer/personal/gent/packages/sdk/src/server.ts:197-225`.
-  Upstream `Layer.mergeAll` and `Layer.provideMerge` are the platform wiring
-  primitives at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Layer.ts:975-981`
-  and
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Layer.ts:1237-1250`.
-- `SessionProfile` stores a built `Context` and also extracts the same services
-  into a custom dependency record at
+- `SessionProfile` stores a built `Context` and extracted service snapshots at
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts:374-405`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-profile.ts:54-67`,
   and
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-profile.ts:253-276`.
-  Upstream `Context` already is the service container at
+- Upstream `Context` is already the service container at
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Context.ts:69-75`.
-- Event publisher late-binds `SessionProfileCache` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-publisher.ts:113-143`,
-  resolves a profile at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-publisher.ts:187-227`,
-  then does not use the resolved profile. That creates a circular dependency
-  without product behavior.
-
-### Runtime Concurrency
-
-- `makeInteractionService` uses plain mutable maps at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-request.ts:156-166`
-  and mutates them across Effect boundaries at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-request.ts:175-240`.
-  Upstream `Ref` and `SubscriptionRef` provide atomic Effect-managed state at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Ref.ts:426-434`
+- Upstream `Layer.mergeAll` and `Layer.provideMerge` are the composition
+  primitives at
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Layer.ts:975-981`
   and
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/SubscriptionRef.ts:395-437`.
-- Agent loop queue mutation layers a semaphore and reservation state around
-  an existing `SubscriptionRef` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts:370-402`
-  and
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:645-748`.
-  Upstream `SubscriptionRef.modifyEffect` is the intended transaction primitive at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/SubscriptionRef.ts:381-437`.
-- Event delivery builds a queue/ack worker at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-publisher.ts:34-71`,
-  though callers await `deliver`. Upstream `Semaphore` and `Ref` cover this
-  serialization/idempotency shape at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Semaphore.ts:34-58`,
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Semaphore.ts:205-220`,
-  and
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Ref.ts:426-434`.
-
-### Actor North Star
-
-- `AgentLoop` currently owns an in-memory registry of session/branch loop
-  handles and per-loop mutation semaphores at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:513-540`.
-  The lifecycle manager then allocates, registers, starts, watches, cleans up,
-  terminates, and restores loop handles at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1412-1613`.
-  That is actor-system work; the durable session/branch loop should become an
-  actor protocol if the existing `ActorEngine` can own mailbox, state,
-  subscription, and lifecycle semantics.
-- `AgentLoopService` exposes tell/ask/watch-shaped methods at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:394-459`,
-  while `ActorEngineService` already exposes `spawn`, `tell`, typed `ask`,
-  `snapshot`, and `subscribeState` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-engine.ts:171-231`.
-  A deeper simplification should make `SessionRuntime` talk to a
-  `SessionLoopActor` instead of preserving a second loop registry.
-- Upstream Effect cluster `Entity` models a named actor type with an RPC
-  protocol, mailbox settings, client lookup, and sharding layer at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/cluster/Entity.ts:50-180`.
-  Gent should not duplicate a cluster/distributed actor system. The immediate
-  path is to actorize local session loops on the existing engine; the deeper
-  audit must decide whether the local engine should later become an adapter over
-  `Entity`/`Rpc` rather than a permanent fork.
-- `SessionRuntime.dispatch` currently validates a target, resolves a session
-  environment, normalizes message input, constructs a domain message, then calls
-  `agentLoop.submit` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:383-501`.
-  After loop actorization, that surface should be a thin RPC/actor command
-  adapter: validate transport input, then tell/ask the owning session actor.
-- Extension reactions compile into ordered arrays of hook handlers at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:226-290`,
-  and execute by iterating those arrays at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:292-520`.
-  Some hooks are pure projections and can remain folds, but long-lived stateful
-  reactions should be actors with `view` projections or messages, not another
-  runtime beside actors.
-
-### Storage / Persistence Rewrite Allowance
-
-- `StorageService` is a broad legacy facade at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:25-145`,
-  and focused sub-tags are currently derived from that same facade at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:168-185`.
-  The plan may delete or invert that shape if direct focused services make the
-  boundary smaller.
-- Live/memory/test storage layer assembly repeats the same `base + sub-tags +
-extras` shape at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:261-348`.
-  Any profile/server composition cleanup may replace this with one shared
-  storage composition root instead of preserving all three variants.
-- The current SQLite schema keeps legacy `messages.parts` while also storing
-  chunked message content at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:470-510`
-  and encodes `legacyPartsJson` as an empty array at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts:177-184`.
-  A storage simplification pass may migrate data to one canonical message
-  content representation and drop the duplicate column after compatibility
-  backfills are proven.
-- Schema initialization already owns migrations, repair, indexes, and FTS
-  rebuilds at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:341-391`
-  and
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:585-622`.
-  New migrations belong here, with rollback-free idempotent startup behavior and
-  dedicated tests against an old-shape database fixture.
-
-### Effect AI North Star
-
-- `ProviderRequest` still carries local `messages`, `systemPrompt`, and
-  `tools` fields at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts:160-178`.
-  After native tool/model migration, the next audit should decide whether the
-  provider boundary can accept upstream `Prompt.Prompt`, `Toolkit`, and
-  `LanguageModel` options directly instead of reconstructing them from Gent
-  DTOs on each call.
-- Upstream `Chat` already owns stateful history, streaming/generate entrypoints,
-  and toolkit-aware options at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Chat.ts:93-238`.
-  Gent should only keep its durable event/message storage if it adds product
-  semantics; provider runtime should not reimplement chat history or response
-  correlation for model providers.
-- Upstream `ResponseIdTracker` tracks response ids across prompt parts at
-  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/ResponseIdTracker.ts:22-94`.
-  Any local previous-response or transcript correlation logic should be audited
-  against it before adding another provider-specific bridge.
+  `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Layer.ts:1237-1250`.
+- SDK `GentNamespacedClient` mirrors the generated RPC client at
+  `/Users/cvr/Developer/personal/gent/packages/sdk/src/namespaced-client.ts:13-130`,
+  while `GentRpcs` already provides typed RPC keys at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts:99-129`.
 
 ## Commit Wave
 
-### Commit 1: `refactor(provider): delete dead request bridges`
+### Phase 1: Remove Proven Dead Bridges
+
+**Commit 1.1: `refactor(provider): delete dead request bridges`**
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/providers/provider.ts` | Remove `abortSignal` and `providerOptions` from `ProviderRequestBase`. |
-| `packages/core/src/runtime/agent/phases/turn.ts` | Stop passing `abortSignal`; keep interruption in the collector. |
-| `packages/core/tests/providers/provider-resolution.test.ts` | Adjust fixtures if they mention removed fields. |
+- Status: complete in `81069950`.
+- Removed unused model-provider `abortSignal` and `providerOptions`.
+- Gate: passed.
 
-**Verification**:
+**Commit 1.2: `refactor(events): simplify publisher routing`**
+
+- Delete unused `SessionProfileCache` late binding in
+  `packages/core/src/server/event-publisher.ts`.
+- Replace queue/ack delivery worker with a direct `Semaphore` plus `Ref`
+  duplicate tracker if ordering/idempotency tests prove equivalent behavior.
+- Remove router-handle mutation from `packages/core/src/server/dependencies.ts`.
+- Verify focused event publisher tests, then `bun run gate`.
 
-- `env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots packages/core/tests/providers/provider-resolution.test.ts`
-- `bun run gate`
+**Commit 1.3: `refactor(interactions): make live coordination effect-managed`**
+
+- Move live pending/resolution state in
+  `packages/core/src/domain/interaction-request.ts` from raw maps to `Ref` or
+  `SubscriptionRef`.
+- Preserve durable interaction storage semantics in
+  `packages/core/src/server/interaction-commands.ts`.
+- Verify focused interaction tests, then `bun run gate`.
+
+### Phase 2: Make Effect AI The Provider Surface
 
-### Commit 2: `refactor(events): simplify publisher routing`
+**Commit 2.1: `refactor(provider): use effect ai model values`**
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/server/event-publisher.ts` | Delete `SessionProfileCache` late-binding handle and unused profile resolution. Replace queue/ack worker with `Semaphore` plus `Ref` duplicate tracking. |
-| `packages/core/src/server/dependencies.ts` | Remove router handle construction and post-cache mutation. |
-| `packages/core/tests/**/event*.test.ts` | Keep or add focused event delivery ordering/idempotency coverage. |
+- Replace one-field `ProviderResolution` with upstream `Model` or direct
+  `LanguageModel` layer values.
+- Update provider extensions to return Effect AI model values where package APIs
+  support it.
+- Verify provider resolution tests, provider extension tests, then
+  `bun run gate`.
 
-**Verification**:
+**Commit 2.2: `refactor(tools): make extension tools native effect tools`**
 
-- Focused event publisher tests.
-- `bun run gate`
+- Make `tool(...)` return an Effect AI `Tool.Any` annotated with Gent metadata.
+- Teach `ToolRunner` to read Gent metadata from tool annotations.
+- Pass native tools/toolkits to providers.
+- Migrate one builtin tool manually, then delegate the remaining mechanical
+  tool migrations with before/after examples.
+- Verify provider tool schema regression tests, tool runner tests, then
+  `bun run gate`.
 
-### Commit 3: `refactor(interactions): make live coordination effect-managed`
+**Commit 2.3: `refactor(tools): delete custom json schema bridge`**
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/interaction-request.ts` | Make the constructor Effect-based and store pending/resolution state in `Ref` or `SubscriptionRef`. |
-| `packages/core/src/runtime/approval-service.ts` | Update construction to provide the Effect-managed service. |
-| `packages/core/src/server/interaction-commands.ts` | Keep durable response semantics but route live coordination through the new atomic service. |
-| `packages/core/tests/**/interaction*.test.ts` | Prove cold resume and single pending request semantics. |
+- Delete `packages/core/src/domain/tool-schema.ts`.
+- Remove `buildToolJsonSchema` exports.
+- Use `Tool.getJsonSchema(tool, { transformer })` in codemode/MCP surfaces that
+  still need JSON Schema.
+- Verify codemode or focused extension tests, provider schema regression, then
+  `bun run gate`.
 
-**Verification**:
+**Commit 2.4: `refactor(ai): make prompt and chat primitives effect-native`**
 
-- Focused interaction tests.
-- `bun run gate`
+- Move provider entrypoints toward `Prompt.Prompt`, `Toolkit`,
+  `LanguageModel`, and `Chat`.
+- Shrink or delete `packages/core/src/providers/ai-transcript.ts` once upstream
+  `Prompt`/`Response` values cross the provider boundary.
+- Audit previous-response handling against `ResponseIdTracker`.
+- Verify provider transcript/schema tests, focused turn streaming tests, then
+  `bun run gate`.
 
-### Commit 4: `refactor(profile): collapse service snapshots into context`
+### Phase 3: Make Actors The Runtime Surface
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/runtime/profile.ts` | Return profile data plus `layerContext`; stop eagerly exporting every service snapshot. |
-| `packages/core/src/runtime/session-profile.ts` | Shrink `SessionProfile` and add `profileService(profile, Tag)` helper. |
-| `packages/core/src/runtime/session-runtime-context.ts` | Read active bindings from the context helper. |
-| `packages/core/src/server/rpc-handlers.ts` | Resolve per-session services from profile context. |
+**Commit 3.1: `refactor(runtime): transact loop state through subscription ref`**
 
-**Verification**:
+- Add one state mutation helper around `SubscriptionRef.modifyEffect`.
+- Delete queue mutation semaphore/reservation state where the helper owns the
+  transition.
+- Verify queue/watch runtime tests, then `bun run gate`.
 
-- Focused profile/session runtime tests.
-- `bun run gate`
+**Commit 3.2: `refactor(runtime): make session loops actor-owned`**
 
-### Commit 5: `refactor(server): share the server composition root`
+- Promote the existing loop command union into a `SessionLoopActor` protocol.
+- Keep loop state as actor state.
+- Replace `loopsRef`, `mutationSemaphoresRef`, loop handles, and watcher scope
+  with actor spawn/find/tell/ask/subscribeState.
+- Make `SessionRuntime` a thin transport validation plus actor command adapter.
+- Verify agent-loop actor tests, SessionRuntime RPC acceptance tests, then
+  `bun run gate`.
+
+**Commit 3.3: `refactor(extensions): actorize stateful reactions`**
+
+- Split extension reactions into pure folds versus stateful runtime behavior.
+- Keep pure message/prompt/projection folds in the reaction compiler.
+- Move stateful turn/message/tool behavior to actor messages or actor views.
+- Verify extension reaction/actor-view tests, then `bun run gate`.
+
+**Commit 3.4: `audit(actor): decide local engine versus effect cluster`**
+
+- Decide whether local `ActorEngine` remains the in-process actor model,
+  becomes an adapter over Effect cluster primitives, or migrates selected actor
+  classes to `Entity`.
+- Do not change the engine unless the audit proves an immediate simplification.
+- Preserve ask/tell/snapshot/restart tests as executable evidence.
+- Verify actor engine tests, then `bun run gate`.
+
+### Phase 4: Collapse Transport And Storage Mirrors
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/server/server-runtime.ts` | Add one shared layer constructor for dependencies, app services, identity, connection tracking, and route dependencies. |
-| `apps/server/src/main.ts` | Replace manual context merging with the shared constructor. |
-| `packages/sdk/src/server.ts` | Replace duplicate server bootstrapping with the shared constructor. |
+**Commit 4.1: `refactor(transport): return domain messages directly`**
 
-**Verification**:
+- Replace `MessageInfo` / `MessageInfoReadonly` with domain `Message`.
+- Return `Schema.Array(Message)` from message RPCs.
+- Delete `messageToInfo` and event-to-transport remapping.
+- Verify message/session snapshot tests, then `bun run gate`.
 
-- `bun run --cwd packages/sdk test`
-- `bun run --cwd apps/server typecheck` or package typecheck command.
-- `bun run gate`
+**Commit 4.2: `refactor(storage): collapse message content storage`**
 
-### Commit 6: `refactor(transport): return domain messages directly`
+- Add an idempotent migration from legacy `messages.parts` to the single
+  surviving content representation.
+- Drop or ignore the duplicate field through table rebuild if needed.
+- Remove `legacyPartsJson`.
+- Add an old-shape database fixture proving migration, readback, search
+  indexing, and `MessageReceived` event backfill.
+- Verify storage migration tests, message/search tests, then `bun run gate`.
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/server/transport-contract.ts` | Replace `MessageInfo` / `MessageInfoReadonly` with domain `Message`. |
-| `packages/core/src/server/rpcs/message.ts` | Return `Schema.Array(Message)`. |
-| `packages/core/src/server/session-utils.ts` | Delete `messageToInfo`. |
-| `apps/tui/src/hooks/use-session-feed.ts` | Remove event-to-transport remapping. |
+**Commit 4.3: `refactor(sessions): own session tree projection in one layer`**
 
-**Verification**:
+- Keep one session tree shape: domain schema, explicit read model, or actor
+  projection. Delete the others.
+- Move projection to the owning query layer if retained.
+- Verify session tree tests, then `bun run gate`.
 
-- Focused message/session snapshot tests.
-- `bun run gate`
+### Phase 5: Collapse Layer, Storage, Resource, And SDK Surfaces
 
-### Commit 6.5: `refactor(storage): collapse message content storage`
+**Commit 5.1: `refactor(profile): collapse service snapshots into context`**
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/storage/schema.ts` | Add an idempotent migration from legacy `messages.parts` to the single surviving content representation, then drop or ignore the duplicate field through a table rebuild if needed. |
-| `packages/core/src/storage/sqlite/rows.ts` | Remove `legacyPartsJson` once reads/writes use the canonical content table only. |
-| `packages/core/src/storage/sqlite/impl.ts` | Simplify message insert/read paths around the surviving schema. |
-| `packages/core/tests/storage/**` | Add an old-shape database fixture that proves migration, readback, search indexing, and `MessageReceived` event backfill. |
+- Return profile data plus `layerContext`.
+- Stop exporting duplicate service snapshots.
+- Add a helper for reading services from the profile context where needed.
+- Verify profile/session runtime tests, then `bun run gate`.
 
-**Verification**:
+**Commit 5.2: `refactor(server): share the server composition root`**
 
-- Focused storage migration tests.
-- Focused message/search tests.
-- `bun run gate`
+- Add one shared layer constructor for dependencies, app services, identity,
+  connection tracking, and route dependencies.
+- Replace manual context merging in server and SDK boot.
+- Verify SDK tests, server typecheck, then `bun run gate`.
 
-### Commit 7: `refactor(sessions): own session tree projection in one layer`
+**Commit 5.3: `refactor(storage): make focused stores primary`**
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/message.ts` | Either make the domain tree schema-backed or remove the public domain tree if it is only a query read model. |
-| `packages/core/src/server/transport-contract.ts` | Rename transport-only shape to an explicit read model if retained. |
-| `packages/core/src/server/rpc-handler-groups/session.ts` | Move tree projection to the owning query layer or delete it if returning the domain tree. |
-| `apps/tui/src/components/session-tree.tsx` | Consume the single surviving shape. |
-
-**Verification**:
+- Delete the broad `StorageService` facade if focused services cover call sites,
+  or reduce it to a private implementation detail.
+- Let focused storage services own construction directly.
+- Keep one storage test layer shape for integration tests.
+- Verify storage service tests, server dependency/profile tests, then
+  `bun run gate`.
 
-- Focused session tree tests.
-- `bun run gate`
+**Commit 5.4: `refactor(resources): author resources as effect services`**
 
-### Commit 8: `refactor(provider): use effect ai model values`
+- Replace shallow resource descriptors with helpers that accept Effect
+  service/layer values and infer tags where possible.
+- Migrate simple resources first; migrate executor only if the helper honestly
+  fits lifecycle requirements.
+- Verify extension lifecycle/resource tests, then `bun run gate`.
 
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/driver.ts` | Replace one-field `ProviderResolution` with upstream `AiModel.Model` or direct language-model layer. |
-| `packages/core/src/providers/provider.ts` | Provide/use the upstream model abstraction without a Gent wrapper. |
-| `packages/extensions/src/{anthropic,openai,mistral,google,bedrock}/**` | Return upstream model values where provider packages support them. |
-| `packages/core/tests/providers/provider-resolution.test.ts` | Update test fixtures to the surviving primitive. |
+**Commit 5.5: `refactor(sdk): delete namespaced rpc mirror`**
 
-**Verification**:
+- Delete `GentNamespacedClient`.
+- Expose the generated RPC client directly or keep an app-edge ergonomic facade.
+- Migrate TUI client calls to generated RPC keys.
+- Verify SDK tests, relevant TUI tests, then `bun run gate`.
 
-- Provider resolution tests.
-- Focused provider extension tests.
-- `bun run gate`
+## Review Gates
 
-### Commit 9: `refactor(tools): make extension tools native effect tools`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/capability/tool.ts` | Make `tool(...)` return an Effect AI `Tool.Any` annotated with Gent metadata. |
-| `packages/core/src/extensions/api.ts` | Re-export the native tool-facing authoring surface. |
-| `packages/core/src/runtime/agent/tool-runner.ts` | Read Gent metadata from tool annotations and execute via the native handler bridge. |
-| `packages/core/src/providers/provider.ts` | Stop converting `ToolToken` to `AiTool.dynamic`; pass native tools/toolkits. |
-
-**Mechanical migration rule**:
-
-- First migrate one builtin tool and provider path manually.
-- Then delegate remaining builtin tool updates with exact before/after examples.
-- Stop delegation if a tool relies on behavior not representable as native `Tool` plus Gent annotations.
-
-**Verification**:
-
-- Provider tool schema regression test.
-- Tool runner tests.
-- `bun run gate`
-
-### Commit 10: `refactor(tools): delete custom json schema bridge`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/tool-schema.ts` | Delete after native tools are in place. |
-| `packages/core/src/extensions/api.ts` | Remove `buildToolJsonSchema` export. |
-| `packages/core/src/extensions/authoring.ts` | Remove `buildToolJsonSchema` export. |
-| `packages/extensions/src/acp-agents/mcp-codemode.ts` | Use `Tool.getJsonSchema(tool, { transformer })`. |
-
-**Verification**:
-
-- Codemode tests or focused extension tests.
-- Provider schema regression.
-- `bun run gate`
-
-### Commit 11: `refactor(sdk): delete namespaced rpc mirror`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/sdk/src/namespaced-client.ts` | Delete manual mirror. |
-| `packages/sdk/src/client.ts` | Expose `GentRpcClient` directly or move any ergonomic facade to the app edge. |
-| `apps/tui/src/**` | Migrate `client.session.foo(...)` to generated RPC keys such as `client["session.foo"](...)`. |
-| `packages/sdk/tests/**` | Update SDK API expectations. |
-
-**Verification**:
-
-- `bun run --cwd packages/sdk test`
-- TUI tests touching client calls.
-- `bun run gate`
-
-### Commit 12: `refactor(runtime): transact queue state through subscription ref`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/runtime/agent/agent-loop.state.ts` | Add one `mutateLoopState` helper around `SubscriptionRef.modifyEffect`. |
-| `packages/core/src/runtime/agent/agent-loop.ts` | Delete `queueMutationSemaphore`, reservation state, and duplicate projected/current-state checks where the helper owns the transition. |
-| `packages/core/tests/runtime/**` | Prove submit/drain/watch state behavior through public runtime APIs. |
-
-**Verification**:
-
-- Focused queue/watch runtime tests.
-- `bun run gate`
-
-### Commit 12.5: `refactor(runtime): make session loops actor-owned`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/runtime/agent/agent-loop.commands.ts` | Promote the existing loop command union into the `SessionLoopActor` protocol or extract the actor protocol beside it. |
-| `packages/core/src/runtime/agent/agent-loop.state.ts` | Keep the loop state as actor state; delete duplicate handle/queue state once actor state owns it. |
-| `packages/core/src/runtime/agent/agent-loop.ts` | Replace `loopsRef`, `mutationSemaphoresRef`, loop handles, and watcher scope with actor spawn/find/tell/ask/subscribeState. |
-| `packages/core/src/runtime/session-runtime.ts` | Dispatch to the session loop actor; keep only transport validation and command construction. |
-| `packages/core/tests/runtime/**` | Prove submit, steer, queue, watch, terminate, and restore through the actor protocol. |
-
-**Verification**:
-
-- Focused agent-loop actor tests.
-- SessionRuntime RPC acceptance tests.
-- `bun run gate`
-
-### Commit 12.6: `refactor(extensions): actorize stateful reactions`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/extension.ts` | Separate pure projection hooks from stateful runtime reactions. |
-| `packages/core/src/runtime/extensions/extension-reactions.ts` | Keep pure folds only; route stateful turn/message/tool events through actor messages or actor views. |
-| `packages/extensions/src/**` | Migrate stateful reaction contributors to behaviors where they maintain state or lifecycle. |
-| `packages/core/tests/extensions/**` | Prove actor view projection and reaction ordering semantics. |
-
-**Verification**:
-
-- Focused extension reaction/actor-view tests.
-- `bun run gate`
-
-### Commit 13: `refactor(resources): author resources as effect services`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/domain/resource.ts` | Add resource helpers that accept Effect service/layer values and infer tags where possible. |
-| `packages/extensions/src/skills/index.ts` | Migrate simple service resource to the new helper. |
-| `packages/extensions/src/task-tools/index.ts` | Migrate simple process resource. |
-| `packages/extensions/src/executor/index.ts` | Migrate only if the new helper honestly fits lifecycle requirements. |
-
-**Verification**:
-
-- Extension lifecycle/resource tests.
-- `bun run gate`
-
-### Commit 14: `refactor(storage): make focused stores primary`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/storage/sqlite-storage.ts` | Delete the broad `StorageService` facade if focused services cover all call sites, or reduce it to a private implementation detail. |
-| `packages/core/src/storage/*-storage.ts` | Own focused service construction directly instead of deriving every tag from one mega-service value. |
-| `packages/core/src/server/dependencies.ts` | Consume the shared storage composition root rather than manually merging storage-related tags. |
-| `packages/core/src/test-utils/**` | Keep one storage test layer shape for integration tests. |
-
-**Verification**:
-
-- Focused storage service tests.
-- Server dependency/profile tests.
-- `bun run gate`
-
-### Commit 15: `refactor(ai): make prompt and chat primitives effect-native`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `packages/core/src/providers/provider.ts` | Move provider entrypoints toward `Prompt.Prompt`, `Toolkit`, `LanguageModel`, and `Chat` primitives after native tools/models land. |
-| `packages/core/src/providers/ai-transcript.ts` | Delete or shrink transcript conversion once upstream `Prompt`/`Response` values cross the provider boundary. |
-| `packages/core/src/runtime/agent/phases/turn.ts` | Build Effect AI prompts/toolkits at the turn boundary and stop reconstructing provider-local DTOs. |
-| `packages/core/tests/providers/**` | Prove Anthropic/OpenAI structured output and response-id behavior with upstream codecs. |
-
-**Verification**:
-
-- Provider transcript/schema regression tests.
-- Focused turn streaming tests.
-- `bun run gate`
-
-### Commit 16: `audit(actor): decide local engine versus effect cluster`
-
-**Changes**:
-| File | Change |
-| --- | --- |
-| `plans/WAVE-16.md` | Add the decision record: keep local `ActorEngine` as the in-process actor model, wrap it over Effect cluster primitives, or migrate selected actor classes to `Entity`. |
-| `packages/core/src/runtime/extensions/actor-engine.ts` | Only change if the audit proves an immediate simplification; otherwise document the adapter boundary. |
-| `packages/core/tests/runtime/extensions/**` | Preserve ask/tell/snapshot/restart semantics as executable evidence. |
-
-**Verification**:
-
-- Actor engine tests.
-- `bun run gate`
-
-## Review Checkpoints
-
-- After Commit 2: quick review for event semantics before touching interaction state.
-- After Commit 5: review composition/profile changes before transport churn.
-- After Commit 6.5: review storage schema and migration invariants before more
-  transport/session read-model deletion.
-- After Commit 8: review provider/model semantics before native tool migration.
-- After Commit 10: review tool migration and delete any temporary adapter seams.
-- After Commit 12.5: review whether the actorized loop removed enough custom
-  registry/lifecycle code to continue, or whether the next step is Effect
-  cluster alignment.
-- After Commit 12.6: review whether any stateful reaction remains outside an
-  actor without a principled reason.
-- After Commit 15: review whether provider prompt/history semantics are now
-  Effect AI native.
-- After Commit 16: final recursive audit against this plan plus `effect-smol`.
+- After Phase 1: event and interaction behavior is unchanged, and no dead
+  request/event bridge remains.
+- After Phase 2: provider/tool/prompt boundaries are Effect AI native unless a
+  retained Gent layer has explicit product semantics.
+- After Phase 3: runtime coordination is actor-owned; any stateful reaction
+  outside actors has a written reason.
+- After Phase 4: transport and storage expose one source of truth per concept.
+- After Phase 5: composition is Layer/Context-first, and public SDK/storage
+  surfaces are narrow.
 
 ## Completion Rule
 
 Wave 16 closes only when:
 
-- All accepted bridges are either deleted or explicitly reclassified with
-  stronger counter-evidence in this file.
+- Every accepted bridge is deleted or reclassified with stronger evidence in
+  this file.
 - `bun run gate` passes after every commit.
-- `bun run test:e2e` passes after the transport/provider/tool commits are done.
-- A final recursive audit finds no P0/P1/P2 uncollapsed Effect bridge in the
-  touched surfaces.
-
-## Status
-
-- Commit 0 complete before this plan:
-  `9affca78 fix: preserve effect tool schemas for providers`
-- Audit complete:
-  five subagents reported grounded findings with local and upstream receipts.
-  Weak findings were rejected, including broad actor-engine deletion and broad
-  domain service tag churn.
+- `bun run test:e2e` passes after Phases 2, 3, and 4.
+- A final recursive audit finds no P0/P1/P2 uncollapsed Effect or actor-model
+  bridge in touched surfaces.
