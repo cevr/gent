@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
+import * as AiTool from "effect/unstable/ai/Tool"
 import { Agents } from "@gent/extensions/all-agents"
 import {
   defineExtension,
@@ -283,6 +284,29 @@ describe("defineExtension", () => {
         const rendered = JSON.stringify(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("tools factory failed: nope")
+      }
+    }),
+  )
+
+  it.live("raw native Effect tools are rejected at defineExtension setup", () =>
+    Effect.gen(function* () {
+      const ext = defineExtension({
+        id: "raw-native",
+        tools: [
+          AiTool.dynamic("raw_tool", {
+            description: "native but missing Gent metadata",
+            parameters: Schema.Unknown,
+          }) as never,
+        ],
+      })
+      const exit = yield* Effect.exit(setupOf(ext))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = JSON.stringify(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain(
+          "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
+        )
       }
     }),
   )

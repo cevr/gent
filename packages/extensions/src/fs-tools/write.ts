@@ -32,6 +32,7 @@ export const WriteResult = Schema.Struct({
 export const WriteTool = tool({
   id: "write",
   needs: [ToolNeeds.write("fs")],
+  destructive: true,
   description: "Write content to file. Creates directories if needed.",
   promptSnippet: "Create or overwrite files",
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],

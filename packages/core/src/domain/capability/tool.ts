@@ -63,11 +63,13 @@ export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | unde
   Context.get(tool.annotations, GentToolMetadataTag)
 
 export const isToolToken = (value: unknown): value is ToolToken => {
-  if (typeof value !== "object" || value === null || !("annotations" in value)) {
+  if (
+    !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
+    !(ToolTokenBrand in value)
+  ) {
     return false
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime-loaded extension values are unknown; metadata annotation is the Gent tool brand.
-  return getToolMetadataOption(value as AiTool.Any) !== undefined
+  return getToolMetadataOption(value) !== undefined
 }
 
 export const getToolMetadata = <Input, Output, Error>(

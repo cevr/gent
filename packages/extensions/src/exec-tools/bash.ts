@@ -120,6 +120,7 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
 export const BashTool = tool({
   id: "bash",
   needs: [ToolNeeds.write("process")],
+  destructive: true,
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   promptSnippet: "Execute shell commands",
