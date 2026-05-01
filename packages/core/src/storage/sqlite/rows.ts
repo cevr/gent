@@ -5,7 +5,6 @@ import { messagePartsSearchText } from "../../domain/message-part-compat.js"
 import { AgentEvent } from "../../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
-import { isRecord } from "../../domain/guards.js"
 import { SqlClient } from "effect/unstable/sql"
 
 // Schema decoders - Effect-based (no sync throws)
@@ -21,41 +20,10 @@ export const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
 export const decodeMessageMetadata = Schema.decodeUnknownOption(MessageMetadataJson)
 export const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
 
-export const LEGACY_EVENT_TAGS = {
-  AgentRunSpawned: ["AgentRunSpawned", "SubagentSpawned"],
-  AgentRunSucceeded: ["AgentRunSucceeded", "SubagentSucceeded"],
-  AgentRunFailed: ["AgentRunFailed", "SubagentFailed"],
-} as const satisfies Record<string, readonly string[]>
-
 export const MESSAGES_FTS_SCHEMA_VERSION = "1"
 
-export const normalizeLegacyAgentEvent = (value: unknown): unknown => {
-  if (!isRecord(value)) return value
-  const record = value
-  switch (record["_tag"]) {
-    case "SubagentSpawned":
-      return { ...record, _tag: "AgentRunSpawned" }
-    case "SubagentSucceeded":
-      return { ...record, _tag: "AgentRunSucceeded" }
-    case "SubagentFailed":
-      return { ...record, _tag: "AgentRunFailed" }
-    default:
-      return value
-  }
-}
-
 export const decodeEvent = (json: string) =>
-  decodeEventJson(json).pipe(
-    Effect.map(normalizeLegacyAgentEvent),
-    Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)),
-  )
-
-export const expandEventTags = (tags: ReadonlyArray<string>) => [
-  ...new Set(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- legacy tag lookup narrows string to known alias keys
-    tags.flatMap((tag) => LEGACY_EVENT_TAGS[tag as keyof typeof LEGACY_EVENT_TAGS] ?? [tag]),
-  ),
-]
+  decodeEventJson(json).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)))
 // Row types
 export interface SessionRow {
   id: SessionId

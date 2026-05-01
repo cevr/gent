@@ -10,7 +10,6 @@ import {
   decodeEvent,
   encodeEvent,
   encodeStoredMessage,
-  expandEventTags,
   groupMessageChunkRows,
   insertMessageContent,
   indexMessageSearch,
@@ -479,21 +478,10 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
       getLatestEventTag: Effect.fn("Storage.getLatestEventTag")(
         function* ({ sessionId, branchId, tags }) {
           if (tags.length === 0) return undefined
-          const expandedTags = expandEventTags(tags)
           const rows = yield* sql<{
             event_tag: string
-          }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
-          const eventTag = rows[0]?.event_tag
-          switch (eventTag) {
-            case "SubagentSpawned":
-              return "AgentRunSpawned"
-            case "SubagentSucceeded":
-              return "AgentRunSucceeded"
-            case "SubagentFailed":
-              return "AgentRunFailed"
-            default:
-              return eventTag
-          }
+          }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
+          return rows[0]?.event_tag
         },
         Effect.mapError(mapError("Failed to get latest event tag")),
       ),
@@ -501,10 +489,9 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
       getLatestEvent: Effect.fn("Storage.getLatestEvent")(
         function* ({ sessionId, branchId, tags }) {
           if (tags.length === 0) return undefined
-          const expandedTags = expandEventTags(tags)
           const rows = yield* sql<{
             event_json: string
-          }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
+          }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
           const row = rows[0]
           if (row === undefined) return undefined
           const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
