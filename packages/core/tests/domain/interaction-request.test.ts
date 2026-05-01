@@ -39,7 +39,7 @@ describe("Interaction Request", () => {
           persist: (record) => persistInteraction(is, record),
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
-        const interaction = makeInteractionService({
+        const interaction = yield* makeInteractionService({
           onPresent: () => Effect.void,
           storage: storageCallbacks,
         })
@@ -156,7 +156,7 @@ describe("Interaction Request", () => {
         })
 
         const presented: InteractionRequestId[] = []
-        const interaction = makeInteractionService({
+        const interaction = yield* makeInteractionService({
           onPresent: (requestId) =>
             Effect.sync(() => {
               presented.push(requestId)
@@ -171,7 +171,7 @@ describe("Interaction Request", () => {
           expect(Cause.pretty(exit.cause)).toContain("Failed to persist interaction request")
         }
         expect(presented).toEqual([])
-        expect(interaction.pendingRequestId({ sessionId, branchId })).toBeUndefined()
+        expect(yield* interaction.pendingRequestId({ sessionId, branchId })).toBeUndefined()
         const pending = yield* is.listPending({ sessionId, branchId })
         expect(pending.map((record) => record.requestId)).toEqual([
           InteractionRequestId.make("req-existing-pending"),
@@ -222,7 +222,7 @@ describe("Interaction Request", () => {
   it.live("storeResolution + subsequent present returns stored value without throwing", () =>
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
-        const interaction = makeInteractionService({
+        const interaction = yield* makeInteractionService({
           onPresent: () => Effect.void,
         })
         const sessionId = SessionId.make("s-cold")
@@ -234,7 +234,7 @@ describe("Interaction Request", () => {
         expect(error._tag).toBe("InteractionPendingError")
         if (!(error instanceof InteractionPendingError)) throw new Error("expected pending")
         // Store resolution keyed by requestId
-        interaction.storeResolution(error.requestId, { approved: true })
+        yield* interaction.storeResolution(error.requestId, { approved: true })
         // Second present — finds stored resolution, returns it
         const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
         expect(result.approved).toBe(true)
@@ -245,7 +245,7 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         // Simulate a fresh service after restart — no in-memory state
-        const interaction = makeInteractionService({
+        const interaction = yield* makeInteractionService({
           onPresent: () => Effect.void,
         })
         const sessionId = SessionId.make("s-restart")
@@ -254,7 +254,7 @@ describe("Interaction Request", () => {
         // Rehydrate rebuilds the pendingByContext reverse lookup
         yield* interaction.rehydrate(requestId, { text: "Approve?" }, { sessionId, branchId })
         // Client responds — store the resolution
-        interaction.storeResolution(requestId, { approved: true, notes: "yes" })
+        yield* interaction.storeResolution(requestId, { approved: true, notes: "yes" })
         // Tool re-calls present() — should find stored resolution via context lookup
         const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
         expect(result.approved).toBe(true)
@@ -274,7 +274,7 @@ describe("Interaction Request", () => {
         const branchId = BranchId.make("b-cold-resume")
         yield* ensureStorageParents({ sessionId, branchId })
         // Phase 1: original service — present() persists and throws
-        const service1 = makeInteractionService({
+        const service1 = yield* makeInteractionService({
           onPresent: () => Effect.void,
           storage: storageCallbacks,
         })
@@ -288,7 +288,7 @@ describe("Interaction Request", () => {
         const pending = yield* is.listPending()
         expect(pending.some((r) => r.requestId === requestId)).toBe(true)
         // Phase 2: simulate restart — create a fresh service instance (no in-memory state)
-        const service2 = makeInteractionService({
+        const service2 = yield* makeInteractionService({
           onPresent: () => Effect.void,
           storage: storageCallbacks,
         })
@@ -300,7 +300,7 @@ describe("Interaction Request", () => {
         }
         yield* service2.rehydrate(requestId, params, { sessionId, branchId })
         // Client responds
-        service2.storeResolution(requestId, { approved: true, notes: "ship it" })
+        yield* service2.storeResolution(requestId, { approved: true, notes: "ship it" })
         // Tool re-calls present() — should find the stored resolution
         const result = yield* service2.present(
           { text: "Approve deployment?" },
@@ -322,7 +322,7 @@ describe("Interaction Request", () => {
           persist: (record) => persistInteraction(is, record),
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
-        const interaction = makeInteractionService({
+        const interaction = yield* makeInteractionService({
           onPresent: () => Effect.void,
           autoResolve: () => ({ approved: true, notes: "auto" }),
           storage: storageCallbacks,

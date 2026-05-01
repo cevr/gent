@@ -65,8 +65,8 @@ const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
 const WORKER_READY_PREFIX = "GENT_WORKER_READY "
-const STARTUP_MAX_ATTEMPTS = 3
-const STARTUP_RETRY_DELAY_MS = 250
+const STARTUP_MAX_ATTEMPTS = 5
+const STARTUP_RETRY_DELAY_MS = 500
 
 const resolveWorkerLaunch = async (options?: {
   readonly sourceEntryPath?: string

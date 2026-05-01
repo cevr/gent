@@ -43,7 +43,7 @@ export class InteractionCommands extends Context.Service<
             branchId: input.branchId,
           })
 
-          const pendingRequestId = approvalService.pendingRequestId(input)
+          const pendingRequestId = yield* approvalService.pendingRequestId(input)
           if (pendingRequestId !== input.requestId) {
             return yield* new InteractionRequestMismatchError({
               message:
@@ -58,7 +58,7 @@ export class InteractionCommands extends Context.Service<
           }
 
           // 1. Store resolution so re-entering present() finds it
-          approvalService.storeResolution(input.requestId, {
+          yield* approvalService.storeResolution(input.requestId, {
             approved: input.approved,
             ...(input.notes !== undefined ? { notes: input.notes } : {}),
           })

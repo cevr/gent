@@ -363,8 +363,8 @@ export const trackingApprovalService = () =>
     const presentCalled = yield* Ref.make(false)
     const layer = Layer.succeed(ApprovalService, {
       present: () => Ref.set(presentCalled, true).pipe(Effect.as({ approved: true })),
-      pendingRequestId: () => undefined,
-      storeResolution: () => {},
+      pendingRequestId: () => Effect.succeed(undefined),
+      storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,
     })

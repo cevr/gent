@@ -13,7 +13,7 @@
  * No Deferred, no blocked fiber. Interactions survive server restarts.
  */
 
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, Ref, Schema } from "effect"
 import { EventStoreError } from "./event"
 import { BranchId, InteractionRequestId, SessionId } from "./ids"
 
@@ -116,10 +116,13 @@ export interface InteractionService {
   readonly pendingRequestId: (ctx: {
     sessionId: SessionId
     branchId: BranchId
-  }) => InteractionRequestId | undefined
+  }) => Effect.Effect<InteractionRequestId | undefined>
   readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Store a resolution for cold-mode resumption (keyed by requestId) */
-  readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
+  readonly storeResolution: (
+    requestId: InteractionRequestId,
+    decision: ApprovalDecision,
+  ) => Effect.Effect<void>
   /** Re-publish event for a persisted pending request (recovery after restart) */
   readonly rehydrate: (
     requestId: InteractionRequestId,
@@ -153,91 +156,133 @@ export interface InteractionServiceConfig {
   readonly storage?: InteractionStorageConfig
 }
 
-export const makeInteractionService = (config: InteractionServiceConfig): InteractionService => {
-  /** Stored resolutions keyed by requestId */
-  const storedResolutions = new Map<InteractionRequestId, ApprovalDecision>()
+interface InteractionState {
+  readonly storedResolutions: ReadonlyMap<InteractionRequestId, ApprovalDecision>
   /** Reverse lookup: sessionId:branchId → requestId (at most one pending per session+branch) */
-  const pendingByContext = new Map<string, InteractionRequestId>()
-  const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+  readonly pendingByContext: ReadonlyMap<string, InteractionRequestId>
+}
 
-  return {
-    storeResolution: (requestId, decision) => {
-      storedResolutions.set(requestId, decision)
-    },
+export const makeInteractionService = (
+  config: InteractionServiceConfig,
+): Effect.Effect<InteractionService> =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make<InteractionState>({
+      storedResolutions: new Map(),
+      pendingByContext: new Map(),
+    })
 
-    present: Effect.fn("InteractionService.present")(function* (
-      params: ApprovalRequest,
-      ctx: { sessionId: SessionId; branchId: BranchId },
-    ) {
-      const auto = config.autoResolve?.(params)
-      if (auto !== undefined) return auto
+    const setResolution = (requestId: InteractionRequestId, decision: ApprovalDecision) =>
+      Ref.update(state, (current) => ({
+        ...current,
+        storedResolutions: new Map(current.storedResolutions).set(requestId, decision),
+      }))
 
-      // Check for a stored resolution (cold interaction resumption).
-      // The tool re-calls present() after the machine resumes. The resolution
-      // was stored by requestId via storeResolution(). We find the requestId
-      // through the context reverse lookup.
-      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
-      const pendingRequestId = pendingByContext.get(ctxKey)
-      if (pendingRequestId !== undefined) {
-        const stored = storedResolutions.get(pendingRequestId)
+    const takeStoredResolution = (ctxKey: string) =>
+      Ref.modify(state, (current) => {
+        const requestId = current.pendingByContext.get(ctxKey)
+        if (requestId === undefined) return [undefined, current]
+
+        const decision = current.storedResolutions.get(requestId)
+        if (decision === undefined) return [undefined, current]
+
+        const storedResolutions = new Map(current.storedResolutions)
+        storedResolutions.delete(requestId)
+        const pendingByContext = new Map(current.pendingByContext)
+        pendingByContext.delete(ctxKey)
+
+        return [
+          { requestId, decision },
+          {
+            storedResolutions,
+            pendingByContext,
+          },
+        ]
+      })
+
+    const setPending = (ctxKey: string, requestId: InteractionRequestId) =>
+      Ref.update(state, (current) => ({
+        ...current,
+        pendingByContext: new Map(current.pendingByContext).set(ctxKey, requestId),
+      }))
+
+    const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+
+    return {
+      storeResolution: setResolution,
+
+      present: Effect.fn("InteractionService.present")(function* (
+        params: ApprovalRequest,
+        ctx: { sessionId: SessionId; branchId: BranchId },
+      ) {
+        const auto = config.autoResolve?.(params)
+        if (auto !== undefined) return auto
+
+        // Check for a stored resolution (cold interaction resumption).
+        // The tool re-calls present() after the machine resumes. The resolution
+        // was stored by requestId via storeResolution(). We find the requestId
+        // through the context reverse lookup.
+        const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+        const stored = yield* takeStoredResolution(ctxKey)
         if (stored !== undefined) {
-          storedResolutions.delete(pendingRequestId)
-          pendingByContext.delete(ctxKey)
           if (config.storage !== undefined) {
-            yield* config.storage.resolve(pendingRequestId)
+            yield* config.storage.resolve(stored.requestId)
           }
-          return stored
+          return stored.decision
         }
-      }
 
-      const requestId = InteractionRequestId.make(Bun.randomUUIDv7())
+        const requestId = InteractionRequestId.make(Bun.randomUUIDv7())
 
-      // Persist to storage before publishing event (crash-safe)
-      if (config.storage !== undefined) {
-        const paramsJson = yield* encodeInteractionParams(params)
-        yield* config.storage.persist({
+        // Persist to storage before publishing event (crash-safe)
+        if (config.storage !== undefined) {
+          const paramsJson = yield* encodeInteractionParams(params)
+          yield* config.storage.persist({
+            requestId,
+            type: INTERACTION_TYPE,
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            paramsJson,
+            status: "pending",
+            createdAt: yield* Clock.currentTimeMillis,
+          })
+        }
+        yield* setPending(ctxKey, requestId)
+
+        yield* config.onPresent(requestId, params, ctx)
+
+        // Signal the machine to park in WaitingForInteraction.
+        return yield* new InteractionPendingError({
           requestId,
-          type: INTERACTION_TYPE,
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
-          paramsJson,
-          status: "pending",
-          createdAt: yield* Clock.currentTimeMillis,
         })
-      }
-      pendingByContext.set(ctxKey, requestId)
+      }),
 
-      yield* config.onPresent(requestId, params, ctx)
+      pendingRequestId: (ctx) =>
+        Ref.get(state).pipe(
+          Effect.map((current) =>
+            current.pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
+          ),
+        ),
 
-      // Signal the machine to park in WaitingForInteraction.
-      return yield* new InteractionPendingError({
-        requestId,
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-      })
-    }),
+      respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
+        if (config.storage !== undefined) {
+          yield* config.storage.resolve(requestId)
+        }
+        // onRespond is optional — events can be published here if needed
+        // but the primary response path is storeResolution + machine wake
+      }),
 
-    pendingRequestId: (ctx) => pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
-
-    respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
-      if (config.storage !== undefined) {
-        yield* config.storage.resolve(requestId)
-      }
-      // onRespond is optional — events can be published here if needed
-      // but the primary response path is storeResolution + machine wake
-    }),
-
-    rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
-      requestId: InteractionRequestId,
-      params: ApprovalRequest,
-      ctx: { sessionId: SessionId; branchId: BranchId },
-    ) {
-      // Rebuild the context reverse lookup so post-restart present() can find
-      // the stored resolution by sessionId:branchId → requestId.
-      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
-      pendingByContext.set(ctxKey, requestId)
-      // Re-publish the event so reconnecting clients render the dialog.
-      yield* config.onPresent(requestId, params, ctx)
-    }),
-  }
-}
+      rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
+        requestId: InteractionRequestId,
+        params: ApprovalRequest,
+        ctx: { sessionId: SessionId; branchId: BranchId },
+      ) {
+        // Rebuild the context reverse lookup so post-restart present() can find
+        // the stored resolution by sessionId:branchId → requestId.
+        const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+        yield* setPending(ctxKey, requestId)
+        // Re-publish the event so reconnecting clients render the dialog.
+        yield* config.onPresent(requestId, params, ctx)
+      }),
+    }
+  })

@@ -31,9 +31,12 @@ export interface ApprovalServiceShape {
   readonly pendingRequestId: (ctx: {
     sessionId: SessionId
     branchId: BranchId
-  }) => InteractionRequestId | undefined
+  }) => Effect.Effect<InteractionRequestId | undefined>
   /** Store a resolution for cold-mode resumption */
-  readonly storeResolution: (requestId: InteractionRequestId, decision: ApprovalDecision) => void
+  readonly storeResolution: (
+    requestId: InteractionRequestId,
+    decision: ApprovalDecision,
+  ) => Effect.Effect<void>
   /** Mark a request as resolved in storage */
   readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Re-publish event for a persisted pending request (recovery after restart) */
@@ -51,7 +54,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
     ApprovalService,
     Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const interaction = makeApprovalInteractionService(eventPublisher)
+      const interaction = yield* makeApprovalInteractionService(eventPublisher)
       return {
         present: interaction.present,
         pendingRequestId: interaction.pendingRequestId,
@@ -69,7 +72,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       ApprovalService,
       Effect.gen(function* () {
         const eventPublisher = yield* EventPublisher
-        const interaction = makeApprovalInteractionService(eventPublisher, storage)
+        const interaction = yield* makeApprovalInteractionService(eventPublisher, storage)
         return {
           present: interaction.present,
           pendingRequestId: interaction.pendingRequestId,
@@ -89,8 +92,8 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       const isAskUser = meta?.["type"] === "ask-user"
       return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
     },
-    pendingRequestId: () => undefined,
-    storeResolution: () => {},
+    pendingRequestId: () => Effect.succeed(undefined),
+    storeResolution: () => Effect.void,
     respond: () => Effect.void,
     rehydrate: () => Effect.void,
   })
@@ -102,8 +105,8 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         const decision = queue.shift() ?? { approved: true }
         return Effect.succeed(decision)
       },
-      pendingRequestId: () => undefined,
-      storeResolution: () => {},
+      pendingRequestId: () => Effect.succeed(undefined),
+      storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,
     })
@@ -113,7 +116,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
 const makeApprovalInteractionService = (
   eventPublisher: EventPublisherService,
   storage?: InteractionStorageConfig,
-): InteractionService =>
+): Effect.Effect<InteractionService> =>
   makeInteractionService({
     onPresent: (requestId, params, ctx) =>
       eventPublisher.publish(
