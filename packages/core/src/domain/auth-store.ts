@@ -84,22 +84,26 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
         provider: string,
         cause: unknown,
       ) {
-        yield* storage.delete(provider).pipe(
+        const deleted = yield* storage.delete(provider).pipe(
+          Effect.as(true),
           Effect.catchEager((deleteCause) =>
             Effect.logWarning("failed to discard invalid auth info").pipe(
               Effect.annotateLogs({
                 provider,
                 cause: String(deleteCause),
               }),
+              Effect.as(false),
             ),
           ),
         )
-        yield* Effect.logWarning("discarded invalid auth info").pipe(
-          Effect.annotateLogs({
-            provider,
-            cause: String(cause),
-          }),
-        )
+        if (deleted) {
+          yield* Effect.logWarning("discarded invalid auth info").pipe(
+            Effect.annotateLogs({
+              provider,
+              cause: String(cause),
+            }),
+          )
+        }
         return undefined as AuthInfo | undefined
       })
 

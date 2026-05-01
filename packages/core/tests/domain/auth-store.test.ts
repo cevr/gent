@@ -85,6 +85,23 @@ describe("AuthStore", () => {
     ),
   )
 
+  it.live("delete failure while discarding invalid auth stays non-fatal", () => {
+    const failingStorage = Layer.succeed(AuthStorage, {
+      get: (provider: string) => Effect.succeed(provider === "openai" ? "sk-raw" : undefined),
+      set: () => Effect.void,
+      delete: () => Effect.fail(new AuthStorageError({ message: "delete failed" })),
+      list: () => Effect.succeed(["openai"]),
+    })
+
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const result = yield* auth.get("openai")
+      expect(result).toBeUndefined()
+      const providers = yield* auth.list()
+      expect(providers).toEqual(["openai"])
+    }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
+  })
+
   it.live("API key persists across reads", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
