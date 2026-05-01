@@ -142,5 +142,3 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-
-export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"

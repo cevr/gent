@@ -13,7 +13,8 @@ import { Effect } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { buildToolJsonSchema, getToolId, type ToolToken } from "@gent/core/extensions/api"
+import * as AiTool from "effect/unstable/ai/Tool"
+import { getToolId, type ToolToken } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -52,7 +53,7 @@ export const generateToolDescription = (tools: ReadonlyArray<ToolToken>): string
   ]
 
   for (const tool of tools) {
-    const schema = buildToolJsonSchema(tool)
+    const schema = AiTool.getJsonSchema(tool)
     const id = getToolId(tool)
     const rawProps = schema["properties"]
     let props: Record<string, unknown> = {}

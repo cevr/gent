@@ -271,7 +271,6 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { runProcess, ProcessError } from "../utils/run-process.js"
 export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 
