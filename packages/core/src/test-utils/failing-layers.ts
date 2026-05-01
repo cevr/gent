@@ -158,10 +158,6 @@ const makeFailingStorageService = (
       fails("getLatestEventId")
         ? storageFailure(storageMessage(options.message, "getLatestEventId"))
         : base.getLatestEventId(params),
-    getLatestEventTag: (params) =>
-      fails("getLatestEventTag")
-        ? storageFailure(storageMessage(options.message, "getLatestEventTag"))
-        : base.getLatestEventTag(params),
     getLatestEvent: (params) =>
       fails("getLatestEvent")
         ? storageFailure(storageMessage(options.message, "getLatestEvent"))

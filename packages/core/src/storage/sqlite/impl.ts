@@ -475,17 +475,6 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
         Effect.mapError(mapError("Failed to get latest event id")),
       ),
 
-      getLatestEventTag: Effect.fn("Storage.getLatestEventTag")(
-        function* ({ sessionId, branchId, tags }) {
-          if (tags.length === 0) return undefined
-          const rows = yield* sql<{
-            event_tag: string
-          }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
-          return tags.find((tag) => tag === rows[0]?.event_tag)
-        },
-        Effect.mapError(mapError("Failed to get latest event tag")),
-      ),
-
       getLatestEvent: Effect.fn("Storage.getLatestEvent")(
         function* ({ sessionId, branchId, tags }) {
           if (tags.length === 0) return undefined

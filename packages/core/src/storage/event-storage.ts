@@ -24,11 +24,6 @@ export interface EventStorageService {
     sessionId: SessionId
     branchId?: BranchId
   }) => Effect.Effect<number | undefined, StorageError>
-  readonly getLatestEventTag: (params: {
-    sessionId: SessionId
-    branchId: BranchId
-    tags: ReadonlyArray<AgentEventTag>
-  }) => Effect.Effect<AgentEventTag | undefined, StorageError>
   readonly getLatestEvent: (params: {
     sessionId: SessionId
     branchId: BranchId
