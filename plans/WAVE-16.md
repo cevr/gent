@@ -17,6 +17,8 @@ only retain Gent code where it owns product semantics.
   duplicate Effect or Effect AI primitives.
 - In: changes that reduce public surface or collapse duplicated state while
   preserving existing Gent behavior.
+- In: SQLite schema/data migrations and storage service rewrites when the
+  current shape is what keeps DTO mirrors or split read models alive.
 - In: commit-sized migrations with gate between commits.
 - Out: broad actor-engine deletion. The runtime audit found the actor engine
   already uses `Queue`, `Deferred`, `SubscriptionRef`, `Scope`, and `Stream`
@@ -53,6 +55,7 @@ For narrow commits, run a focused test first, then `bun run gate`.
 | Services / Layers     | `019de44c-fb8b-7e21-8e34-069e54c0324e` | Manual server contexts, duplicated `SessionProfile`, stale event router handle. |
 | Runtime / Concurrency | `019de44c-fb9f-7151-b217-6d7bd0095d4a` | Interaction `Map`s, queue mutation semaphore, event delivery queue/ack worker.  |
 | Extension API         | `019de44c-fbb0-7633-9bc6-9df50fed2f0b` | `ToolToken` parallel substrate, `tool-schema.ts`, resource descriptors.         |
+| Storage / Persistence | local follow-up                        | Storage rewrite is allowed where it deletes transport/read-model indirection.   |
 
 ## Accepted Findings
 
@@ -190,6 +193,35 @@ For narrow commits, run a focused test first, then `bun run gate`.
   and
   `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Ref.ts:426-434`.
 
+### Storage / Persistence Rewrite Allowance
+
+- `StorageService` is a broad legacy facade at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:25-145`,
+  and focused sub-tags are currently derived from that same facade at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:168-185`.
+  The plan may delete or invert that shape if direct focused services make the
+  boundary smaller.
+- Live/memory/test storage layer assembly repeats the same `base + sub-tags +
+extras` shape at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:261-348`.
+  Any profile/server composition cleanup may replace this with one shared
+  storage composition root instead of preserving all three variants.
+- The current SQLite schema keeps legacy `messages.parts` while also storing
+  chunked message content at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:470-510`
+  and encodes `legacyPartsJson` as an empty array at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts:177-184`.
+  A storage simplification pass may migrate data to one canonical message
+  content representation and drop the duplicate column after compatibility
+  backfills are proven.
+- Schema initialization already owns migrations, repair, indexes, and FTS
+  rebuilds at
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:341-391`
+  and
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:585-622`.
+  New migrations belong here, with rollback-free idempotent startup behavior and
+  dedicated tests against an old-shape database fixture.
+
 ## Commit Wave
 
 ### Commit 1: `refactor(provider): delete dead request bridges`
@@ -278,6 +310,22 @@ For narrow commits, run a focused test first, then `bun run gate`.
 **Verification**:
 
 - Focused message/session snapshot tests.
+- `bun run gate`
+
+### Commit 6.5: `refactor(storage): collapse message content storage`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `packages/core/src/storage/schema.ts` | Add an idempotent migration from legacy `messages.parts` to the single surviving content representation, then drop or ignore the duplicate field through a table rebuild if needed. |
+| `packages/core/src/storage/sqlite/rows.ts` | Remove `legacyPartsJson` once reads/writes use the canonical content table only. |
+| `packages/core/src/storage/sqlite/impl.ts` | Simplify message insert/read paths around the surviving schema. |
+| `packages/core/tests/storage/**` | Add an old-shape database fixture that proves migration, readback, search indexing, and `MessageReceived` event backfill. |
+
+**Verification**:
+
+- Focused storage migration tests.
+- Focused message/search tests.
 - `bun run gate`
 
 ### Commit 7: `refactor(sessions): own session tree projection in one layer`
@@ -394,13 +442,31 @@ For narrow commits, run a focused test first, then `bun run gate`.
 - Extension lifecycle/resource tests.
 - `bun run gate`
 
+### Commit 14: `refactor(storage): make focused stores primary`
+
+**Changes**:
+| File | Change |
+| --- | --- |
+| `packages/core/src/storage/sqlite-storage.ts` | Delete the broad `StorageService` facade if focused services cover all call sites, or reduce it to a private implementation detail. |
+| `packages/core/src/storage/*-storage.ts` | Own focused service construction directly instead of deriving every tag from one mega-service value. |
+| `packages/core/src/server/dependencies.ts` | Consume the shared storage composition root rather than manually merging storage-related tags. |
+| `packages/core/src/test-utils/**` | Keep one storage test layer shape for integration tests. |
+
+**Verification**:
+
+- Focused storage service tests.
+- Server dependency/profile tests.
+- `bun run gate`
+
 ## Review Checkpoints
 
 - After Commit 2: quick review for event semantics before touching interaction state.
 - After Commit 5: review composition/profile changes before transport churn.
+- After Commit 6.5: review storage schema and migration invariants before more
+  transport/session read-model deletion.
 - After Commit 8: review provider/model semantics before native tool migration.
 - After Commit 10: review tool migration and delete any temporary adapter seams.
-- After Commit 13: final recursive audit against this plan plus `effect-smol`.
+- After Commit 14: final recursive audit against this plan plus `effect-smol`.
 
 ## Completion Rule
 
