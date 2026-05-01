@@ -61,6 +61,24 @@ const encodeTaskMetadata = (metadata: unknown) =>
 const decodeTaskMetadata = (metadata: string | null) =>
   metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
 
+const requiredTaskColumns = [
+  "id",
+  "session_id",
+  "branch_id",
+  "subject",
+  "description",
+  "status",
+  "owner",
+  "agent_type",
+  "prompt",
+  "cwd",
+  "metadata",
+  "created_at",
+  "updated_at",
+] as const
+
+const requiredTaskDepColumns = ["task_id", "blocked_by_id"] as const
+
 const selectTaskById = (sql: SqlClient.SqlClient, id: TaskId) =>
   sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`.pipe(
     Effect.map((rows) => {
@@ -85,6 +103,44 @@ const taskFromRow = (row: TaskRow) =>
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   })
+
+const tableColumns = Effect.fn("TaskStorage.tableColumns")(function* (
+  sql: SqlClient.SqlClient,
+  table: "tasks" | "task_deps",
+) {
+  const rows = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(${table})`)
+  return new Set(rows.map((row) => row.name))
+})
+
+const tableNeedsReset = Effect.fn("TaskStorage.tableNeedsReset")(function* (
+  sql: SqlClient.SqlClient,
+  table: "tasks" | "task_deps",
+  requiredColumns: ReadonlyArray<string>,
+) {
+  const columns = yield* tableColumns(sql, table)
+  if (columns.size === 0) return false
+  return requiredColumns.some((column) => !columns.has(column))
+})
+
+const resetIncompatibleTaskTables = Effect.fn("TaskStorage.resetIncompatibleTaskTables")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  const resetTasks = yield* tableNeedsReset(sql, "tasks", requiredTaskColumns)
+  const resetTaskDeps = yield* tableNeedsReset(sql, "task_deps", requiredTaskDepColumns)
+  if (!resetTasks && !resetTaskDeps) return
+
+  yield* Effect.acquireUseRelease(
+    sql.unsafe(`PRAGMA foreign_keys = OFF`),
+    () =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql.unsafe(`DROP TABLE IF EXISTS task_deps`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS tasks`)
+        }),
+      ),
+    () => sql.unsafe(`PRAGMA foreign_keys = ON`),
+  )
+})
 
 /**
  * Read-only slice of the TaskStorage surface — list/get queries +
@@ -151,6 +207,8 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
     const sql = yield* SqlClient.SqlClient
 
     // Extension-owned DDL — fatal if this fails
+    yield* resetIncompatibleTaskTables(sql).pipe(Effect.orDie)
+
     const tasksCreateSql = `
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
