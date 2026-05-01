@@ -130,6 +130,14 @@ Accepted deletion targets from the audit:
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts` and
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools-storage.ts`
   should reset incompatible local state instead of migrating old table shapes.
+  Status: completed for core storage in `26273f9a`, then completed for
+  extension-owned task tables in `cdd76897` and tightened in `473bd055`.
+  The final predicate checks both required columns and required foreign-key
+  shape at
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools-storage.ts:115-175`.
+  The regression seeds a current core schema with stale extension task FKs and
+  proves reset, branch cascade, and missing-branch rejection at
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/task-storage.test.ts:58-185`.
 - Event tag shims:
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts`
   should stop translating retired `Subagent*` event tags.
@@ -366,12 +374,44 @@ the service they need.
 - Verify agent-loop actor tests, SessionRuntime RPC acceptance tests, then
   `bun run gate`.
 
+Status: still open after the final audit. Runtime loop ownership remains in
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:173-209`
+and
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:513-517`;
+`SessionRuntime` still delegates public commands directly to `AgentLoop` at
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:434-499`.
+This blocks Wave 16 closure.
+
 **Commit 3.3: `refactor(extensions): actorize stateful reactions`**
 
 - Split extension reactions into pure folds versus stateful runtime behavior.
 - Keep pure message/prompt/projection folds in the reaction compiler.
 - Move stateful turn/message/tool behavior to actor messages or actor views.
 - Verify extension reaction/actor-view tests, then `bun run gate`.
+
+Status: still open after the final audit. Pure folds may remain in
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:292-411`,
+but stateful turn/tool reactions still drive live coordination through manual
+loops at
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:521-534`,
+`/Users/cvr/Developer/personal/gent/packages/extensions/src/auto.ts:569-677`,
+and `/Users/cvr/Developer/personal/gent/packages/extensions/src/handoff.ts:73-124`.
+This blocks Wave 16 closure.
+
+**Commit 3.3b: `refactor(extensions): route turn control through actors`**
+
+- Replace `ExtensionTurnControl.Live`'s queue/owner/ack registry with the
+  session-loop actor protocol from Commit 3.2.
+- Delete the manual stream consumer in `AgentLoop` once follow-up queue control
+  is an actor message.
+- Verify queue follow-up tests, agent-loop runtime tests, and RPC acceptance
+  tests, then `bun run gate`.
+
+Status: open. The manual mailbox lives at
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/turn-control.ts:56-112`
+and is consumed by
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:2275-2310`.
+This blocks Wave 16 closure.
 
 **Commit 3.4: `audit(actor): decide local engine versus effect cluster`**
 
@@ -381,6 +421,34 @@ the service they need.
 - Do not change the engine unless the audit proves an immediate simplification.
 - Preserve ask/tell/snapshot/restart tests as executable evidence.
 - Verify actor engine tests, then `bun run gate`.
+
+Status: partially decided. The final audit reclassified current `ActorEngine`
+as an acceptable in-process actor host for now: actor refs, inboxes, state,
+snapshots, restarts, receptionist lookup, and subscriptions are owned at
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-engine.ts:171-230`
+and tested at
+`/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/actor-engine.test.ts:59-552`.
+No immediate Effect cluster migration is required before the session-loop actor
+work above.
+
+**Commit 3.5: `refactor(runtime): delete extension runtime marker`**
+
+- Delete the empty `ExtensionRuntime` service and route profile/session/server
+  dependencies through `ActorEngine`, `Receptionist`, `ExtensionRegistry`, and
+  `ExtensionTurnControl` directly.
+- Replace `ExtensionRuntime.Test()` helper usages with explicit actor-runtime
+  test layers.
+- Verify session-runtime-context, session-profile, rpc-handler, tool-runner,
+  agent-loop, and extension harness tests, then `bun run gate`.
+
+Status: open. The marker itself is empty at
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/extension-runtime.ts:12-27`,
+but it is threaded through profile/session/server/test contexts, for example
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts:339-358`,
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime-context.ts:26-35`,
+and
+`/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handler-groups/shared.ts:21-44`.
+This is a P2 bridge and should be deleted before Wave 16 closes.
 
 ### Phase 4: Collapse Transport And Storage Mirrors
 
