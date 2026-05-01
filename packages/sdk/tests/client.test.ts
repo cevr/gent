@@ -5,8 +5,8 @@ import {
   extractImages,
   extractToolCalls,
   buildToolResultMap,
-  MessageInfo,
-  type MessageInfoReadonly,
+  Message,
+  type Message as DomainMessage,
 } from "../src/index"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ToolResultPart } from "@gent/core/domain/message"
@@ -50,8 +50,8 @@ describe("sdk client helpers", () => {
   })
 
   test("buildToolResultMap indexes tool outputs by call id", () => {
-    const messages: MessageInfoReadonly[] = [
-      MessageInfo.Regular.make({
+    const messages: DomainMessage[] = [
+      Message.Regular.make({
         id: MessageId.make("m1"),
         sessionId: SessionId.make("s1"),
         branchId: BranchId.make("b1"),

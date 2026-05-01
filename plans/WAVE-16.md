@@ -351,6 +351,11 @@ the service they need.
 - Delete `messageToInfo` and event-to-transport remapping.
 - Verify message/session snapshot tests, then `bun run gate`.
 
+Status: completed in two reviewable commits. The first removed server-side
+message transport conversion and e2e-verified the runtime boundary; the second
+migrated SDK/TUI consumers to domain `Message` while keeping `MessageInfo` as a
+compatibility export.
+
 **Commit 4.2: `refactor(storage): collapse message content storage`**
 
 - Add an idempotent migration from legacy `messages.parts` to the single

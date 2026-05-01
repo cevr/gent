@@ -23,7 +23,7 @@ import {
   extractImages,
   buildToolResultMap,
   extractToolCallsWithResults,
-  type MessageInfoReadonly,
+  type Message as DomainMessage,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
 import type { SessionEvent } from "../components/session-event-label"
@@ -66,11 +66,8 @@ const isMessage = (item: SessionItem): item is Message =>
 
 // ── Build messages from raw ──
 
-const messageTimestamp = (createdAt: MessageInfoReadonly["createdAt"]): number =>
-  createdAt instanceof Date ? createdAt.getTime() : createdAt
-
 const buildSegments = (
-  parts: MessageInfoReadonly["parts"],
+  parts: DomainMessage["parts"],
   resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
 ): AssistantSegment[] => {
   const segments: AssistantSegment[] = []
@@ -114,7 +111,7 @@ const buildSegments = (
   return segments
 }
 
-const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
+const buildMessages = (msgs: readonly DomainMessage[]): Message[] => {
   const resultMap = buildToolResultMap(msgs)
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
@@ -127,7 +124,7 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       content: extractText(m.parts),
       reasoning: extractReasoning(m.parts),
       images: extractImages(m.parts),
-      createdAt: messageTimestamp(m.createdAt),
+      createdAt: m.createdAt.getTime(),
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       segments,
       metadata: m.metadata,
@@ -140,7 +137,7 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
 
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
-  message: MessageInfoReadonly,
+  message: DomainMessage,
 ) => {
   const next = buildMessages([message])[0]
   if (next === undefined) return

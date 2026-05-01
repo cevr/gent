@@ -1,4 +1,8 @@
 // Shared transport contract
+export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/domain/queue.js"
+
+export { Message } from "@gent/core/domain/message.js"
+
 export {
   SessionInfo,
   BranchInfo,
@@ -44,7 +48,6 @@ export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 export { probeRegistryEntryIdentity } from "./server.js"
 
 // Message types
-export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/domain/queue.js"
 export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.js"
 
 // Part types (re-exported from @gent/core)

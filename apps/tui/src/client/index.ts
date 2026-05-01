@@ -3,7 +3,7 @@ export {
   type GentNamespacedClient,
   type GentRuntime,
   type GentRpcError,
-  type MessageInfoReadonly,
+  type Message,
   type SessionInfo,
   type BranchInfo,
   type BranchTreeNode,

@@ -5,11 +5,11 @@ import {
   extractToolCalls,
   buildToolResultMap,
   extractToolCallsWithResults,
-  type MessageInfoReadonly,
+  Message,
+  type Message as DomainMessage,
 } from "@gent/sdk"
 import { type MessagePart, ToolCallPart, ToolResultPart, TextPart } from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { MessageInfo } from "@gent/core/server/transport-contract"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
@@ -135,11 +135,8 @@ describe("extractToolCalls", () => {
 })
 
 describe("buildToolResultMap", () => {
-  const makeMsg = (
-    role: "user" | "assistant" | "tool",
-    parts: MessagePart[],
-  ): MessageInfoReadonly =>
-    MessageInfo.Regular.make({
+  const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
+    Message.Regular.make({
       id: MessageId.make(Bun.randomUUIDv7()),
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
@@ -159,7 +156,7 @@ describe("buildToolResultMap", () => {
     })
 
   test("builds map from tool messages", () => {
-    const messages: MessageInfoReadonly[] = [
+    const messages: DomainMessage[] = [
       makeMsg("assistant", [
         ToolCallPart.make({
           type: "tool-call",
@@ -181,9 +178,7 @@ describe("buildToolResultMap", () => {
   })
 
   test("handles error results", () => {
-    const messages: MessageInfoReadonly[] = [
-      makeMsg("tool", [toolResult("tc1", "File not found", true)]),
-    ]
+    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", "File not found", true)])]
 
     const map = buildToolResultMap(messages)
     expect(map.get("tc1")).toEqual({
@@ -195,7 +190,7 @@ describe("buildToolResultMap", () => {
 
   test("truncates long output in summary", () => {
     const longText = "x".repeat(150)
-    const messages: MessageInfoReadonly[] = [makeMsg("tool", [toolResult("tc1", longText)])]
+    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", longText)])]
 
     const map = buildToolResultMap(messages)
     const result = map.get("tc1")!
@@ -206,14 +201,14 @@ describe("buildToolResultMap", () => {
 
   test("summary uses first line only", () => {
     const multiline = "First line\nSecond line\nThird line"
-    const messages: MessageInfoReadonly[] = [makeMsg("tool", [toolResult("tc1", multiline)])]
+    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", multiline)])]
 
     const map = buildToolResultMap(messages)
     expect(map.get("tc1")?.summary).toBe("First line")
   })
 
   test("handles object output", () => {
-    const messages: MessageInfoReadonly[] = [
+    const messages: DomainMessage[] = [
       makeMsg("tool", [toolResult("tc1", { files: ["a.ts", "b.ts"] })]),
     ]
 
@@ -224,7 +219,7 @@ describe("buildToolResultMap", () => {
   })
 
   test("handles multiple tool results", () => {
-    const messages: MessageInfoReadonly[] = [
+    const messages: DomainMessage[] = [
       makeMsg("tool", [toolResult("tc1", "result1"), toolResult("tc2", "result2")]),
     ]
 
@@ -235,7 +230,7 @@ describe("buildToolResultMap", () => {
   })
 
   test("ignores non-tool messages", () => {
-    const messages: MessageInfoReadonly[] = [
+    const messages: DomainMessage[] = [
       makeMsg("user", [TextPart.make({ type: "text", text: "Hello" })]),
       makeMsg("assistant", [TextPart.make({ type: "text", text: "Hi there" })]),
     ]

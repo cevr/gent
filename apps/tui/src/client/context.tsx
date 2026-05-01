@@ -40,7 +40,7 @@ import type {
   GentNamespacedClient,
   GentRuntime,
   GentRpcError,
-  MessageInfoReadonly,
+  Message,
   QueueSnapshot,
   SessionInfo,
   BranchInfo,
@@ -143,7 +143,7 @@ export interface ClientSessionValue {
   ) => Effect.Effect<void, GentRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
+  listMessages: () => Effect.Effect<readonly Message[], GentRpcError>
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
@@ -615,7 +615,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     listMessages: () => {
       const s = session()
-      if (s === null) return Effect.succeed([] as readonly MessageInfoReadonly[])
+      if (s === null) return Effect.succeed([] as readonly Message[])
       return client.message.list({ branchId: s.branchId })
     },
 

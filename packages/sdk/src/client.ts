@@ -13,7 +13,6 @@ import {
   GentConnectionError,
   type ConnectionState,
   type GentLifecycle,
-  type MessageInfoReadonly,
   type SteerCommand,
   type SessionInfo,
   type BranchInfo,
@@ -31,6 +30,7 @@ import type { PermissionRule } from "@gent/core/domain/permission.js"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
 import type {
+  Message,
   MessagePart,
   TextPart,
   ReasoningPart,
@@ -71,6 +71,7 @@ export type {
   AuthProviderInfo,
   AuthAuthorization,
   AuthMethod,
+  Message,
   SessionId,
   BranchId,
   MessageId,
@@ -80,7 +81,6 @@ export type {
 export type {
   GentLifecycle,
   ConnectionState,
-  MessageInfoReadonly,
   SteerCommand,
   SessionInfo,
   BranchInfo,
@@ -143,7 +143,7 @@ export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCa
 }
 
 export function buildToolResultMap(
-  messages: readonly MessageInfoReadonly[],
+  messages: readonly Message[],
 ): Map<string, { summary: string; output: string; isError: boolean }> {
   const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
 
