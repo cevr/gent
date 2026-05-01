@@ -80,13 +80,39 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
           cause,
         })
 
+      const discardInvalidAuth = Effect.fn("AuthStore.discardInvalidAuth")(function* (
+        provider: string,
+        cause: unknown,
+      ) {
+        yield* storage.delete(provider).pipe(
+          Effect.catchEager((deleteCause) =>
+            Effect.logWarning("failed to discard invalid auth info").pipe(
+              Effect.annotateLogs({
+                provider,
+                cause: String(deleteCause),
+              }),
+            ),
+          ),
+        )
+        yield* Effect.logWarning("discarded invalid auth info").pipe(
+          Effect.annotateLogs({
+            provider,
+            cause: String(cause),
+          }),
+        )
+        return undefined as AuthInfo | undefined
+      })
+
+      const decodeStored = (provider: string, raw: string) =>
+        decode(raw).pipe(Effect.catchEager((e) => discardInvalidAuth(provider, e)))
+
       return AuthStore.of({
         get: (provider) =>
           storage.get(provider).pipe(
             Effect.mapError(authStorageError("Failed to read auth info")),
             Effect.flatMap((raw) =>
               raw !== undefined && raw.length > 0
-                ? decode(raw)
+                ? decodeStored(provider, raw)
                 : Effect.sync(() => undefined as AuthInfo | undefined),
             ),
             Effect.withSpan("AuthStore.get"),
@@ -134,7 +160,11 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
                     Effect.mapError(authStorageError("Failed to read auth info")),
                     Effect.flatMap((raw) =>
                       raw !== undefined && raw.length > 0
-                        ? decode(raw).pipe(Effect.map((info) => [provider, info] as const))
+                        ? decodeStored(provider, raw).pipe(
+                            Effect.map((info) =>
+                              info === undefined ? null : ([provider, info] as const),
+                            ),
+                          )
                         : Effect.succeed(null),
                     ),
                   ),

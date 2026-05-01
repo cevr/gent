@@ -29,11 +29,13 @@ describe("AuthStore", () => {
     ),
   )
 
-  it.live("old OAuth JSON fails closed", () =>
+  it.live("old OAuth JSON is discarded", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
-      const result = yield* Effect.exit(auth.get("openai"))
-      expect(result._tag).toBe("Failure")
+      const result = yield* auth.get("openai")
+      expect(result).toBeUndefined()
+      const providers = yield* auth.list()
+      expect(providers).not.toContain("openai")
     }).pipe(
       Effect.provide(
         storeLayer({
@@ -44,19 +46,40 @@ describe("AuthStore", () => {
     ),
   )
 
-  it.live("invalid auth payloads fail closed", () =>
+  it.live("invalid auth payloads are discarded", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
-      const rawKey = yield* Effect.exit(auth.get("openai"))
-      expect(rawKey._tag).toBe("Failure")
+      const rawKey = yield* auth.get("openai")
+      expect(rawKey).toBeUndefined()
 
-      const invalidJson = yield* Effect.exit(auth.get("broken"))
-      expect(invalidJson._tag).toBe("Failure")
+      const invalidJson = yield* auth.get("broken")
+      expect(invalidJson).toBeUndefined()
+      const providers = yield* auth.list()
+      expect(providers).toEqual([])
     }).pipe(
       Effect.provide(
         storeLayer({
           openai: "sk-raw",
           broken: '{"type":"oauth","access":"missing-required-fields"}',
+        }),
+      ),
+    ),
+  )
+
+  it.live("listInfo omits and discards invalid auth payloads", () =>
+    Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const result = yield* auth.listInfo()
+      expect(Object.keys(result)).toEqual(["anthropic"])
+      expect(result["anthropic"]?.type).toBe("api")
+      const providers = yield* auth.list()
+      expect(providers).toEqual(["anthropic"])
+    }).pipe(
+      Effect.provide(
+        storeLayer({
+          anthropic: apiJson("key1"),
+          openai:
+            '{"type":"oauth","access":"access-token","refresh":"refresh-token","expires":4102444800000}',
         }),
       ),
     ),
