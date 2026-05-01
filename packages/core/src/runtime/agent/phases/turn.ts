@@ -8,7 +8,7 @@ import {
   type AgentName as AgentNameType,
   type RunSpec,
 } from "../../../domain/agent.js"
-import type { ToolToken } from "../../../domain/capability/tool.js"
+import { getToolMetadata, type ToolToken } from "../../../domain/capability/tool.js"
 import { calculateCost, type ModelId } from "../../../domain/model.js"
 import { ConfigService } from "../../config-service.js"
 import type { InteractionPendingError } from "../../../domain/interaction-request.js"
@@ -599,7 +599,10 @@ export const executeToolCalls = (params: {
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getModelCapability(toolCall.toolName)
-        const result = yield* params.resourceManager.withNeeds(tool?.needs ?? [], run)
+        const result = yield* params.resourceManager.withNeeds(
+          tool !== undefined ? (getToolMetadata(tool).needs ?? []) : [],
+          run,
+        )
 
         const outputSummary = summarizeToolOutput(result)
         const isError = result.output.type === "error-json"

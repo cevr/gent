@@ -9,11 +9,12 @@ import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-// Tool .effect signatures cross the erased runtime leaf boundary
-// cast in tool(). Tests provide everything via ctx; narrow R to never for it.live.
+// Tool execution flows through Gent metadata on the native Effect tool.
+// Tests provide everything via ctx; narrow R to never for it.live.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
@@ -99,7 +100,7 @@ describe("Audit Tool", () => {
       })
 
       return narrowR(
-        AuditTool.effect(
+        getToolEffect(AuditTool)(
           {
             prompt: "check error handling",
             paths: ["src/foo.ts", "src/bar.ts"],
@@ -155,7 +156,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      AuditTool.effect({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
+      getToolEffect(AuditTool)({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.findings.length).toBe(1)
           const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
@@ -172,7 +173,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      AuditTool.effect({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
+      getToolEffect(AuditTool)({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.findings.length).toBe(0)
           expect(result.output).toBe("No findings to fix.")
@@ -205,7 +206,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+      getToolEffect(AuditTool)({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           expect(executorAgents.length).toBeGreaterThan(0)
           expect(executorAgents[0]).toBe("cowork")
@@ -238,7 +239,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+      getToolEffect(AuditTool)({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           expect(auditOverrides.length).toBeGreaterThan(0)
           for (const overrides of auditOverrides) {

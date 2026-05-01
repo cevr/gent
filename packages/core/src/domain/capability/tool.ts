@@ -18,38 +18,65 @@
  * @module
  */
 
-import { type Effect, Schema } from "effect"
-import type {
-  CapabilityEffect,
-  ErasedCapabilityEffect,
-  ModelCapabilityContext,
-} from "../capability.js"
+import { Context, type Effect, Schema } from "effect"
+import * as AiTool from "effect/unstable/ai/Tool"
+import type { CapabilityEffect, ModelCapabilityContext } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { ToolNeed } from "../tool.js"
 
-/**
- * `ToolToken` — `tool({...})` return type. The `ExtensionContributions.tools`
- * bucket is the discrimination; non-tool leaves (`request`, `action`) cannot
- * be slotted into `tools:`.
- */
 declare const ToolTokenBrand: unique symbol
-export interface ToolToken<Input = unknown, Output = unknown> {
-  readonly [ToolTokenBrand]: true
+declare const ToolTokenType: unique symbol
+export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
-  readonly description: string
   readonly intent: "read" | "write"
   readonly input: Schema.Schema<Input>
-  readonly output: Schema.Schema<Output>
+  readonly output: Schema.Schema<unknown>
   readonly needs?: ReadonlyArray<ToolNeed>
   readonly promptSnippet?: string
   readonly promptGuidelines?: ReadonlyArray<string>
   readonly interactive?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
-  readonly effect: ErasedCapabilityEffect
+  readonly effect: CapabilityEffect<Input, Output, never, Error>
 }
+
+export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefined>(
+  "@gent/core/src/domain/capability/tool/GentToolMetadata",
+  { defaultValue: () => undefined },
+)
+
+/**
+ * `ToolToken` — `tool({...})` return type. Gent tools are native Effect AI
+ * tools annotated with Gent execution metadata. Runtime code reads Gent-only
+ * fields from the annotation instead of widening Effect's tool surface.
+ */
+export type ToolToken<Input = unknown, Output = unknown, Error = unknown> = AiTool.Any & {
+  readonly [ToolTokenBrand]?: true
+  readonly [ToolTokenType]?: {
+    readonly input: Input
+    readonly output: Output
+    readonly error: Error
+  }
+}
+
+export const getToolMetadata = <Input, Output, Error>(
+  tool: ToolToken<Input, Output, Error>,
+): GentToolMetadata<Input, Output, Error> => {
+  const metadata = Context.get(tool.annotations, GentToolMetadataTag)
+  if (metadata === undefined) {
+    throw new Error(`Tool "${tool.name}" is missing Gent metadata`)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken carries Input/Output as a phantom type; annotation storage is intentionally heterogeneous.
+  return metadata as GentToolMetadata<Input, Output, Error>
+}
+
+export const getToolId = (tool: ToolToken): ToolId => getToolMetadata(tool).id
+
+export const getToolEffect = <Input, Output, Error>(
+  tool: ToolToken<Input, Output, Error>,
+): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
 
 /** Context passed to `tool({...}).execute`. Same shape as the wide
  *  `ModelCapabilityContext` but with `toolCallId` narrowed to required.
@@ -129,16 +156,14 @@ export const tool = <
   Deps,
 >(
   input: ToolInput<Params, Result, Error, Deps>,
-): ToolToken<Schema.Schema.Type<Params>, Result> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken brand applied at factory boundary
-  ({
-    id: ToolId.make(input.id),
-    description: input.description,
+): ToolToken<Schema.Schema.Type<Params>, Result, Error> => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
+  const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
+  const id = ToolId.make(input.id)
+  const metadata: GentToolMetadata<Schema.Schema.Type<Params>, Result, Error> = {
+    id,
     intent: input.intent ?? "write",
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    input: input.params as Schema.Schema<unknown>,
-    // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
-    // Tools needing typed-output validation should author through `request(...)`.
+    input: params,
     output: Schema.Unknown,
     ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
@@ -150,5 +175,18 @@ export const tool = <
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as CapabilityEffect<Schema.Schema.Type<Params>, Result, Deps, Error>,
-  }) as unknown as ToolToken<Schema.Schema.Type<Params>, Result>
+    effect: input.execute as CapabilityEffect<Schema.Schema.Type<Params>, Result, never, Error>,
+  }
+
+  const native = AiTool.dynamic(input.id, {
+    description: input.description,
+    parameters: params,
+    success: Schema.Unknown,
+  })
+    .annotate(GentToolMetadataTag, metadata)
+    .annotate(AiTool.Readonly, metadata.intent === "read")
+    .annotate(AiTool.Destructive, metadata.intent === "write")
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- `tool` brands Effect's native Tool with a compile-time-only Gent marker.
+  return native as ToolToken<Schema.Schema.Type<Params>, Result, Error>
+}

@@ -57,7 +57,12 @@ import type { Behavior } from "../domain/actor.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionToken } from "../domain/capability/action.js"
 import type { RequestToken } from "../domain/capability/request.js"
-import type { ToolToken } from "../domain/capability/tool.js"
+import {
+  getToolEffect,
+  getToolId,
+  getToolMetadata,
+  type ToolToken,
+} from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -212,8 +217,13 @@ export { Receptionist } from "../runtime/extensions/receptionist.js"
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
 export {
+  getToolId,
+  getToolEffect,
+  getToolMetadata,
   tool,
+  GentToolMetadataTag,
   type ToolCapabilityContext,
+  type GentToolMetadata,
   type ToolInput,
   type ToolToken,
 } from "../domain/capability/tool.js"
@@ -416,14 +426,15 @@ const resolveField = <A>(
  */
 const checkBucketIds = (
   bucket: string,
-  entries: ReadonlyArray<{ readonly id: string }>,
+  entries: ReadonlyArray<{ readonly id: string } | ToolToken>,
   capIds: Map<string, string>,
 ): string | undefined => {
   for (const [i, cap] of entries.entries()) {
-    if (capIds.has(cap.id)) {
-      return `${bucket}[${i}] (${cap.id}): duplicate id within extension (also at ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+    const id = "parametersSchema" in cap ? getToolId(cap) : cap.id
+    if (capIds.has(id)) {
+      return `${bucket}[${i}] (${id}): duplicate id within extension (also at ${capIds.get(id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
     }
-    capIds.set(cap.id, `${bucket}[${i}]`)
+    capIds.set(id, `${bucket}[${i}]`)
   }
   return undefined
 }
@@ -432,13 +443,12 @@ const checkBucketIds = (
  * Tools require a non-empty description because the model sees it as the tool
  * description. Bucket shape makes non-tool leaves unreachable here.
  */
-const checkToolDescriptions = (
-  tools: ReadonlyArray<{ readonly id: string; readonly description?: string }>,
-): string | undefined => {
+const checkToolDescriptions = (tools: ReadonlyArray<ToolToken>): string | undefined => {
   for (const [i, cap] of tools.entries()) {
     if (cap.description === undefined || cap.description === "") {
-      return `tools[${i}] (${cap.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
+      return `tools[${i}] (${getToolId(cap)}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
     }
+    getToolMetadata(cap)
   }
   return undefined
 }

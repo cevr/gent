@@ -24,7 +24,7 @@ import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import type { ActionToken } from "../../domain/capability/action.js"
 import type { RequestToken } from "../../domain/capability/request.js"
-import type { ToolToken } from "../../domain/capability/tool.js"
+import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
@@ -132,7 +132,11 @@ const compileCapabilityWinners = (
     // for each extension so a later-scope contribution from any bucket
     // shadows an earlier registration with the same id.
     for (const cap of ext.contributions.tools ?? []) {
-      winners.set(String(cap.id), { kind: "tool", extensionId: ext.manifest.id, capability: cap })
+      winners.set(String(getToolId(cap)), {
+        kind: "tool",
+        extensionId: ext.manifest.id,
+        capability: cap,
+      })
     }
     for (const cap of ext.contributions.commands ?? []) {
       winners.set(String(cap.id), {
@@ -173,10 +177,12 @@ const resolveCapabilityEntry = (
 ): RegisteredCapabilityEntry | undefined => {
   for (let i = entries.length - 1; i >= 0; i--) {
     const candidate = entries[i]
+    const candidateId =
+      candidate?.kind === "tool" ? getToolId(candidate.capability) : candidate?.capability.id
     if (
       candidate !== undefined &&
       candidate.extensionId === extensionId &&
-      candidate.capability.id === capabilityId
+      candidateId === capabilityId
     ) {
       return candidate
     }
@@ -352,7 +358,8 @@ export const resolveExtensions = (
   // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
-    if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
+    const prompt = "parametersSchema" in cap ? getToolMetadata(cap).prompt : cap.prompt
+    if (prompt) promptSectionsMap.set(prompt.id, prompt)
   }
 
   // Permission rules are collected from WINNERS, not raw extractions:
@@ -360,7 +367,9 @@ export const resolveExtensions = (
   // builtin denies.
   const permissionRules: PermissionRule[] = []
   for (const { capability: cap } of capabilityWinners.values()) {
-    if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
+    const rules =
+      "parametersSchema" in cap ? getToolMetadata(cap).permissionRules : cap.permissionRules
+    if (rules) permissionRules.push(...rules)
   }
 
   const extensionReactions = compileExtensionReactions(sorted)
@@ -420,7 +429,7 @@ export const compileToolPolicy = (
   runContext: RunContext,
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  const allToolsByName = new Map(allTools.map((t) => [String(t.id), t]))
+  const allToolsByName = new Map(allTools.map((t) => [String(getToolId(t)), t]))
 
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
@@ -438,7 +447,7 @@ export const compileToolPolicy = (
       })
     } else {
       if (policy.include !== undefined) {
-        const existing = new Set(tools.map((t) => String(t.id)))
+        const existing = new Set(tools.map((t) => String(getToolId(t))))
         for (const name of policy.include) {
           if (!existing.has(name)) {
             const t = allToolsByName.get(name)
@@ -451,7 +460,7 @@ export const compileToolPolicy = (
       }
       if (policy.exclude !== undefined) {
         const excludeSet = new Set(policy.exclude)
-        tools = tools.filter((t) => !excludeSet.has(String(t.id)))
+        tools = tools.filter((t) => !excludeSet.has(String(getToolId(t))))
       }
     }
   }
@@ -461,7 +470,7 @@ export const compileToolPolicy = (
 
   // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
   if (runContext.interactive === false) {
-    tools = tools.filter((t) => t.interactive !== true)
+    tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }
 
   // 6. Collect extension-contributed prompt sections
@@ -581,7 +590,11 @@ export const listSlashCommands = (
   const winners = new Map<string, RegisteredCapabilityEntry>()
   for (const ext of sortExtensionsByScope(extensions)) {
     for (const cap of ext.contributions.tools ?? []) {
-      winners.set(String(cap.id), { kind: "tool", extensionId: ext.manifest.id, capability: cap })
+      winners.set(String(getToolId(cap)), {
+        kind: "tool",
+        extensionId: ext.manifest.id,
+        capability: cap,
+      })
     }
     for (const cap of ext.contributions.commands ?? []) {
       winners.set(String(cap.id), {
@@ -630,7 +643,7 @@ const filterToolsForAgent = (
 
   if (agent.allowedTools !== undefined) {
     const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => names.has(String(t.id)))
+    tools = allTools.filter((t) => names.has(String(getToolId(t))))
   } else {
     tools = [...allTools]
   }
@@ -646,5 +659,5 @@ const filterToolsForAgent = (
 const applyDenyFilter = (tools: ReadonlyArray<ToolToken>, agent: AgentDefinition): ToolToken[] => {
   if (agent.deniedTools === undefined) return [...tools]
   const denied = new Set(agent.deniedTools)
-  return tools.filter((t) => !denied.has(String(t.id)))
+  return tools.filter((t) => !denied.has(String(getToolId(t))))
 }

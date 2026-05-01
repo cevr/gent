@@ -5,6 +5,9 @@ type ToolSchemaCarrier =
       readonly input: Schema.Schema<unknown>
     }
   | {
+      readonly parametersSchema: Schema.Schema<unknown>
+    }
+  | {
       readonly params: Schema.Schema<unknown>
     }
 
@@ -45,7 +48,14 @@ export function flattenAllOf(schema: Record<string, unknown>): Record<string, un
 }
 
 export function buildToolJsonSchema(source: ToolSchemaCarrier): Record<string, unknown> {
-  const schema = "input" in source ? source.input : source.params
+  let schema: Schema.Schema<unknown>
+  if ("parametersSchema" in source) {
+    schema = source.parametersSchema
+  } else if ("input" in source) {
+    schema = source.input
+  } else {
+    schema = source.params
+  }
   const doc = Schema.toJsonSchemaDocument(schema)
   const merged =
     Object.keys(doc.definitions).length > 0 ? { ...doc.schema, $defs: doc.definitions } : doc.schema

@@ -39,7 +39,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
 import { Agents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
@@ -366,7 +366,9 @@ describe("external turn execution", () => {
       expect(capturedCtx!.agent.name).toBe(AgentName.make("test-external"))
       expect(capturedCtx!.cwd).toBe("/tmp")
       expect(capturedCtx!.abortSignal).toBeDefined()
-      expect(capturedCtx!.tools.map((candidate) => String(candidate.id))).toEqual(["context_probe"])
+      expect(capturedCtx!.tools.map((candidate) => String(getToolId(candidate)))).toEqual([
+        "context_probe",
+      ])
     }),
   )
   it.live("executor receives all live user message parts", () =>

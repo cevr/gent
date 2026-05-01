@@ -13,6 +13,7 @@ import {
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
+import { getToolId, getToolMetadata } from "../../domain/capability/tool.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -256,7 +257,7 @@ export const collectValidationFailures = (
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
-    (cap) => cap.id,
+    (cap) => getToolId(cap),
     "tool",
   )
   collectScopedCollisions(
@@ -288,9 +289,11 @@ export const collectValidationFailures = (
   // mirrors the legacy promptSection contribution's id-keyed dedup.
   collectScopedCollisions(
     (cs) =>
-      [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? [])]
-        .map((c) => c.prompt)
-        .filter((p): p is PromptSection => p !== undefined),
+      [
+        ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),
+        ...(cs.commands ?? []).map((command) => command.prompt),
+        ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
+      ].filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,
     "prompt section",
   )
@@ -304,7 +307,7 @@ export const collectValidationFailures = (
       if (trimmed.length === 0) {
         addFailure(
           ext,
-          `Tool "${cap.id}" is missing a non-empty description (the LLM tool schema requires one).`,
+          `Tool "${getToolId(cap)}" is missing a non-empty description (the LLM tool schema requires one).`,
         )
       }
     }

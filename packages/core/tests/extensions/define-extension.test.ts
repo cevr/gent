@@ -15,6 +15,8 @@ import {
   defineStatefulExtension,
   defineToolExtension,
   defineUiExtension,
+  getToolId,
+  getToolMetadata,
   request,
   tool,
 } from "@gent/core/extensions/api"
@@ -129,9 +131,11 @@ describe("defineExtension", () => {
       })
       const contributions = yield* setupOf(ext)
       const modelCaps = contributions.tools ?? []
-      expect(String(modelCaps[0]?.id)).toBe("echo")
-      expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
-      expect(modelCaps[0]?.prompt?.id).toBe("rules")
+      const modelCapMetadata =
+        modelCaps[0] !== undefined ? getToolMetadata(modelCaps[0]) : undefined
+      expect(String(modelCaps[0] === undefined ? undefined : getToolId(modelCaps[0]))).toBe("echo")
+      expect(modelCapMetadata?.permissionRules?.[0]?.tool).toBe("echo")
+      expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
       expect(contributions.reactions?.systemPrompt).toBeDefined()
       const resources = contributions.resources ?? []
@@ -200,7 +204,13 @@ describe("defineExtension", () => {
           }),
       })
       const contributions = yield* setupOf(ext)
-      expect(String((contributions.tools ?? [])[0]?.id)).toBe("from-effect")
+      expect(
+        String(
+          (contributions.tools ?? [])[0] === undefined
+            ? undefined
+            : getToolId((contributions.tools ?? [])[0]!),
+        ),
+      ).toBe("from-effect")
     }),
   )
 
@@ -244,7 +254,13 @@ describe("defineExtension", () => {
         contributions,
       }
       const resolved = resolveExtensions([loaded])
-      expect(String(resolved.modelCapabilities.get("from-define")?.id)).toBe("from-define")
+      expect(
+        String(
+          resolved.modelCapabilities.get("from-define") === undefined
+            ? undefined
+            : getToolId(resolved.modelCapabilities.get("from-define")!),
+        ),
+      ).toBe("from-define")
 
       const compiled = compileExtensionReactions([loaded])
       const result = yield* compiled.resolveSystemPrompt(
@@ -307,7 +323,7 @@ describe("defineExtension", () => {
       const statefulContribs = yield* setupOf(statefulExt)
       const uiContribs = yield* setupOf(uiExt)
 
-      expect(toolContribs.tools?.map((t) => String(t.id))).toEqual(["helper-tool-call"])
+      expect(toolContribs.tools?.map((t) => String(getToolId(t)))).toEqual(["helper-tool-call"])
       expect(statefulContribs.actors).toHaveLength(1)
       expect(statefulContribs.rpc?.map((r) => String(r.id))).toEqual(["read-snapshot"])
       expect(uiExt.client).toBe(uiClient)

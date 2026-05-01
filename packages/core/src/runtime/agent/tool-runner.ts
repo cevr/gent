@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import type { ToolToken } from "../../domain/capability/tool.js"
+import { getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
 import { type ToolContext } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
@@ -103,6 +103,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               )
               return errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`)
             }
+            const metadata = getToolMetadata(tool)
 
             // Run permission.check interceptor, falling back to base Permission service
             const permCheckResult = yield* runPermissionCheck({
@@ -140,9 +141,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, "Permission denied")
             }
 
-            const decodedInput = yield* Schema.decodeUnknownEffect(tool.input)(toolCall.input).pipe(
-              Effect.result,
-            )
+            const decodedInput = yield* Schema.decodeUnknownEffect(metadata.input)(
+              toolCall.input,
+            ).pipe(Effect.result)
             if (decodedInput._tag === "Failure") {
               const failure = decodedInput.failure
               const message = Schema.isSchemaError(failure)
@@ -170,13 +171,13 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                 },
                 () => {
                   const wrapped = Effect.gen(function* () {
-                    const output = yield* tool.effect(
+                    const output = yield* metadata.effect(
                       decodedInput.success,
                       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                      ctx as Parameters<typeof tool.effect>[1],
+                      ctx as Parameters<typeof metadata.effect>[1],
                     )
                     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                    yield* Schema.encodeUnknownEffect(tool.output as Schema.Any)(output).pipe(
+                    yield* Schema.encodeUnknownEffect(metadata.output as Schema.Any)(output).pipe(
                       Effect.orDie,
                     )
                     return output

@@ -8,10 +8,11 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-// Tool .effect crosses the erased runtime leaf boundary in tool().
+// Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -72,7 +73,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      ReviewTool.effect(
+      getToolEffect(ReviewTool)(
         { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
         ctx,
       ).pipe(
@@ -118,7 +119,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
+      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.comments.length).toBe(1)
           expect(result.comments[0]!.severity).toBe("high")
@@ -143,7 +144,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
+      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
         Effect.flip,
         Effect.map((error) => {
           expect(error._tag).toBe("ReviewError")
@@ -193,7 +194,10 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      ReviewTool.effect({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
+      getToolEffect(ReviewTool)(
+        { description: "test", content: "fake diff", mode: "fix" },
+        ctx,
+      ).pipe(
         Effect.map((result) => {
           expect(result.output).toBe("Applied fixes.")
           expect(
@@ -228,7 +232,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
+      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.session).toBeUndefined()
         }),

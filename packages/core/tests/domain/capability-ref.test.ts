@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
-import { action, ref, request, tool } from "@gent/core/extensions/api"
+import { action, getToolId, ref, request, tool } from "@gent/core/extensions/api"
 import type { CommandId, RpcId, ToolId } from "@gent/core/domain/ids"
 import { ExtensionId } from "@gent/core/domain/ids"
 
@@ -40,7 +40,7 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed({ n: 1 }),
     })
 
-    const toolId: ToolId = toolToken.id
+    const toolId: ToolId = getToolId(toolToken)
     const commandId: CommandId = actionToken.id
     const rpcId: RpcId = requestToken.id
     expect([String(toolId), String(commandId), String(rpcId)]).toEqual([

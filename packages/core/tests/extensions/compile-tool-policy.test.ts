@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/extensions/registry"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -39,7 +39,7 @@ describe("compileToolPolicy", () => {
 
   const emptyCtx = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
 
-  const names = (tools: ReadonlyArray<{ id: string }>) => tools.map((t) => String(t.id)).sort()
+  const names = (tools: ReadonlyArray<ToolToken>) => tools.map((t) => String(getToolId(t))).sort()
 
   test("no allow-list → all tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })

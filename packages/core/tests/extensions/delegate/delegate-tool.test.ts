@@ -7,6 +7,7 @@ import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { ModelId } from "@gent/core/domain/model"
 import { SessionId } from "@gent/core/domain/ids"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -59,10 +60,15 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect({ agent: "explore", task: "hello" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), task: "hello" }, ctx).pipe(
         Effect.map((result) => {
+          if (!("output" in result) || result.output === undefined) {
+            throw new Error("expected delegate output")
+          }
           expect(result.output).toBe("explore:hello")
-          expect(result.metadata?.sessionId).toBeUndefined()
+          if (result.metadata !== undefined && "sessionId" in result.metadata) {
+            expect(result.metadata.sessionId).toBeUndefined()
+          }
         }),
       ),
     )
@@ -82,8 +88,11 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect({ agent: "cowork", task: "hello" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("cowork"), task: "hello" }, ctx).pipe(
         Effect.map((result) => {
+          if (!("output" in result) || result.output === undefined) {
+            throw new Error("expected delegate output")
+          }
           // Delegate is fire-and-forget ephemeral by design — no durable session ref is shown.
           expect(result.output).toBe("cowork:hello")
         }),
@@ -108,16 +117,19 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect(
+      getToolEffect(DelegateTool)(
         {
           chain: [
-            { agent: "explore", task: "first" },
-            { agent: "explore", task: "second" },
+            { agent: AgentName.make("explore"), task: "first" },
+            { agent: AgentName.make("explore"), task: "second" },
           ],
         },
         ctx,
       ).pipe(
         Effect.map((result) => {
+          if (!("output" in result) || result.output === undefined) {
+            throw new Error("expected delegate output")
+          }
           expect(result.output).toBe("step-1")
         }),
       ),
@@ -141,16 +153,19 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect(
+      getToolEffect(DelegateTool)(
         {
           tasks: [
-            { agent: "explore", task: "a" },
-            { agent: "explore", task: "b" },
+            { agent: AgentName.make("explore"), task: "a" },
+            { agent: AgentName.make("explore"), task: "b" },
           ],
         },
         ctx,
       ).pipe(
         Effect.map((result) => {
+          if (!("output" in result) || result.output === undefined) {
+            throw new Error("expected delegate output")
+          }
           expect(result.output).toContain("2/2 succeeded")
           expect(result.output).not.toContain("Full sessions:")
           expect(result.output).not.toContain("session://session-")
@@ -176,7 +191,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect({ agent: "explore", task: "go" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), task: "go" }, ctx).pipe(
         Effect.map(() => {
           expect(capturedRunSpec?.persistence).toBe("ephemeral")
         }),
@@ -201,11 +216,11 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect(
+      getToolEffect(DelegateTool)(
         {
           chain: [
-            { agent: "explore", task: "a" },
-            { agent: "explore", task: "b" },
+            { agent: AgentName.make("explore"), task: "a" },
+            { agent: AgentName.make("explore"), task: "b" },
           ],
         },
         ctx,
@@ -235,11 +250,11 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      DelegateTool.effect(
+      getToolEffect(DelegateTool)(
         {
           tasks: [
-            { agent: "explore", task: "a" },
-            { agent: "explore", task: "b" },
+            { agent: AgentName.make("explore"), task: "a" },
+            { agent: AgentName.make("explore"), task: "b" },
           ],
         },
         ctx,

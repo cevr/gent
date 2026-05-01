@@ -7,6 +7,7 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { FallbackFileIndexLive } from "../../../src/runtime/file-index/index"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const ctx: ToolContext = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -35,7 +36,7 @@ describe("GrepTool", () => {
       yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
       yield* fs.writeFileString(`${tmpDir}/file3.ts`, "const foo = 3")
 
-      const result = yield* GrepTool.effect({ pattern: "foo", path: tmpDir }, ctx)
+      const result = yield* getToolEffect(GrepTool)({ pattern: "foo", path: tmpDir }, ctx)
       expect(result.matches.length).toBe(2)
     }).pipe(Effect.provide(PlatformLayer)),
   )
@@ -47,7 +48,10 @@ describe("GrepTool", () => {
       yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
       yield* fs.writeFileString(`${tmpDir}/file2.js`, "const foo = 2")
 
-      const result = yield* GrepTool.effect({ pattern: "foo", path: tmpDir, glob: "*.ts" }, ctx)
+      const result = yield* getToolEffect(GrepTool)(
+        { pattern: "foo", path: tmpDir, glob: "*.ts" },
+        ctx,
+      )
       expect(result.matches.length).toBe(1)
       expect(result.matches[0]!.file).toContain("file1.ts")
     }).pipe(Effect.provide(PlatformLayer)),
@@ -59,7 +63,10 @@ describe("GrepTool", () => {
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/target.ts`, "hello\nworld\nhello again")
 
-      const result = yield* GrepTool.effect({ pattern: "hello", path: `${tmpDir}/target.ts` }, ctx)
+      const result = yield* getToolEffect(GrepTool)(
+        { pattern: "hello", path: `${tmpDir}/target.ts` },
+        ctx,
+      )
       expect(result.matches.length).toBe(2)
     }).pipe(Effect.provide(PlatformLayer)),
   )

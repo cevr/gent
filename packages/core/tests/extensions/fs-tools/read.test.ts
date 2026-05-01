@@ -6,6 +6,7 @@ import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const ctx: ToolContext = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -34,14 +35,16 @@ describe("ReadTool", () => {
       const testFile = `${tmpDir}/test.txt`
       yield* fs.writeFileString(testFile, "Hello, World!")
 
-      const result = yield* ReadTool.effect({ path: testFile }, ctx)
+      const result = yield* getToolEffect(ReadTool)({ path: testFile }, ctx)
       expect(result.content).toBe("1\tHello, World!")
     }),
   )
 
   readTest("returns error for non-existent file", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.result(ReadTool.effect({ path: "/nonexistent/file.txt" }, ctx))
+      const result = yield* Effect.result(
+        getToolEffect(ReadTool)({ path: "/nonexistent/file.txt" }, ctx),
+      )
       expect(result._tag).toBe("Failure")
     }),
   )
@@ -51,7 +54,7 @@ describe("ReadTool", () => {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
 
-      const result = yield* Effect.result(ReadTool.effect({ path: tmpDir }, ctx))
+      const result = yield* Effect.result(getToolEffect(ReadTool)({ path: tmpDir }, ctx))
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(result.failure.message).toContain("Cannot read directory")

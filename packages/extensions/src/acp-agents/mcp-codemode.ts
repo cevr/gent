@@ -9,11 +9,11 @@
  *
  * @module
  */
-import { Effect, type Schema } from "effect"
+import { Effect } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { buildToolJsonSchema } from "@gent/core/extensions/api"
+import { buildToolJsonSchema, getToolId, type ToolToken } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -23,14 +23,8 @@ export interface CodemodeServer {
   readonly stop: () => void
 }
 
-interface CodemodeTool {
-  readonly id: string
-  readonly description?: string
-  readonly input: Schema.Schema<unknown>
-}
-
 export interface CodemodeConfig {
-  readonly tools: ReadonlyArray<CodemodeTool>
+  readonly tools: ReadonlyArray<ToolToken>
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
@@ -45,7 +39,7 @@ export interface CodemodeConfig {
  * tool's description AND as the ACP system prompt's tools section
  * (replaces the default per-tool listing for external-routed agents).
  */
-export const generateToolDescription = (tools: ReadonlyArray<CodemodeTool>): string => {
+export const generateToolDescription = (tools: ReadonlyArray<ToolToken>): string => {
   const lines = [
     "Execute JavaScript with access to gent tools.",
     "",
@@ -59,6 +53,7 @@ export const generateToolDescription = (tools: ReadonlyArray<CodemodeTool>): str
 
   for (const tool of tools) {
     const schema = buildToolJsonSchema(tool)
+    const id = getToolId(tool)
     const rawProps = schema["properties"]
     let props: Record<string, unknown> = {}
     if (typeof rawProps === "object" && rawProps !== null && !Array.isArray(rawProps)) {
@@ -85,7 +80,7 @@ export const generateToolDescription = (tools: ReadonlyArray<CodemodeTool>): str
       })
       .join(", ")
 
-    lines.push(`- \`gent.${tool.id}({ ${params} })\` — ${tool.description ?? ""}`)
+    lines.push(`- \`gent.${id}({ ${params} })\` — ${tool.description ?? ""}`)
   }
 
   return lines.join("\n")
@@ -93,8 +88,8 @@ export const generateToolDescription = (tools: ReadonlyArray<CodemodeTool>): str
 
 // ── Proxy factory ──
 
-const makeGentProxy = (tools: ReadonlyArray<CodemodeTool>, runTool: CodemodeConfig["runTool"]) => {
-  const toolNames = new Set(tools.map((t) => String(t.id)))
+const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig["runTool"]) => {
+  const toolNames = new Set(tools.map((tool) => String(getToolId(tool))))
 
   return new Proxy(
     {},

@@ -7,6 +7,7 @@ import { SkillsTool } from "@gent/extensions/skills/skills-tool"
 import { SearchSkillsTool } from "@gent/extensions/skills/search-skills"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const testSkills = [
   new Skill({
@@ -38,7 +39,7 @@ const ctx = testToolContext()
 describe("SkillsTool", () => {
   it.live("loads specific skill by name", () =>
     narrowR(
-      SkillsTool.effect({ names: ["react"] }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: ["react"] }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("react")
           expect(result).toContain("Use function components")
@@ -50,7 +51,7 @@ describe("SkillsTool", () => {
 
   it.live("resolves local before global for ambiguous names", () =>
     narrowR(
-      SkillsTool.effect({ names: ["effect-v4"] }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: ["effect-v4"] }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("Custom service layer patterns")
           expect(result).toContain("local")
@@ -62,7 +63,7 @@ describe("SkillsTool", () => {
 
   it.live("supports $skill:global syntax", () =>
     narrowR(
-      SkillsTool.effect({ names: ["$effect-v4:global"] }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: ["$effect-v4:global"] }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("Use Effect.fn for tracing")
           expect(result).toContain("global")
@@ -74,7 +75,7 @@ describe("SkillsTool", () => {
 
   it.live("reports not-found skills", () =>
     narrowR(
-      SkillsTool.effect({ names: ["nonexistent"] }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: ["nonexistent"] }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("Not found: nonexistent")
           expect(result).toContain("Available:")
@@ -86,7 +87,7 @@ describe("SkillsTool", () => {
 
   it.live("loads all skills", () =>
     narrowR(
-      SkillsTool.effect({ names: "all" }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: "all" }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("effect-v4")
           expect(result).toContain("react")
@@ -98,7 +99,7 @@ describe("SkillsTool", () => {
 
   it.live("filters all by level", () =>
     narrowR(
-      SkillsTool.effect({ names: "all", level: "global" }, ctx).pipe(
+      getToolEffect(SkillsTool)({ names: "all", level: "global" }, ctx).pipe(
         Effect.map((result) => {
           expect(result).toContain("Use Effect.fn for tracing")
           expect(result).toContain("react")
@@ -113,7 +114,7 @@ describe("SkillsTool", () => {
 describe("SearchSkillsTool", () => {
   it.live("finds skills by name", () =>
     narrowR(
-      SearchSkillsTool.effect({ query: "effect" }, ctx).pipe(
+      getToolEffect(SearchSkillsTool)({ query: "effect" }, ctx).pipe(
         Effect.map((result) => {
           const r = result as { count: number; results: Array<{ name: string }> }
           expect(r.count).toBe(2)
@@ -126,7 +127,7 @@ describe("SearchSkillsTool", () => {
 
   it.live("includes level in results", () =>
     narrowR(
-      SearchSkillsTool.effect({ query: "react" }, ctx).pipe(
+      getToolEffect(SearchSkillsTool)({ query: "react" }, ctx).pipe(
         Effect.map((result) => {
           const r = result as { results: Array<{ level: string }> }
           expect(r.results[0]?.level).toBe("global")

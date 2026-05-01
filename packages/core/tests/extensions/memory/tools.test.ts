@@ -17,10 +17,11 @@ import type { ToolContext } from "@gent/core/domain/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const memoryToolTest = it.scopedLive.layer(BunFileSystem.layer)
 
-// ToolToken.effect intentionally erases its dependency channel at the public tool boundary.
+// Tool execution intentionally keeps dependency requirements behind Gent metadata at the public tool boundary.
 // These tests provide MemoryVaultTest(tmpDir) at every call site before narrowing to never.
 const runMemoryTool = <A, E>(
   effect: Effect.Effect<A, E, unknown>,
@@ -78,7 +79,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
       const cwd = "/some/active/repo"
       const expectedKey = projectKeyOf(cwd)
       yield* runMemoryTool(
-        MemoryRememberTool.effect(
+        getToolEffect(MemoryRememberTool)(
           {
             title: "Auto Key",
             content: "should land in project dir",
@@ -99,7 +100,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       yield* runMemoryTool(
-        MemoryRememberTool.effect(
+        getToolEffect(MemoryRememberTool)(
           {
             title: "Explicit Key",
             content: "uses provided key",
@@ -119,7 +120,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       yield* runMemoryTool(
-        MemoryRememberTool.effect(
+        getToolEffect(MemoryRememberTool)(
           {
             title: "Global Note",
             content: "no project key needed",
@@ -149,7 +150,10 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
       )
       expect(Fs.existsSync(file)).toBe(true)
       yield* runMemoryTool(
-        MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd, tmpDir)),
+        getToolEffect(MemoryForgetTool)(
+          { title: "To Remove", scope: "project" },
+          makeCtx(cwd, tmpDir),
+        ),
         tmpDir,
       )
       expect(Fs.existsSync(file)).toBe(false)

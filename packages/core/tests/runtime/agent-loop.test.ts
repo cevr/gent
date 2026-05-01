@@ -41,6 +41,7 @@ import {
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
 import {
+  getToolId,
   tool,
   ToolNeeds,
   type AnyResourceContribution,
@@ -1843,7 +1844,7 @@ describe("interaction", () => {
             if (idx === 0) {
               return Stream.fromIterable([
                 toolCallPart(
-                  tool.id,
+                  getToolId(tool),
                   { value: "guard-test" },
                   {
                     toolCallId: ToolCallId.make("tc-guard"),
@@ -2724,7 +2725,7 @@ describe("durable suspension and queue drain regression", () => {
       Layer.provide(BunServices.layer),
     )
     const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-    const providerLayer = makeSuspendProviderLayer(params.streamCallRef, interactionTool.id)
+    const providerLayer = makeSuspendProviderLayer(params.streamCallRef, getToolId(interactionTool))
     const extRegistry = makeExtRegistry([interactionTool])
     const baseDeps = Layer.mergeAll(
       storageLayer,

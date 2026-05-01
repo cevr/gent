@@ -170,19 +170,15 @@ describe("extension activation isolation", () => {
   // addition to tool/tool. The resolver overwrites silently in last-write-wins
   // order without this check.
 
-  // Raw token-shaped leaves bypass the `tool()/action()/request()` factories
-  // (whose runtime guards would catch malformed inputs at construction). The
-  // validation pass exists to catch leaves authored through the runtime-load
-  // path or that bypass typed authoring — these tests assert validation works
-  // on the typed-bucket leaf shape.
+  // Validation still owns semantic tool checks after authoring has produced a
+  // native Effect tool. Description checks live here because runtime-loaded
+  // extensions can pass schema-valid but model-hostile tool metadata.
   const rawToolLeaf = (id: string, description: string | undefined): never =>
-    ({
+    tool({
       id,
-      ...(description !== undefined ? { description } : {}),
-      intent: "write",
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
+      description: description ?? "",
+      params: Schema.Unknown,
+      execute: () => Effect.succeed(undefined),
     }) as never
 
   const rawRpcLeaf = (id: string): never =>

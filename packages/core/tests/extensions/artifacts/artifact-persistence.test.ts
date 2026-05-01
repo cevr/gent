@@ -6,8 +6,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 
-// PlanTool/AuditTool/ReviewTool .effect signatures inherit R=any from
-// the erased runtime leaf boundary in the tool() factory. Tests run
+// PlanTool/AuditTool/ReviewTool execution signatures inherit their
+// dependency channels from Gent metadata. Tests run
 // with no real services beyond ctx, so we narrow R to never at the
 // call site for it.live compatibility.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
@@ -17,7 +17,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import type { AgentName } from "@gent/core/domain/agent"
 import { ArtifactId, SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
-import { ref } from "@gent/core/extensions/api"
+import { ref, getToolEffect } from "@gent/core/extensions/api"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
@@ -117,7 +117,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
@@ -155,7 +155,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
@@ -186,7 +186,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
@@ -210,7 +210,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
@@ -247,7 +247,7 @@ describe("AuditTool artifact persistence", () => {
     })
 
     return narrowR(
-      AuditTool.effect({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
+      getToolEffect(AuditTool)({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
@@ -286,7 +286,7 @@ describe("ReviewTool artifact persistence", () => {
     })
 
     return narrowR(
-      ReviewTool.effect({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
+      getToolEffect(ReviewTool)({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls.filter(
             (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",

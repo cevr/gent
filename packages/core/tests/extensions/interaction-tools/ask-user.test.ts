@@ -10,6 +10,7 @@ import { ApprovalService } from "../../../src/runtime/approval-service"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const makeCtx = (approvalService: {
   present: ToolContext["interaction"]["approve"]
@@ -54,7 +55,7 @@ describe("AskUser Tool", () => {
           }),
       })
 
-      const result = yield* AskUserTool.effect(
+      const result = yield* getToolEffect(AskUserTool)(
         {
           questions: [
             {
@@ -89,7 +90,7 @@ describe("AskUser Tool", () => {
           }),
       })
 
-      const result = yield* AskUserTool.effect(
+      const result = yield* getToolEffect(AskUserTool)(
         {
           questions: [
             {

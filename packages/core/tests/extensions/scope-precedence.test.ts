@@ -20,7 +20,7 @@ const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, nev
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { tool } from "@gent/core/extensions/api"
+import { getToolEffect, tool, type ToolToken } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentDefinition } from "@gent/core/domain/agent"
 import { AgentName } from "@gent/core/domain/agent"
@@ -46,7 +46,7 @@ const stubProjectionCtx = {
   },
 }
 
-const toolReturning = (name: string, label: string) =>
+const toolReturning = (name: string, label: string): ToolToken<{}, string> =>
   tool({
     id: name,
     description: label,
@@ -78,11 +78,11 @@ describe("scope precedence", () => {
         ext("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")!
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string>
       return narrowR(
-        resolvedTool
-          .effect({}, {} as never)
-          .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project")))),
+        getToolEffect(resolvedTool)({}, {} as never).pipe(
+          Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))),
+        ),
       )
     })
 
@@ -185,11 +185,11 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")!
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string>
       return narrowR(
-        resolvedTool
-          .effect({}, {} as never)
-          .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z")))),
+        getToolEffect(resolvedTool)({}, {} as never).pipe(
+          Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))),
+        ),
       )
     })
   })

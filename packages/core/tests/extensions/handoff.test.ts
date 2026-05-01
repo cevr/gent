@@ -15,6 +15,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/domain/ids"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -61,7 +62,7 @@ describe("HandoffTool", () => {
     })
 
     return narrowR(
-      HandoffTool.effect(
+      getToolEffect(HandoffTool)(
         {
           context: "Current task: implement auth. Key files: src/auth.ts",
           reason: "context window filling up",
@@ -83,7 +84,7 @@ describe("HandoffTool", () => {
     })
 
     return narrowR(
-      HandoffTool.effect(
+      getToolEffect(HandoffTool)(
         {
           context: "Current task: implement auth",
         },

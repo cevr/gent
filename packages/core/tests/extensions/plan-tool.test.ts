@@ -8,8 +8,9 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core/extensions/api"
 
-// Tool .effect crosses the erased runtime leaf boundary in tool().
+// Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -101,7 +102,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement caching" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement caching" }, ctx).pipe(
         Effect.map((result) => {
           // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
           expect(calls.length).toBe(7)
@@ -146,7 +147,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      PlanTool.effect(
+      getToolEffect(PlanTool)(
         {
           prompt: "add auth",
           context: "Using JWT tokens",
@@ -177,7 +178,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "refactor" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "refactor" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.decision).toBe("no")
         }),
@@ -204,7 +205,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "test" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "test" }, ctx).pipe(
         Effect.map(() => {
           // Should have at least 2 different models used
           const uniqueModels = new Set(models)
@@ -248,7 +249,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+      getToolEffect(PlanTool)({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map((result) => {
           // Single cycle: plan phases + execute (no evaluator loop)
           expect(result.output).toBe("Executed batch 1 successfully.")

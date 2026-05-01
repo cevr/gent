@@ -4,6 +4,7 @@ import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { BashTool } from "@gent/extensions/exec-tools/bash"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const makePlatformLayer = () =>
   Layer.mergeAll(
@@ -74,7 +75,9 @@ describe("BashTool execution", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const result = yield* provideBun(BashTool.effect({ command: "echo hello" }, stubCtx))
+          const result = yield* provideBun(
+            getToolEffect(BashTool)({ command: "echo hello" }, stubCtx),
+          )
 
           expect(result.stdout.trim()).toBe("hello")
           expect(result.exitCode).toBe(0)
@@ -88,7 +91,7 @@ describe("BashTool execution", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const result = yield* provideBun(BashTool.effect({ command: "exit 2" }, stubCtx))
+          const result = yield* provideBun(getToolEffect(BashTool)({ command: "exit 2" }, stubCtx))
 
           expect(result.exitCode).toBe(2)
         }),
@@ -102,7 +105,7 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const result = yield* provideBun(
-            BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx),
+            getToolEffect(BashTool)({ command: "pwd", cwd: "/tmp" }, stubCtx),
           )
 
           expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -117,7 +120,9 @@ describe("BashTool execution", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const result = yield* provideBun(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
+          const result = yield* provideBun(
+            getToolEffect(BashTool)({ command: "cd /tmp && pwd" }, stubCtx),
+          )
 
           expect(result.stdout.trim()).toMatch(/\/tmp$/)
           expect(result.exitCode).toBe(0)
@@ -140,7 +145,7 @@ describe("BashTool execution", () => {
             },
           }
           const result = yield* provideBun(
-            BashTool.effect(
+            getToolEffect(BashTool)(
               { command: "printf background-finished", run_in_background: true },
               ctx,
             ),

@@ -11,8 +11,8 @@ import {
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
-import * as AiTool from "effect/unstable/ai/Tool"
 import * as AiError from "effect/unstable/ai/AiError"
+import type * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import { toPrompt } from "./ai-transcript.js"
 import { ProviderError } from "../domain/provider-error.js"
@@ -222,13 +222,7 @@ export interface ProviderService {
   ) => Effect.Effect<string, ProviderError | ProviderAuthError>
 }
 
-// ── Tool Conversion (Capability → canonical Tool / advertise-only Toolkit) ──
-
-const toCapabilityTool = (capability: ToolToken): AiTool.Any =>
-  AiTool.dynamic(capability.id, {
-    description: capability.description ?? "",
-    parameters: capability.input,
-  })
+// ── Tool Conversion (Capability → advertise-only Toolkit) ──
 
 const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
   tools: Tools,
@@ -252,7 +246,7 @@ function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.WithHandler<Pr
   const toolsRecord: ProviderToolMap = {}
 
   for (const capability of tools) {
-    toolsRecord[capability.id] = toCapabilityTool(capability)
+    toolsRecord[capability.name] = capability
   }
 
   return makeAdvertiseOnlyToolkit(toolsRecord)

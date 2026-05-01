@@ -7,6 +7,8 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import {
   action,
+  getToolId,
+  getToolMetadata,
   request,
   tool,
   ToolNeeds,
@@ -341,7 +343,7 @@ describe("ExtensionRegistry", () => {
         buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
       )
       const tool = yield* registry.getModelCapability("read")
-      expect(String(tool?.id)).toBe("read")
+      expect(String(tool === undefined ? undefined : getToolId(tool))).toBe("read")
     }),
   )
   it.live("unregistered model capability name returns undefined", () =>
@@ -379,7 +381,7 @@ describe("ExtensionRegistry", () => {
       const tools = yield* registry.listModelCapabilities()
       const failed = yield* registry.listFailedExtensions()
       const statuses = yield* registry.listExtensionStatuses()
-      expect(tools.map((tool) => String(tool.id))).toEqual(["read"])
+      expect(tools.map((tool) => String(getToolId(tool)))).toEqual(["read"])
       expect(failed).toEqual([
         {
           manifest: { id: ExtensionId.make("broken") },
@@ -450,7 +452,7 @@ describe("ExtensionRegistry", () => {
       )
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
       expect(tools.length).toBe(1)
-      expect(String(tools[0]?.id)).toBe("read")
+      expect(String(tools[0] === undefined ? undefined : getToolId(tools[0]))).toBe("read")
     }),
   )
   it.live("allowedTools restricts the resolved set to exactly the listed names", () =>
@@ -468,7 +470,7 @@ describe("ExtensionRegistry", () => {
         ]),
       )
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
-      const names = tools.map((t) => String(t.id))
+      const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
       expect(names).toContain("bash")
       expect(names).not.toContain("edit")
@@ -486,7 +488,7 @@ describe("ExtensionRegistry", () => {
         buildRegistry([makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] })]),
       )
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
-      const names = tools.map((t) => String(t.id))
+      const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
       expect(names).not.toContain("write")
     }),
@@ -506,7 +508,7 @@ describe("ExtensionRegistry", () => {
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [
         { toolPolicy: { include: ["secret"] } },
       ])
-      expect(tools.map((t) => String(t.id))).not.toContain("secret")
+      expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")
     }),
   )
   it.live("registered model driver is findable by ID", () =>
@@ -690,10 +692,11 @@ describe("resolveExtensions — slash command discovery", () => {
     const resolvedTool = resolved.modelCapabilities.get("rich")
     expect(resolvedTool).toBeDefined()
     expect(resolvedTool?.description).toBe("rich tool")
-    expect(resolvedTool?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
-    expect(resolvedTool?.promptSnippet).toBe("Snippet here.")
-    expect(resolvedTool?.promptGuidelines).toEqual(["use carefully", "log result"])
-    expect(resolvedTool?.interactive).toBe(true)
+    const metadata = resolvedTool !== undefined ? getToolMetadata(resolvedTool) : undefined
+    expect(metadata?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
+    expect(metadata?.promptSnippet).toBe("Snippet here.")
+    expect(metadata?.promptGuidelines).toEqual(["use carefully", "log result"])
+    expect(metadata?.interactive).toBe(true)
   })
   test("rpc does not appear as a tool", () => {
     const cap = makeRequest("rpc-only")

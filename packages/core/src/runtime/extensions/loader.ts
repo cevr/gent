@@ -8,15 +8,18 @@ import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
 import { validatePackageShape } from "../../extensions/api.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import { getToolMetadata } from "../../domain/capability/tool.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
  *  scope collision detection. Reads from every typed bucket — same shape,
  *  same precedence rules as the legacy promptSection contribution. */
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
-  [...(cs.tools ?? []), ...(cs.commands ?? []), ...(cs.rpc ?? [])]
-    .map((c) => c.prompt)
-    .filter((p): p is PromptSection => p !== undefined)
+  [
+    ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),
+    ...(cs.commands ?? []).map((command) => command.prompt),
+    ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
+  ].filter((p): p is PromptSection => p !== undefined)
 
 // Discovery — scan directories for extension files
 

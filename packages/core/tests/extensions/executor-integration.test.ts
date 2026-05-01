@@ -47,7 +47,8 @@ import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
-// Tool .effect crosses the erased runtime leaf boundary in tool().
+import { getToolEffect } from "@gent/core/extensions/api"
+// Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -212,7 +213,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx(readySnapshot)
       const result = yield* narrowR(
-        ExecuteTool.effect({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
+        getToolEffect(ExecuteTool)({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
           Effect.provide(bridgeLayer),
         ),
       )
@@ -227,7 +228,9 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx(readySnapshot)
       const exit = yield* Effect.exit(
-        narrowR(ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer))),
+        narrowR(
+          getToolEffect(ExecuteTool)({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+        ),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -239,7 +242,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx(notReadySnapshot)
       const exit = yield* Effect.exit(
-        narrowR(ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
+        narrowR(getToolEffect(ExecuteTool)({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -251,7 +254,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx(readySnapshot)
       const result = yield* narrowR(
-        ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+        getToolEffect(ExecuteTool)({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
       )
       expect(result.executionId).toBe("exec-abc-123")
       expect(result.text).toBe("Waiting for approval")
@@ -272,7 +275,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx(readySnapshot)
       yield* narrowR(
-        ResumeTool.effect(
+        getToolEffect(ResumeTool)(
           {
             executionId: "exec-1",
             action: "accept" as "accept" | "decline" | "cancel",
@@ -295,7 +298,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx(readySnapshot)
       const exit = yield* Effect.exit(
         narrowR(
-          ResumeTool.effect(
+          getToolEffect(ResumeTool)(
             {
               executionId: "exec-1",
               action: "accept" as "accept" | "decline" | "cancel",
@@ -316,7 +319,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx(notReadySnapshot)
       const exit = yield* Effect.exit(
         narrowR(
-          ResumeTool.effect(
+          getToolEffect(ResumeTool)(
             {
               executionId: "exec-1",
               action: "decline" as "accept" | "decline" | "cancel",

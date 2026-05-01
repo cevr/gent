@@ -1,6 +1,6 @@
 import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition } from "../../domain/agent.js"
-import type { ToolToken } from "../../domain/capability/tool.js"
+import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
 import {
   type ReasoningPart,
   type Message,
@@ -41,10 +41,15 @@ export const buildTurnPromptSections = (
     })
   }
 
+  const toolsWithMetadata = tools.map((tool) => ({
+    id: getToolId(tool),
+    metadata: getToolMetadata(tool),
+  }))
+
   // Tool list — tools with promptSnippet get listed explicitly
-  const snippets = tools
-    .filter((t) => t.promptSnippet !== undefined)
-    .map((t) => `- **${t.id}**: ${t.promptSnippet}`)
+  const snippets = toolsWithMetadata
+    .filter((tool) => tool.metadata.promptSnippet !== undefined)
+    .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
   if (snippets.length > 0) {
     // Wrap with section sentinels so the ACP codemode prompt slot can swap
     // this block atomically. Other sections don't need markers because
@@ -58,9 +63,11 @@ export const buildTurnPromptSections = (
   }
 
   // Tool guidelines — collected from active tools + conditional rules
-  const guidelines = tools.flatMap((t) => t.promptGuidelines ?? [])
-  const hasBash = tools.some((t) => t.id === "bash")
-  const dedicatedNames = ["grep", "glob", "read"].filter((n) => tools.some((t) => t.id === n))
+  const guidelines = toolsWithMetadata.flatMap((tool) => tool.metadata.promptGuidelines ?? [])
+  const hasBash = toolsWithMetadata.some((tool) => tool.id === "bash")
+  const dedicatedNames = ["grep", "glob", "read"].filter((name) =>
+    toolsWithMetadata.some((tool) => tool.id === name),
+  )
   if (hasBash && dedicatedNames.length > 0) {
     guidelines.push(`Prefer ${dedicatedNames.join("/")} over bash for file searching and reading`)
   }
@@ -79,7 +86,7 @@ export const buildTurnPromptSections = (
   // Delegation targets — synthesized from registered agents when delegate is available
   // Internal agents are hidden — only user-facing agents appear as delegation targets
   const INTERNAL_AGENTS = new Set(["auditor", "architect", "summarizer", "title", "librarian"])
-  const hasDelegate = tools.some((t) => t.id === "delegate")
+  const hasDelegate = toolsWithMetadata.some((tool) => tool.id === "delegate")
   if (hasDelegate && delegationTargets !== undefined && delegationTargets.length > 0) {
     const targets = delegationTargets
       .filter(

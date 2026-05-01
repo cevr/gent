@@ -7,7 +7,7 @@ import { TaskGetTool } from "@gent/extensions/task-tools/task-get"
 import { TaskUpdateTool } from "@gent/extensions/task-tools/task-update"
 import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
 import { Agents } from "@gent/extensions/all-agents"
-import { Task } from "@gent/core/extensions/api"
+import { Task, getToolEffect } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import { BranchId, SessionId, TaskId, ToolCallId } from "@gent/core/domain/ids"
@@ -25,7 +25,7 @@ import type {
 } from "@gent/core/domain/capability"
 
 import type { AgentRunner } from "@gent/core/domain/agent"
-import { AgentRunResult } from "@gent/core/domain/agent"
+import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -119,7 +119,7 @@ describe("TaskCreateTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const result = yield* TaskCreateTool.effect({ subject: "Fix auth bug" }, ctx)
+        const result = yield* getToolEffect(TaskCreateTool)({ subject: "Fix auth bug" }, ctx)
         expect(result.taskId).toBeDefined()
         expect(result.subject).toBe("Fix auth bug")
         expect(result.status).toBe("pending")
@@ -132,8 +132,8 @@ describe("TaskCreateTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const t1 = yield* TaskCreateTool.effect({ subject: "First" }, ctx)
-        const t2 = yield* TaskCreateTool.effect(
+        const t1 = yield* getToolEffect(TaskCreateTool)({ subject: "First" }, ctx)
+        const t2 = yield* getToolEffect(TaskCreateTool)(
           {
             subject: "Second",
             blockedBy: [t1.taskId],
@@ -153,10 +153,13 @@ describe("TaskListTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        yield* TaskCreateTool.effect({ subject: "Task A" }, ctx)
-        yield* TaskCreateTool.effect({ subject: "Task B" }, ctx)
-        const result = yield* TaskListTool.effect({}, ctx)
+        yield* getToolEffect(TaskCreateTool)({ subject: "Task A" }, ctx)
+        yield* getToolEffect(TaskCreateTool)({ subject: "Task B" }, ctx)
+        const result = yield* getToolEffect(TaskListTool)({}, ctx)
         expect(result.tasks.length).toBe(2)
+        if (typeof result.summary === "string") {
+          throw new Error("expected task summary counts")
+        }
         expect(result.summary.total).toBe(2)
         expect(result.summary.pending).toBe(2)
       }).pipe(Effect.provide(layer)),
@@ -168,7 +171,7 @@ describe("TaskListTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const result = yield* TaskListTool.effect({}, ctx)
+        const result = yield* getToolEffect(TaskListTool)({}, ctx)
         expect(result.tasks.length).toBe(0)
         expect(result.summary).toBe("No tasks")
       }).pipe(Effect.provide(layer)),
@@ -182,14 +185,17 @@ describe("TaskGetTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const created = yield* TaskCreateTool.effect(
+        const created = yield* getToolEffect(TaskCreateTool)(
           {
             subject: "Review code",
             description: "Full review of auth module",
           },
           ctx,
         )
-        const result = yield* TaskGetTool.effect({ taskId: created.taskId }, ctx)
+        const result = yield* getToolEffect(TaskGetTool)({ taskId: created.taskId }, ctx)
+        if ("error" in result && result.error !== undefined) {
+          throw new Error(result.error)
+        }
         expect(result.subject).toBe("Review code")
         expect(result.description).toBe("Full review of auth module")
       }).pipe(Effect.provide(layer)),
@@ -201,7 +207,10 @@ describe("TaskGetTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const result = yield* TaskGetTool.effect({ taskId: TaskId.make("nonexistent") }, ctx)
+        const result = yield* getToolEffect(TaskGetTool)(
+          { taskId: TaskId.make("nonexistent") },
+          ctx,
+        )
         expect(result.error).toContain("not found")
       }).pipe(Effect.provide(layer)),
     ),
@@ -214,10 +223,10 @@ describe("TaskUpdateTool", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const created = yield* TaskCreateTool.effect({ subject: "Fix it" }, ctx)
+        const created = yield* getToolEffect(TaskCreateTool)({ subject: "Fix it" }, ctx)
         // Must follow valid transition: pending → in_progress → completed
-        yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "in_progress" }, ctx)
-        const result = yield* TaskUpdateTool.effect(
+        yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "in_progress" }, ctx)
+        const result = yield* getToolEffect(TaskUpdateTool)(
           { taskId: created.taskId, status: "completed" },
           ctx,
         )
@@ -240,10 +249,10 @@ describe("TaskUpdateTool", () => {
           ),
         )
         yield* Effect.yieldNow
-        const created = yield* TaskCreateTool.effect({ subject: "Ship it" }, ctx)
+        const created = yield* getToolEffect(TaskCreateTool)({ subject: "Ship it" }, ctx)
         // Valid transition: pending → in_progress → completed
-        yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "in_progress" }, ctx)
-        yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "completed" }, ctx)
+        yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "in_progress" }, ctx)
+        yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "completed" }, ctx)
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
         expect(events).toContain("TaskCompleted")
@@ -429,14 +438,17 @@ describe("DelegateTool background mode", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const result = yield* DelegateTool.effect(
+        const result = yield* getToolEffect(DelegateTool)(
           {
-            agent: "explore" as const,
+            agent: AgentName.make("explore"),
             task: "analyze the codebase",
             background: true,
           },
           ctx,
         )
+        if (!("taskId" in result) || result.taskId === undefined) {
+          throw new Error("expected background delegate task")
+        }
         expect(result.taskId).toBeDefined()
         expect(result.status).toBe("running")
       }).pipe(Effect.provide(layer)),

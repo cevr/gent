@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { PlanExtension, PLAN_EXTENSION_ID } from "@gent/extensions/plan"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { modelCapabilities } from "@gent/core/domain/contribution"
+import { getToolId } from "@gent/core/extensions/api"
 
 describe("Plan extension", () => {
   test("has correct extension ID", () => {
@@ -14,7 +15,7 @@ describe("Plan extension", () => {
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
       // tool({...}) outputs slot into the typed `tools:` bucket.
-      const toolIds = modelCapabilities(contributions).map((cap) => String(cap.id))
+      const toolIds = modelCapabilities(contributions).map((cap) => String(getToolId(cap)))
       expect(toolIds).toContain("plan")
     }).pipe(Effect.runPromise))
 

@@ -31,7 +31,7 @@ import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { tool } from "@gent/core/extensions/api"
+import { getToolId, tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
@@ -251,7 +251,9 @@ describe("RunSpec", () => {
           assertRequest: (request) => {
             expect(request.model).toBe("custom/model")
             expect(request.reasoning).toBe("high")
-            expect(request.tools?.map((candidate) => String(candidate.id))).toEqual(["bash"])
+            expect(request.tools?.map((candidate) => String(getToolId(candidate)))).toEqual([
+              "bash",
+            ])
           },
         },
       ])

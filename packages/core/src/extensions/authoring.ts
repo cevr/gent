@@ -39,8 +39,13 @@ export {
 } from "../domain/agent.js"
 
 export {
+  getToolId,
+  getToolEffect,
+  getToolMetadata,
   tool,
+  GentToolMetadataTag,
   type ToolCapabilityContext,
+  type GentToolMetadata,
   type ToolInput,
   type ToolToken,
 } from "../domain/capability/tool.js"

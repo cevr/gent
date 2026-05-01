@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PromptTool } from "@gent/extensions/interaction-tools/prompt"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -22,7 +23,7 @@ describe("Prompt Tool", () => {
     })
 
     return narrowR(
-      PromptTool.effect({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+      getToolEffect(PromptTool)({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("review")
           if (result.mode === "review") {
@@ -45,7 +46,7 @@ describe("Prompt Tool", () => {
     })
 
     return narrowR(
-      PromptTool.effect({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
+      getToolEffect(PromptTool)({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("confirm")
           if (result.mode === "confirm") {
@@ -67,7 +68,7 @@ describe("Prompt Tool", () => {
     })
 
     return narrowR(
-      PromptTool.effect({ mode: "present", content: "Info" }, ctx).pipe(
+      getToolEffect(PromptTool)({ mode: "present", content: "Info" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("present")
           if (result.mode === "present") {

@@ -13,6 +13,7 @@ const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, nev
 import { BunFileSystem } from "@effect/platform-bun"
 import { mkdirSync } from "node:fs"
 import { GitReader } from "@gent/extensions/librarian/git-reader"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const TEST_HOME = "/tmp/test-research-" + Date.now()
 
@@ -59,7 +60,7 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      ResearchTool.effect(
+      getToolEffect(ResearchTool)(
         { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
         ctx,
       ).pipe(
@@ -103,7 +104,7 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      ResearchTool.effect(
+      getToolEffect(ResearchTool)(
         {
           question: "Compare concurrency models",
           repos: ["effect-ts/effect", "zio/zio"],
@@ -138,7 +139,7 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      ResearchTool.effect(
+      getToolEffect(ResearchTool)(
         {
           question: "How does the scheduler work?",
           repos: ["effect-ts/effect"],
@@ -157,7 +158,7 @@ describe("ResearchTool", () => {
 
   it.live("rejects empty repos", () =>
     narrowR(
-      ResearchTool.effect(
+      getToolEffect(ResearchTool)(
         { question: "test", repos: [] },
         makeCtx({ agentRun: () => Effect.die("unreachable") }),
       ).pipe(
@@ -171,7 +172,7 @@ describe("ResearchTool", () => {
 
   it.live("rejects too many repos", () =>
     narrowR(
-      ResearchTool.effect(
+      getToolEffect(ResearchTool)(
         { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
         makeCtx({ agentRun: () => Effect.die("unreachable") }),
       ).pipe(

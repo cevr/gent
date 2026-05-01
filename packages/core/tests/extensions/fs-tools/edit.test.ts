@@ -15,6 +15,7 @@ import {
 } from "@gent/extensions/fs-tools/edit"
 import { FileLockService } from "@gent/core/domain/file-lock"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core/extensions/api"
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
     expect(detectRedaction("old code", "new code")).toBeUndefined()
@@ -118,7 +119,7 @@ describe("EditTool execution", () => {
         () =>
           Effect.gen(function* () {
             const result = yield* narrowR(
-              EditTool.effect(
+              getToolEffect(EditTool)(
                 { path: filePath, oldString: "hello world", newString: "hi there" },
                 stubCtx,
               ).pipe(Effect.provide(editLayer)),
@@ -145,7 +146,7 @@ describe("EditTool execution", () => {
         () =>
           Effect.gen(function* () {
             const result = yield* narrowR(
-              EditTool.effect(
+              getToolEffect(EditTool)(
                 { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
                 stubCtx,
               ).pipe(Effect.provide(editLayer)),
@@ -172,7 +173,7 @@ describe("EditTool execution", () => {
           Effect.gen(function* () {
             const exit = yield* narrowR(
               Effect.exit(
-                EditTool.effect(
+                getToolEffect(EditTool)(
                   { path: filePath, oldString: "not here", newString: "replaced" },
                   stubCtx,
                 ).pipe(Effect.provide(editLayer)),
@@ -198,7 +199,7 @@ describe("EditTool execution", () => {
           Effect.gen(function* () {
             const exit = yield* narrowR(
               Effect.exit(
-                EditTool.effect(
+                getToolEffect(EditTool)(
                   { path: filePath, oldString: "foo", newString: "baz" },
                   stubCtx,
                 ).pipe(Effect.provide(editLayer)),
@@ -223,7 +224,7 @@ describe("EditTool execution", () => {
         () =>
           Effect.gen(function* () {
             const result = yield* narrowR(
-              EditTool.effect(
+              getToolEffect(EditTool)(
                 { path: filePath, oldString: "line1\\nline2", newString: "merged" },
                 stubCtx,
               ).pipe(Effect.provide(editLayer)),

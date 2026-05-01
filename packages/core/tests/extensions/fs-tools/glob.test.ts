@@ -7,6 +7,7 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { FallbackFileIndexLive } from "../../../src/runtime/file-index/index"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const ctx: ToolContext = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -35,7 +36,7 @@ describe("GlobTool", () => {
       yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
       yield* fs.writeFileString(`${tmpDir}/c.js`, "")
 
-      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.files.every((f: string) => f.endsWith(".ts"))).toBe(true)
     }).pipe(Effect.provide(PlatformLayer)),
@@ -49,7 +50,10 @@ describe("GlobTool", () => {
         yield* fs.writeFileString(`${tmpDir}/file${i}.ts`, "")
       }
 
-      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir, limit: 2 }, ctx)
+      const result = yield* getToolEffect(GlobTool)(
+        { pattern: "*.ts", path: tmpDir, limit: 2 },
+        ctx,
+      )
       expect(result.files.length).toBe(2)
       expect(result.truncated).toBe(true)
     }).pipe(Effect.provide(PlatformLayer)),
@@ -64,7 +68,7 @@ describe("GlobTool", () => {
       yield* Effect.sleep(50)
       yield* fs.writeFileString(`${tmpDir}/new.ts`, "new")
 
-      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       // Newest first
       expect(result.files[0]).toContain("new.ts")

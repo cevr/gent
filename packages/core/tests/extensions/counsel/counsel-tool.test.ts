@@ -6,6 +6,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
+import { getToolEffect } from "@gent/core/extensions/api"
 
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -48,7 +49,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      CounselTool.effect({ prompt: "Is this approach sound?" }, ctx).pipe(
+      getToolEffect(CounselTool)({ prompt: "Is this approach sound?" }, ctx).pipe(
         Effect.map((result) => {
           expect(capturedPrompt).toContain("Is this approach sound?")
           expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
@@ -84,7 +85,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      CounselTool.effect({ prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
+      getToolEffect(CounselTool)({ prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
         Effect.map((result) => {
           expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
           expect(capturedOverrides?.["reasoningEffort"]).toBe("high")
@@ -121,7 +122,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      CounselTool.effect(
+      getToolEffect(CounselTool)(
         { prompt: "Is this safe?", context: "We removed the auth middleware" },
         ctx,
       ).pipe(
@@ -145,7 +146,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      CounselTool.effect({ prompt: "help" }, ctx).pipe(
+      getToolEffect(CounselTool)({ prompt: "help" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.error).toBe("Model unavailable")
         }),
@@ -172,7 +173,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      CounselTool.effect({ prompt: "thoughts?" }, ctx).pipe(
+      getToolEffect(CounselTool)({ prompt: "thoughts?" }, ctx).pipe(
         Effect.map(() => {
           expect(capturedAgent?.name).toBe("counsel-worker")
           expect(capturedRunPersistence).toBe("ephemeral")
