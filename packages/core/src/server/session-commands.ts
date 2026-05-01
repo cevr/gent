@@ -25,7 +25,8 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
-import { Provider, providerRequestFromMessages } from "../providers/provider.js"
+import { Provider } from "../providers/provider.js"
+import { toPrompt } from "../providers/ai-transcript.js"
 import {
   SessionRuntime,
   type SessionRuntimeService,
@@ -705,13 +706,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const streamEffect = yield* provider.stream(
-          providerRequestFromMessages({
-            model: NAME_GEN_MODEL,
-            messages: [summaryMessage],
-            maxTokens: 400,
-          }),
-        )
+        const streamEffect = yield* provider.stream({
+          model: NAME_GEN_MODEL,
+          prompt: toPrompt([summaryMessage]),
+          maxTokens: 400,
+        })
 
         const parts: string[] = []
         yield* Stream.runForEach(streamEffect, (part) =>

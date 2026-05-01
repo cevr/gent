@@ -50,11 +50,11 @@ import type { ExtensionHostContext } from "../../../domain/extension-host-contex
 import type { ProviderAuthError, TurnError, TurnEvent } from "../../../domain/driver.js"
 import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
 import {
-  providerRequestFromMessages,
   type ProviderError,
   type ProviderStreamPart,
   type ProviderService,
 } from "../../../providers/provider.js"
+import { toPrompt } from "../../../providers/ai-transcript.js"
 import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../../retry"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../../wide-event-boundary"
@@ -757,20 +757,17 @@ export const resolveTurnEventStream = (params: {
       } satisfies ExternalTurnSource
     }
 
-    const streamEffect = params.provider.stream(
-      providerRequestFromMessages({
-        model: resolved.modelId,
-        messages: [...resolved.messages],
-        tools: [...resolved.tools],
-        systemPrompt: resolved.systemPrompt,
-        ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-        ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
-        driverRegistry: params.driverRegistry,
-        ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
-          ? { driverId: resolved.driver.id }
-          : {}),
-      }),
-    )
+    const streamEffect = params.provider.stream({
+      model: resolved.modelId,
+      prompt: toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt }),
+      tools: [...resolved.tools],
+      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+      ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+      driverRegistry: params.driverRegistry,
+      ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
+        ? { driverId: resolved.driver.id }
+        : {}),
+    })
 
     return {
       driverKind: "model" as const,

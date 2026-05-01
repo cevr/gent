@@ -1,6 +1,5 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { getToolId, type ToolToken } from "../domain/capability/tool.js"
-import type { Message } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
@@ -14,7 +13,6 @@ import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
-import { toPrompt } from "./ai-transcript.js"
 import { ProviderError } from "../domain/provider-error.js"
 
 // ── Provider Resolution ──
@@ -175,22 +173,6 @@ export interface ProviderRequest<
   readonly tools?: ReadonlyArray<ToolToken>
   readonly toolkit?: AiToolkit.WithHandler<Tools>
 }
-
-export interface ProviderMessageRequest<
-  Tools extends ProviderToolMap = ProviderToolMap,
-> extends Omit<ProviderRequest<Tools>, "prompt"> {
-  readonly messages: ReadonlyArray<Message>
-  readonly systemPrompt?: string
-}
-
-export const providerRequestFromMessages = <Tools extends ProviderToolMap = ProviderToolMap>({
-  messages,
-  systemPrompt,
-  ...request
-}: ProviderMessageRequest<Tools>): ProviderRequest<Tools> => ({
-  ...request,
-  prompt: toPrompt(messages, { systemPrompt }),
-})
 
 // Simple generate request (no tools, no streaming)
 
