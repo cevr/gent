@@ -422,12 +422,17 @@ This blocks Wave 16 closure.
 - Preserve ask/tell/snapshot/restart tests as executable evidence.
 - Verify actor engine tests, then `bun run gate`.
 
-Status: partially decided. The final audit reclassified current `ActorEngine`
-as an acceptable in-process actor host for now: actor refs, inboxes, state,
-snapshots, restarts, receptionist lookup, and subscriptions are owned at
+Status: partially decided. The final audit reclassified the current
+`ActorEngine` + `ActorHost` pair as an acceptable in-process actor host for now:
+actor refs, inboxes, state, snapshots, receptionist lookup, and subscriptions
+are owned at
 `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-engine.ts:171-230`
 and tested at
-`/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/actor-engine.test.ts:59-552`.
+`/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/actor-engine.test.ts:59-552`;
+restart supervision is owned by
+`/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/actor-host.ts:159-219`
+and tested at
+`/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/actor-host.test.ts:143-201`.
 No immediate Effect cluster migration is required before the session-loop actor
 work above.
 
