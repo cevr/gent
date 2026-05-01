@@ -181,7 +181,7 @@ describe("Storage", () => {
         }).pipe(Effect.provide(layer))
       }),
     )
-    it.scoped("resets retired message parts schemas before accepting writes", () =>
+    it.scoped("resets incompatible storage schemas before accepting writes", () =>
       Effect.gen(function* () {
         const dir = yield* Effect.acquireRelease(
           Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-storage-retired-parts-"))),
@@ -297,6 +297,9 @@ describe("Storage", () => {
             SELECT name FROM sqlite_schema WHERE type = ${"trigger"}
           `
           const foreignKeys = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
+          const coreVersion = yield* sql<{
+            value: string
+          }>`SELECT value FROM storage_meta WHERE key = ${"core_schema_version"}`
           expect(tables.map((table) => table.name)).not.toContain("tasks")
           expect(tables.map((table) => table.name)).not.toContain("task_deps")
           expect(tables.map((table) => table.name)).not.toContain("retired_fts")
@@ -304,6 +307,7 @@ describe("Storage", () => {
           expect(views.map((view) => view.name)).not.toContain("retired_message_view")
           expect(triggers.map((trigger) => trigger.name)).not.toContain("retired_message_touch")
           expect(foreignKeys[0]?.foreign_keys).toBe(1)
+          expect(coreVersion[0]?.value).toBe("1")
           expect(columns.map((column) => column.name)).not.toContain("parts")
           yield* storage.createSession(
             new Session({
@@ -829,80 +833,6 @@ describe("Storage", () => {
           }
         }
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
-    )
-    it.live("deletes cyclic legacy child sessions without recursive CTE loops", () =>
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const sql = yield* SqlClient.SqlClient
-        yield* sql`PRAGMA foreign_keys = OFF`
-        yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-a"}, ${"cycle-b"}, ${0}, ${0})`
-        yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-b"}, ${"cycle-a"}, ${0}, ${0})`
-        yield* sql`PRAGMA foreign_keys = ON`
-        yield* storage.deleteSession(SessionId.make("cycle-a")).pipe(Effect.timeout("1 second"))
-        const remaining = yield* sql<{
-          count: number
-        }>`SELECT COUNT(*) as count FROM sessions`
-        expect(remaining[0]?.count).toBe(0)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
-    )
-    it.live("migrates duplicate pending interactions to one pending row per session branch", () =>
-      Effect.gen(function* () {
-        yield* Effect.acquireUseRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-interaction-singleton-"))),
-          (dir) =>
-            Effect.gen(function* () {
-              const dbPath = join(dir, "legacy.db")
-              const layer = Storage.LiveWithSql(dbPath).pipe(
-                Layer.provide(BunFileSystem.layer),
-                Layer.provide(BunServices.layer),
-              )
-              yield* Effect.gen(function* () {
-                const storage = yield* Storage
-                const sql = yield* SqlClient.SqlClient
-                yield* storage.createSession(
-                  new Session({
-                    id: SessionId.make("legacy-interaction-session"),
-                    name: "legacy",
-                    createdAt: new Date(0),
-                    updatedAt: new Date(0),
-                  }),
-                )
-                yield* storage.createBranch(
-                  new Branch({
-                    id: BranchId.make("legacy-interaction-branch"),
-                    sessionId: SessionId.make("legacy-interaction-session"),
-                    name: "main",
-                    createdAt: new Date(0),
-                  }),
-                )
-                yield* sql.unsafe(`DROP INDEX idx_interaction_requests_pending_singleton`)
-                yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"old-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${1})`
-                yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"new-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${2})`
-              }).pipe(Effect.provide(layer))
-
-              yield* Effect.gen(function* () {
-                yield* Storage
-                const sql = yield* SqlClient.SqlClient
-                const rows = yield* sql<{
-                  request_id: string
-                  status: string
-                }>`SELECT request_id, status FROM interaction_requests ORDER BY request_id`
-                expect(rows).toEqual([
-                  { request_id: "new-pending", status: "pending" },
-                  { request_id: "old-pending", status: "resolved" },
-                ])
-                const duplicate = yield* Effect.exit(
-                  sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${"third-pending"}, ${"approval"}, ${"legacy-interaction-session"}, ${"legacy-interaction-branch"}, ${"{}"}, ${"pending"}, ${3})`,
-                )
-                expect(duplicate._tag).toBe("Failure")
-              }).pipe(Effect.provide(layer))
-            }),
-          (dir) =>
-            Effect.sync(() => {
-              rmSync(dir, { recursive: true, force: true })
-            }),
-        )
-      }),
     )
   })
   describe("Events", () => {

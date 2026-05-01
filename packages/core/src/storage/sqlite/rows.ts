@@ -70,22 +70,8 @@ export interface EventRow {
   trace_id: string | null
 }
 
-export interface ForeignKeyListRow {
-  id: number
-  seq: number
-  table: string
-  from: string
-  to: string | null
-  on_update: string
-  on_delete: string
-  match: string
-}
-
 export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
-
-export const hasSessionParentBranchCheck = (createSql: string): boolean =>
-  createSql.replace(/\s+/g, " ").toUpperCase().includes(SESSION_PARENT_BRANCH_CHECK.toUpperCase())
 
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
