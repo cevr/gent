@@ -1,14 +1,22 @@
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
-import { ToolCallId } from "../domain/ids.js"
-import {
+import type {
   ImagePart,
+  Message,
   ReasoningPart,
   TextPart,
   ToolCallPart,
   ToolResultPart,
-  type Message,
 } from "../domain/message.js"
+import {
+  assistantMessagePartToPromptPart,
+  assistantMessagePartToResponsePart,
+  responsePartToAssistantMessagePart,
+  responsePartToToolResultPart,
+  toolMessagePartToPromptPart,
+  toolResultPartToResponsePart,
+  userMessagePartToPromptPart,
+} from "../domain/message-part-compat.js"
 
 export const GENT_MESSAGE_METADATA_FIELDS = [
   "_tag",
@@ -32,15 +40,6 @@ export interface PromptTranscriptOptions {
 export interface MessagePartProjection {
   readonly assistant: ReadonlyArray<TextPart | ReasoningPart | ImagePart | ToolCallPart>
   readonly tool: ReadonlyArray<ToolResultPart>
-}
-
-const toPromptFileData = (value: string): string | URL => {
-  if (value.startsWith("data:")) return value
-  try {
-    return new URL(value)
-  } catch {
-    return value
-  }
 }
 
 const appendNormalizedTextPart = (parts: Array<Response.AnyPart>, text: string): void => {
@@ -221,15 +220,8 @@ const toUserMessage = (message: Message): Prompt.UserMessage | undefined => {
   for (const part of message.parts) {
     switch (part.type) {
       case "text":
-        content.push(Prompt.textPart({ text: part.text }))
-        break
       case "image":
-        content.push(
-          Prompt.filePart({
-            data: toPromptFileData(part.image),
-            mediaType: part.mediaType ?? "image/png",
-          }),
-        )
+        content.push(userMessagePartToPromptPart(part))
         break
       default:
         break
@@ -245,28 +237,10 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
   for (const part of message.parts) {
     switch (part.type) {
       case "text":
-        content.push(Prompt.textPart({ text: part.text }))
-        break
       case "reasoning":
-        content.push(Prompt.reasoningPart({ text: part.text }))
-        break
       case "image":
-        content.push(
-          Prompt.filePart({
-            data: part.image,
-            mediaType: part.mediaType ?? "image/png",
-          }),
-        )
-        break
       case "tool-call":
-        content.push(
-          Prompt.toolCallPart({
-            id: part.toolCallId,
-            name: part.toolName,
-            params: part.input,
-            providerExecuted: false,
-          }),
-        )
+        content.push(assistantMessagePartToPromptPart(part))
         break
       default:
         break
@@ -279,16 +253,7 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
 const toToolMessage = (message: Message): Prompt.ToolMessage | undefined => {
   const content = message.parts.flatMap(
     (part): ReadonlyArray<Prompt.ToolMessagePart> =>
-      part.type === "tool-result"
-        ? [
-            Prompt.toolResultPart({
-              id: part.toolCallId,
-              name: part.toolName,
-              isFailure: part.output.type === "error-json",
-              result: part.output.value,
-            }),
-          ]
-        : [],
+      part.type === "tool-result" ? [toolMessagePartToPromptPart(part)] : [],
   )
 
   return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
@@ -337,27 +302,6 @@ export const toPrompt = (
   return Prompt.fromMessages(promptMessages)
 }
 
-const dataUrlToBytes = (value: string): Uint8Array | undefined => {
-  const match = /^data:([^;,]+);base64,(.+)$/u.exec(value)
-  if (match === null) return undefined
-  const data = match[2]
-  if (data === undefined) return undefined
-  return Uint8Array.from(Buffer.from(data, "base64"))
-}
-
-const imagePartToResponseFilePart = (part: ImagePart): Response.FilePart => {
-  const data = dataUrlToBytes(part.image)
-  if (data === undefined) {
-    throw new Error(
-      `responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "${part.image}"`,
-    )
-  }
-  return Response.makePart("file", {
-    data,
-    mediaType: part.mediaType ?? "image/png",
-  })
-}
-
 export const responsePartsFromMessages = (
   messages: ReadonlyArray<Message>,
 ): ReadonlyArray<Response.AnyPart> =>
@@ -368,20 +312,10 @@ export const responsePartsFromMessages = (
           return message.parts.flatMap((part): ReadonlyArray<Response.AnyPart> => {
             switch (part.type) {
               case "text":
-                return [Response.makePart("text", { text: part.text })]
               case "reasoning":
-                return [Response.makePart("reasoning", { text: part.text })]
               case "tool-call":
-                return [
-                  Response.makePart("tool-call", {
-                    id: part.toolCallId,
-                    name: part.toolName,
-                    params: part.input,
-                    providerExecuted: false,
-                  }),
-                ]
               case "image": {
-                return [imagePartToResponseFilePart(part)]
+                return [assistantMessagePartToResponsePart(part)]
               }
               default:
                 return []
@@ -390,69 +324,13 @@ export const responsePartsFromMessages = (
         case "tool":
           return message.parts.flatMap(
             (part): ReadonlyArray<Response.AnyPart> =>
-              part.type === "tool-result"
-                ? [
-                    Response.makePart("tool-result", {
-                      id: part.toolCallId,
-                      name: part.toolName,
-                      isFailure: part.output.type === "error-json",
-                      result: part.output.value,
-                      encodedResult: part.output.value,
-                      providerExecuted: false,
-                      preliminary: false,
-                    }),
-                  ]
-                : [],
+              part.type === "tool-result" ? [toolResultPartToResponsePart(part)] : [],
           )
         default:
           return []
       }
     }),
   )
-
-const responseFilePartToImagePart = (part: Response.FilePart): ImagePart | undefined =>
-  part.mediaType.startsWith("image/")
-    ? new ImagePart({
-        type: "image",
-        image: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
-        mediaType: part.mediaType,
-      })
-    : undefined
-
-const responsePartToAssistantProjection = (
-  part: Response.AnyPart,
-): TextPart | ReasoningPart | ImagePart | ToolCallPart | undefined => {
-  switch (part.type) {
-    case "text":
-      return new TextPart({ type: "text", text: part.text })
-    case "reasoning":
-      return new ReasoningPart({ type: "reasoning", text: part.text })
-    case "file":
-      return responseFilePartToImagePart(part)
-    case "tool-call":
-      return new ToolCallPart({
-        type: "tool-call",
-        toolCallId: ToolCallId.make(part.id),
-        toolName: part.name,
-        input: part.params,
-      })
-    default:
-      return undefined
-  }
-}
-
-const responsePartToToolProjection = (part: Response.AnyPart): ToolResultPart | undefined =>
-  part.type === "tool-result" && part.preliminary !== true
-    ? new ToolResultPart({
-        type: "tool-result",
-        toolCallId: ToolCallId.make(part.id),
-        toolName: part.name,
-        output: {
-          type: part.isFailure ? "error-json" : "json",
-          value: part.encodedResult,
-        },
-      })
-    : undefined
 
 export const projectResponsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
@@ -462,12 +340,12 @@ export const projectResponsePartsToMessageParts = (
   const tool: ToolResultPart[] = []
 
   for (const part of normalized) {
-    const assistantPart = responsePartToAssistantProjection(part)
+    const assistantPart = responsePartToAssistantMessagePart(part)
     if (assistantPart !== undefined) {
       assistant.push(assistantPart)
       continue
     }
-    const toolPart = responsePartToToolProjection(part)
+    const toolPart = responsePartToToolResultPart(part)
     if (toolPart !== undefined) tool.push(toolPart)
   }
 
