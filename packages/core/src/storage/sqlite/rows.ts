@@ -9,9 +9,6 @@ import { isRecord } from "../../domain/guards.js"
 import { SqlClient } from "effect/unstable/sql"
 
 // Schema decoders - Effect-based (no sync throws)
-export const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
-export const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
-export const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
 export const MessagePartJson = Schema.fromJsonString(MessagePart)
 export const decodeMessagePart = Schema.decodeUnknownEffect(MessagePartJson)
 export const encodeMessagePart = Schema.encodeEffect(MessagePartJson)
@@ -88,7 +85,6 @@ export interface MessageRow {
   branch_id: BranchId
   kind: "regular" | "interjection" | null
   role: "user" | "assistant" | "system" | "tool"
-  parts: string
   created_at: number
   turn_duration_ms: number | null
   metadata: string | null
@@ -179,7 +175,6 @@ export const encodeStoredMessage = (message: Message) =>
   Effect.gen(function* () {
     const partJsons = yield* Effect.forEach(message.parts, (part) => encodeMessagePart(part))
     return {
-      legacyPartsJson: yield* encodeMessageParts([]),
       partJsons,
       metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
     }
@@ -244,78 +239,6 @@ export const indexMessageSearch = Effect.fn("Storage.indexMessageSearch")(functi
   yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
 })
 
-export const backfillMessageContentChunks = Effect.fn("Storage.backfillMessageContentChunks")(
-  function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql<
-      Pick<MessageRow, "id" | "parts">
-    >`SELECT id, parts FROM messages WHERE parts != ${"[]"}`
-    yield* sql.withTransaction(
-      Effect.forEach(
-        rows,
-        (row) =>
-          Effect.gen(function* () {
-            const parts = yield* decodeMessageParts(row.parts)
-            const partJsons = yield* Effect.forEach(parts, (part) => encodeMessagePart(part))
-            const emptyPartsJson = yield* encodeMessageParts([])
-            yield* insertMessageContent(row.id, partJsons)
-            yield* sql`UPDATE messages SET parts = ${emptyPartsJson} WHERE id = ${row.id}`
-          }),
-        { discard: true },
-      ),
-    )
-  },
-)
-
-export const backfillMessageReceivedEvents = Effect.fn("Storage.backfillMessageReceivedEvents")(
-  function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql<{
-      id: number
-      event_json: string
-    }>`SELECT id, event_json FROM events WHERE event_tag = ${"MessageReceived"}`
-
-    yield* Effect.forEach(
-      rows,
-      (row) =>
-        Effect.gen(function* () {
-          const decoded = yield* decodeEventJson(row.event_json).pipe(Effect.option)
-          if (decoded._tag === "None") return
-          const event = normalizeLegacyAgentEvent(decoded.value)
-          if (!isRecord(event)) return
-          if (event["_tag"] !== "MessageReceived") return
-          if ("message" in event) return
-          const messageId = event["messageId"]
-          if (typeof messageId !== "string") return
-
-          const messageRows = yield* sql<MessageChunkRow>`SELECT
-              m.id,
-              m.session_id,
-              m.branch_id,
-              m.kind,
-              m.role,
-              m.parts,
-              m.created_at,
-              m.turn_duration_ms,
-              m.metadata,
-              mc.ordinal as chunk_ordinal,
-              c.part_json as chunk_part_json
-            FROM messages m
-            LEFT JOIN message_chunks mc ON mc.message_id = m.id
-            LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            WHERE m.id = ${messageId}
-            ORDER BY mc.ordinal ASC`
-          const entry = groupMessageChunkRows(messageRows)[0]
-          if (entry === undefined) return
-          const message = yield* decodeStoredMessage(entry.row, entry.partJsons)
-          const eventJson = yield* encodeEvent(AgentEvent.MessageReceived.make({ message }))
-          yield* sql`UPDATE events SET event_json = ${eventJson}, branch_id = ${message.branchId} WHERE id = ${row.id}`
-        }),
-      { discard: true },
-    )
-  },
-)
-
 export const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex")(
   function* () {
     const sql = yield* SqlClient.SqlClient
@@ -325,7 +248,6 @@ export const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSear
       m.branch_id,
       m.kind,
       m.role,
-      m.parts,
       m.created_at,
       m.turn_duration_ms,
       m.metadata,

@@ -99,9 +99,10 @@ Transport should expose domain schema classes directly when the domain class is
 the contract. Separate DTOs survive only when they are explicit read models with
 different semantics.
 
-Storage rewrites and SQLite migrations are in scope. If an old table shape keeps
-a DTO mirror alive, migrate the data and remove the shape. Startup migrations
-must be idempotent and tested against old-shape database fixtures.
+Storage rewrites are in scope, and this project currently has no compatibility
+obligation to old local databases. If an old table shape keeps a DTO mirror
+alive, delete the old shape and reset the database instead of preserving startup
+migrations or old-shape fixtures.
 
 ### Composition
 
@@ -199,10 +200,13 @@ the service they need.
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:168-185`.
 - Live/memory/test storage assembly repeats the same shape at
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts:261-348`.
-- SQLite keeps legacy `messages.parts` while also storing chunked content at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:470-510`.
-- Message write encoding still produces `legacyPartsJson` at
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts:177-184`.
+- SQLite message content now has one storage path: `message_chunks` references
+  `content_chunks`; the retired `messages.parts` column and `legacyPartsJson`
+  encoder were removed from
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/impl.ts`,
+  and
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts`.
 - Migration and repair hooks already live at
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:341-391`
   and

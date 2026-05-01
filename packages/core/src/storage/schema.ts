@@ -6,8 +6,6 @@ import {
   hasSessionParentBranchCheck,
   MESSAGES_FTS_SCHEMA_VERSION,
   backfillMessageSearchIndex,
-  backfillMessageContentChunks,
-  backfillMessageReceivedEvents,
   type ForeignKeyListRow,
 } from "./sqlite/rows.js"
 
@@ -149,7 +147,6 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
                 "branch_id",
                 "kind",
                 "role",
-                "parts",
                 "created_at",
                 "turn_duration_ms",
                 "metadata",
@@ -162,7 +159,6 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             branch_id TEXT NOT NULL,
             kind TEXT,
             role TEXT NOT NULL,
-            parts TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             turn_duration_ms INTEGER,
             metadata TEXT,
@@ -474,7 +470,6 @@ export const initSchema = Effect.gen(function* () {
       branch_id TEXT NOT NULL,
       kind TEXT,
       role TEXT NOT NULL,
-      parts TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       turn_duration_ms INTEGER,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
@@ -507,8 +502,6 @@ export const initSchema = Effect.gen(function* () {
     )
   `)
 
-  yield* backfillMessageContentChunks()
-
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY,
@@ -523,7 +516,6 @@ export const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`ALTER TABLE events ADD COLUMN trace_id TEXT`).pipe(Effect.ignoreCause)
-  yield* backfillMessageReceivedEvents()
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS actor_inbox (

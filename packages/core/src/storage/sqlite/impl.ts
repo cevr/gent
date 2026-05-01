@@ -281,10 +281,10 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
       // Messages
       createMessage: Effect.fn("Storage.createMessage")(
         function* (message) {
-          const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
+          const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
           yield* sql.withTransaction(
             Effect.gen(function* () {
-              yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+              yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
               yield* insertContent(message.id, partJsons)
               yield* indexSearch(message)
               yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
@@ -297,10 +297,10 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
 
       createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
         function* (message) {
-          const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
+          const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
           yield* sql.withTransaction(
             Effect.gen(function* () {
-              yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+              yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
               const rows = yield* sql<{
                 changed: number
               }>`SELECT changes() as changed`
@@ -324,7 +324,6 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
             m.branch_id,
             m.kind,
             m.role,
-            m.parts,
             m.created_at,
             m.turn_duration_ms,
             m.metadata,
@@ -351,7 +350,6 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
             m.branch_id,
             m.kind,
             m.role,
-            m.parts,
             m.created_at,
             m.turn_duration_ms,
             m.metadata,
@@ -571,7 +569,6 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
             m.branch_id,
             m.kind,
             m.role,
-            m.parts,
             m.created_at,
             m.turn_duration_ms,
             m.metadata,
