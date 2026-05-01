@@ -290,11 +290,19 @@ describe("Storage", () => {
           const tables = yield* sql<{ name: string }>`
             SELECT name FROM sqlite_schema WHERE type = ${"table"} AND name NOT LIKE ${"sqlite_%"}
           `
+          const views = yield* sql<{ name: string }>`
+            SELECT name FROM sqlite_schema WHERE type = ${"view"}
+          `
+          const triggers = yield* sql<{ name: string }>`
+            SELECT name FROM sqlite_schema WHERE type = ${"trigger"}
+          `
           const foreignKeys = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
           expect(tables.map((table) => table.name)).not.toContain("tasks")
           expect(tables.map((table) => table.name)).not.toContain("task_deps")
           expect(tables.map((table) => table.name)).not.toContain("retired_fts")
           expect(tables.some((table) => table.name.startsWith("retired_fts_"))).toBe(false)
+          expect(views.map((view) => view.name)).not.toContain("retired_message_view")
+          expect(triggers.map((trigger) => trigger.name)).not.toContain("retired_message_touch")
           expect(foreignKeys[0]?.foreign_keys).toBe(1)
           expect(columns.map((column) => column.name)).not.toContain("parts")
           yield* storage.createSession(

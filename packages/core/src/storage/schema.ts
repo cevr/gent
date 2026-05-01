@@ -310,7 +310,7 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
     parent: string
     fkid: number
   }>`PRAGMA foreign_key_check`
-  // These tables are retired immediately after the core schema is current.
+  // These retired tables are dropped unconditionally next; their rows are not actionable.
   const activeRows = rows.filter((row) => row.table !== "extension_state" && row.table !== "todos")
 
   if (activeRows.length === 0) return
