@@ -22,7 +22,7 @@ import {
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as AiTool from "effect/unstable/ai/Tool"
@@ -65,10 +65,9 @@ const failingLanguageModel: LanguageModel.Service = {
       }),
     )) as never,
 }
-/** Create a fake ProviderResolution with a stub LanguageModel layer */
-const fakeResolution = (): ProviderResolution => ({
-  layer: Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
-})
+/** Create a fake upstream model with a stub LanguageModel layer */
+const fakeResolution = (): ProviderResolution =>
+  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,
@@ -373,8 +372,8 @@ describe("Provider model resolution", () => {
       const streamingProvider: ModelDriverContribution = {
         id: "tools-live",
         name: "ToolsLive",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, {
+        resolveModel: () =>
+          Layer.succeed(LanguageModel.LanguageModel, {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -405,7 +404,6 @@ describe("Provider model resolution", () => {
               ])
             },
           } as unknown as LanguageModel.Service),
-        }),
       }
       const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
@@ -471,8 +469,8 @@ describe("Provider model resolution", () => {
       const streamingProvider: ModelDriverContribution = {
         id: "typed-toolkit-live",
         name: "TypedToolkitLive",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, {
+        resolveModel: () =>
+          Layer.succeed(LanguageModel.LanguageModel, {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -504,7 +502,6 @@ describe("Provider model resolution", () => {
               ])
             },
           } as unknown as LanguageModel.Service),
-        }),
       }
       const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
@@ -555,8 +552,8 @@ describe("Provider model resolution", () => {
       const streamingProvider: ModelDriverContribution = {
         id: "typed-message-toolkit-live",
         name: "TypedMessageToolkitLive",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, {
+        resolveModel: () =>
+          Layer.succeed(LanguageModel.LanguageModel, {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -588,7 +585,6 @@ describe("Provider model resolution", () => {
               ])
             },
           } as unknown as LanguageModel.Service),
-        }),
       }
       const layer = buildProviderLayer([
         makeExt("typed-message-toolkit-live-ext", [streamingProvider]),
@@ -623,8 +619,8 @@ describe("Provider model resolution", () => {
       const streamingProvider: ModelDriverContribution = {
         id: "prompt-live",
         name: "PromptLive",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, {
+        resolveModel: () =>
+          Layer.succeed(LanguageModel.LanguageModel, {
             generateText: () =>
               Effect.fail(
                 AiError.make({
@@ -651,7 +647,6 @@ describe("Provider model resolution", () => {
               ])
             },
           } as unknown as LanguageModel.Service),
-        }),
       }
       const layer = buildProviderLayer([makeExt("prompt-live-ext", [streamingProvider])])
       yield* Effect.gen(function* () {
@@ -756,9 +751,7 @@ describe("Provider model resolution", () => {
       const causeProvider: ModelDriverContribution = {
         id: "cause-stream",
         name: "CauseStream",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
-        }),
+        resolveModel: () => Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
       }
       const layer = buildProviderLayer([makeExt("cause-stream-ext", [causeProvider])])
       const result = yield* Effect.exit(
@@ -801,9 +794,7 @@ describe("Provider model resolution", () => {
       const causeProvider: ModelDriverContribution = {
         id: "cause-generate",
         name: "CauseGenerate",
-        resolveModel: () => ({
-          layer: Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
-        }),
+        resolveModel: () => Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
       }
       const layer = buildProviderLayer([makeExt("cause-generate-ext", [causeProvider])])
       const result = yield* Effect.exit(

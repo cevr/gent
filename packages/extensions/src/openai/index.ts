@@ -11,6 +11,7 @@ import {
 } from "@gent/core/extensions/api"
 import { authorizeOpenAI, OPENAI_OAUTH_ALLOWED_MODELS } from "./oauth.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
   OpenAICredentialService,
@@ -123,7 +124,11 @@ export const buildOpenAIModelDriver = (
       if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
         throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
       }
-      return { layer: makeOauthOpenAILayer(modelName, config, authInfo, credentialCellRef) }
+      return AiModel.make(
+        "openai",
+        modelName,
+        makeOauthOpenAILayer(modelName, config, authInfo, credentialCellRef),
+      )
     }
 
     // Stored API key takes precedence over env var
@@ -133,7 +138,7 @@ export const buildOpenAIModelDriver = (
     const apiKey = storedApiKey ?? envApiKey
 
     if (apiKey !== undefined) {
-      return { layer: makeApiKeyOpenAILayer(modelName, config, apiKey) }
+      return AiModel.make("openai", modelName, makeApiKeyOpenAILayer(modelName, config, apiKey))
     }
 
     // Fail closed — no stored OAuth, no stored API key, no env var.

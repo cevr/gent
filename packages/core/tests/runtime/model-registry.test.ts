@@ -9,7 +9,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
 import { ModelRegistry } from "../../src/runtime/model-registry.js"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
 import { waitFor } from "../../src/test-utils/fixtures.js"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 
 const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
@@ -89,9 +89,8 @@ const unusedLanguageModel = {
     ) as never,
 } as unknown as LanguageModel.Service
 
-const unusedResolution = (): ProviderResolution => ({
-  layer: Layer.succeed(LanguageModel.LanguageModel, unusedLanguageModel),
-})
+const unusedResolution = (): ProviderResolution =>
+  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, unusedLanguageModel))
 
 const authLayer = Layer.succeed(AuthStore, {
   get: () => Effect.succeed(undefined),

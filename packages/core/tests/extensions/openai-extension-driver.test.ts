@@ -119,9 +119,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           }),
         ),
       )
-      const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       expect(fetchState.captured.length).toBeGreaterThan(0)
       const lastReq = fetchState.captured[fetchState.captured.length - 1]!
       expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
@@ -139,9 +139,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           ),
         )
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-        const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
+        const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer, fetchState))
+        yield* Effect.promise(() => runOne(model, fetchState))
         const lastReq = fetchState.captured.at(-1)!
         // Codex transform replaces the SDK's `/chat/completions` target
         // with the ChatGPT backend Codex endpoint.
@@ -164,9 +164,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         ),
       )
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-      const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       const headers = fetchState.captured.at(-1)!.headers
       // `OpenAiClient.layer({ transformClient: ... })` is built without
       // an `apiKey` field — the SDK only sets Bearer when apiKey is
@@ -192,9 +192,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           ),
         )
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-        const layer1 = driver.resolveModel("gpt-5.4", makeOAuthInfo()).layer
+        const model1 = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer1, fetchState1))
+        yield* Effect.promise(() => runOne(model1, fetchState1))
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
         // Mutate the test-owned Ref between calls. If the second
         // `resolveModel` allocated a fresh internal Ref (the  regression
@@ -207,9 +207,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
             makeDurableCell({ access: "second-token", refresh: "r", expires: FAR_FUTURE_MS() }),
           ),
         )
-        const layer2 = driver.resolveModel("gpt-5.4", makeOAuthInfo()).layer
+        const model2 = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer2, fetchState2))
+        yield* Effect.promise(() => runOne(model2, fetchState2))
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
   )
@@ -241,7 +241,7 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
           ),
         )
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-        const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
+        const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         // 401 triggers tapError(invalidate). The retry's preprocess sees
         // the invalidated cell and attempts a live refresh. Effect.exit preserves
@@ -253,7 +253,7 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
         // Test boundary: the resolved layer is intentionally provided here.
         yield* (
           // @effect-diagnostics-next-line strictEffectProvide:off test entry point
-          oneGenerate(layer, fetchState, responder).pipe(Effect.exit)
+          oneGenerate(model, fetchState, responder).pipe(Effect.exit)
         )
         // First wire attempt fired with the seeded token — proves the
         // production mapRequestEffect ran preprocess through the rewired
@@ -282,9 +282,9 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
       Effect.gen(function* () {
         const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-        const { layer } = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
+        const model = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer, fetchState))
+        yield* Effect.promise(() => runOne(model, fetchState))
         const lastReq = fetchState.captured.at(-1)!
         // SDK injects standard Bearer auth from apiKey
         expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
@@ -298,9 +298,9 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
-      const { layer } = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
+      const model = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       expect(Ref.getUnsafe(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
     }),
   )

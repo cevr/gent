@@ -53,7 +53,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const oauthProvider: ModelDriverContribution = {
     id: "persisting-oauth",
     name: "Persisting OAuth",
-    resolveModel: () => ({ layer: Layer.empty as never }),
+    resolveModel: () => Layer.empty as never,
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
       authorize: (ctx) =>
@@ -74,7 +74,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const authorizePersistProvider: ModelDriverContribution = {
     id: "persisting-authorize",
     name: "Persisting Authorize",
-    resolveModel: () => ({ layer: Layer.empty as never }),
+    resolveModel: () => Layer.empty as never,
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
       authorize: (ctx) =>

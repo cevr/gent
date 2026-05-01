@@ -21,11 +21,11 @@ import { ProviderId } from "@gent/core/domain/model"
 const stubLayer = Layer.empty as unknown as Layer.Layer<LanguageModel.LanguageModel>
 
 const testProviders: ModelDriverContribution[] = [
-  { id: "anthropic", name: "Anthropic", resolveModel: () => ({ layer: stubLayer }) },
-  { id: "openai", name: "OpenAI", resolveModel: () => ({ layer: stubLayer }) },
-  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => ({ layer: stubLayer }) },
-  { id: "google", name: "Google", resolveModel: () => ({ layer: stubLayer }) },
-  { id: "mistral", name: "Mistral", resolveModel: () => ({ layer: stubLayer }) },
+  { id: "anthropic", name: "Anthropic", resolveModel: () => stubLayer },
+  { id: "openai", name: "OpenAI", resolveModel: () => stubLayer },
+  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => stubLayer },
+  { id: "google", name: "Google", resolveModel: () => stubLayer },
+  { id: "mistral", name: "Mistral", resolveModel: () => stubLayer },
 ]
 
 const testAgents = [

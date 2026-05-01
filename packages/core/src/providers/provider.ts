@@ -597,13 +597,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           maxTokens: request.maxTokens,
           temperature: request.temperature,
         }
-        const resolution = yield* getModel(
+        const model = yield* getModel(
           request.model,
           hints,
           request.driverRegistry,
           request.driverId,
         )
-        const modelLayer = resolution.layer
 
         const withHandler =
           request.toolkit ?? (request.tools !== undefined ? convertTools(request.tools) : undefined)
@@ -620,7 +619,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
               })
 
         return rawStream.pipe(
-          Stream.provide(modelLayer),
+          Stream.provide(model),
           Stream.catch((error: unknown) =>
             Stream.fail(
               new ProviderError({
@@ -653,16 +652,15 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       return {
         stream,
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const resolution = yield* getModel(
+          const model = yield* getModel(
             request.model,
             { maxTokens: request.maxTokens },
             request.driverRegistry,
             request.driverId,
           )
-          const modelLayer = resolution.layer
           const result = yield* LanguageModel.generateText({ prompt: request.prompt }).pipe(
             // @effect-diagnostics-next-line strictEffectProvide:off
-            Effect.provide(modelLayer),
+            Effect.provide(model),
             Effect.mapError(
               (error: unknown) =>
                 new ProviderError({

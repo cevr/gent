@@ -78,11 +78,10 @@ export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError
   },
 ) {}
 
-/** Resolution returned by a model driver's `resolveModel`. The Layer must be
- *  fully self-contained — auth, tool naming, cache control all baked in. */
-export interface ProviderResolution {
-  readonly layer: Layer.Layer<LanguageModel.LanguageModel>
-}
+/** Upstream Effect AI model/layer returned by a model driver's `resolveModel`.
+ *  It must be fully self-contained: auth, tool naming, cache control, and
+ *  model metadata are all baked in. */
+export type ProviderResolution = Layer.Layer<LanguageModel.LanguageModel>
 
 /** Hints passed from the agent loop into `resolveModel`. Drivers bake these
  *  into their provider Config layer (e.g. `AnthropicLanguageModel.Config.max_tokens`). */
@@ -156,8 +155,8 @@ export interface ProviderAuthContribution {
 
 /**
  * Registers a model provider as a driver. Same capability surface as the
- * pre- `ProviderContribution` — `id` doubles as the driver id, the layer
- * returned by `resolveModel` produces an `effect/unstable/ai` LanguageModel,
+ * pre- `ProviderContribution` — `id` doubles as the driver id, the model
+ * returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
  * `listModels` filters/extends the catalog, and `auth` wires the OAuth/API
  * key flow. The driver registry routes a `DriverRef({ _tag: "model", id })`
  * to the matching contribution.
@@ -167,7 +166,7 @@ export interface ModelDriverContribution {
   readonly id: string
   /** Display name. */
   readonly name: string
-  /** Resolve a model name to a layer that produces a LanguageModel. */
+  /** Resolve a model name to an Effect AI model. */
   readonly resolveModel: (
     modelName: string,
     authInfo?: ProviderAuthInfo,

@@ -14,7 +14,7 @@ const pendingCallbacks = new Map<string, (code?: string) => string>()
 const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
-  resolveModel: () => ({ layer: Layer.empty as never }),
+  resolveModel: () => Layer.empty as never,
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
@@ -44,7 +44,7 @@ const oauthProvider: ModelDriverContribution = {
 const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
-  resolveModel: () => ({ layer: Layer.empty as never }),
+  resolveModel: () => Layer.empty as never,
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
@@ -52,7 +52,7 @@ const noopProvider: ModelDriverContribution = {
 const persistDuringAuthorizeProvider: ModelDriverContribution = {
   id: "persisting",
   name: "Persisting",
-  resolveModel: () => ({ layer: Layer.empty as never }),
+  resolveModel: () => Layer.empty as never,
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
     authorize: (ctx) =>

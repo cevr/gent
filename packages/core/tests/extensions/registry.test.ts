@@ -37,7 +37,7 @@ const makeAgent = (
 const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
   name: name ?? providerId,
-  resolveModel: (_modelName) => ({ layer: Layer.empty as never }),
+  resolveModel: (_modelName) => Layer.empty as never,
 })
 // Static prompt sections live on capability leaf `prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.

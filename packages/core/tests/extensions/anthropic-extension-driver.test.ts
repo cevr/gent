@@ -107,9 +107,9 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           at: Date.now(),
         }),
       )
-      const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       expect(fetchState.captured.length).toBeGreaterThan(0)
       const lastReq = fetchState.captured[fetchState.captured.length - 1]!
       expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
@@ -129,9 +129,9 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           }),
         )
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-        const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+        const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer, fetchState))
+        yield* Effect.promise(() => runOne(model, fetchState))
         const payload = parsePayload(fetchState.captured.at(-1)?.body)
         // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
         // OAuth path stops being wrapped, the system block disappears.
@@ -158,9 +158,9 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           }),
         )
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-        const layer1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
+        const model1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer1, fetchState1))
+        yield* Effect.promise(() => runOne(model1, fetchState1))
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
         // Mutate the test-owned Ref between calls. If the second
         // `resolveModel` allocated a fresh internal Ref (the  regression),
@@ -177,9 +177,9 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
             at: Date.now(),
           }),
         )
-        const layer2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
+        const model2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer2, fetchState2))
+        yield* Effect.promise(() => runOne(model2, fetchState2))
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
   )
@@ -206,9 +206,9 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         }),
       )
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-      const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
       expect(sentBeta).not.toContain("context-1m-2025-08-07")
     }),
@@ -221,9 +221,9 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-      const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       const headers = fetchState.captured.at(-1)!.headers
       expect(headers["x-api-key"]).toBe("sk-test-1234")
       expect(headers["authorization"]).toBeUndefined()
@@ -237,9 +237,9 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-        const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+        const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(layer, fetchState))
+        yield* Effect.promise(() => runOne(model, fetchState))
         const payload = parsePayload(fetchState.captured.at(-1)?.body)
         // No keychainClient wrapper → no system block, no identity prefix
         // injection. The API-key branch must not wrap.
@@ -252,9 +252,9 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
-      const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(layer, fetchState))
+      yield* Effect.promise(() => runOne(model, fetchState))
       expect(Ref.getUnsafe(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
       expect(Ref.getUnsafe(betaCellRef)).toBe(EMPTY_BETA_CELL)
     }),

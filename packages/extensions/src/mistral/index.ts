@@ -8,6 +8,7 @@ import {
   type ProviderResolution,
 } from "@gent/core/extensions/api"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 
 const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
@@ -51,7 +52,7 @@ export const MistralExtension = defineExtension({
         const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
           Layer.provide(clientLayer),
         )
-        return { layer: modelLayer }
+        return AiModel.make("mistral", modelName, modelLayer)
       },
       auth: {
         methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],

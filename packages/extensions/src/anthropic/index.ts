@@ -18,6 +18,7 @@ import {
   type AnthropicKeychainEnv,
 } from "./oauth.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
+import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 import { keychainClient } from "./keychain-client.js"
 import {
@@ -152,7 +153,11 @@ export const buildAnthropicModelDriver = (
     const config = buildAnthropicConfig(hints)
 
     if (apiKey !== undefined) {
-      return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
+      return AiModel.make(
+        "anthropic",
+        modelName,
+        makeApiKeyAnthropicLayer(modelName, config, apiKey),
+      )
     }
 
     // Fail closed — no stored API key, no env var, and no stored OAuth.
@@ -174,9 +179,11 @@ export const buildAnthropicModelDriver = (
     // service + beta cache layer pair. The Refs are shared across all
     // calls, so cross-request beta learning and credential cache reuse
     // survive.
-    return {
-      layer: makeOauthAnthropicLayer(modelName, config, authInfo, credentialCellRef, betaCellRef),
-    }
+    return AiModel.make(
+      "anthropic",
+      modelName,
+      makeOauthAnthropicLayer(modelName, config, authInfo, credentialCellRef, betaCellRef),
+    )
   },
   auth: {
     methods: [
