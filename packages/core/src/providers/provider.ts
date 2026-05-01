@@ -163,8 +163,6 @@ interface ProviderRequestBase {
   readonly maxTokens?: number
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-  readonly abortSignal?: AbortSignal
-  readonly providerOptions?: unknown
   /** Per-turn driver registry override (per-cwd profile). */
   readonly driverRegistry?: DriverRegistryService
   /** Per-agent driver id override (from `ModelDriverRef.id`). */

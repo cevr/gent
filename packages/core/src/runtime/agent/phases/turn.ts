@@ -760,7 +760,6 @@ export const resolveTurnEventStream = (params: {
         messages: [...resolved.messages],
         tools: [...resolved.tools],
         systemPrompt: resolved.systemPrompt,
-        abortSignal: params.activeStream.abortController.signal,
         ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
         ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
         driverRegistry: params.driverRegistry,
