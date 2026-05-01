@@ -30,13 +30,15 @@ const makeSerializedDeliver = (deliver: (envelope: EventEnvelope) => Effect.Effe
             yield* Deferred.succeed(job.ack, void 0)
             return
           }
-          yield* deliver(job.envelope)
-          delivered.add(job.envelope.id)
-          if (delivered.size > maxDeliveredIds) {
-            const oldest = delivered.values().next().value
-            if (oldest !== undefined) delivered.delete(oldest)
+          const exit = yield* Effect.exit(deliver(job.envelope))
+          if (exit._tag === "Success") {
+            delivered.add(job.envelope.id)
+            if (delivered.size > maxDeliveredIds) {
+              const oldest = delivered.values().next().value
+              if (oldest !== undefined) delivered.delete(oldest)
+            }
           }
-          yield* Deferred.succeed(job.ack, void 0)
+          yield* Deferred.done(job.ack, exit)
         }),
       ),
       Effect.forever,

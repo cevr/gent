@@ -151,6 +151,34 @@ describe("EventPublisher", () => {
       }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
+  it.live("broadcast defects fail the caller without killing the delivery worker", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const envelope = {
+        id: EventId.make(1),
+        event: makeEvent("OuterEvent", "session-1", "branch-1"),
+        createdAt: Date.now(),
+      } as EventEnvelope
+      const customEventStore = Layer.succeed(EventStore, {
+        append: (event) => Effect.succeed({ ...envelope, event }),
+        broadcast: () =>
+          Ref.updateAndGet(attempts, (count) => count + 1).pipe(
+            Effect.flatMap((count) => (count === 1 ? Effect.die("broadcast defect") : Effect.void)),
+          ),
+        publish: () => Effect.void,
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
+        removeSession: () => Effect.void,
+      })
+      const layer = Layer.provide(EventPublisherLive, customEventStore)
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        const failed = yield* Effect.exit(publisher.deliver(envelope))
+        expect(failed._tag).toBe("Failure")
+        yield* publisher.deliver(envelope)
+      }).pipe(Effect.provide(layer))
+      expect(yield* Ref.get(attempts)).toBe(2)
+    }),
+  )
 })
 describe("EventPublisher server layer", () => {
   it.live("published events persist and broadcast through the shared store", () =>
