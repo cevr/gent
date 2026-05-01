@@ -86,12 +86,15 @@ describe("AuthStore", () => {
   )
 
   it.live("delete failure while discarding invalid auth stays non-fatal", () => {
-    const logMessages: string[] = []
-    const captureLogger = Logger.make(({ message }) => {
-      logMessages.push(
-        Array.isArray(message) ? message.map((entry) => String(entry)).join(" ") : String(message),
-      )
+    const logEntries: Array<{
+      readonly message: unknown
+      readonly annotations: Record<string, unknown>
+    }> = []
+    const captureLogger = Logger.map(Logger.formatStructured, (entry) => {
+      logEntries.push(entry)
     })
+    const messageText = (message: unknown) =>
+      Array.isArray(message) ? message.map((entry) => String(entry)).join(" ") : String(message)
     const failingStorage = Layer.succeed(AuthStorage, {
       get: (provider: string) => Effect.succeed(provider === "openai" ? "sk-raw" : undefined),
       set: () => Effect.void,
@@ -103,8 +106,16 @@ describe("AuthStore", () => {
       const auth = yield* AuthStore
       const result = yield* auth.get("openai").pipe(Effect.provide(Logger.layer([captureLogger])))
       expect(result).toBeUndefined()
+      const logMessages = logEntries.map((entry) => messageText(entry.message))
       expect(logMessages).toContain("failed to discard invalid auth info")
       expect(logMessages).not.toContain("discarded invalid auth info")
+      const failureLog = logEntries.find(
+        (entry) => messageText(entry.message) === "failed to discard invalid auth info",
+      )
+      expect(String(failureLog?.annotations["cause"])).toContain("AuthStoreError")
+      expect(String(failureLog?.annotations["deleteCause"])).toContain(
+        "AuthStorageError: delete failed",
+      )
       const providers = yield* auth.list()
       expect(providers).toEqual(["openai"])
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
