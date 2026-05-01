@@ -4,7 +4,7 @@
  * This file is intentionally smaller than `extensions/api`: it exports the
  * primitives extension authors should reach for by default, while advanced
  * runtime, provider, actor-engine, and test plumbing stays on explicit domain
- * subpaths or the legacy full-power facade during migration.
+ * subpaths or the full-power `extensions/api` facade.
  *
  * @module
  */
@@ -29,7 +29,6 @@ export {
   DriverRef,
   ModelDriverRef,
   ExternalDriverRef,
-  AgentSpec,
   makeRunSpec,
   RunSpecSchema,
   AgentRunOverridesSchema,

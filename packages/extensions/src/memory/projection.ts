@@ -8,8 +8,7 @@
  *      (project/global).
  *      No actor, no mirror. `derive-do-not-create-states`: disk is truth.
  *
- * Session memories were removed with the legacy state-holder; the vault is
- * the prompt source.
+ * The vault is the prompt source.
  */
 
 import { Effect } from "effect"

@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
@@ -38,9 +38,9 @@ const makeCtx = (overrides: {
   testToolContext({
     agentName: AgentName.make("cowork"),
     agent: {
-      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
-        const agent = Object.values(Agents).find((a) => a.name === name)
+        const agent = AllBuiltinAgents.find((a) => a.name === name)
         return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
       },
       run: overrides.agentRun,

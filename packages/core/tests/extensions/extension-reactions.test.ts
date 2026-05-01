@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Data, Effect, Exit } from "effect"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type {
   ContextMessagesInput,
   ExtensionContributions,
@@ -34,7 +34,7 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents["cowork"]!,
+    agent: getBuiltinAgent("cowork")!,
     allTools: [],
     agentName: AgentName.make("cowork"),
   },
@@ -140,7 +140,7 @@ describe("runtime slots", () => {
 
     return slots
       .resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents["cowork"]! } satisfies SystemPromptInput,
+        { basePrompt: "base", agent: getBuiltinAgent("cowork")! } satisfies SystemPromptInput,
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
@@ -166,7 +166,7 @@ describe("runtime slots", () => {
 
     return slots
       .resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents["cowork"]! } satisfies SystemPromptInput,
+        { basePrompt: "base", agent: getBuiltinAgent("cowork")! } satisfies SystemPromptInput,
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
@@ -189,7 +189,7 @@ describe("runtime slots", () => {
       .resolveContextMessages(
         {
           messages: [baseMessage],
-          agent: Agents["cowork"]!,
+          agent: getBuiltinAgent("cowork")!,
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
         } satisfies ContextMessagesInput,
@@ -238,7 +238,7 @@ describe("runtime slots", () => {
       .resolveContextMessages(
         {
           messages: [baseMessage],
-          agent: Agents["cowork"]!,
+          agent: getBuiltinAgent("cowork")!,
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
         } satisfies ContextMessagesInput,

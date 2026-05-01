@@ -9,7 +9,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/extensions/session-tools"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -24,7 +24,7 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents["cowork"]!,
+    agent: getBuiltinAgent("cowork")!,
     allTools: [],
     agentName: AgentName.make("cowork"),
   },
@@ -42,7 +42,7 @@ describe("SessionToolsExtension", () => {
         },
       ])
       const prompt = yield* compiled.resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents["cowork"]!, interactive: true },
+        { basePrompt: "base", agent: getBuiltinAgent("cowork")!, interactive: true },
         { projection: stubProjectionCtx, host: stubCtx },
       )
       expect(prompt).toContain("## Session naming")
@@ -61,7 +61,7 @@ describe("SessionToolsExtension", () => {
         },
       ])
       const prompt = yield* compiled.resolveSystemPrompt(
-        { basePrompt: "base", agent: Agents["cowork"]!, interactive: false },
+        { basePrompt: "base", agent: getBuiltinAgent("cowork")!, interactive: false },
         { projection: stubProjectionCtx, host: stubCtx },
       )
       expect(prompt).toBe("base")

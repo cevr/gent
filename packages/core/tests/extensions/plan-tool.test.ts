@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -46,9 +46,9 @@ const makeCtx = (overrides: {
       request: dieStub("extension.request"),
     },
     agent: {
-      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
-        const agent = Object.values(Agents).find((a) => a.name === name)
+        const agent = AllBuiltinAgents.find((a) => a.name === name)
         return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
       },
       run: agentRun,

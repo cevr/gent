@@ -14,7 +14,7 @@ import { compileExtensionReactions } from "../../../src/runtime/extensions/exten
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsRpc } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
@@ -83,7 +83,7 @@ describe("SkillsExtension via RPC", () => {
           turn: {
             sessionId,
             branchId,
-            agent: Agents["cowork"]!,
+            agent: getBuiltinAgent("cowork")!,
             allTools: [],
             agentName: AgentName.make("cowork"),
           },

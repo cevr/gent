@@ -13,7 +13,7 @@ import { Effect } from "effect"
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { AgentRunResult } from "@gent/core/domain/agent"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import type { AgentName } from "@gent/core/domain/agent"
 import { ArtifactId, SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
@@ -77,9 +77,9 @@ const stubAgentRun =
     )
 
 const agentLookup = {
-  get: (name: AgentName) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+  get: (name: AgentName) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
   require: (name: AgentName) => {
-    const agent = Object.values(Agents).find((a) => a.name === name)
+    const agent = AllBuiltinAgents.find((a) => a.name === name)
     return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
   },
   resolveDualModelPair: () =>

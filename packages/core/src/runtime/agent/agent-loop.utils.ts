@@ -9,7 +9,7 @@ import {
   messagePartsToolCallParts,
   messagePartsToolResultParts,
   messageSingleText,
-} from "../../domain/message-part-compat.js"
+} from "../../domain/message-part-projection.js"
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
 import { Message, Branch, MessagePart, MessageMetadata, Session } from "../../domain/message.js"
-import { messagePartsSearchText } from "../../domain/message-part-compat.js"
+import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent } from "../../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"

@@ -4,7 +4,6 @@ import {
   transformPayload,
   transformResponseContent,
   transformStreamEvent,
-  transformSystem,
   SYSTEM_IDENTITY_PREFIX,
 } from "@gent/extensions/anthropic/keychain-client"
 
@@ -116,54 +115,6 @@ describe("transformPayload", () => {
     const result = transformPayload(payload)
     expect(result["model"]).toBe("claude-opus-4-6")
     expect(result["max_tokens"]).toBe(4096)
-  })
-})
-
-// ── transformSystem ──
-
-describe("transformSystem", () => {
-  test("returns identity prefix when system is undefined", () => {
-    expect(transformSystem(undefined)).toBe(SYSTEM_IDENTITY_PREFIX)
-  })
-
-  test("returns identity prefix when system is null", () => {
-    expect(transformSystem(null)).toBe(SYSTEM_IDENTITY_PREFIX)
-  })
-
-  test("prepends identity to string system", () => {
-    const result = transformSystem("Be helpful.") as string
-    expect(result.startsWith(SYSTEM_IDENTITY_PREFIX)).toBe(true)
-    expect(result).toContain("Be helpful.")
-  })
-
-  test("idempotent — does not duplicate identity in string", () => {
-    const alreadyPrefixed = `${SYSTEM_IDENTITY_PREFIX}\n\nBe helpful.`
-    expect(transformSystem(alreadyPrefixed)).toBe(alreadyPrefixed)
-  })
-
-  test("prepends identity block to array system", () => {
-    const blocks = [{ type: "text", text: "Be helpful." }]
-    const result = transformSystem(blocks) as Array<Record<string, unknown>>
-    expect(result.length).toBe(2)
-    expect(result[0]!["text"]).toBe(SYSTEM_IDENTITY_PREFIX)
-    expect(result[1]!["text"]).toBe("Be helpful.")
-  })
-
-  test("idempotent — does not duplicate identity in array", () => {
-    const blocks = [
-      { type: "text", text: SYSTEM_IDENTITY_PREFIX },
-      { type: "text", text: "Be helpful." },
-    ]
-    const result = transformSystem(blocks) as Array<Record<string, unknown>>
-    expect(result.length).toBe(2)
-  })
-
-  test("sets cache_control on all system blocks", () => {
-    const blocks = [{ type: "text", text: "Be helpful." }]
-    const result = transformSystem(blocks) as Array<Record<string, unknown>>
-    for (const block of result) {
-      expect(block["cache_control"]).toEqual({ type: "ephemeral" })
-    }
   })
 })
 

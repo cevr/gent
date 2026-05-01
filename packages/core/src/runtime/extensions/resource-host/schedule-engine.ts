@@ -2,8 +2,7 @@
  * Schedule engine — host-side cron reconciliation for `Resource.schedule`
  * entries.
  *
- * Replaces the legacy `scheduler.ts` (`extractJobs` + `JobContribution`).
- * Same wire format and reconciliation semantics:
+ * Reconciles desired schedules from resources into Bun cron jobs:
  *   - Sources desired jobs from every Resource's `schedule` array
  *   - Renders a Bun-spawn wrapper script per job
  *   - Installs/removes via `Bun.cron`

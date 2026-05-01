@@ -16,7 +16,7 @@ import {
   toolMessagePartToPromptPart,
   toolResultPartToResponsePart,
   userMessagePartToPromptPart,
-} from "../domain/message-part-compat.js"
+} from "../domain/message-part-projection.js"
 
 export const GENT_MESSAGE_METADATA_FIELDS = [
   "_tag",

@@ -1,15 +1,9 @@
 /**
  * @gent/exec-tools — shell-execution capability surface.
  *
- * The migration removed the legacy `notificationMachine` /
- * `notificationResource` FSM that mediated background-command
- * notifications. The bash tool now calls `ctx.session.queueFollowUp`
- * directly from its `Effect.forkDetach` watcher (`bash.ts`), which is
- * the same surface that the FSM's `afterTransition` `QueueFollowUp`
- * effect ultimately reached. The state machine carried no observable
- * data — its sole job was to translate one inbound command into one
- * outbound effect — so it is deleted rather than migrated. This also
- * removes the extension's last request/actor view surface.
+ * The bash tool calls `ctx.session.queueFollowUp` directly from its
+ * `Effect.forkDetach` watcher (`bash.ts`). Background command completion is
+ * modeled as a direct session follow-up, with no extension actor state.
  */
 
 import { defineExtension } from "@gent/core/extensions/api"

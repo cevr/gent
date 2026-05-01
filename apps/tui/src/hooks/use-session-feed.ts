@@ -16,7 +16,7 @@ import {
   messagePartReasoning,
   messagePartText,
   messagePartToolCall,
-} from "@gent/core/domain/message-part-compat.js"
+} from "@gent/core/domain/message-part-projection.js"
 import {
   extractText,
   extractReasoning,

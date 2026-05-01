@@ -21,7 +21,7 @@ import {
   messagePartsText,
   messagePartsToolCallParts,
   messagePartsToolResultParts,
-} from "@gent/core/domain/message-part-compat"
+} from "@gent/core/domain/message-part-projection"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import {
@@ -42,7 +42,7 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
 // ── Helpers ──
@@ -312,7 +312,7 @@ describe("external turn execution", () => {
           manifest: { id: ExtensionId.make("agents") },
           scope: "builtin" as const,
           sourcePath: "test",
-          contributions: { agents: Object.values(Agents) },
+          contributions: { agents: AllBuiltinAgents },
         },
       ])
       const deps = Layer.mergeAll(

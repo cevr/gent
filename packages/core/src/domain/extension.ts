@@ -308,8 +308,8 @@ export interface ExtensionReactions<E = never, R = never> {
   ) => Effect.Effect<unknown, E, R>
   /**
    * Tool execution wrapper. Receives the current result produced by the base
-   * tool or a lower-scope wrapper. Use sparingly for auditing or compatibility
-   * shims; ordinary behavior belongs in the tool implementation.
+   * tool or a lower-scope wrapper. Use sparingly for auditing and
+   * cross-cutting policies; ordinary behavior belongs in the tool implementation.
    */
   readonly toolExecute?: (
     input: ToolExecuteInput & { readonly current: unknown },
@@ -341,9 +341,6 @@ export interface ProjectionTurnContext {
   readonly sessionCwd?: string
   readonly turn: ExtensionTurnContext
 }
-
-/** @deprecated Use ExtensionTurnContext */
-export type ExtensionDeriveContext = ExtensionTurnContext
 
 /** Fragment contributed by an extension's derive() to influence tool visibility */
 export interface ToolPolicyFragment {

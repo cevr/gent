@@ -1,9 +1,7 @@
 /**
  * Interaction-tools extension — `ask_user` + `prompt` tools.
  *
- * The legacy actor (which mirrored `InteractionPresented`/`InteractionResolved`
- * events into `Pending`/`Idle` state for the UI snapshot) has been deleted.
- * The actual interaction workflow is owned by
+ * The interaction workflow is owned by
  * `AgentLoop.WaitingForInteraction` + `ApprovalService`, both of which are
  * cold-state correct (interactions survive restart). Clients fetch pending
  * interaction state through typed RPC and refetch from session events.

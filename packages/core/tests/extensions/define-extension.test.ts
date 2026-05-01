@@ -9,7 +9,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
@@ -50,7 +50,7 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents["cowork"]!,
+    agent: getBuiltinAgent("cowork")!,
     allTools: [],
     agentName: AgentName.make("cowork"),
   },
@@ -113,7 +113,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "all-kinds",
         tools: [myTool],
-        agents: [Agents["cowork"]!],
+        agents: [getBuiltinAgent("cowork")!],
         reactions: {
           systemPrompt: (input) => Effect.succeed(`${input.basePrompt} [suffix]`),
         },
@@ -266,7 +266,7 @@ describe("defineExtension", () => {
 
       const compiled = compileExtensionReactions([loaded])
       const result = yield* compiled.resolveSystemPrompt(
-        { basePrompt: "yo", agent: Agents["cowork"]! },
+        { basePrompt: "yo", agent: getBuiltinAgent("cowork")! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       expect(result).toBe("yo!!")

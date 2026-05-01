@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -22,7 +22,7 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents["cowork"]!,
+    agent: getBuiltinAgent("cowork")!,
     allTools: [],
     agentName: AgentName.make("cowork"),
   },
@@ -53,7 +53,7 @@ describe("prompt slots", () => {
 
     return compiled
       .resolveSystemPrompt(
-        { basePrompt: "x", agent: Agents["cowork"]! },
+        { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
@@ -64,7 +64,7 @@ describe("prompt slots", () => {
   it.live("empty turn reactions are a no-op", () =>
     compileExtensionReactions([])
       .resolveSystemPrompt(
-        { basePrompt: "x", agent: Agents["cowork"]! },
+        { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("x")))),

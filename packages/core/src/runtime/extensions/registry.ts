@@ -39,8 +39,7 @@ import { sealErasedEffect } from "./effect-membrane.js"
 
 // SlashCommand — public-facing slash entry. Built from `commands:` bucket
 // winners. Read- and write-intent both surface as commands; the bucket is the
-// load-bearing filter. The legacy server-side command contribution shape died
-// in .
+// load-bearing filter.
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
@@ -358,8 +357,7 @@ export const resolveExtensions = (
   // Prompt sections from capability leaves are read off the WINNERS map,
   // not raw extractions. Otherwise a higher-scope capability shadowing a
   // lower-scope tool would still inherit the loser's prompt — defeating the
-  // shadow. Last scope wins by section id, identical
-  // to the legacy promptSection contribution semantics.
+  // shadow. Last scope wins by section id.
   // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {

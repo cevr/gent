@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
@@ -40,7 +40,7 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: Agents["cowork"]!,
+    agent: getBuiltinAgent("cowork")!,
     allTools: [],
     agentName: AgentName.make("cowork"),
   },
@@ -87,8 +87,11 @@ describe("scope precedence", () => {
     })
 
     it.live("agent with same name: project shadows builtin", () => {
-      const builtinAgent = Agents["cowork"]!
-      const projectAgent = { ...Agents["cowork"]!, description: "shadowed" } as AgentDefinition
+      const builtinAgent = getBuiltinAgent("cowork")!
+      const projectAgent = {
+        ...getBuiltinAgent("cowork")!,
+        description: "shadowed",
+      } as AgentDefinition
 
       const resolved = resolveExtensions([
         ext("a", "builtin", { agents: [builtinAgent] }),
@@ -212,7 +215,7 @@ describe("scope precedence", () => {
 
       return compiled
         .resolveSystemPrompt(
-          { basePrompt: "x", agent: Agents["cowork"]! },
+          { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
           { projection: stubProjectionCtx, host: stubCtx },
         )
         .pipe(

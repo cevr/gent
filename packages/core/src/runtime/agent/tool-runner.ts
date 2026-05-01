@@ -159,7 +159,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, message)
             }
 
-            // Run the legacy tool.execute shim, falling back to direct tool execution.
+            // Run extension tool wrappers, falling back to direct tool execution.
             const executeResult = yield* activeRegistry.extensionReactions
               .executeTool(
                 {

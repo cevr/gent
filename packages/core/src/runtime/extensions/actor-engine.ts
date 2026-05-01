@@ -4,7 +4,7 @@
  * Each `spawn(behavior)` allocates a `Mailbox<M>` (Queue.unbounded),
  * forks a fiber that runs the behavior's `receive` loop, and returns
  * a typed `ActorRef<M>`. `tell` enqueues a message; `ask` correlates a
- * one-shot reply via `Deferred<A>` plus a per-correlation `reply` shim
+ * one-shot reply via `Deferred<A>` plus a per-correlation `reply` channel
  * attached to the `ActorContext` for the duration of one `receive`.
  *
  * Supervision policy in the actor loop:
@@ -178,9 +178,8 @@ export interface ActorEngineService {
    * Ask-correlated send. The reply type is inferred from the message's
    * `AskBranded<Reply>` brand attached by `TaggedEnumClass.askVariant<R>()`.
    * Tell-only variants do not carry the brand and are rejected at the type
-   * level. The runtime channel is the same as before (per-correlation
-   * `Deferred` plus a per-receive `reply` shim) — only the type signature
-   * changed.
+   * level. The runtime channel is per-correlation `Deferred` plus a
+   * per-receive `reply` channel.
    */
   readonly ask: <M, ReplyMsg extends M & AskBranded<unknown>>(
     target: ActorRef<M>,

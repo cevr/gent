@@ -287,7 +287,7 @@ export const collectValidationFailures = (
     "external driver",
   )
   // Static prompt sections live on capability leaf `prompt`. Collision check
-  // mirrors the legacy promptSection contribution's id-keyed dedup.
+  // uses prompt-section id dedup.
   collectScopedCollisions(
     (cs) =>
       [

@@ -54,7 +54,7 @@ export type ExternalDriverRef = typeof DriverRef.External.Type
 export const DEFAULT_AGENT_NAME = AgentName.make("cowork")
 
 /**
- * AgentSpec — agent identity + defaults.
+ * AgentDefinition — agent identity + defaults.
  *
  * Per `composability-not-flags`, agent specs carry only what makes the agent
  * what it is: name, description, model, prompt, tool allow/deny, sampling
@@ -75,10 +75,6 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   reasoningEffort: Schema.optional(ReasoningEffort),
   driver: Schema.optional(DriverRef),
 }) {}
-
-/** @alias retained for transitional readability — `AgentSpec` is the conceptual name. */
-export const AgentSpec = AgentDefinition
-export type AgentSpec = AgentDefinition
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
 

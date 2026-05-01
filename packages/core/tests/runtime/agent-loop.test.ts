@@ -38,7 +38,7 @@ import {
   TextPart,
   ToolResultPart,
 } from "@gent/core/domain/message"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
 import {
   getToolId,
@@ -101,7 +101,7 @@ const makeExtRegistry = (
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
-        agents: Object.values(Agents),
+        agents: AllBuiltinAgents,
         tools,
         resources,
       },
@@ -392,7 +392,7 @@ const makeExternalLayerWithEvents = (
       scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
-        agents: Object.values(Agents),
+        agents: AllBuiltinAgents,
       },
     },
     {
@@ -2219,7 +2219,7 @@ describe("recovery", () => {
         scope: "builtin",
         sourcePath: "test",
         contributions: {
-          agents: Object.values(Agents),
+          agents: AllBuiltinAgents,
           tools: [idempotentTestTool],
         },
       },

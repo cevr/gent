@@ -52,7 +52,7 @@ import { Session, Branch, type Message } from "../../domain/message.js"
 import {
   messagePartsReasoningLines,
   messagePartsTextLines,
-} from "../../domain/message-part-compat.js"
+} from "../../domain/message-part-projection.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"

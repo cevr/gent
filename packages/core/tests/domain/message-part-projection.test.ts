@@ -16,7 +16,7 @@ import {
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
   toolResultPartToResponsePart,
-} from "@gent/core/domain/message-part-compat"
+} from "@gent/core/domain/message-part-projection"
 import { ToolCallId } from "@gent/core/domain/ids"
 import {
   ImagePart,
@@ -28,7 +28,7 @@ import {
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
-describe("message part compatibility", () => {
+describe("message part projection", () => {
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
     const textPart = new TextPart({ type: "text", text: "hello" })

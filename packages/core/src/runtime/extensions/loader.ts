@@ -12,8 +12,7 @@ import { getToolMetadata } from "../../domain/capability/tool.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
- *  scope collision detection. Reads from every typed bucket — same shape,
- *  same precedence rules as the legacy promptSection contribution. */
+ *  scope collision detection across typed buckets. */
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
   [
     ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),

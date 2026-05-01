@@ -7,7 +7,7 @@ import {
 } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
-import { messagePartsTextLines } from "../domain/message-part-compat.js"
+import { messagePartsTextLines } from "../domain/message-part-projection.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../domain/steer.js"
 import {
@@ -785,9 +785,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               yield* sessionStorage.createSession(session)
               yield* branchStorage.createBranch(branch)
               // Pre-record the (sessionId → cwd) binding before the first event
-              // so runtime/profile lookup can resolve the session cwd without
-              // falling back to a storage read. `input.cwd` is optional in the
-              // schema for legacy callers.
+              // so runtime/profile lookup can resolve the session cwd without a
+              // storage read. Headless startup can omit cwd.
               if (input.cwd !== undefined) {
                 yield* sessionCwdRegistry.record(sessionId, input.cwd)
               }

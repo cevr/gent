@@ -24,7 +24,7 @@ import {
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
 } from "@gent/core/domain/agent"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents, getBuiltinAgent } from "@gent/extensions/all-agents"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
@@ -82,7 +82,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        agents: Object.values(Agents),
+        agents: AllBuiltinAgents,
         tools: [bashStubTool],
       },
     },
@@ -109,7 +109,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        agents: Object.values(Agents),
+        agents: AllBuiltinAgents,
         tools: [bashStubTool, readStubTool],
       },
     },
@@ -231,15 +231,15 @@ describe("RunSpec", () => {
         manifest: { id: ExtensionId.make("agents") },
         scope: "builtin",
         sourcePath: "test",
-        contributions: { agents: Object.values(Agents) },
+        contributions: { agents: AllBuiltinAgents },
       },
     ])
     const impl = ExtensionRegistry.fromResolved(registry)
     return Effect.gen(function* () {
       const reg = yield* ExtensionRegistry
       const [a, b] = yield* reg.resolveDualModelPair()
-      expect(a).toBe(resolveAgentModel(Agents["cowork"]!))
-      expect(b).toBe(resolveAgentModel(Agents["deepwork"]!))
+      expect(a).toBe(resolveAgentModel(getBuiltinAgent("cowork")!))
+      expect(b).toBe(resolveAgentModel(getBuiltinAgent("deepwork")!))
       expect(a).not.toBe(b)
     }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl), Effect.runPromise)
   })
@@ -278,7 +278,7 @@ describe("RunSpec", () => {
           }),
         )
         const result = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "check forwarding",
           parentSessionId: SessionId.make("parent-runspec"),
           parentBranchId: BranchId.make("parent-runspec-branch"),
@@ -344,7 +344,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -430,7 +430,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         const result = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "spawn rollback",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -480,7 +480,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         const result = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "fail test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -527,7 +527,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         return yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "timeout test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -578,7 +578,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -644,7 +644,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "run helper with one tool",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -700,7 +700,7 @@ describe("AgentRunner", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "persist this child",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -773,7 +773,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-reasoning"),
           parentBranchId: BranchId.make("branch-reasoning"),
@@ -845,7 +845,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-mixed"),
           parentBranchId: BranchId.make("branch-mixed"),
@@ -917,7 +917,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "save test",
           parentSessionId: SessionId.make("parent-save"),
           parentBranchId: BranchId.make("branch-save"),
@@ -1115,7 +1115,7 @@ describe("ephemeral service propagation", () => {
         const runner = yield* AgentRunnerService
         yield* setupParentSession(storage, SessionId.make("parent-svc-prop"))
         const result = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "test service propagation",
           parentSessionId: SessionId.make("parent-svc-prop"),
           parentBranchId: BranchId.make("parent-svc-prop-branch"),
@@ -1152,7 +1152,7 @@ describe("ephemeral service propagation", () => {
             scope: "builtin" as const,
             sourcePath: "test",
             contributions: {
-              agents: Object.values(Agents),
+              agents: AllBuiltinAgents,
               tools: [approveTool],
             },
           },
@@ -1181,7 +1181,7 @@ describe("ephemeral service propagation", () => {
         const runner = yield* AgentRunnerService
         yield* setupParentSession(storage, SessionId.make("parent-approve"))
         const result = yield* runner.run({
-          agent: Agents["explore"]!,
+          agent: getBuiltinAgent("explore")!,
           prompt: "test auto-approve",
           parentSessionId: SessionId.make("parent-approve"),
           parentBranchId: BranchId.make("parent-approve-branch"),

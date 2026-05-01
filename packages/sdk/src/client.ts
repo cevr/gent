@@ -43,7 +43,7 @@ import {
   messagePartsText,
   messagePartsToolCalls,
   messagePartsToolResults,
-} from "@gent/core/domain/message-part-compat.js"
+} from "@gent/core/domain/message-part-projection.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import {
   makeNamespacedClient,

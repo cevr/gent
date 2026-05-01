@@ -60,9 +60,7 @@ export interface MakeExtensionHostContextDeps {
   readonly receptionist: ReceptionistService
   /**
    * Turn-control surface. Threaded into the `session.queueFollowUp`
-   * facet so slot handlers (and any non-FSM caller) can enqueue
-   * follow-ups without going through the legacy FSM
-   * `afterTransition` runEffects pipeline.
+   * facet so slot handlers and direct callers can enqueue follow-ups.
    */
   readonly turnControl: ExtensionTurnControlService
 }

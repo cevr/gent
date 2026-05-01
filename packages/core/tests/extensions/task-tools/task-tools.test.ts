@@ -6,7 +6,7 @@ import { TaskListTool } from "@gent/extensions/task-tools/task-list"
 import { TaskGetTool } from "@gent/extensions/task-tools/task-get"
 import { TaskUpdateTool } from "@gent/extensions/task-tools/task-update"
 import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
-import { Agents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { Task, getToolEffect } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
@@ -65,9 +65,9 @@ const makeCtx = Effect.gen(function* () {
     branchId: BranchId.make("b1"),
     toolCallId: ToolCallId.make("tc1"),
     agent: {
-      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
-        const agent = Object.values(Agents).find((a) => a.name === name)
+        const agent = AllBuiltinAgents.find((a) => a.name === name)
         return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
       },
       run: (params) =>

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Stream, type Schema } from "effect"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { type Behavior, ServiceKey } from "@gent/core/domain/actor"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
@@ -24,7 +24,7 @@ import {
 const turnCtx: ExtensionTurnContext = {
   sessionId: "s" as ExtensionTurnContext["sessionId"],
   branchId: "b" as ExtensionTurnContext["branchId"],
-  agent: Agents["cowork"],
+  agent: getBuiltinAgent("cowork"),
   allTools: [],
   interactive: true,
   cwd: "/tmp",

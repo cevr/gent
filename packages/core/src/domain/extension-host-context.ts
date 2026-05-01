@@ -146,11 +146,9 @@ export declare namespace ExtensionHostContext {
     ) => Effect.Effect<ReadonlyArray<ExtensionHostSearchResult>, ExtensionHostError>
 
     // Turn control — slot handlers and direct callers can enqueue a
-    // follow-up to the current turn without going through the legacy
-    // FSM `afterTransition` runEffects pipeline. Wraps
-    // `ExtensionTurnControl.queueFollowUp` and surfaces failures as
-    // `ExtensionHostError` so callers don't have to import a runtime
-    // error type.
+    // follow-up to the current turn. Wraps `ExtensionTurnControl.queueFollowUp`
+    // and surfaces failures as `ExtensionHostError` so callers don't have to
+    // import a runtime error type.
     readonly queueFollowUp: (params: {
       readonly content: string
       readonly metadata?: MessageMetadata

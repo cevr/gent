@@ -4,7 +4,7 @@ import {
   renderMessageParts,
   renderSessionTree,
 } from "@gent/extensions/session-tools/read-session"
-import { messagePartsDisplayText } from "@gent/core/domain/message-part-compat"
+import { messagePartsDisplayText } from "@gent/core/domain/message-part-projection"
 import {
   TextPart,
   ToolCallPart,

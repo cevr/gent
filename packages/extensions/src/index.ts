@@ -52,7 +52,7 @@ export {
   ExecutorExtension,
 }
 
-export { AllBuiltinAgents, Agents } from "./all-agents.js"
+export { AllBuiltinAgents, getBuiltinAgent } from "./all-agents.js"
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   HandoffExtension,

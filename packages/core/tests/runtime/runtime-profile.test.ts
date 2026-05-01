@@ -21,7 +21,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
-import { Agents } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
@@ -220,7 +220,7 @@ describe("resolveRuntimeProfile", () => {
             turn: {
               sessionId: "s" as never,
               branchId: "b" as never,
-              agent: Agents["cowork"]!,
+              agent: getBuiltinAgent("cowork")!,
               agentName: AgentName.make("cowork"),
               allTools: [],
             },

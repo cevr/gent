@@ -1,15 +1,13 @@
 /**
  * Contribution buckets — typed sub-arrays for `defineExtension`.
  *
- * The legacy `Contribution` discriminated union is gone. Extensions now
- * declare their leaf values in homogeneously-typed buckets. The bucket name
- * IS the discrimination — no `_kind` field on leaves, no wrapper smart
- * constructors, no `filterByKind`.
+ * Extensions declare their leaf values in homogeneously typed buckets. The
+ * bucket name IS the discrimination — no `_kind` field on leaves, no wrapper
+ * smart constructors, no `filterByKind`.
  *
- * Capabilities (): authored exclusively through the typed factories
- * `tool({...})` / `request({...})` / `action({...})` at
- * `domain/capability/{tool,request,action}.ts`. The legacy lowering smart
- * constructors `tool` / `request` aliases from the old split were deleted in .
+ * Capabilities are authored through the typed factories `tool({...})`,
+ * `request({...})`, and `action({...})` at
+ * `domain/capability/{tool,request,action}.ts`.
  *
  * Resource keeps an identity smart constructor (`resource`) below — it
  * exists to widen variance at the bucket boundary, not to lower a legacy
@@ -132,10 +130,8 @@ export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray
 
 // ── Smart constructors ──
 //
-// `resource` widens the typed authoring shape to the bucket leaf. The
-// legacy `tool` / `query` / `mutation` smart constructors were deleted in
-//  — capabilities are now authored exclusively through the typed factories in
-// `domain/capability/{tool,request,action}.ts`.
+// `resource` widens the typed authoring shape to the bucket leaf. Capabilities
+// are authored through the typed factories in `domain/capability/{tool,request,action}.ts`.
 
 // The old query/mutation smart constructors are gone. Authors use the
 // unified `request({ intent: "read" | "write", ... })` factory at

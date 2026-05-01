@@ -90,7 +90,6 @@ export {
   DriverRef,
   ModelDriverRef,
   ExternalDriverRef,
-  AgentSpec,
   makeRunSpec,
   RunSpecSchema,
   AgentRunOverridesSchema,
@@ -199,7 +198,7 @@ export {
   type MessagePartsDisplayTextOptions,
   type ToolCallPartProjection,
   type ToolResultPartProjection,
-} from "../domain/message-part-compat.js"
+} from "../domain/message-part-projection.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
 export {
@@ -232,11 +231,8 @@ export {
 export { ActorEngine } from "../runtime/extensions/actor-engine.js"
 export { Receptionist } from "../runtime/extensions/receptionist.js"
 
-//  typed capability factories — the old generic audience flag matrix
-// is gone from the author surface. Extension registries dispatch by
-// factory-origin metadata baked into the lowering. The  migration
-// window closed in ; the legacy `defineTool` smart constructor
-// and the dual-shape `tool()` overload were deleted there.
+// Typed capability factories. Extension registries dispatch by factory-origin
+// metadata baked into the lowering.
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
 export {

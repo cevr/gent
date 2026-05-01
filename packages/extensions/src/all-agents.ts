@@ -19,11 +19,5 @@ export const AllBuiltinAgents: ReadonlyArray<AgentDefinition> = [
   librarian,
 ]
 
-/**
- * Backward-compat keyed object for test files that use `Agents.cowork` etc.
- * Prefer `AllBuiltinAgents` array for new code.
- */
-export const Agents = Object.fromEntries(AllBuiltinAgents.map((a) => [a.name, a])) as Record<
-  string,
-  AgentDefinition
->
+export const getBuiltinAgent = (name: string): AgentDefinition | undefined =>
+  AllBuiltinAgents.find((agent) => agent.name === name)

@@ -256,37 +256,6 @@ const buildSystemArray = (
   ]
 }
 
-/** @deprecated kept for the existing test surface — use `buildSystemArray`
- *  via `transformPayload`. The legacy single-arg shape can't compute the
- *  billing hash because it has no access to the messages. */
-export const transformSystem = (system: unknown): unknown => {
-  if (system === undefined || system === null) return SYSTEM_IDENTITY_PREFIX
-
-  if (typeof system === "string") {
-    if (system.includes(SYSTEM_IDENTITY_PREFIX)) return system
-    return `${SYSTEM_IDENTITY_PREFIX}\n\n${system}`
-  }
-
-  if (Array.isArray(system)) {
-    const blocks = isRecordArray(system) ? system : []
-    const hasPrefix = blocks.some((entry) => {
-      const text = entry["text"]
-      return typeof text === "string" && text.includes(SYSTEM_IDENTITY_PREFIX)
-    })
-
-    const withIdentity: ReadonlyArray<Record<string, unknown>> = hasPrefix
-      ? blocks
-      : [{ type: "text", text: SYSTEM_IDENTITY_PREFIX }, ...blocks]
-
-    return withIdentity.map((block) => ({
-      ...block,
-      cache_control: { type: "ephemeral" as const },
-    }))
-  }
-
-  return system
-}
-
 /**
  * Counsel  (opencode parity A) — Anthropic's OAuth-billing path
  * validates `system[]` against the Claude Code identity prefix.
