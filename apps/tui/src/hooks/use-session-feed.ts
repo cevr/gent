@@ -11,7 +11,6 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { Message as DomainMessage } from "@gent/core/domain/message.js"
 import {
   messagePartImage,
   messagePartReasoning,
@@ -66,6 +65,9 @@ const isMessage = (item: SessionItem): item is Message =>
   item._tag === "regular-message" || item._tag === "interjection-message"
 
 // ── Build messages from raw ──
+
+const messageTimestamp = (createdAt: MessageInfoReadonly["createdAt"]): number =>
+  createdAt instanceof Date ? createdAt.getTime() : createdAt
 
 const buildSegments = (
   parts: MessageInfoReadonly["parts"],
@@ -125,7 +127,7 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       content: extractText(m.parts),
       reasoning: extractReasoning(m.parts),
       images: extractImages(m.parts),
-      createdAt: m.createdAt,
+      createdAt: messageTimestamp(m.createdAt),
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       segments,
       metadata: m.metadata,
@@ -136,27 +138,11 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
   })
 }
 
-const domainMessageToInfo = (message: DomainMessage): MessageInfoReadonly => {
-  const fields = {
-    id: message.id,
-    sessionId: message.sessionId,
-    branchId: message.branchId,
-    role: message.role,
-    parts: message.parts,
-    createdAt: message.createdAt.getTime(),
-    turnDurationMs: message.turnDurationMs,
-    metadata: message.metadata,
-  }
-  return message._tag === "interjection"
-    ? { ...fields, _tag: "interjection", role: "user" }
-    : { ...fields, _tag: "regular" }
-}
-
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
-  message: DomainMessage,
+  message: MessageInfoReadonly,
 ) => {
-  const next = buildMessages([domainMessageToInfo(message)])[0]
+  const next = buildMessages([message])[0]
   if (next === undefined) return
   setStore(
     produce((draft) => {

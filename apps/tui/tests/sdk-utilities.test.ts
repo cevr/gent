@@ -145,7 +145,7 @@ describe("buildToolResultMap", () => {
       branchId: BranchId.make("b1"),
       role,
       parts,
-      createdAt: Date.now(),
+      createdAt: new Date(),
       turnDurationMs: undefined,
     })
 

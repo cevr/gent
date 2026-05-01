@@ -10,7 +10,7 @@ import {
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
-import { MessageMetadata, MessagePart } from "../domain/message.js"
+import { Message } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
@@ -210,26 +210,9 @@ export const SendMessageInput = Schema.Struct({
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
-const MessageInfoFields = {
-  id: MessageId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  role: Schema.Literals(["user", "assistant", "system", "tool"]),
-  parts: Schema.Array(MessagePart),
-  createdAt: Schema.Number,
-  turnDurationMs: Schema.optional(Schema.Number),
-  metadata: Schema.optional(MessageMetadata),
-}
-
-export const MessageInfo = TaggedEnumClass("MessageInfo", {
-  Regular: TaggedEnumClass.variant("regular", MessageInfoFields),
-  Interjection: TaggedEnumClass.variant("interjection", {
-    ...MessageInfoFields,
-    role: Schema.Literal("user"),
-  }),
-})
-export type MessageInfo = typeof MessageInfo.Type
-export type MessageInfoReadonly = MessageInfo
+export const MessageInfo = Message
+export type MessageInfo = Message
+export type MessageInfoReadonly = Message
 
 export const ListMessagesInput = Schema.Struct({
   branchId: BranchId,
@@ -246,7 +229,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.optional(Schema.String),
-  messages: Schema.Array(MessageInfo),
+  messages: Schema.Array(Message),
   lastEventId: Schema.NullOr(Schema.Number),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),

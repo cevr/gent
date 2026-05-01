@@ -1,7 +1,7 @@
 import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import type { Session, SessionTreeNode } from "../domain/message.js"
+import type { Message, Session, SessionTreeNode } from "../domain/message.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -10,13 +10,12 @@ import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
-import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
+import { buildBranchTree, branchToInfo, sessionToInfo } from "./session-utils.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type {
   BranchInfo,
   BranchTreeNode,
   GetSessionSnapshotInput,
-  MessageInfoReadonly,
   SessionInfo,
 } from "./transport-contract.js"
 
@@ -34,7 +33,7 @@ export interface SessionQueriesService {
   readonly getBranchTree: (sessionId: SessionId) => Effect.Effect<BranchTreeNode[], AppServiceError>
   readonly listMessages: (
     branchId: BranchId,
-  ) => Effect.Effect<MessageInfoReadonly[], AppServiceError>
+  ) => Effect.Effect<ReadonlyArray<Message>, AppServiceError>
   readonly getQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -179,7 +178,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           sessionId: input.sessionId,
           branchId: input.branchId,
           name: session.name,
-          messages: messages.map(messageToInfo),
+          messages,
           lastEventId: lastEventId ?? null,
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
@@ -197,8 +196,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         listBranches: (sessionId) =>
           branchStorage.listBranches(sessionId).pipe(Effect.map((xs) => xs.map(branchToInfo))),
         getBranchTree,
-        listMessages: (branchId) =>
-          messageStorage.listMessages(branchId).pipe(Effect.map((xs) => xs.map(messageToInfo))),
+        listMessages: (branchId) => messageStorage.listMessages(branchId),
         getQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
             .getQueuedMessages({ sessionId, branchId })

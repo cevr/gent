@@ -21,7 +21,6 @@ import {
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
-import { messageToInfo } from "../../src/server/session-utils"
 import { repairSqliteForeignKeyOrphans } from "../../src/storage/sqlite-repair"
 
 interface SchemaRow {
@@ -2329,7 +2328,7 @@ describe("Storage", () => {
         expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
-    test("messageToInfo preserves metadata for transport", () => {
+    test("domain message preserves metadata for transport", () => {
       const message = Message.Regular.make({
         id: "info-msg",
         sessionId: SessionId.make("info-s"),
@@ -2339,10 +2338,9 @@ describe("Storage", () => {
         createdAt: new Date(),
         metadata: { customType: "review-status", hidden: true },
       })
-      const info = messageToInfo(message)
-      expect(info.metadata).toBeDefined()
-      expect(info.metadata!.customType).toBe("review-status")
-      expect(info.metadata!.hidden).toBe(true)
+      expect(message.metadata).toBeDefined()
+      expect(message.metadata!.customType).toBe("review-status")
+      expect(message.metadata!.hidden).toBe(true)
     })
     it.live("interjection messages round-trip as explicit variants", () =>
       Effect.gen(function* () {
@@ -2374,12 +2372,10 @@ describe("Storage", () => {
         const stored = yield* storage.getMessage(MessageId.make("interjection-msg"))
         if (stored === undefined) throw new Error("expected interjection message")
         expect(stored._tag).toBe("interjection")
-        const info = messageToInfo(stored)
-        expect(info._tag).toBe("interjection")
-        expect(info.role).toBe("user")
+        expect(stored.role).toBe("user")
       }).pipe(Effect.provide(Storage.Test())),
     )
-    test("messageToInfo omits metadata when absent", () => {
+    test("domain message omits metadata when absent", () => {
       const message = Message.Regular.make({
         id: "plain-msg",
         sessionId: SessionId.make("plain-s"),
@@ -2388,8 +2384,7 @@ describe("Storage", () => {
         parts: [new TextPart({ type: "text", text: "hi" })],
         createdAt: new Date(),
       })
-      const info = messageToInfo(message)
-      expect(info.metadata).toBeUndefined()
+      expect(message.metadata).toBeUndefined()
     })
   })
   describe("Event backward compatibility", () => {

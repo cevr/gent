@@ -1,7 +1,7 @@
 import type { BranchId } from "../domain/ids.js"
-import type { Branch, Message, Session } from "../domain/message.js"
-import { BranchInfo, MessageInfo, SessionInfo } from "./transport-contract.js"
-import type { BranchTreeNode, MessageInfoReadonly } from "./transport-contract.js"
+import type { Branch, Session } from "../domain/message.js"
+import { BranchInfo, SessionInfo } from "./transport-contract.js"
+import type { BranchTreeNode } from "./transport-contract.js"
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
@@ -30,22 +30,6 @@ export const branchToInfo = (branch: Branch): BranchInfo =>
     summary: branch.summary,
     createdAt: branch.createdAt.getTime(),
   })
-
-export const messageToInfo = (message: Message): MessageInfoReadonly => {
-  const fields = {
-    id: message.id,
-    sessionId: message.sessionId,
-    branchId: message.branchId,
-    role: message.role,
-    parts: message.parts,
-    createdAt: message.createdAt.getTime(),
-    turnDurationMs: message.turnDurationMs,
-    metadata: message.metadata,
-  }
-  return message._tag === "interjection"
-    ? MessageInfo.Interjection.make({ ...fields, role: "user" })
-    : MessageInfo.Regular.make(fields)
-}
 
 export const buildBranchTree = (
   branches: ReadonlyArray<Branch>,

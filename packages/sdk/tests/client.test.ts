@@ -64,7 +64,7 @@ describe("sdk client helpers", () => {
             output: { type: "json", value: "file contents" },
           }),
         ],
-        createdAt: Date.now(),
+        createdAt: new Date(),
       }),
     ]
     const map = buildToolResultMap(messages)
