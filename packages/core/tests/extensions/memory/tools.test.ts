@@ -15,7 +15,7 @@ import {
   Test as MemoryVaultTest,
   projectKey as projectKeyOf,
 } from "@gent/extensions/memory/vault"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
@@ -32,7 +32,7 @@ const runMemoryTool = <A, E>(
   effect.pipe(Effect.provide(MemoryVaultTest(tmpDir)))
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-const makeCtx = (cwd: string, home: string): ToolContext =>
+const makeCtx = (cwd: string, home: string): ToolCapabilityContext =>
   testToolContext({
     sessionId: SessionId.make("019d97c0-0000-7000-0000-000000000000"),
     branchId: BranchId.make("019d97c0-0000-7001-0000-000000000000"),

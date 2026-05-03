@@ -5,7 +5,7 @@
  * Long-lived — one instance per server scope, so storedResolutions
  * survive across tool re-executions for cold resume.
  *
- * Tools access this indirectly via `ctx.interaction.approve()` on ToolContext.
+ * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
  */
 
 import { Context, Effect, Layer } from "effect"

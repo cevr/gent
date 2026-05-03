@@ -11,7 +11,7 @@ import { ToolRunner } from "../../src/extensions/internal.js"
 import { ToolResultPart } from "../../src/domain/message.js"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
 import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
-import type { ToolContext } from "../../src/domain/tool.js"
+import type { ToolCapabilityContext } from "../../src/domain/capability/tool.js"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
@@ -389,7 +389,7 @@ describe("codemode proxy", () => {
 // Effect-runtime crossing (e.g. forgetting to thread services into
 // `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
-const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
+const makeStubHostCtx = (): Omit<ToolCapabilityContext, "toolCallId"> => ({
   sessionId: SessionId.make("ses-acp-boundary-test"),
   branchId: BranchId.make("br-acp-boundary-test"),
   cwd: "/tmp/gent-acp-boundary-test",

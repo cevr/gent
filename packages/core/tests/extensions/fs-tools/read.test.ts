@@ -2,13 +2,13 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/extensions/fs-tools/read"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/extensions/api"
 
-const ctx: ToolContext = testToolContext({
+const ctx: ToolCapabilityContext = testToolContext({
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("test-call"),

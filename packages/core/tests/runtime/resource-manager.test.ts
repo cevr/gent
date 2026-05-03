@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Ref, type Scope } from "effect"
-import { ToolNeeds } from "../../src/domain/tool.js"
+import { ToolNeeds } from "../../src/domain/capability/tool.js"
 import { ResourceManager, ResourceManagerLive } from "../../src/runtime/resource-manager.js"
 const runWithResourceManager = <A, E>(effect: Effect.Effect<A, E, ResourceManager | Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.provide(ResourceManagerLive)))

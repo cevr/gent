@@ -7,7 +7,7 @@ import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { getToolEffect } from "@gent/core/extensions/api"
 
@@ -34,7 +34,7 @@ const makeCtx = (overrides: {
     params: Parameters<ExtensionHostContext.Agent["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
   present?: ExtensionHostContext.Interaction["present"]
-}): ToolContext =>
+}): ToolCapabilityContext =>
   testToolContext({
     agentName: AgentName.make("cowork"),
     agent: {

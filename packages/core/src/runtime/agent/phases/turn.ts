@@ -30,7 +30,6 @@ import {
   type MessageId,
   type SessionId,
 } from "../../../domain/ids.js"
-import { makeToolContext } from "../../../domain/tool.js"
 import {
   ErrorOccurred,
   MessageReceived,
@@ -582,13 +581,11 @@ export const executeToolCalls = (params: {
     params.toolCalls,
     (toolCall) =>
       Effect.gen(function* () {
-        const ctx = makeToolContext(
-          {
-            ...params.hostCtx,
-            agentName: params.currentTurnAgent,
-          },
-          toolCall.toolCallId,
-        )
+        const ctx = {
+          ...params.hostCtx,
+          agentName: params.currentTurnAgent,
+          toolCallId: toolCall.toolCallId,
+        }
         const run = params.toolRunner
           .run(toolCall, ctx, {
             registry: params.extensionRegistry,

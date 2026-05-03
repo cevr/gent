@@ -8,7 +8,7 @@ import {
   tool,
   ToolNeeds,
   type AgentDefinition,
-  type ToolContext,
+  type ToolCapabilityContext,
   type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
@@ -303,7 +303,7 @@ export const ReviewTool = tool({
     "Pass description to guide review focus",
   ],
   params: ReviewParams,
-  execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "report"
 
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME

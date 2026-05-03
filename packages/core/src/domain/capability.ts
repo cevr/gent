@@ -36,7 +36,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
  *
  * Split: `CapabilityCoreContext` (the always-on minimum) plus the wider
  * `ModelCapabilityContext` for the model audience whose handlers historically
- * have full host access through `ToolContext` (and frequently rely on it —
+ * have full host access through `ToolCapabilityContext` (and frequently rely on it —
  * spawning subagents, asking for approval, queuing follow-ups).
  *
  * Capability authors pick the surface they need by typing their `effect`'s

@@ -1,6 +1,10 @@
 import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
-import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
-import { type ToolContext } from "../../domain/tool.js"
+import {
+  getToolId,
+  getToolMetadata,
+  type ToolCapabilityContext,
+  type ToolToken,
+} from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -39,7 +43,7 @@ interface ToolExecutionProfile {
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
 const provideCapabilityContext = <A, E, R>(
-  ctx: ToolContext,
+  ctx: ToolCapabilityContext,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   ctx.capabilityContext === undefined
@@ -59,7 +63,7 @@ type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ToolTokenMap>, "tools"> & {
 export interface ToolRunnerService {
   readonly run: (
     toolCall: ToolCall,
-    ctx: ToolContext,
+    ctx: ToolCapabilityContext,
     profileOverride?: ToolExecutionProfile,
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
@@ -108,7 +112,7 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
 
 const publishStarted = (params: {
   publishEvent?: PublishToolEvent
-  ctx: ToolContext
+  ctx: ToolCapabilityContext
   toolCall: ToolCall
 }) =>
   params.publishEvent?.(
@@ -123,7 +127,7 @@ const publishStarted = (params: {
 
 const publishCompleted = (params: {
   publishEvent?: PublishToolEvent
-  ctx: ToolContext
+  ctx: ToolCapabilityContext
   result: ToolResultPart
 }) =>
   Effect.gen(function* () {
@@ -146,7 +150,7 @@ const publishCompleted = (params: {
 const makeExecutionToolkit = (params: {
   tool: ToolToken
   toolCall: ToolCall
-  ctx: ToolContext
+  ctx: ToolCapabilityContext
   registry: ExtensionRegistryService
 }): ToolRunnerToolkit => {
   const metadata = getToolMetadata(params.tool)

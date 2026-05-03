@@ -4,7 +4,7 @@ import {
   defineAgent,
   makeRunSpec,
   tool,
-  type ToolContext,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 
 const COUNSEL_DEEP_PROMPT = `
@@ -59,7 +59,7 @@ export const CounselTool = tool({
     "Include relevant context — the counsel agent has no conversation history",
   ],
   params: CounselParams,
-  execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "standard"
     const [, modelB] = yield* ctx.agent.resolveDualModelPair()
 

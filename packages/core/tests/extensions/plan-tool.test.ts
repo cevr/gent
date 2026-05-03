@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
@@ -22,7 +22,7 @@ const makeCtx = (overrides: {
     params: Parameters<ExtensionHostContext.Agent["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
   reviewDecision?: "yes" | "no" | "edit"
-}): ToolContext => {
+}): ToolCapabilityContext => {
   const base = testToolContext({
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),

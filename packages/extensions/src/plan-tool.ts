@@ -6,7 +6,7 @@ import {
   tool,
   ToolNeeds,
   type AgentDefinition,
-  type ToolContext,
+  type ToolCapabilityContext,
   type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
@@ -188,7 +188,7 @@ export const PlanTool = tool({
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
-  execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "plan-only"
 
     const architect = yield* ctx.agent.require(AgentName.make("architect"))

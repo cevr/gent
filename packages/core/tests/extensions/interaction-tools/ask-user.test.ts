@@ -5,7 +5,7 @@ const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never>
   e as Effect.Effect<A, E, never>
 import { BunServices } from "@effect/platform-bun"
 import { AskUserTool } from "@gent/extensions/interaction-tools/ask-user"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
@@ -13,8 +13,8 @@ import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core/extensions/api"
 
 const makeCtx = (approvalService: {
-  present: ToolContext["interaction"]["approve"]
-}): ToolContext =>
+  present: ToolCapabilityContext["interaction"]["approve"]
+}): ToolCapabilityContext =>
   testToolContext({
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),

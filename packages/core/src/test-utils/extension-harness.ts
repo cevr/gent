@@ -12,11 +12,10 @@ import {
 import { EventStore } from "../domain/event.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { ToolToken } from "../domain/capability/tool.js"
+import type { ToolCapabilityContext, ToolToken } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import type { ToolContext } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import {
   reconcileLoadedExtensions,
@@ -141,8 +140,10 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-/** Default ToolContext for tests — overridable via spread */
-export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext => ({
+/** Default ToolCapabilityContext for tests — overridable via spread */
+export const testToolContext = (
+  overrides?: Partial<ToolCapabilityContext>,
+): ToolCapabilityContext => ({
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("test-call"),

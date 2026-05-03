@@ -65,18 +65,16 @@ import type { AgentEvent } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 
-// `ToolContext` is the internal lowered execution context consumed by provider
-// adapters and the tool-runner registry. Authors construct tools via
-// `tool({...})` from `domain/capability/tool.ts` (re-exported below).
+// `ToolCapabilityContext` (re-exported via the second `domain/capability/tool`
+// block below) is the execution context passed to a tool's `execute(...)` body
+// — the wide host context with `toolCallId` narrowed to required.
 export {
   LOCK_REGISTRY,
-  makeToolContext,
   ToolNeeds,
-  type ToolContext,
   type ToolNeed,
   type ToolNeedAccess,
   type ToolNeedTag,
-} from "../domain/tool.js"
+} from "../domain/capability/tool.js"
 export {
   defineAgent,
   AgentDefinition,

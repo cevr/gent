@@ -5,7 +5,7 @@ import {
   makeRunSpec,
   tool,
   ToolNeeds,
-  type ToolContext,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
@@ -92,7 +92,7 @@ export const ResearchTool = tool({
     "Include focus to narrow search to specific modules or patterns",
   ],
   params: ResearchParams,
-  execute: Effect.fn("ResearchTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ResearchTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }
     }

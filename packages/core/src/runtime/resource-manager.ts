@@ -19,7 +19,7 @@
  * @module
  */
 import { Context, Effect, Layer, Ref, Semaphore } from "effect"
-import type { ToolNeed } from "../domain/tool.js"
+import type { ToolNeed } from "../domain/capability/tool.js"
 
 const READ_PERMITS = 1_000_000
 

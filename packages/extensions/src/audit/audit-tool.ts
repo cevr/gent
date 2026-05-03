@@ -6,7 +6,7 @@ import {
   tool,
   ToolNeeds,
   type AgentDefinition,
-  type ToolContext,
+  type ToolCapabilityContext,
   type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
@@ -290,7 +290,7 @@ export const AuditTool = tool({
     "Specify paths to scope the audit; defaults to git diff",
   ],
   params: AuditParams,
-  execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5
     const paths = yield* resolveAuditPaths(params.paths, ctx.cwd)

@@ -13,7 +13,7 @@
  */
 
 import { Context, Effect, Random } from "effect"
-import { ToolCallId, makeToolContext, type ToolContext } from "@gent/core/extensions/api"
+import { ToolCallId, type ToolCapabilityContext } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../internal/builtin.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
@@ -26,7 +26,7 @@ import type { CodemodeConfig } from "./mcp-codemode.js"
  */
 export const makeAcpRunTool = (params: {
   readonly services: Context.Context<never>
-  readonly hostCtx: Omit<ToolContext, "toolCallId">
+  readonly hostCtx: Omit<ToolCapabilityContext, "toolCallId">
 }): CodemodeConfig["runTool"] => {
   // The TurnExecutor interface erases the executor's context channel, but
   // the agent runtime ambiently provides ToolRunner at invocation time. Re-
@@ -41,7 +41,7 @@ export const makeAcpRunTool = (params: {
       Effect.gen(function* () {
         const uuid = yield* Random.nextUUIDv4
         const toolCallId = ToolCallId.make(uuid)
-        const toolCtx: ToolContext = makeToolContext(params.hostCtx, toolCallId)
+        const toolCtx: ToolCapabilityContext = { ...params.hostCtx, toolCallId }
         return yield* toolRunner.run({ toolCallId, toolName, input: args }, toolCtx)
       }),
     )

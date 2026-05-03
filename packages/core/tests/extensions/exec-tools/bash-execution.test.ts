@@ -3,7 +3,7 @@ import { Deferred, Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { BashTool } from "@gent/extensions/exec-tools/bash"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { ToolContext } from "@gent/core/domain/tool"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { getToolEffect } from "@gent/core/extensions/api"
 
 const makePlatformLayer = () =>
@@ -21,7 +21,7 @@ const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const stubCtx: ToolContext = {
+const stubCtx: ToolCapabilityContext = {
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("tc-1"),
@@ -128,7 +128,7 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ content: string }>()
-          const ctx: ToolContext = {
+          const ctx: ToolCapabilityContext = {
             ...stubCtx,
             session: {
               ...stubCtx.session,

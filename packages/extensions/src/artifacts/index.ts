@@ -12,7 +12,7 @@ import {
   defineResource,
   tool,
   ToolNeeds,
-  type ToolContext,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
@@ -36,7 +36,7 @@ const ArtifactSaveTool = tool({
       }),
     ),
   }),
-  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const artifacts = yield* ArtifactsWrite
     const artifact = yield* artifacts.save(ctx.sessionId, ctx.branchId, params)
     return { id: artifact.id, label: artifact.label, sourceTool: artifact.sourceTool }
@@ -52,7 +52,7 @@ const ArtifactReadTool = tool({
       Schema.String.annotate({ description: "Source tool name to look up by" }),
     ),
   }),
-  execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const query =
       params.id !== undefined
         ? { _tag: "ById" as const, id: ArtifactId.make(params.id) }
@@ -86,7 +86,7 @@ const ArtifactUpdateTool = tool({
       }),
     ),
   }),
-  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const patch =
       params.find !== undefined && params.replace !== undefined
         ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
@@ -110,7 +110,7 @@ const ArtifactClearTool = tool({
   params: Schema.Struct({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),
   }),
-  execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolContext) {
+  execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const artifacts = yield* ArtifactsWrite
     yield* artifacts.clear(ctx.sessionId, ctx.branchId, ArtifactId.make(params.id))
     return { cleared: true }

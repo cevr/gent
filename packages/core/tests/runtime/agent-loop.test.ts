@@ -51,7 +51,7 @@ import {
   ToolResultPart,
 } from "@gent/core/domain/message"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { type ToolContext } from "@gent/core/domain/tool"
+import { type ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import {
   getToolId,
   tool,
@@ -1558,7 +1558,7 @@ describe("interaction", () => {
         params: {
           value: string
         },
-        ctx: ToolContext,
+        ctx: ToolCapabilityContext,
       ) =>
         Effect.gen(function* () {
           const count = yield* Ref.getAndUpdate(callCount, (n) => n + 1)
@@ -2553,7 +2553,7 @@ describe("durable suspension and queue drain regression", () => {
         toolParams: {
           value: string
         },
-        ctx: ToolContext,
+        ctx: ToolCapabilityContext,
       ) =>
         Effect.gen(function* () {
           const count = yield* Ref.getAndUpdate(params.callCountRef, (n) => n + 1)

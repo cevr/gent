@@ -22,7 +22,39 @@ import type { CapabilityEffect, ModelCapabilityContext } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-import type { ToolNeed } from "../tool.js"
+
+export type ToolNeedAccess = "read" | "write"
+
+export const LOCK_REGISTRY = [
+  // Shared subagent budget: review/research/audit/delegate/handoff/plan all
+  // spawn agent work and intentionally serialize against each other.
+  "agent",
+  "artifact",
+  "auto",
+  "fs",
+  "interaction",
+  "memory",
+  "network",
+  "process",
+  "recovery",
+  "repo",
+  "session",
+  "skills",
+  "task",
+  "test-serial",
+] as const
+
+export type ToolNeedTag = (typeof LOCK_REGISTRY)[number]
+
+export interface ToolNeed {
+  readonly tag: ToolNeedTag
+  readonly access: ToolNeedAccess
+}
+
+export const ToolNeeds = {
+  read: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "read" }),
+  write: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "write" }),
+} as const
 
 const ToolTokenBrand: unique symbol = Symbol("@gent/core/ToolToken")
 declare const ToolTokenType: unique symbol
