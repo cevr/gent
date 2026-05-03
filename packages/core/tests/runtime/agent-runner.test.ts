@@ -15,7 +15,7 @@ import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
-import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import {
   dateFromMillis,
@@ -57,7 +57,7 @@ import {
   type SessionRuntimeService,
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunFileSystem } from "@effect/platform-bun"
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
   responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
@@ -144,9 +144,8 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     providerLayer,
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    BunGentPlatformLive,
+    BunPlatformLive,
     ConfigService.Test(),
-    BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
     ephemeralParentDeps,
@@ -167,10 +166,9 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
 }
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(
-  BunServices.layer,
+  BunPlatformLive,
   Permission.Live([], "allow"),
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-  BunGentPlatformLive,
   ServerProfileService.Test(),
   ConfigService.Test(),
   ModelRegistry.Test(),
