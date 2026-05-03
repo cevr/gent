@@ -91,7 +91,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       initAnthropicKeychainEnv({})
       const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
       // Ref via `AnthropicCredentialService.layer(authInfo)`, the
@@ -126,7 +126,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
         const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* Effect.promise(() => runOne(model, fetchState))
@@ -153,7 +153,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           },
           at: yield* Clock.currentTimeMillis,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
         const model1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
         yield* Effect.promise(() => runOne(model1, fetchState1))
@@ -195,7 +195,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         lastBetaFlags: undefined,
         lastModelId: "claude-opus-4-6",
       })
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
       const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* Effect.promise(() => runOne(model, fetchState))
@@ -210,7 +210,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       initAnthropicKeychainEnv({})
       const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
       const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* Effect.promise(() => runOne(model, fetchState))
@@ -226,7 +226,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         initAnthropicKeychainEnv({})
         const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
         const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
         yield* Effect.promise(() => runOne(model, fetchState))
@@ -241,7 +241,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       initAnthropicKeychainEnv({})
       const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
       const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* Effect.promise(() => runOne(model, fetchState))

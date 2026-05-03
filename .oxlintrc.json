@@ -100,13 +100,7 @@
       }
     },
     {
-      "files": [
-        "**/extensions/src/anthropic/**",
-        "**/extensions/src/openai/**",
-        "**/extensions/src/bedrock/**",
-        "**/extensions/src/google/**",
-        "**/extensions/src/mistral/**"
-      ],
+      "files": ["**/extensions/src/anthropic/oauth.ts"],
       "rules": {
         "node/no-process-env": "off",
         "gent/no-direct-env": "off"

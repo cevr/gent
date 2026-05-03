@@ -1,4 +1,4 @@
-import { Duration, Effect, Fiber, Layer, Redacted, Ref } from "effect"
+import { Config, Duration, Effect, Fiber, Layer, Option, Redacted, Ref } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -25,12 +25,11 @@ import {
 } from "./credential-service.js"
 import { buildCodexTransformClient } from "./codex-transform.js"
 
-// Provider extensions read env at setup time (outside Effect runtime, no Config available).
-// Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
-const readEnv = (name: string): string | undefined => {
-  const val = Bun.env[name]
-  return val !== undefined && val !== "" ? val : undefined
-}
+const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    const opt = yield* Config.option(Config.string(name))
+    return Option.getOrUndefined(opt)
+  }).pipe(Effect.orElseSucceed(() => undefined))
 
 type PendingCallbackEntry = {
   readonly flow: OpenAIAuthorizationFlow
@@ -109,6 +108,7 @@ const makeOauthOpenAILayer = (
 export const buildOpenAIModelDriver = (
   credentialCellRef: Ref.Ref<CredentialCacheCell>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
+  envApiKey: string | undefined,
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
@@ -134,7 +134,6 @@ export const buildOpenAIModelDriver = (
     // Stored API key takes precedence over env var
     const storedApiKey =
       authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-    const envApiKey = readEnv("OPENAI_API_KEY")
     const apiKey = storedApiKey ?? envApiKey
 
     if (apiKey !== undefined) {
@@ -243,6 +242,8 @@ export const OpenAIExtension = defineExtension({
       // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
       const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
-      return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks)]
+      const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
+
+      return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey)]
     }),
 })

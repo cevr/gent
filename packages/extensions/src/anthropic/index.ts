@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Effect, Layer, Redacted, Ref } from "effect"
+import { Clock, Config, Effect, Layer, Option, Redacted, Ref } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -29,12 +29,11 @@ import {
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 
-// Provider extensions read env at setup time (outside Effect runtime, no Config available).
-// Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
-const readEnv = (name: string): string | undefined => {
-  const val = Bun.env[name]
-  return val !== undefined && val !== "" ? val : undefined
-}
+const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    const opt = yield* Config.option(Config.string(name))
+    return Option.getOrUndefined(opt)
+  }).pipe(Effect.orElseSucceed(() => undefined))
 
 // Credential cache + refresh logic live in `AnthropicCredentialService`
 // (Effect-native). The OAuth path provides this service into the layer
@@ -140,6 +139,7 @@ const makeOauthAnthropicLayer = (
 export const buildAnthropicModelDriver = (
   credentialCellRef: Ref.Ref<CredentialCacheCell>,
   betaCellRef: Ref.Ref<BetaCacheCell>,
+  envApiKey: string | undefined,
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
@@ -147,7 +147,6 @@ export const buildAnthropicModelDriver = (
     // Precedence: stored API key > env API key > keychain/OAuth
     const storedApiKey =
       authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-    const envApiKey = readEnv("ANTHROPIC_API_KEY")
     const apiKey = storedApiKey ?? envApiKey
 
     const config = buildAnthropicConfig(hints)
@@ -238,11 +237,13 @@ export const AnthropicExtension = defineExtension({
   modelDrivers: () =>
     Effect.gen(function* () {
       const env: AnthropicKeychainEnv = {
-        betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
-        cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
-        userAgent: readEnv("ANTHROPIC_USER_AGENT"),
+        betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
+        cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
+        userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
       }
       initAnthropicKeychainEnv(env)
+
+      const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension
@@ -252,6 +253,6 @@ export const AnthropicExtension = defineExtension({
       const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef)]
+      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey)]
     }),
 })
