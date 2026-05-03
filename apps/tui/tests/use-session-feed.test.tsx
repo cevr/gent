@@ -77,12 +77,22 @@ describe("useSessionFeed", () => {
           metadata: undefined,
         }),
       )
-      const liveEvent = makeEnvelope(
+      const switchedBranchId = BranchId.make("branch-feed-switched")
+      const bufferedBranchSwitch = makeEnvelope(
         3,
+        AgentEvent.BranchSwitched.make({
+          sessionId,
+          fromBranchId: branchId,
+          toBranchId: switchedBranchId,
+        }),
+      )
+      const liveEvent = makeEnvelope(
+        4,
         AgentEvent.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
       )
       const interactionSeen = yield* Deferred.make<ActiveInteraction>()
       const liveSeen = yield* Deferred.make<void>()
+      const branchSwitchSeen = yield* Deferred.make<{ sessionId: SessionId; branchId: BranchId }>()
       let requestedAfter: number | undefined
       const bufferedTags: string[] = []
 
@@ -92,11 +102,11 @@ describe("useSessionFeed", () => {
           session: active,
           client: createMockClient({
             session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 2)),
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
               events: ({ after }: { readonly after?: number }) => {
                 requestedAfter = after
                 return Stream.concat(
-                  Stream.make(bufferedPulse, bufferedInteraction, liveEvent),
+                  Stream.make(bufferedPulse, bufferedInteraction, bufferedBranchSwitch, liveEvent),
                   Stream.never,
                 )
               },
@@ -126,7 +136,14 @@ describe("useSessionFeed", () => {
               Effect.runFork(Deferred.succeed(interactionSeen, interaction))
             },
             onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
+            onBranchSwitch: (nextSessionId, nextBranchId) => {
+              Effect.runFork(
+                Deferred.succeed(branchSwitchSeen, {
+                  sessionId: nextSessionId,
+                  branchId: nextBranchId,
+                }),
+              )
+            },
             onQueueSnapshot: () => {},
           },
         )
@@ -134,11 +151,17 @@ describe("useSessionFeed", () => {
       })
 
       const interaction = yield* Deferred.await(interactionSeen)
+      const branchSwitch = yield* Deferred.await(branchSwitchSeen)
       yield* Deferred.await(liveSeen)
       yield* Effect.sync(() => {
         expect(requestedAfter).toBe(0)
-        expect(bufferedTags).toEqual(["ExtensionStateChanged", "InteractionPresented"])
+        expect(bufferedTags).toEqual([
+          "ExtensionStateChanged",
+          "InteractionPresented",
+          "BranchSwitched",
+        ])
         expect(interaction.requestId).toBe(InteractionRequestId.make("interaction-buffered"))
+        expect(branchSwitch).toEqual({ sessionId, branchId: switchedBranchId })
         dispose()
       })
     }),

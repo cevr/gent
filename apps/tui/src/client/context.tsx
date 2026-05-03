@@ -475,10 +475,16 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     setConnectionIssue(null)
-    if (snapshot.reasoningLevel !== undefined) {
+    const currentSession = session()
+    if (currentSession === null || currentSession.sessionId === snapshot.sessionId) {
       dispatchSession(
-        SessionStateEvent.UpdateReasoningLevel.make({
-          reasoningLevel: snapshot.reasoningLevel,
+        SessionStateEvent.Activated.make({
+          session: {
+            sessionId: snapshot.sessionId,
+            branchId: snapshot.branchId,
+            name: snapshot.name ?? currentSession?.name ?? "Unnamed",
+            reasoningLevel: snapshot.reasoningLevel,
+          },
         }),
       )
     }

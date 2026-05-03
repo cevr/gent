@@ -507,7 +507,12 @@ export function useSessionFeed(
 
     // Snapshot data already contains message, lifecycle, and metrics state.
     // Buffered replay only hydrates event-only UI state that is absent from the
-    // snapshot, such as pending interactions.
+    // snapshot, such as pending interactions and route navigation.
+    if (event._tag === "BranchSwitched") {
+      callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
+      return
+    }
+
     if (event._tag === "InteractionResolved") {
       callbacks.onInteractionDismissed(event.requestId)
       return

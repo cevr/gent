@@ -161,6 +161,63 @@ describe("ClientProvider session lifecycle", () => {
       expect(ctx.model()).toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )
+  it.live("applySessionSnapshot refreshes the active session identity", () =>
+    Effect.gen(function* () {
+      let ctx: ClientContextValue | undefined
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+          initialSession: {
+            id: SessionId.make("session-stale"),
+            activeBranchId: BranchId.make("branch-stale"),
+            name: "Stale",
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          },
+        }),
+      )
+      if (ctx === undefined) throw new Error("client context not ready")
+      ctx.applySessionSnapshot({
+        sessionId: SessionId.make("session-stale"),
+        branchId: BranchId.make("branch-fresh"),
+        name: "Fresh",
+        messages: [],
+        lastEventId: null,
+        reasoningLevel: "high",
+        runtime: {
+          _tag: "Idle" as const,
+          agent: AgentName.make("cowork"),
+          queue: emptyQueueSnapshot(),
+        },
+        metrics: {
+          turns: 0,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 0,
+          lastInputTokens: 0,
+        },
+      })
+      const state = yield* Effect.promise(() =>
+        waitForState(
+          setup,
+          () => ctx!.sessionState(),
+          (current) =>
+            current.status === "active" &&
+            current.session.branchId === BranchId.make("branch-fresh"),
+        ),
+      )
+      expect(state).toEqual({
+        status: "active",
+        session: {
+          sessionId: SessionId.make("session-stale"),
+          branchId: BranchId.make("branch-fresh"),
+          name: "Fresh",
+          reasoningLevel: "high",
+        },
+      })
+    }),
+  )
   it.live("switchSession clears stale lastModelId before re-hydration", () =>
     Effect.gen(function* () {
       let ctx: ClientContextValue | undefined
