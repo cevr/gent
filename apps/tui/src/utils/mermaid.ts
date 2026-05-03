@@ -6,6 +6,7 @@
  */
 
 import { renderMermaidASCII, type AsciiRenderOptions } from "beautiful-mermaid"
+import { createHash } from "node:crypto"
 
 export interface MermaidBlock {
   /** Original mermaid source code */
@@ -109,8 +110,7 @@ const CACHE_MAX = 20
 const renderCache = new Map<string, string>()
 
 function hashSource(source: string, maxWidth?: number): string {
-  const hasher = new Bun.CryptoHasher("md5")
-  hasher.update(source)
+  const hasher = createHash("md5").update(source)
   if (maxWidth !== undefined) hasher.update(`:${maxWidth}`)
   return hasher.digest("hex")
 }

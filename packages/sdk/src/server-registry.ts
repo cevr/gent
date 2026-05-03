@@ -13,6 +13,7 @@
 
 // @effect-diagnostics nodeBuiltinImport:off — registry key includes host identity
 import { hostname } from "node:os"
+import { createHash } from "node:crypto"
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect"
 
@@ -40,9 +41,7 @@ const ServerRegistryEntryJson = Schema.fromJsonString(ServerRegistryEntry)
 const registryHash = (path: Path.Path, dbPath: string): string => {
   const host = hostname()
   const canonical = path.resolve(dbPath)
-  const hasher = new Bun.CryptoHasher("sha256")
-  hasher.update(`${host}\0${canonical}`)
-  return hasher.digest("hex").slice(0, 16)
+  return createHash("sha256").update(`${host}\0${canonical}`).digest("hex").slice(0, 16)
 }
 
 const ensureRegistryDir = (
