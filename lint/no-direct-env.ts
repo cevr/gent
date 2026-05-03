@@ -1190,13 +1190,12 @@ const plugin: Plugin = {
      *   - `**\/packages/tooling/**` (CI helpers)
      *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
      *   - `**\/main.ts` (process entrypoints)
-     *   - `**\/runtime/id-service.ts` (the canonical IdService.Live adapter)
-     *   - `**\/lint/**` (this plugin file)
      *   - `*.test.ts` and files under `tests/`
      *
-     * Note: this is the "broad" allowlist landed in C32.1; subsequent commits
-     * shrink it as call sites migrate to platform services or move into named
-     * `*-adapter.ts` files.
+     * The IdService.Live `Bun.randomUUIDv7` call has been extracted into
+     * `runtime/id-service-adapter.ts`, so the runtime/id-service.ts special
+     * case is gone. The `lint/` exemption was dead — the plugin file only
+     * mentions `Bun` in strings/comments, not MemberExpressions.
      */
     "no-bun-outside-adapter": {
       create(context) {
@@ -1211,8 +1210,6 @@ const plugin: Plugin = {
           if (/\/packages\/tooling\//.test(filename)) return {}
           if (/\/packages\/e2e\//.test(filename)) return {}
           if (/\/main\.ts$/.test(filename)) return {}
-          if (/\/runtime\/id-service\.ts$/.test(filename)) return {}
-          if (/\/lint\/[^/]+\.ts$/.test(filename)) return {}
           if (/\/tests\//.test(filename)) return {}
           if (/\.test\.tsx?$/.test(filename)) return {}
         } else {
