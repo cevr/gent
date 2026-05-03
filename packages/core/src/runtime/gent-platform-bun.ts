@@ -52,9 +52,13 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
 /**
  * The complete Bun-runtime platform stack: `@effect/platform-bun`
- * (FileSystem, Path, ChildProcessSpawner, …) merged with the gent-owned
- * `BunGentPlatformLive`. Production wiring and test harnesses both
- * yield this single Layer so they can't drift on which BunService
- * stack they pull in.
+ * (FileSystem, Path, ChildProcessSpawner, …) bundled with the gent-owned
+ * `BunGentPlatformLive`. Production wiring and test harnesses both yield
+ * this single Layer so they can't drift on which BunService stack they
+ * pull in.
+ *
+ * Note: `BunGentPlatformLive` is `Layer.succeed` with no requirements,
+ * so this is purely an output-context bundle (`Layer.merge`), not a
+ * dependency wiring (`Layer.provideMerge`).
  */
 export const BunPlatformLive = Layer.merge(BunServices.layer, BunGentPlatformLive)
