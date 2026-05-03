@@ -31,6 +31,7 @@ import { AgentLoop } from "./agent/agent-loop.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
+import { IdService } from "./id-service.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand as SteerCommandType } from "../domain/steer.js"
@@ -249,6 +250,7 @@ type SessionRuntimeEntityLayerRequirements =
   | ExtensionRegistry
   | DriverRegistry
   | ModelRegistry
+  | IdService
   | LayerRequirements<ReturnType<typeof AgentLoop.Live>>
 
 export interface SessionRuntimeService {
@@ -314,7 +316,6 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   return new SessionRuntimeError({ message, cause })
 }
 
-const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
 
 const wrapEntitySessionRuntimeError = (operation: string, error: unknown) =>
@@ -377,6 +378,7 @@ const makeLiveSessionRuntime: Effect.Effect<
   | ExtensionRegistry
   | DriverRegistry
   | ModelRegistry
+  | IdService
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
   const sessionStorage = yield* SessionStorage
@@ -385,6 +387,7 @@ const makeLiveSessionRuntime: Effect.Effect<
   const eventPublisher = yield* EventPublisher
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
+  const idService = yield* IdService
   const permissionOpt = yield* Effect.serviceOption(Permission)
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
@@ -420,7 +423,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     input: SendUserMessagePayload,
   ) {
     yield* requireSessionBranch(input)
-    const commandId = input.commandId ?? makeCommandId()
+    const commandId = input.commandId ?? ActorCommandId.make(yield* idService.next)
     const resolved = yield* resolveSessionEnvironmentOrFail({
       sessionId: input.sessionId,
       branchId: input.branchId,

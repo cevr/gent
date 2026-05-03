@@ -80,7 +80,6 @@ export const LoopCommand = Schema.Union([
 ])
 export type LoopCommand = typeof LoopCommand.Type
 
-export const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 export const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
 export const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:assistant`)

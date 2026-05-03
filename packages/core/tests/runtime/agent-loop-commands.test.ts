@@ -3,12 +3,17 @@ import { Schema } from "effect"
 import {
   AgentLoopError,
   LoopCommand,
-  makeCommandId,
   toolCallIdForCommand,
   assistantMessageIdForCommand,
   toolResultMessageIdForCommand,
 } from "../../src/runtime/agent/agent-loop.commands"
-import { BranchId, InteractionRequestId, MessageId, SessionId } from "@gent/core/domain/ids"
+import {
+  ActorCommandId,
+  BranchId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+} from "@gent/core/domain/ids"
 
 const sessionId = SessionId.make("command-session")
 const branchId = BranchId.make("command-branch")
@@ -25,7 +30,7 @@ const messageInput = {
 
 describe("agent loop commands", () => {
   test("command ids derive stable message and tool ids", () => {
-    const commandId = makeCommandId()
+    const commandId = ActorCommandId.make("test-command-id")
 
     expect(String(toolCallIdForCommand(commandId))).toBe(String(commandId))
     expect(String(assistantMessageIdForCommand(commandId))).toBe(`${commandId}:assistant`)
@@ -49,7 +54,7 @@ describe("agent loop commands", () => {
   })
 
   test("loop command schema accepts every command variant", () => {
-    const commandId = makeCommandId()
+    const commandId = ActorCommandId.make("test-command-id")
     const inputs = [
       { _tag: "RunTurn", message: messageInput },
       { _tag: "ApplySteer", command: { _tag: "Cancel", sessionId, branchId } },

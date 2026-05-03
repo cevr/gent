@@ -35,10 +35,10 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, type MessageMetadata } from "../../domain/message.js"
 import {
+  ActorCommandId,
   InteractionRequestId,
   MessageId,
   type ToolCallId,
-  type ActorCommandId,
   type BranchId,
   type SessionId,
 } from "../../domain/ids.js"
@@ -102,7 +102,6 @@ import {
   AgentLoopError,
   SteerCommand,
   assistantMessageIdForCommand,
-  makeCommandId,
   toolCallIdForCommand,
   toolResultMessageIdForCommand,
   type ApplySteerCommand,
@@ -1854,10 +1853,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             .withPermits(1)(
               Effect.gen(function* () {
                 yield* getLoop(command.sessionId, command.branchId)
+                const recordCommandId =
+                  command.commandId ?? ActorCommandId.make(yield* idService.next)
                 yield* recordToolResultPhase({
                   storage: turnStorage,
                   eventPublisher,
-                  commandId: command.commandId ?? makeCommandId(),
+                  commandId: recordCommandId,
                   sessionId: command.sessionId,
                   branchId: command.branchId,
                   toolCallId: command.toolCallId,
@@ -1878,7 +1879,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             .withPermits(1)(
               Effect.gen(function* () {
                 const loop = yield* getLoop(command.sessionId, command.branchId)
-                const commandId = command.commandId ?? makeCommandId()
+                const commandId = command.commandId ?? ActorCommandId.make(yield* idService.next)
                 const currentTurnAgent = (yield* currentRuntimeState(loop)).agent
                 const environment = yield* loop.resolveTurnProfile
 
