@@ -1,4 +1,4 @@
-import { Clock, Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import {
   FileIndex,
   FileIndexError,
@@ -33,17 +33,17 @@ export const ensureDbDir = (
   })
 
 // ---------------------------------------------------------------------------
-// Poll-based scan wait (non-blocking)
+// Scan completion (delegated to native `waitForScan` FFI)
 // ---------------------------------------------------------------------------
 
+// The fff-bun library exposes a synchronous `waitForScan(timeoutMs)` that
+// blocks until the indexer signals completion (or the timeout elapses).
+// Using it directly removes the JS-side 50ms `Effect.sleep` poll loop —
+// scan completion is a single FFI rendezvous, not a busy-wait.
 const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const start = yield* Clock.currentTimeMillis
-    while (finder.isScanning()) {
-      if ((yield* Clock.currentTimeMillis) - start > timeoutMs) return false
-      yield* Effect.sleep(50)
-    }
-    return true
+  Effect.sync(() => {
+    const result = finder.waitForScan(timeoutMs)
+    return result.ok && result.value
   })
 
 // ---------------------------------------------------------------------------
