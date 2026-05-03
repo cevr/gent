@@ -62,6 +62,7 @@ type SessionFeedClient = Pick<ClientSessionValue, "session"> &
     | "waitForTransportReady"
     | "applySessionSnapshot"
     | "applySessionEvent"
+    | "applyBufferedSessionEvent"
   >
 
 type SessionFeedStore = {
@@ -302,6 +303,7 @@ export function useSessionFeed(
   const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
   const [streamReadyKey, setStreamReadyKey] = createSignal<string | null>(null)
   let eventSeq = 0
+  const lastSeenEventIdByKey = new Map<string, number>()
 
   // Track the active key to guard against stale async writes and reset prompt state
   let currentKey: string | null = null
@@ -407,26 +409,30 @@ export function useSessionFeed(
                   lastEventId: snapshot.lastEventId,
                 })
 
-                yield* Effect.sync(() => {
-                  if (currentKey !== key) return
+                const snapshotApplied = yield* Effect.sync(() => {
+                  if (currentKey !== key) return false
                   client.applySessionSnapshot(snapshot)
                   callbacks.onQueueSnapshot(snapshot.runtime.queue)
                   setStore("messages", buildMessages(snapshot.messages))
+                  return true
                 })
+                if (!snapshotApplied) return yield* Effect.never
+
+                const after = lastSeenEventIdByKey.get(key) ?? 0
 
                 const eventStream = client.client.session.events({
                   sessionId: session,
                   branchId: branch,
-                  ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+                  after,
                 })
 
-                client.log.info("feed.stream.open", { key, after: snapshot.lastEventId })
+                client.log.info("feed.stream.open", { key, after })
                 const eventsFiber = yield* eventStream.pipe(
                   Stream.runForEach((envelope) =>
                     Effect.sync(() => {
                       if (currentKey !== key) return
                       client.setConnectionIssue(null)
-                      processEnvelope(envelope, branch, key)
+                      processEnvelope(envelope, branch, key, snapshot.lastEventId)
                     }),
                   ),
                   Effect.forkScoped,
@@ -478,11 +484,34 @@ export function useSessionFeed(
     }),
   )
 
-  const processEnvelope = (envelope: EventEnvelope, branch: BranchId, key: string) => {
+  const processEnvelope = (
+    envelope: EventEnvelope,
+    branch: BranchId,
+    key: string,
+    snapshotLastEventId: number | null,
+  ) => {
     // Drop events if identity changed
     if (currentKey !== key) return
+    lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
+    if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
+      client.applyBufferedSessionEvent(envelope)
+      processBufferedEvent(envelope.event, key)
+      return
+    }
     client.applySessionEvent(envelope)
     processEvent(envelope.event, branch, key)
+  }
+
+  const processBufferedEvent = (event: AgentEvent, key: string) => {
+    if (currentKey !== key) return
+
+    if (event._tag === "InteractionResolved") {
+      callbacks.onInteractionDismissed(event.requestId)
+      return
+    }
+
+    const interaction = toActiveInteraction(event)
+    if (interaction !== undefined) callbacks.onInteraction(interaction)
   }
 
   const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {

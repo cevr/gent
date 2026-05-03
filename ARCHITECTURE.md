@@ -126,7 +126,7 @@ It is the composition boundary. Not the domain boundary.
 
 ### RuntimeProfileResolver
 
-`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently and drift; now both go through the resolver paired with `buildExtensionLayers`:
+`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Both profile entrypoints go through the resolver paired with `buildExtensionLayers`:
 
 - **Server startup** (`server/dependencies.ts`) — resolves once at boot, builds the registry/state/event-bus layer via `buildExtensionLayers`, publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
 - **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, builds the same layer shape via `buildExtensionLayers` inside the captured server scope.
@@ -329,9 +329,9 @@ One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?,
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
+- **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
-- **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
+- **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
 
@@ -349,10 +349,10 @@ Other notes:
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
-- Task UI reads through typed task RPC and refetches from direct session events (`TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskFailed`, `TaskStopped`, `TaskDeleted`). The actor no longer mirrors task events, and there is no task-list projection.
+- Task UI reads through typed task RPC and refetches from direct session events (`TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskFailed`, `TaskStopped`, `TaskDeleted`).
 - task mutation flows through the extension boundary as typed Capability contributions (`intent: "write"`)
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
-- Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
+- Core `dependencies.ts` receives `TaskService` through the extension layer graph.
 - Event-publisher persists and broadcasts session events only. Client widgets read state via typed RPC + typed events on the normal transport stream.
 
 ### TUI Extensions
@@ -368,11 +368,8 @@ Other notes:
 
 ### Extension State
 
-Gent no longer ships a local actor substrate for extensions. The old
-`actors:` bucket, `Behavior`, `ServiceKey`, receptionist discovery, local
-mailboxes, and actor persistence tables were deleted in Wave 17. Builtin
-stateful extensions now use ordinary scoped Effect services/resources and
-publish product events through the normal session event stream.
+Extension state lives in scoped Effect services/resources and publishes product
+events through the normal session event stream.
 
 True actor protocols should be introduced at their owning runtime boundary
 using Effect Entity/RPC rather than recreating mailbox, discovery, persistence,
@@ -451,7 +448,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `@gent/interaction-tools` — `ask_user` and `prompt` tools.
 
-The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume, but the UI no longer uses a projection or actor mirror.
+The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume.
 
 ## Artifacts Extension
 

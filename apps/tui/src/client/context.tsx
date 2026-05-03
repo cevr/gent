@@ -128,6 +128,7 @@ export interface ClientTransportValue {
   onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
   applySessionSnapshot: (snapshot: SessionSnapshot) => void
   applySessionEvent: (envelope: EventEnvelope) => void
+  applyBufferedSessionEvent: (envelope: EventEnvelope) => void
 }
 
 export interface ClientSessionValue {
@@ -579,6 +580,12 @@ export function ClientProvider(props: ClientProviderProps) {
     applySessionMetadataEvent(event)
   }
 
+  const applyBufferedSessionEvent = (envelope: EventEnvelope): void => {
+    const event = envelope.event
+    notifySessionEvent(envelope)
+    notifyExtensionStateChanged(event)
+  }
+
   const transportValue: ClientTransportValue = {
     client,
     runtime,
@@ -612,6 +619,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
     applySessionSnapshot,
     applySessionEvent,
+    applyBufferedSessionEvent,
   }
 
   const sessionValue: ClientSessionValue = {

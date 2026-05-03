@@ -44,6 +44,16 @@ interface ToolResultState {
 
 interface IndexedToolResultState extends ToolResultState {
   readonly messageIndex: number
+  readonly partIndex: number
+}
+
+interface ToolCallPosition {
+  readonly messageIndex: number
+  readonly partIndex: number
+}
+
+interface IndexedToolCallState extends ToolCallPartProjection {
+  readonly position: ToolCallPosition
 }
 
 export interface MessagePartsDisplayTextOptions {
@@ -159,10 +169,13 @@ const buildToolResultMapFromMessages = (
   const resultMap = new Map<string, IndexedToolResultState[]>()
   for (const [messageIndex, message] of messages.entries()) {
     if (message.role !== "tool") continue
-    for (const result of messagePartsToolResults(message.parts)) {
+    for (const [partIndex, part] of message.parts.entries()) {
+      const result = messagePartToolResult(part)
+      if (result === undefined) continue
       const results = resultMap.get(result.id) ?? []
       results.push({
         messageIndex,
+        partIndex,
         summary: result.summary,
         output: result.text,
         isError: result.isError,
@@ -173,55 +186,94 @@ const buildToolResultMapFromMessages = (
   return resultMap
 }
 
-const messageHasToolCall = (message: Message, toolCallId: string): boolean =>
-  message.parts.some((part) => part.type === "tool-call" && part.toolCallId === toolCallId)
+const comparePosition = (left: ToolCallPosition, right: ToolCallPosition): number => {
+  if (left.messageIndex !== right.messageIndex) return left.messageIndex - right.messageIndex
+  return left.partIndex - right.partIndex
+}
+
+const indexedToolCalls = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyMap<string, ReadonlyArray<IndexedToolCallState>> => {
+  const calls = new Map<string, IndexedToolCallState[]>()
+  for (const [messageIndex, message] of messages.entries()) {
+    for (const [partIndex, part] of message.parts.entries()) {
+      const toolCall = messagePartToolCall(part)
+      if (toolCall === undefined) continue
+      const existing = calls.get(toolCall.id) ?? []
+      existing.push({ ...toolCall, position: { messageIndex, partIndex } })
+      calls.set(toolCall.id, existing)
+    }
+  }
+  return calls
+}
+
+const buildToolResultPairings = (
+  messages: ReadonlyArray<Message>,
+  resultMap: ReadonlyMap<string, ReadonlyArray<IndexedToolResultState>>,
+): ReadonlyMap<string, ToolResultState> => {
+  const pairings = new Map<string, ToolResultState>()
+  const callsById = indexedToolCalls(messages)
+  for (const [toolCallId, calls] of callsById) {
+    const results = resultMap.get(toolCallId) ?? []
+    let resultIndex = 0
+    for (const call of calls) {
+      while (
+        resultIndex < results.length &&
+        comparePosition(results[resultIndex] ?? call.position, call.position) <= 0
+      ) {
+        resultIndex++
+      }
+      const result = results[resultIndex]
+      if (result === undefined) continue
+      pairings.set(`${call.position.messageIndex}:${call.position.partIndex}`, result)
+      resultIndex++
+    }
+  }
+  return pairings
+}
 
 const findResultForToolCall = (
-  messages: ReadonlyArray<Message>,
   callMessageIndex: number,
-  toolCallId: string,
-  resultMap: ReadonlyMap<string, ReadonlyArray<IndexedToolResultState>>,
+  callPartIndex: number,
+  pairings: ReadonlyMap<string, ToolResultState>,
 ): ToolResultState | undefined => {
-  const results = resultMap.get(toolCallId)
-  if (results === undefined) return undefined
-  const nextDuplicateIndex = messages.findIndex(
-    (message, index) => index > callMessageIndex && messageHasToolCall(message, toolCallId),
-  )
-  return results.find(
-    (result) =>
-      result.messageIndex > callMessageIndex &&
-      (nextDuplicateIndex === -1 || result.messageIndex < nextDuplicateIndex),
-  )
+  return pairings.get(`${callMessageIndex}:${callPartIndex}`)
 }
 
 const messagePartsToolInteractions = (
   parts: ReadonlyArray<MessagePart>,
-  resultForToolCall: (toolCallId: string) => ToolResultState | undefined,
-): ReadonlyArray<ToolInteraction> =>
-  messagePartsToolCalls(parts).map((toolCall) => {
+  resultForToolCall: (partIndex: number) => ToolResultState | undefined,
+): ReadonlyArray<ToolInteraction> => {
+  const interactions: ToolInteraction[] = []
+  for (const [partIndex, part] of parts.entries()) {
+    const toolCall = messagePartToolCall(part)
+    if (toolCall === undefined) continue
     const id = ToolCallId.make(toolCall.id)
-    const result = resultForToolCall(toolCall.id)
+    const result = resultForToolCall(partIndex)
     let status: ToolInteraction["status"] = "running"
     if (result !== undefined) status = result.isError ? "error" : "completed"
-    return {
+    interactions.push({
       id,
       toolName: toolCall.toolName,
       status,
       input: toolCall.input,
       summary: result?.summary,
       output: result?.output,
-    }
-  })
+    })
+  }
+  return interactions
+}
 
 export const projectMessagesWithToolInteractions = (
   messages: ReadonlyArray<Message>,
 ): ReadonlyArray<ProjectedMessage> => {
   const resultMap = buildToolResultMapFromMessages(messages)
+  const pairings = buildToolResultPairings(messages, resultMap)
   return messages.map((message, index) =>
     projectMessage(
       message,
-      messagePartsToolInteractions(message.parts, (toolCallId) =>
-        findResultForToolCall(messages, index, toolCallId, resultMap),
+      messagePartsToolInteractions(message.parts, (partIndex) =>
+        findResultForToolCall(index, partIndex, pairings),
       ),
     ),
   )

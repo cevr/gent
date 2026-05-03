@@ -236,6 +236,58 @@ describe("message part projection", () => {
     })
   })
 
+  test("pairs same-message duplicate provider tool ids by part order", () => {
+    const firstCall = new ToolCallPart({
+      type: "tool-call",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      input: { path: "first.txt" },
+    })
+    const secondCall = new ToolCallPart({
+      type: "tool-call",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      input: { path: "second.txt" },
+    })
+    const firstResult = new ToolResultPart({
+      type: "tool-result",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      output: { type: "json", value: "first result" },
+    })
+    const secondResult = new ToolResultPart({
+      type: "tool-result",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      output: { type: "json", value: "second result" },
+    })
+
+    const projected = projectMessagesWithToolInteractions([
+      makeMessage("m-assistant", "assistant", [firstCall, secondCall]),
+      makeMessage("m-tool-1", "tool", [firstResult]),
+      makeMessage("m-tool-2", "tool", [secondResult]),
+    ])
+
+    expect(projected[0]?.toolInteractions).toEqual([
+      {
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "first.txt" },
+        summary: "first result",
+        output: "first result",
+      },
+      {
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "second.txt" },
+        summary: "second result",
+        output: "second result",
+      },
+    ])
+  })
+
   test("projects Effect response parts back to Gent transcript parts", () => {
     expect(responsePartToAssistantMessagePart(Response.makePart("text", { text: "hi" }))).toEqual(
       new TextPart({ type: "text", text: "hi" }),
