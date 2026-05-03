@@ -144,6 +144,19 @@ describe("Provider model resolution", () => {
       expect(result._tag).toBe("Failure")
     }),
   )
+  it.live("failing test provider resolves before failing at stream boundary", () =>
+    Effect.gen(function* () {
+      const provider = yield* Provider
+      const model = yield* provider.resolve({ model: "test/failing" })
+      const result = yield* Effect.exit(
+        LanguageModel.streamText({ prompt: [] }).pipe(Stream.provide(model), Stream.runCollect),
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(Cause.pretty(result.cause)).toContain("provider exploded")
+      }
+    }).pipe(Effect.provide(Provider.Failing)),
+  )
   it.live("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {
       const original = new Error("kaboom")

@@ -51,7 +51,7 @@ describe("session feed boundary", () => {
               content: "queued",
             })
             // controls.waitForStreamStart is the actual readiness signal — it
-            // resolves once provider.stream() has been called, which can only
+            // resolves once the model stream starts, which can only
             // happen after the feed fiber is consuming events.
             yield* controls.waitForStreamStart
             // Emit all chunks + finish
@@ -103,7 +103,7 @@ describe("session feed boundary", () => {
               content: "first",
             })
             // Wait for first turn's stream to start. waitForStreamStart is the
-            // readiness signal — provider.stream() is only called once the feed
+            // readiness signal — the model stream starts once the feed
             // fiber has consumed the MessageReceived event.
             yield* controls.waitForStreamStart
             // Send second message while first is still streaming (gated)
@@ -127,7 +127,7 @@ describe("session feed boundary", () => {
             expect(frame).toContain("[queued 1] queued follow-up")
             // Emit first turn's chunks to unblock
             yield* controls.emitAll()
-            // The agent loop will dequeue the follow-up and call stream() again.
+            // The agent loop will dequeue the follow-up and start a model stream again.
             // The signal provider's shared queue needs tokens for the second turn too.
             yield* controls.emitAll()
           }),

@@ -49,7 +49,12 @@ import type { PermissionService } from "../../../domain/permission.js"
 import type { ExtensionHostContext } from "../../../domain/extension-host-context.js"
 import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
 import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
-import { convertTools, ProviderError, type ProviderService } from "../../../providers/provider.js"
+import {
+  convertTools,
+  ProviderError,
+  type ProviderService,
+  type ProviderStreamPart,
+} from "../../../providers/provider.js"
 import { toPrompt } from "../../../providers/ai-transcript.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -687,7 +692,7 @@ export const runTurnBeforeHook = (
 type ModelTurnSource = {
   readonly driverKind: "model"
   readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
+  readonly stream: Stream.Stream<ProviderStreamPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,

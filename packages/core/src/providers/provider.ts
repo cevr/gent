@@ -371,11 +371,12 @@ const _DebugFailingProvider = () => {
   if (_debugFailingProviderCache === undefined) {
     _debugFailingProviderCache = Layer.succeed(Provider, {
       resolve: (request: ModelRequest) =>
-        Effect.fail(
-          new ProviderError({
-            message: "provider exploded",
-            model: request.model,
-          }),
+        Effect.succeed(
+          _testModel(
+            request,
+            () => Stream.fail(providerAiError("Failing.streamText", "provider exploded")),
+            () => Effect.fail(providerAiError("Failing.generateText", "provider exploded")),
+          ),
         ),
     } satisfies ProviderService)
   }
