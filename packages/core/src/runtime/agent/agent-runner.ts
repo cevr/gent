@@ -889,6 +889,11 @@ export const InProcessRunner = (
   | SessionRuntime
   | ExtensionRegistry
   | Provider
+  | RuntimePlatform
+  | FileSystem.FileSystem
+  | Path.Path
+  | ConfigService
+  | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
 > =>
@@ -1089,6 +1094,11 @@ export const SubprocessRunner = (
   | EventPublisher
   | ExtensionRegistry
   | Provider
+  | RuntimePlatform
+  | FileSystem.FileSystem
+  | Path.Path
+  | ConfigService
+  | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
 > =>

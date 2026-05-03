@@ -72,8 +72,7 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   /** Schema for output. */
   readonly output: Schema.Schema<Output>
   /** Action handler. Always called from human input. Receives the wide
-   *  `ModelCapabilityContext` for session, agent, storage, and typed RPC
-   *  helpers. */
+   *  `ModelCapabilityContext` for session, agent, and storage helpers. */
   readonly execute: (
     input: Input,
     ctx: ModelCapabilityContext,

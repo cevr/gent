@@ -7,8 +7,7 @@
  * source of truth for parent service omission.
  */
 
-import { Layer } from "effect"
-import type { Context } from "effect"
+import { Layer, type Config, type Context, type FileSystem, type Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -30,6 +29,10 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { SessionRuntime } from "./session-runtime.js"
+import type { Provider } from "../providers/provider.js"
+import type { ConfigService } from "./config-service.js"
+import type { ModelRegistry } from "./model-registry.js"
+import type { RuntimePlatform } from "./runtime-platform.js"
 import {
   eraseContextKey,
   eraseLayer,
@@ -47,14 +50,20 @@ export interface EphemeralRuntimeInputs<Provides> {
 
 export interface EphemeralRuntimeOverrides {
   readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
-  readonly eventStore: Layer.Layer<EventStore, unknown, unknown>
-  readonly eventPublisher: Layer.Layer<EventPublisher | BuiltinEventSink, unknown, unknown>
-  readonly approval: Layer.Layer<ApprovalService, unknown, unknown>
-  readonly promptPresenter: Layer.Layer<PromptPresenter, unknown, unknown>
-  readonly resourceManager: Layer.Layer<ResourceManager, unknown, unknown>
-  readonly toolRunner: Layer.Layer<ToolRunner, unknown, unknown>
-  readonly sessionRuntime: Layer.Layer<SessionRuntime, unknown, unknown>
+  readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
+  readonly eventPublisher: Layer.Layer<
+    EventPublisher | BuiltinEventSink,
+    EphemeralOverrideError,
+    never
+  >
+  readonly approval: Layer.Layer<ApprovalService, never, never>
+  readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
+  readonly resourceManager: Layer.Layer<ResourceManager, never, never>
+  readonly toolRunner: Layer.Layer<ToolRunner, never, never>
+  readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
 }
+
+type EphemeralOverrideError = StorageError | Config.ConfigError
 
 type EphemeralStorageProvides =
   | SqlClient.SqlClient
@@ -80,6 +89,15 @@ type EphemeralOverrideProvides =
   | ResourceManager
   | ToolRunner
   | SessionRuntime
+
+type EphemeralExtensionRequires =
+  | EphemeralStorageProvides
+  | RuntimePlatform
+  | FileSystem.FileSystem
+  | Path.Path
+  | Provider
+  | ConfigService
+  | ModelRegistry
 
 const storageOverrideTags = [
   SqlClient.SqlClient,
@@ -130,7 +148,7 @@ export const buildEphemeralRuntime = <Provides>(
   const typedExtensionLayer =
     inputs.extensionLayers === undefined
       ? undefined
-      : restoreErasedLayer<Provides, never, EphemeralStorageProvides>(
+      : restoreErasedLayer<Provides, never, EphemeralExtensionRequires>(
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — extension layer membrane owns heterogeneous extension requirements
           eraseLayer(inputs.extensionLayers),
         )
@@ -140,7 +158,7 @@ export const buildEphemeralRuntime = <Provides>(
       ? undefined
       : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, inputs.overrides.storage))
 
-  // Merge order is parent → extension layers fed by child storage → child overrides. Last writer wins.
+  // Merge order is parent → extension layers fed by parent context + child storage → child overrides. Last writer wins.
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
   const merged = mergeErasedLayers([
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary

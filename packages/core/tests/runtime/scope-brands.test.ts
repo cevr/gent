@@ -40,6 +40,7 @@ import { ResourceManager } from "../../src/runtime/resource-manager"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { RuntimePlatform, type RuntimePlatformShape } from "../../src/runtime/runtime-platform"
+import { ConfigService, type ConfigServiceService } from "../../src/runtime/config-service"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
@@ -171,7 +172,11 @@ describe("scope brand type fences", () => {
       Effect.gen(function* () {
         class ExtensionSqlProbe extends Context.Service<
           ExtensionSqlProbe,
-          { readonly sql: unknown; readonly platform: RuntimePlatformShape }
+          {
+            readonly sql: unknown
+            readonly platform: RuntimePlatformShape
+            readonly config: ConfigServiceService
+          }
         >()("@gent/core/tests/scope-brands/ExtensionSqlProbe") {}
 
         const parentSql = { sentinel: "parent-sql" } as never
@@ -180,9 +185,20 @@ describe("scope brand type fences", () => {
           home: "/parent-home",
           platform: "parent-platform",
         })
+        const parentConfig: ConfigServiceService = {
+          get: () => Effect.succeed({} as never),
+          set: () => Effect.void,
+          getPermissionRules: () => Effect.succeed([]),
+          addPermissionRule: () => Effect.void,
+          removePermissionRule: () => Effect.void,
+          setDriverOverride: () => Effect.void,
+          clearDriverOverride: () => Effect.void,
+          loadInstructions: () => Effect.succeed("parent instructions"),
+        }
         const parentServicesWithDependencies = Context.empty().pipe(
           Context.add(SqlClient.SqlClient, parentSql),
           Context.add(RuntimePlatform, parentPlatform),
+          Context.add(ConfigService, parentConfig),
         ) as Context.Context<never>
 
         const extensionLayer = Layer.effect(
@@ -190,7 +206,8 @@ describe("scope brand type fences", () => {
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient
             const platform = yield* RuntimePlatform
-            return { sql, platform }
+            const config = yield* ConfigService
+            return { sql, platform, config }
           }),
         )
 
@@ -207,6 +224,7 @@ describe("scope brand type fences", () => {
 
         expect((probe.sql as { sentinel: string }).sentinel).toBe("child-sql")
         expect(probe.platform.platform).toBe("parent-platform")
+        expect(yield* probe.config.loadInstructions("/tmp")).toBe("parent instructions")
       }),
     )
   })
