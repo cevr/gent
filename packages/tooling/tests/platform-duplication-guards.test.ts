@@ -62,18 +62,28 @@ describe("platform duplication guards", () => {
   })
 
   test("flags deleted public actor rpc path", () => {
+    expect(findPlatformDuplicationViolations("packages/core/src/server/rpcs/actor.ts", "")).toEqual(
+      [
+        {
+          file: "packages/core/src/server/rpcs/actor.ts",
+          line: 1,
+          message: "Public actor RPC surface is deleted; use product RPCs",
+        },
+      ],
+    )
+
+    expect(
+      findPlatformDuplicationViolations("packages/core/src/server/rpcs/session.ts", ""),
+    ).toEqual([])
+  })
+
+  test("does not flag the guard source itself", () => {
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/rpcs/actor.ts",
-        "export const ActorRpcs = {}",
+        "packages/tooling/src/platform-duplication-guards.ts",
+        ["ExtensionRuntime", "ctx.extension.request(ref)", "subTagLayers(base)"].join("\n"),
       ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/rpcs/actor.ts",
-        line: 1,
-        message: "Public actor RPC surface is deleted; use product RPCs",
-      },
-    ])
+    ).toEqual([])
   })
 
   test("flags session transport dto names only in the transport contract", () => {
@@ -96,6 +106,24 @@ describe("platform duplication guards", () => {
         "export class SessionInfo {}",
       ),
     ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/transport-contract.ts",
+        ["export class BranchInfo {}", "const runtime = ExtensionRuntime"].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/server/transport-contract.ts",
+        line: 1,
+        message: "Transport session DTOs mirror domain types",
+      },
+      {
+        file: "packages/core/src/server/transport-contract.ts",
+        line: 2,
+        message: "ExtensionRuntime marker service is deleted; use explicit services",
+      },
+    ])
   })
 
   test("flags stale in-process extension rpc comments and calls", () => {
