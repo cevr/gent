@@ -13,7 +13,7 @@ Old mental model:
 New mental model:
 
 - `SessionRuntime` is the only public runtime owner
-- writes flow through `dispatch(command)`
+- writes flow through typed `SessionRuntime` methods
 - reads flow through `getState`, `watchState`, `getQueuedMessages`, `getMetrics`
 
 ### Old
@@ -31,22 +31,20 @@ yield *
 
 ```ts
 yield *
-  sessionRuntime.dispatch(
-    sendUserMessageCommand({
-      sessionId,
-      branchId,
-      content,
-    }),
-  )
+  sessionRuntime.sendUserMessage({
+    sessionId,
+    branchId,
+    content,
+  })
 ```
 
-Use these command constructors:
+Use the typed runtime methods for write boundaries:
 
-- `sendUserMessageCommand(...)`
-- `recordToolResultCommand(...)`
-- `invokeToolCommand(...)`
-- `applySteerCommand(...)`
-- `respondInteractionCommand(...)`
+- `sendUserMessage(...)`
+- `recordToolResult(...)`
+- `invokeTool(...)`
+- `steer(...)`
+- `respondInteraction(...)`
 
 If you are writing server code, stop at `SessionRuntime`. `AgentLoop` is internal runtime machinery, not an integration boundary.
 
