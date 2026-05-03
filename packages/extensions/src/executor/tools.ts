@@ -9,18 +9,20 @@
  */
 
 import { Effect, Schema } from "effect"
-import { ref, tool, type ToolContext } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
+import { ExecutorRead } from "./controller.js"
 import { type ExecutorMcpToolResult, type ResumeAction, ExecutorMcpError } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
-import { ExecutorRpc } from "./protocol.js"
 
 // ── Helpers ──
 
-const requireReadyBaseUrl = (ctx: ToolContext, phase: "execute" | "resume") =>
+const requireReadyBaseUrl = (phase: "execute" | "resume") =>
   Effect.gen(function* () {
-    const snapshot = yield* ctx.extension
-      .request(ref(ExecutorRpc.GetSnapshot), {})
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+    const executor = yield* Effect.serviceOption(ExecutorRead)
+    const snapshot =
+      executor._tag === "Some"
+        ? yield* executor.value.snapshot().pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+        : undefined
     if (
       snapshot === undefined ||
       snapshot.status !== "ready" ||
@@ -52,8 +54,8 @@ export const ExecuteTool = tool({
       description: "TypeScript code to execute in the Executor runtime.",
     }),
   }),
-  execute: Effect.fn("ExecuteTool.execute")(function* (params, ctx) {
-    const baseUrl = yield* requireReadyBaseUrl(ctx, "execute")
+  execute: Effect.fn("ExecuteTool.execute")(function* (params) {
+    const baseUrl = yield* requireReadyBaseUrl("execute")
     const bridge = yield* ExecutorMcpBridge
     const result = yield* bridge.execute(baseUrl, params.code)
     const checked = yield* failIfError(result, "execute")
@@ -87,8 +89,8 @@ export const ResumeTool = tool({
       }),
     ),
   }),
-  execute: Effect.fn("ResumeTool.execute")(function* (params, ctx) {
-    const baseUrl = yield* requireReadyBaseUrl(ctx, "resume")
+  execute: Effect.fn("ResumeTool.execute")(function* (params) {
+    const baseUrl = yield* requireReadyBaseUrl("resume")
     const bridge = yield* ExecutorMcpBridge
     const contentStr = params.content
     const parsed = contentStr

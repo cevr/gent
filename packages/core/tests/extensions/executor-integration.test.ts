@@ -38,7 +38,7 @@ import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect, withReadOnly } from "@gent/core/extensions/api"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { AgentName } from "@gent/core/domain/agent"
@@ -54,12 +54,21 @@ const readySnapshot: ExecutorSnapshotReply = {
 const notReadySnapshot: ExecutorSnapshotReply = {
   status: "idle",
 }
-const makeToolCtx = (snapshot: ExecutorSnapshotReply | undefined) =>
-  testToolContext({
-    extension: {
-      request: () => Effect.succeed(snapshot as never),
-    },
-  })
+const makeExecutorReadLayer = (snapshot: ExecutorSnapshotReply | undefined) =>
+  Layer.succeed(
+    ExecutorRead,
+    withReadOnly({
+      snapshot: () =>
+        snapshot === undefined
+          ? Effect.die("executor snapshot unavailable")
+          : Effect.succeed(snapshot),
+    }),
+  )
+const makeToolLayer = (
+  bridgeLayer: Layer.Layer<ExecutorMcpBridge>,
+  snapshot: ExecutorSnapshotReply | undefined,
+) => Layer.merge(bridgeLayer, makeExecutorReadLayer(snapshot))
+const makeToolCtx = () => testToolContext({})
 const successResult: ExecutorMcpToolResult = {
   text: "Hello from Executor",
   structuredContent: { answer: 42 },
@@ -169,10 +178,10 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         execute: (_baseUrl, _code) => Effect.succeed(successResult),
       })
-      const ctx = makeToolCtx(readySnapshot)
+      const ctx = makeToolCtx()
       const result = yield* narrowR(
         getToolEffect(ExecuteTool)({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
-          Effect.provide(bridgeLayer),
+          Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
         ),
       )
       expect(result.text).toBe("Hello from Executor")
@@ -184,10 +193,12 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         execute: () => Effect.succeed(errorResult),
       })
-      const ctx = makeToolCtx(readySnapshot)
+      const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
-          getToolEffect(ExecuteTool)({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+          getToolEffect(ExecuteTool)({ code: "bad()" }, ctx).pipe(
+            Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
+          ),
         ),
       )
       expect(exit._tag).toBe("Failure")
@@ -198,9 +209,13 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         execute: () => Effect.succeed(successResult),
       })
-      const ctx = makeToolCtx(notReadySnapshot)
+      const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
-        narrowR(getToolEffect(ExecuteTool)({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer))),
+        narrowR(
+          getToolEffect(ExecuteTool)({ code: "x" }, ctx).pipe(
+            Effect.provide(makeToolLayer(bridgeLayer, notReadySnapshot)),
+          ),
+        ),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -210,9 +225,11 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         execute: () => Effect.succeed(waitingResult),
       })
-      const ctx = makeToolCtx(readySnapshot)
+      const ctx = makeToolCtx()
       const result = yield* narrowR(
-        getToolEffect(ExecuteTool)({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+        getToolEffect(ExecuteTool)({ code: "api.call()" }, ctx).pipe(
+          Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
+        ),
       )
       expect(result.executionId).toBe("exec-abc-123")
       expect(result.text).toBe("Waiting for approval")
@@ -231,7 +248,7 @@ describe("Executor tools", () => {
           return Effect.succeed(successResult)
         },
       })
-      const ctx = makeToolCtx(readySnapshot)
+      const ctx = makeToolCtx()
       yield* narrowR(
         getToolEffect(ResumeTool)(
           {
@@ -240,7 +257,7 @@ describe("Executor tools", () => {
             content: '{"approved": true}',
           },
           ctx,
-        ).pipe(Effect.provide(bridgeLayer)),
+        ).pipe(Effect.provide(makeToolLayer(bridgeLayer, readySnapshot))),
       )
       expect(captured).toHaveLength(1)
       expect(captured[0]!.executionId).toBe("exec-1")
@@ -253,7 +270,7 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         resume: () => Effect.succeed(successResult),
       })
-      const ctx = makeToolCtx(readySnapshot)
+      const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
           getToolEffect(ResumeTool)(
@@ -263,7 +280,7 @@ describe("Executor tools", () => {
               content: "not valid json{{{",
             },
             ctx,
-          ).pipe(Effect.provide(bridgeLayer)),
+          ).pipe(Effect.provide(makeToolLayer(bridgeLayer, readySnapshot))),
         ),
       )
       expect(exit._tag).toBe("Failure")
@@ -274,7 +291,7 @@ describe("Executor tools", () => {
       const bridgeLayer = ExecutorMcpBridge.Test({
         resume: () => Effect.succeed(successResult),
       })
-      const ctx = makeToolCtx(notReadySnapshot)
+      const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
           getToolEffect(ResumeTool)(
@@ -283,7 +300,7 @@ describe("Executor tools", () => {
               action: "decline" as "accept" | "decline" | "cancel",
             },
             ctx,
-          ).pipe(Effect.provide(bridgeLayer)),
+          ).pipe(Effect.provide(makeToolLayer(bridgeLayer, notReadySnapshot))),
         ),
       )
       expect(exit._tag).toBe("Failure")

@@ -6,11 +6,10 @@ import {
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
-  ref,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
 import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
-import { AutoRpc } from "./auto-protocol.js"
+import { AutoRead } from "./auto-controller.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
@@ -70,9 +69,11 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     yield* cooldown.turnCompleted().pipe(Effect.catchEager(() => Effect.void))
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
-    const autoActive = yield* ctx.extension
-      .request(ref(AutoRpc.IsActive), {})
-      .pipe(Effect.catchEager(() => Effect.succeed(false)))
+    const auto = yield* Effect.serviceOption(AutoRead)
+    const autoActive =
+      auto._tag === "Some"
+        ? yield* auto.value.isActive().pipe(Effect.catchEager(() => Effect.succeed(false)))
+        : false
     if (autoActive) return
 
     const cooldownCount = yield* cooldown.get().pipe(Effect.catchEager(() => Effect.succeed(0)))
