@@ -495,21 +495,21 @@ export function useSessionFeed(
     lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
     if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
       client.applyBufferedSessionEvent(envelope)
-      processBufferedEvent(envelope.event, key)
+      processBufferedEvent(envelope.event, branch, key)
       return
     }
     client.applySessionEvent(envelope)
     processEvent(envelope.event, branch, key)
   }
 
-  const processBufferedEvent = (event: AgentEvent, key: string) => {
+  const processBufferedEvent = (event: AgentEvent, branch: BranchId, key: string) => {
     if (currentKey !== key) return
 
     // Snapshot data already contains message, lifecycle, and metrics state.
     // Buffered replay only hydrates event-only UI state that is absent from the
     // snapshot, such as pending interactions and route navigation.
     if (event._tag === "BranchSwitched") {
-      callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
+      if (event.toBranchId !== branch) callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
       return
     }
 

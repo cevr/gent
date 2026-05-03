@@ -77,13 +77,12 @@ describe("useSessionFeed", () => {
           metadata: undefined,
         }),
       )
-      const switchedBranchId = BranchId.make("branch-feed-switched")
       const bufferedBranchSwitch = makeEnvelope(
         3,
         AgentEvent.BranchSwitched.make({
           sessionId,
           fromBranchId: branchId,
-          toBranchId: switchedBranchId,
+          toBranchId: branchId,
         }),
       )
       const liveEvent = makeEnvelope(
@@ -92,9 +91,9 @@ describe("useSessionFeed", () => {
       )
       const interactionSeen = yield* Deferred.make<ActiveInteraction>()
       const liveSeen = yield* Deferred.make<void>()
-      const branchSwitchSeen = yield* Deferred.make<{ sessionId: SessionId; branchId: BranchId }>()
       let requestedAfter: number | undefined
       const bufferedTags: string[] = []
+      const branchSwitches: Array<{ sessionId: SessionId; branchId: BranchId }> = []
 
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
@@ -137,12 +136,7 @@ describe("useSessionFeed", () => {
             },
             onInteractionDismissed: () => {},
             onBranchSwitch: (nextSessionId, nextBranchId) => {
-              Effect.runFork(
-                Deferred.succeed(branchSwitchSeen, {
-                  sessionId: nextSessionId,
-                  branchId: nextBranchId,
-                }),
-              )
+              branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
             },
             onQueueSnapshot: () => {},
           },
@@ -151,7 +145,6 @@ describe("useSessionFeed", () => {
       })
 
       const interaction = yield* Deferred.await(interactionSeen)
-      const branchSwitch = yield* Deferred.await(branchSwitchSeen)
       yield* Deferred.await(liveSeen)
       yield* Effect.sync(() => {
         expect(requestedAfter).toBe(0)
@@ -161,7 +154,7 @@ describe("useSessionFeed", () => {
           "BranchSwitched",
         ])
         expect(interaction.requestId).toBe(InteractionRequestId.make("interaction-buffered"))
-        expect(branchSwitch).toEqual({ sessionId, branchId: switchedBranchId })
+        expect(branchSwitches).toEqual([])
         dispose()
       })
     }),

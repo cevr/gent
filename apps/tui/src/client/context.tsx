@@ -474,20 +474,25 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
-    setConnectionIssue(null)
     const currentSession = session()
-    if (currentSession === null || currentSession.sessionId === snapshot.sessionId) {
-      dispatchSession(
-        SessionStateEvent.Activated.make({
-          session: {
-            sessionId: snapshot.sessionId,
-            branchId: snapshot.branchId,
-            name: snapshot.name ?? currentSession?.name ?? "Unnamed",
-            reasoningLevel: snapshot.reasoningLevel,
-          },
-        }),
-      )
+    if (
+      currentSession !== null &&
+      (currentSession.sessionId !== snapshot.sessionId ||
+        currentSession.branchId !== snapshot.branchId)
+    ) {
+      return
     }
+    setConnectionIssue(null)
+    dispatchSession(
+      SessionStateEvent.Activated.make({
+        session: {
+          sessionId: snapshot.sessionId,
+          branchId: snapshot.branchId,
+          name: snapshot.name ?? currentSession?.name ?? "Unnamed",
+          reasoningLevel: snapshot.reasoningLevel,
+        },
+      }),
+    )
     const rt = snapshot.runtime
     const status = rt._tag === "Idle" ? AgentStatus.Idle.make({}) : AgentStatus.Streaming.make({})
     setAgentStore({

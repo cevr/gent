@@ -161,14 +161,14 @@ describe("ClientProvider session lifecycle", () => {
       expect(ctx.model()).toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )
-  it.live("applySessionSnapshot refreshes the active session identity", () =>
+  it.live("applySessionSnapshot refreshes the active session metadata", () =>
     Effect.gen(function* () {
       let ctx: ClientContextValue | undefined
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
           initialSession: {
-            id: SessionId.make("session-stale"),
-            activeBranchId: BranchId.make("branch-stale"),
+            id: SessionId.make("session-refresh"),
+            activeBranchId: BranchId.make("branch-refresh"),
             name: "Stale",
             createdAt: new Date(0),
             updatedAt: new Date(0),
@@ -177,8 +177,8 @@ describe("ClientProvider session lifecycle", () => {
       )
       if (ctx === undefined) throw new Error("client context not ready")
       ctx.applySessionSnapshot({
-        sessionId: SessionId.make("session-stale"),
-        branchId: BranchId.make("branch-fresh"),
+        sessionId: SessionId.make("session-refresh"),
+        branchId: BranchId.make("branch-refresh"),
         name: "Fresh",
         messages: [],
         lastEventId: null,
@@ -204,18 +204,151 @@ describe("ClientProvider session lifecycle", () => {
           () => ctx!.sessionState(),
           (current) =>
             current.status === "active" &&
-            current.session.branchId === BranchId.make("branch-fresh"),
+            current.session.name === "Fresh" &&
+            current.session.reasoningLevel === "high",
         ),
       )
       expect(state).toEqual({
         status: "active",
         session: {
-          sessionId: SessionId.make("session-stale"),
-          branchId: BranchId.make("branch-fresh"),
+          sessionId: SessionId.make("session-refresh"),
+          branchId: BranchId.make("branch-refresh"),
           name: "Fresh",
           reasoningLevel: "high",
         },
       })
+    }),
+  )
+  it.live("applySessionSnapshot ignores stale foreign identity snapshots", () =>
+    Effect.gen(function* () {
+      let ctx: ClientContextValue | undefined
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+          initialSession: {
+            id: SessionId.make("session-source"),
+            activeBranchId: BranchId.make("branch-source"),
+            name: "Source",
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          },
+        }),
+      )
+      if (ctx === undefined) throw new Error("client context not ready")
+      ctx.switchSession(
+        SessionId.make("session-target"),
+        BranchId.make("branch-target"),
+        "Target",
+        AgentName.make("deepwork"),
+      )
+      ctx.applySessionSnapshot({
+        sessionId: SessionId.make("session-source"),
+        branchId: BranchId.make("branch-source"),
+        name: "Foreign",
+        messages: [],
+        lastEventId: null,
+        reasoningLevel: "high",
+        runtime: {
+          _tag: "Running" as const,
+          agent: AgentName.make("cowork"),
+          queue: emptyQueueSnapshot(),
+        },
+        metrics: {
+          turns: 9,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 123,
+          lastInputTokens: 456,
+          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        },
+      })
+      const state = yield* Effect.promise(() =>
+        waitForState(
+          setup,
+          () => ctx!.sessionState(),
+          (current) => current.status === "active",
+        ),
+      )
+      expect(state).toEqual({
+        status: "active",
+        session: {
+          sessionId: SessionId.make("session-target"),
+          branchId: BranchId.make("branch-target"),
+          name: "Target",
+          reasoningLevel: undefined,
+        },
+      })
+      expect(ctx.agent()).toBe(AgentName.make("deepwork"))
+      expect(ctx.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(ctx.cost()).toBe(0)
+      expect(ctx.latestInputTokens()).toBe(0)
+    }),
+  )
+  it.live("applySessionSnapshot ignores stale snapshots for a previous branch", () =>
+    Effect.gen(function* () {
+      let ctx: ClientContextValue | undefined
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+          initialSession: {
+            id: SessionId.make("session-branch-race"),
+            activeBranchId: BranchId.make("branch-old"),
+            name: "Old",
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          },
+        }),
+      )
+      if (ctx === undefined) throw new Error("client context not ready")
+      ctx.switchSession(
+        SessionId.make("session-branch-race"),
+        BranchId.make("branch-new"),
+        "New",
+        AgentName.make("deepwork"),
+      )
+      ctx.applySessionSnapshot({
+        sessionId: SessionId.make("session-branch-race"),
+        branchId: BranchId.make("branch-old"),
+        name: "Old Snapshot",
+        messages: [],
+        lastEventId: null,
+        reasoningLevel: "medium",
+        runtime: {
+          _tag: "Running" as const,
+          agent: AgentName.make("cowork"),
+          queue: emptyQueueSnapshot(),
+        },
+        metrics: {
+          turns: 1,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 12,
+          lastInputTokens: 34,
+          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        },
+      })
+      const state = yield* Effect.promise(() =>
+        waitForState(
+          setup,
+          () => ctx!.sessionState(),
+          (current) =>
+            current.status === "active" && current.session.branchId === BranchId.make("branch-new"),
+        ),
+      )
+      expect(state).toEqual({
+        status: "active",
+        session: {
+          sessionId: SessionId.make("session-branch-race"),
+          branchId: BranchId.make("branch-new"),
+          name: "New",
+          reasoningLevel: undefined,
+        },
+      })
+      expect(ctx.agent()).toBe(AgentName.make("deepwork"))
+      expect(ctx.cost()).toBe(0)
+      expect(ctx.latestInputTokens()).toBe(0)
     }),
   )
   it.live("switchSession clears stale lastModelId before re-hydration", () =>
