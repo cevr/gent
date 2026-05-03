@@ -2,7 +2,6 @@ import { Effect, Stream, type Context } from "effect"
 import type { AuthGuardService } from "../../domain/auth-guard.js"
 import type { AuthStoreService } from "../../domain/auth-store.js"
 import type { EventEnvelope, EventStoreService } from "../../domain/event.js"
-import type { Session } from "../../domain/message.js"
 import type { ProviderAuthService } from "../../providers/provider-auth.js"
 import type { ConfigServiceService } from "../../runtime/config-service.js"
 import type { RuntimePlatformShape } from "../../runtime/runtime-platform.js"
@@ -45,7 +44,9 @@ export interface RpcHandlerDeps {
   readonly resolveSessionServices: (
     sessionId: string | undefined,
   ) => Effect.Effect<ResolvedSessionServices>
-  readonly loadSession: (sessionId: string) => Effect.Effect<Session | undefined>
+  readonly resolveProfileServices: (
+    cwd: string | undefined,
+  ) => Effect.Effect<ResolvedSessionServices>
 }
 
 export const isPublicTransportEvent = (envelope: EventEnvelope) =>

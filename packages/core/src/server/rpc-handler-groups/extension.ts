@@ -118,7 +118,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           message: "Session cwd unavailable for extension request",
         })
       }
-      const { registry, capabilityContext } = yield* deps.resolveSessionServices(sessionId)
+      const { registry, capabilityContext } = yield* deps.resolveProfileServices(scope.session.cwd)
       // Public write request handlers may ask for the wide host surface
       // (`session.*`, `agent.*`, storage, etc.). Build the full
       // ExtensionHostContext here so handlers use the same boundary as tools.

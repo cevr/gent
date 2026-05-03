@@ -58,24 +58,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         .pipe(Effect.orElseSucceed(() => undefined))
     }
 
-    const resolveSessionServices = (sessionId: string | undefined) =>
+    const resolveProfileServices = (cwd: string | undefined) =>
       Effect.gen(function* () {
-        if (sessionId === undefined || profileCache === undefined) {
+        if (cwd === undefined || profileCache === undefined) {
           return {
             registry: extensionRegistry,
           }
         }
-        const session = yield* loadSession(sessionId)
-        if (session?.cwd === undefined) {
-          return {
-            registry: extensionRegistry,
-          }
-        }
-        const profile = yield* profileCache.resolve(session.cwd)
+        const profile = yield* profileCache.resolve(cwd)
         return {
           registry: profile.registryService,
           capabilityContext: profile.layerContext,
         }
+      })
+
+    const resolveSessionServices = (sessionId: string | undefined) =>
+      Effect.gen(function* () {
+        if (sessionId === undefined) return yield* resolveProfileServices(undefined)
+        const session = yield* loadSession(sessionId)
+        return yield* resolveProfileServices(session?.cwd)
       })
 
     const deps = {
@@ -97,7 +98,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       connectionTracker,
       serverIdentity,
       resolveSessionServices,
-      loadSession,
+      resolveProfileServices,
     } as const
 
     return {
