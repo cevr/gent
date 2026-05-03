@@ -2,6 +2,26 @@ import { Config, Effect, Layer, Option } from "effect"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 
+const readColorFgBg = (): string | undefined =>
+  Effect.runSync(
+    Effect.gen(function* () {
+      const opt = yield* Config.option(Config.string("COLORFGBG"))
+      return Option.getOrUndefined(opt)
+    }),
+  )
+
+const readDarwinAppearance = (): "dark" | "light" => {
+  const exitCode = Effect.runSync(
+    Effect.gen(function* () {
+      const platform = yield* GentPlatform
+      const result = yield* platform.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"])
+      return result.exitCode
+      // @effect-diagnostics-next-line strictEffectProvide:off
+    }).pipe(Effect.provide(Layer.fresh(BunGentPlatformLive))),
+  )
+  return exitCode === 0 ? "dark" : "light"
+}
+
 /**
  * Detect if terminal is using dark or light mode.
  * Uses multiple strategies in order:
@@ -12,12 +32,7 @@ import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 export function detectColorScheme(): "dark" | "light" {
   // Check COLORFGBG env (set by some terminals like rxvt, xterm, some terminal emulators)
   // Format: "fg;bg" where higher bg number = light theme
-  const colorFgBg = Effect.runSync(
-    Effect.gen(function* () {
-      const opt = yield* Config.option(Config.string("COLORFGBG"))
-      return Option.getOrUndefined(opt)
-    }),
-  )
+  const colorFgBg = readColorFgBg()
   if (colorFgBg !== undefined && colorFgBg.length > 0) {
     const parts = colorFgBg.split(";")
     const bg = parseInt(parts[parts.length - 1] ?? "0", 10)
@@ -25,22 +40,7 @@ export function detectColorScheme(): "dark" | "light" {
     return bg > 6 ? "light" : "dark"
   }
 
-  // Check macOS system appearance
-  if (process.platform === "darwin") {
-    const exitCode = Effect.runSync(
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const result = yield* platform.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"])
-        return result.exitCode
-        // @effect-diagnostics-next-line strictEffectProvide:off
-      }).pipe(Effect.provide(Layer.fresh(BunGentPlatformLive))),
-    )
-    if (exitCode === 0) {
-      return "dark"
-    }
-    return "light"
-  }
+  if (process.platform === "darwin") return readDarwinAppearance()
 
-  // Default to dark
   return "dark"
 }
