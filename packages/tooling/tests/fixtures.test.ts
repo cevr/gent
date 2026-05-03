@@ -102,7 +102,7 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
     valid: "no-promise-control-flow-in-tests.valid.test.ts",
-    expectedCount: 7,
+    expectedCount: 8,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",
@@ -124,8 +124,12 @@ const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
 }
 
 effectDescribe("custom lint rules", () => {
-  const loadRuns = Effect.promise(() =>
-    Promise.all([runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))]),
+  const loadRuns = Effect.all(
+    [
+      Effect.promise(() => runOxlint(CASES.map((c) => c.invalid))),
+      Effect.promise(() => runOxlint(CASES.map((c) => c.valid))),
+    ],
+    { concurrency: "unbounded" },
   )
 
   for (const c of CASES) {

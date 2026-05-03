@@ -155,7 +155,7 @@ const capabilityFactoryName = (node: AstNode): string | undefined => {
 }
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
-const PROMISE_STATIC_METHODS = new Set(["resolve", "reject"])
+const PROMISE_STATIC_METHODS = new Set(["all", "allSettled", "any", "race", "resolve", "reject"])
 
 const promiseChainMethodName = (node: AstNode): string | undefined => {
   if (node.type !== "CallExpression") return undefined

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { ToolCallId } from "@gent/core/domain/ids.js"
 import { extractText } from "@gent/sdk"

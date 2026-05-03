@@ -85,12 +85,13 @@ describe("headless CLI", () => {
             stderr: "pipe",
           },
         )
-        const [exitCode, stdout, stderr] = yield* Effect.promise(() =>
-          Promise.all([
-            waitForExit(proc, 15000),
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-          ]),
+        const [exitCode, stdout, stderr] = yield* Effect.all(
+          [
+            Effect.promise(() => waitForExit(proc, 15000)),
+            Effect.promise(() => new Response(proc.stdout).text()),
+            Effect.promise(() => new Response(proc.stderr).text()),
+          ],
+          { concurrency: "unbounded" },
         )
         expect(stderr).toBe("")
         expect(exitCode).toBe(0)

@@ -5,7 +5,7 @@
  * process cleanup). Transport/runtime behavior that can be tested in-process
  * belongs in the default test pipeline (event-stream, watch-state, etc).
  */
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import { sleepMillis, waitDeferred } from "../src/effect-test-adapters"
 import { extractText } from "@gent/sdk"
@@ -93,12 +93,13 @@ describe("worker supervisor", () => {
             },
           )
 
-          const [exitCode, stdout, stderr] = yield* Effect.promise(() =>
-            Promise.all([
-              proc.exited,
-              new Response(proc.stdout).text(),
-              new Response(proc.stderr).text(),
-            ]),
+          const [exitCode, stdout, stderr] = yield* Effect.all(
+            [
+              Effect.promise(() => proc.exited),
+              Effect.promise(() => new Response(proc.stdout).text()),
+              Effect.promise(() => new Response(proc.stderr).text()),
+            ],
+            { concurrency: "unbounded" },
           )
 
           expect(exitCode).toBe(0)

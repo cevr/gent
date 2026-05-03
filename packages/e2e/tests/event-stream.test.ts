@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"

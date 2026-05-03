@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { toTestFailure, transportCases } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"

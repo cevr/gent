@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"

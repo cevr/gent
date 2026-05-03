@@ -14,6 +14,8 @@ test("promise catch is banned", () => work().catch(() => "fallback"))
 
 test("promise finally is banned", () => work().finally(cleanup))
 
+test("promise aggregation is banned", () => Promise.all([work()]))
+
 async function work(): Promise<string> {
   return "work"
 }

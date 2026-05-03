@@ -158,8 +158,8 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" ! -path \"*/extensions/exec-tools/bash-execution.test.ts\" ! -path \"*/utils/run-process.test.ts\" -print0 | xargs -0 bun test --reporter=dots --parallel=16'",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/extensions/exec-tools/bash-execution.test.ts tests/utils/run-process.test.ts"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" ! -path \"*/extensions/exec-tools/bash-execution.test.ts\" ! -path \"*/extensions/artifacts/artifacts.test.ts\" ! -path \"*/extensions/auto-integration.test.ts\" ! -path \"*/extensions/session-snapshot-rpc.test.ts\" ! -path \"*/extensions/skills/skills-rpc.test.ts\" ! -path \"*/extensions/task-tools/task-rpc.test.ts\" ! -path \"*/runtime/agent-loop.test.ts\" ! -path \"*/runtime/session-runtime.test.ts\" ! -path \"*/server/auth-rpc.test.ts\" ! -path \"*/server/extension-commands-rpc.test.ts\" ! -path \"*/server/interaction-commands.test.ts\" ! -path \"*/server/session-commands.test.ts\" ! -path \"*/server/session-queries.test.ts\" ! -path \"*/utils/run-process.test.ts\" -print0 | xargs -0 bun test --reporter=dots --parallel=16'",
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/extensions/exec-tools/bash-execution.test.ts tests/extensions/artifacts/artifacts.test.ts tests/extensions/auto-integration.test.ts tests/extensions/session-snapshot-rpc.test.ts tests/extensions/skills/skills-rpc.test.ts tests/extensions/task-tools/task-rpc.test.ts tests/runtime/agent-loop.test.ts tests/runtime/session-runtime.test.ts tests/server/auth-rpc.test.ts tests/server/extension-commands-rpc.test.ts tests/server/interaction-commands.test.ts tests/server/session-commands.test.ts tests/server/session-queries.test.ts tests/utils/run-process.test.ts"
   },
   "dependencies": {
     "effect-wide-event": "catalog:"
