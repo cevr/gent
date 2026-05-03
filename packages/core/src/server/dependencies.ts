@@ -109,9 +109,10 @@ export const createDependencies = (config: DependenciesConfig) => {
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
 
   const authStorageLive = AuthStorage.LiveSystem({
+    platform: config.platform,
     serviceName: "gent",
-    ...(config.authFilePath !== undefined ? { filePath: config.authFilePath } : {}),
-    ...(config.authKeyPath !== undefined ? { keyPath: config.authKeyPath } : {}),
+    filePath: config.authFilePath ?? `${config.home}/.gent/auth.json.enc`,
+    keyPath: config.authKeyPath ?? `${config.home}/.gent/auth.key`,
   })
   const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
 

@@ -1,8 +1,6 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import { Buffer } from "node:buffer"
-import * as os from "node:os"
 import { runProcess } from "../utils/run-process.js"
 
 // Auth Storage Error
@@ -40,31 +38,23 @@ export interface KeychainRunResult {
 export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService>()(
   "@gent/core/src/domain/auth-storage/AuthStorage",
 ) {
-  static LiveSystem = (
-    options: {
-      serviceName?: string
-      filePath?: string
-      keyPath?: string
-    } = {},
-  ): Layer.Layer<
+  static LiveSystem = (options: {
+    platform: string
+    serviceName?: string
+    filePath: string
+    keyPath: string
+  }): Layer.Layer<
     AuthStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
   > =>
-    process.platform === "darwin" && options.filePath === undefined && options.keyPath === undefined
+    options.platform === "darwin"
       ? (AuthStorage.LiveKeychain(options.serviceName ?? "gent") as Layer.Layer<
           AuthStorage,
           PlatformError.PlatformError,
           FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
         >)
-      : Layer.unwrap(
-          Effect.sync(() => {
-            const home = os.homedir()
-            const filePath = options.filePath ?? `${home}/.gent/auth.json.enc`
-            const keyPath = options.keyPath ?? `${home}/.gent/auth.key`
-            return AuthStorage.LiveEncryptedFile(filePath, keyPath)
-          }),
-        )
+      : AuthStorage.LiveEncryptedFile(options.filePath, options.keyPath)
 
   // Shape returned by the keychain shell boundary. Exported so tests can
   // inject a custom runner and assert classification behavior without
@@ -252,89 +242,6 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
       }),
     )
 
-  // File-based implementation (fallback)
-  static LiveFile = (
-    filePath: string,
-  ): Layer.Layer<AuthStorage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.effect(
-      AuthStorage,
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const dir = path.dirname(filePath)
-
-        yield* fs.makeDirectory(dir, { recursive: true })
-
-        const AuthData = Schema.Record(Schema.String, Schema.String)
-        type AuthData = typeof AuthData.Type
-        const AuthDataJson = Schema.fromJsonString(AuthData)
-
-        const readData = (): Effect.Effect<AuthData, AuthStorageError> =>
-          fs.exists(filePath).pipe(
-            Effect.mapError(
-              (e) =>
-                new AuthStorageError({
-                  message: "Failed to read auth file",
-                  cause: e,
-                }),
-            ),
-            Effect.flatMap((exists) => {
-              if (!exists) return Effect.succeed("{}")
-              return fs.readFileString(filePath).pipe(
-                Effect.mapError(
-                  (e) =>
-                    new AuthStorageError({
-                      message: "Failed to read auth file",
-                      cause: e,
-                    }),
-                ),
-              )
-            }),
-            Effect.flatMap((content) =>
-              Schema.decodeUnknownEffect(AuthDataJson)(content).pipe(
-                Effect.mapError(
-                  (e) =>
-                    new AuthStorageError({
-                      message: "Failed to parse auth file",
-                      cause: e,
-                    }),
-                ),
-              ),
-            ),
-          )
-
-        const writeData = (data: AuthData): Effect.Effect<void, AuthStorageError> =>
-          Schema.encodeEffect(AuthDataJson)(data).pipe(
-            Effect.flatMap((json) => fs.writeFileString(filePath, json)),
-            Effect.mapError(
-              (e) =>
-                new AuthStorageError({
-                  message: "Failed to write auth file",
-                  cause: e,
-                }),
-            ),
-          )
-
-        return {
-          get: (provider) => readData().pipe(Effect.map((data) => data[provider])),
-
-          set: (provider, key) =>
-            readData().pipe(Effect.flatMap((data) => writeData({ ...data, [provider]: key }))),
-
-          delete: (provider) =>
-            readData().pipe(
-              Effect.flatMap((data) => {
-                const { [provider]: _removed, ...rest } = data
-                void _removed
-                return writeData(rest)
-              }),
-            ),
-
-          list: () => readData().pipe(Effect.map((data) => Object.keys(data))),
-        }
-      }),
-    )
-
   // Encrypted file-based implementation (fallback)
   static LiveEncryptedFile = (
     filePath: string,
@@ -366,9 +273,11 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
         const textEncoder = new TextEncoder()
         const textDecoder = new TextDecoder()
 
-        const toBase64 = (data: Uint8Array): string => Buffer.from(data).toString("base64")
-        const fromBase64 = (data: string): ArrayBuffer =>
-          Buffer.from(data, "base64").buffer.slice(0)
+        const toBase64 = (data: Uint8Array): string => data.toBase64()
+        const fromBase64 = (data: string): ArrayBuffer => {
+          const bytes = Uint8Array.fromBase64(data)
+          return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        }
 
         const loadKey = (): Effect.Effect<CryptoKey, AuthStorageError> =>
           fs.exists(keyPath).pipe(
