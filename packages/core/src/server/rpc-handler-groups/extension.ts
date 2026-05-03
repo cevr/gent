@@ -139,7 +139,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       }
       const { registry, capabilityContext } = yield* deps.resolveSessionServices(sessionId)
       // Public write request handlers may ask for the wide host surface
-      // (`session.*`, `agent.*`, typed extension RPC, etc.). Build the full
+      // (`session.*`, `agent.*`, storage, etc.). Build the full
       // ExtensionHostContext here so handlers use the same boundary as tools.
       // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
       // dispatch where handlers author against `CapabilityCoreContext`.

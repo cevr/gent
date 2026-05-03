@@ -20,7 +20,7 @@ import { dedupRequest, SessionCommands } from "../../src/server/session-commands
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
-import { Storage, StorageError, subTagLayers } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
@@ -229,7 +229,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
   runtimeRestored: Array<SessionId>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
-  const baseSessionStorage = subTagLayers(storageLayer)
   const failingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -239,10 +238,9 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
         deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
       }
     }),
-  ).pipe(Layer.provide(baseSessionStorage))
+  ).pipe(Layer.provide(storageLayer))
   const deps = Layer.mergeAll(
     storageLayer,
-    baseSessionStorage,
     failingSessionStorageLayer,
     sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
     SessionCommands.SessionRuntimeTerminatorLive,
@@ -269,7 +267,6 @@ const racySessionCommandsLayer = (params: {
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
   const storageLayer = Storage.MemoryWithSql()
-  const baseSubTags = subTagLayers(storageLayer)
   const racingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -304,10 +301,9 @@ const racySessionCommandsLayer = (params: {
           }),
       }
     }),
-  ).pipe(Layer.provide(baseSubTags))
+  ).pipe(Layer.provide(storageLayer))
   const deps = Layer.mergeAll(
     storageLayer,
-    baseSubTags,
     racingSessionStorageLayer,
     sessionRuntimeProbeLayer(params.runtimeTerminated),
     SessionCommands.SessionRuntimeTerminatorLive,

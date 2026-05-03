@@ -8,7 +8,7 @@
  *
  * The handler context is `ModelCapabilityContext` (the wide host
  * surface), not the narrow `CapabilityCoreContext`, so human actions can
- * use session, agent, storage, and typed extension RPC helpers directly.
+ * use session, agent, and storage helpers directly.
  * Handlers asking for `CapabilityCoreContext` get a structurally-narrower
  * view by virtue of the inheritance chain.
  *

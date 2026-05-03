@@ -143,28 +143,6 @@ const subTagLayersFromService = (
   )
 
 /**
- * Build focused sub-Tag layers from a layer that provides Storage.
- * Called at composition roots (dependencies.ts, test layers) to wire
- * sub-Tags alongside the existing Storage Tag.
- */
-export const subTagLayers = <E, R>(
-  base: Layer.Layer<Storage, E, R>,
-): Layer.Layer<
-  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
-  E,
-  R
-> =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const s = yield* Storage
-      return subTagLayersFromService(s)
-    }).pipe(
-      // @effect-diagnostics-next-line strictEffectProvide:off — layer composition helper, not a runtime call
-      Effect.provide(base),
-    ),
-  )
-
-/**
  * Layer that derives sub-Tags from Storage already in context.
  * Use with `Layer.provideMerge` when Storage is already provided — this
  * avoids double-instantiating the base layer (no `base` argument needed).
