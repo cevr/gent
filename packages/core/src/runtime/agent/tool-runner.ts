@@ -17,9 +17,9 @@ import type * as AiTool from "effect/unstable/ai/Tool"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 
-export type ProviderToolMap = Record<string, ToolToken>
+export type ToolTokenMap = Record<string, ToolToken>
 
-export function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.Toolkit<ProviderToolMap> {
+export function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.Toolkit<ToolTokenMap> {
   return AiToolkit.make(...tools)
 }
 
@@ -46,7 +46,7 @@ const provideCapabilityContext = <A, E, R>(
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
 
-type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ProviderToolMap>, "tools"> & {
+type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ToolTokenMap>, "tools"> & {
   readonly handle: (
     name: string,
     input: unknown,
