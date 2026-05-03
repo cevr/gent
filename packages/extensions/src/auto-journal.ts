@@ -2,7 +2,8 @@
  * AutoJournal — append-only JSONL persistence for the auto loop.
  *
  * Files live at .gent/auto/<goal-slug>.jsonl relative to cwd.
- * An active.json pointer tracks which journal to resume on session start.
+ * An "active" pointer (KeyValueStore-backed) tracks which journal to resume
+ * on session start.
  *
  * Row types:
  * - config: initial goal + maxIterations
@@ -11,6 +12,7 @@
  */
 
 import { Clock, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { KeyValueStore } from "effect/unstable/persistence"
 
 // ── Row types ──
 
@@ -67,8 +69,9 @@ const ActivePointerSchema = Schema.Struct({
   sessionId: Schema.optional(Schema.String),
 })
 
+const ACTIVE_POINTER_KEY = "active"
+
 const encodeConfigRowJson = Schema.encodeSync(Schema.fromJsonString(ConfigRowSchema))
-const encodeActivePointerJson = Schema.encodeSync(Schema.fromJsonString(ActivePointerSchema))
 const decodeJournalRow = Schema.decodeUnknownOption(Schema.fromJsonString(JournalRowSchema))
 
 // ── Service ──
@@ -116,15 +119,14 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
 
   static Live = (params: {
     cwd: string
-  }): Layer.Layer<AutoJournal, never, FileSystem.FileSystem | Path.Path> =>
-    Layer.effect(
+  }): Layer.Layer<AutoJournal, never, FileSystem.FileSystem | Path.Path> => {
+    const autoDir = `${params.cwd}/.gent/auto`
+    return Layer.effect(
       AutoJournal,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-
-        const autoDir = path.join(params.cwd, ".gent", "auto")
-        const activeFilePath = path.join(autoDir, "active.json")
+        const kv = yield* KeyValueStore.KeyValueStore
 
         const ensureDir = fs.makeDirectory(autoDir, { recursive: true }).pipe(Effect.ignore)
 
@@ -160,11 +162,11 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             Effect.orElseSucceed((): JournalRow[] => []),
           )
 
-        const readActivePointer = fs.readFileString(activeFilePath).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ActivePointerSchema))),
-          Effect.map((pointer): { path: string; sessionId?: string } => pointer),
-          Effect.option,
+        const pointerStore = KeyValueStore.toSchemaStore(kv, ActivePointerSchema)
+
+        const readActivePointer = pointerStore.get(ACTIVE_POINTER_KEY).pipe(
           Effect.map(Option.getOrUndefined),
+          Effect.orElseSucceed(() => undefined),
         )
 
         return AutoJournal.of({
@@ -180,13 +182,10 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
                 startedAt: yield* Clock.currentTimeMillis,
               }
               yield* fs.writeFileString(journalPath, encodeConfigRowJson(row) + "\n")
-              yield* fs.writeFileString(
-                activeFilePath,
-                encodeActivePointerJson({
-                  path: journalPath,
-                  ...(sessionId !== undefined ? { sessionId } : {}),
-                }),
-              )
+              yield* pointerStore.set(ACTIVE_POINTER_KEY, {
+                path: journalPath,
+                ...(sessionId !== undefined ? { sessionId } : {}),
+              })
               return journalPath
             }).pipe(Effect.orDie),
 
@@ -204,7 +203,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
               yield* appendRow(active.path, { type: "review", iteration })
             }).pipe(Effect.orDie),
 
-          finish: () => fs.remove(activeFilePath).pipe(Effect.ignore),
+          finish: () => pointerStore.remove(ACTIVE_POINTER_KEY).pipe(Effect.ignore),
 
           readActive: () =>
             Effect.gen(function* () {
@@ -219,5 +218,6 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
           getActivePath: () => readActivePointer.pipe(Effect.map((a) => a?.path)),
         } satisfies AutoJournalService)
       }),
-    )
+    ).pipe(Layer.provide(Layer.orDie(KeyValueStore.layerFileSystem(autoDir))))
+  }
 }
