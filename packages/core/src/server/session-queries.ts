@@ -15,6 +15,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
+import { StorageTransaction } from "../storage/storage-transaction.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { buildBranchTree } from "./session-utils.js"
@@ -60,6 +61,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
+      const storageTransaction = yield* StorageTransaction
       const sessionRuntime = yield* SessionRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
@@ -132,12 +134,19 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
-        const messages = yield* messageStorage.listMessages(input.branchId)
-        const projectedMessages = projectMessagesWithToolInteractions(messages)
-        const lastEventId = yield* eventStorage.getLatestEventId({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-        })
+        const snapshotState = yield* storageTransaction.withTransaction(
+          Effect.gen(function* () {
+            const messages = yield* messageStorage.listMessages(input.branchId)
+            const lastEventId = yield* eventStorage.getLatestEventId({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+            })
+            return {
+              projectedMessages: projectMessagesWithToolInteractions(messages),
+              lastEventId,
+            }
+          }),
+        )
 
         // Fetch current runtime state — idle sessions return Idle runtime
         const idleRuntime = SessionRuntimeStateSchema.Idle.make({
@@ -177,8 +186,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           sessionId: input.sessionId,
           branchId: input.branchId,
           name: session.name,
-          messages: projectedMessages,
-          lastEventId: lastEventId ?? null,
+          messages: snapshotState.projectedMessages,
+          lastEventId: snapshotState.lastEventId ?? null,
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,

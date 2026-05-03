@@ -33,7 +33,7 @@ import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useWorkspace } from "../workspace"
 import { AgentStatus, type AgentState } from "./agent-state"
-import { createSessionSubscriptionEffect } from "./session-subscription"
+import { reduceAgentLifecycle } from "./agent-lifecycle"
 
 import type {
   ConnectionState,
@@ -42,6 +42,7 @@ import type {
   GentRpcError,
   Message,
   QueueSnapshot,
+  SessionSnapshot,
   Session as DomainSession,
   Branch,
   BranchTreeNode,
@@ -125,6 +126,8 @@ export interface ClientTransportValue {
   ) => () => void
   /** Subscribe to every event for the active session/branch. */
   onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+  applySessionSnapshot: (snapshot: SessionSnapshot) => void
+  applySessionEvent: (envelope: EventEnvelope) => void
 }
 
 export interface ClientSessionValue {
@@ -364,8 +367,6 @@ export function ClientProvider(props: ClientProviderProps) {
   const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
-  const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
-  const [lastSeenSessionKey, setLastSeenSessionKey] = createSignal<string | null>(null)
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
@@ -384,13 +385,6 @@ export function ClientProvider(props: ClientProviderProps) {
       setConnectionState(nextState)
     })
     onCleanup(unsubscribe)
-  })
-
-  // Stable session key — only changes when sessionId:branchId actually changes
-  const sessionKey = createMemo<string | null>(() => {
-    const current = sessionState()
-    if (current.status !== "active") return null
-    return `${current.session.sessionId}:${current.session.branchId}`
   })
 
   const workerEpoch = createMemo<number | null>(() => {
@@ -478,25 +472,112 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
-  createSessionSubscriptionEffect({
-    client,
-    runtime,
-    log,
-    sessionKey,
-    workerEpoch,
-    connectionState,
-    session,
-    lastSeenEventId,
-    lastSeenSessionKey,
-    setLastSeenEventId,
-    setLastSeenSessionKey,
-    setConnectionIssue,
-    dispatchSessionEvent: dispatchSession,
-    setAgentStore,
-    setLatestInputTokens,
-    notifyExtensionStateChanged,
-    notifySessionEvent,
-  })
+  const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
+    setConnectionIssue(null)
+    if (snapshot.reasoningLevel !== undefined) {
+      dispatchSession(
+        SessionStateEvent.UpdateReasoningLevel.make({
+          reasoningLevel: snapshot.reasoningLevel,
+        }),
+      )
+    }
+    const rt = snapshot.runtime
+    const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
+    setAgentStore({
+      agent: rt.agent,
+      status,
+      cost: snapshot.metrics.costUsd,
+      lastModelId: snapshot.metrics.lastModelId,
+    })
+    setLatestInputTokens(snapshot.metrics.lastInputTokens)
+  }
+
+  const refreshSessionMetrics = (): void => {
+    const s = session()
+    if (s === null) return
+    cast(
+      client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
+        Effect.tap((snapshot) =>
+          Effect.sync(() => {
+            setAgentStore({
+              cost: snapshot.metrics.costUsd,
+              lastModelId: snapshot.metrics.lastModelId,
+            })
+            setLatestInputTokens(snapshot.metrics.lastInputTokens)
+          }),
+        ),
+        Effect.catchEager(() => Effect.void),
+      ),
+    )
+  }
+
+  const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
+    const lifecycle = reduceAgentLifecycle(event)
+    if (lifecycle.preferredAgent !== undefined) {
+      if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
+        setAgentStore({ agent: lifecycle.preferredAgent })
+      } else {
+        setAgentStore({ agent: undefined })
+      }
+    }
+    if (lifecycle.status !== undefined) {
+      switch (lifecycle.status._tag) {
+        case "idle":
+          setAgentStore({ status: AgentStatus.idle() })
+          break
+        case "streaming":
+          setAgentStore({ status: AgentStatus.streaming() })
+          break
+        case "error":
+          setAgentStore({ status: AgentStatus.error(lifecycle.status.error) })
+          break
+      }
+    }
+  }
+
+  const applySessionMetadataEvent = (event: EventEnvelope["event"]): void => {
+    switch (event._tag) {
+      case "SessionNameUpdated": {
+        const s = session()
+        if (s !== null && event.sessionId === s.sessionId) {
+          dispatchSession(SessionStateEvent.UpdateName.make({ name: event.name }))
+        }
+        break
+      }
+
+      case "BranchSwitched": {
+        const s = session()
+        if (s !== null && event.sessionId === s.sessionId) {
+          dispatchSession(SessionStateEvent.UpdateBranch.make({ branchId: event.toBranchId }))
+        }
+        break
+      }
+
+      case "SessionSettingsUpdated": {
+        const s = session()
+        if (s !== null && event.sessionId === s.sessionId && event.reasoningLevel !== undefined) {
+          dispatchSession(
+            SessionStateEvent.UpdateReasoningLevel.make({
+              reasoningLevel: event.reasoningLevel,
+            }),
+          )
+        }
+        break
+      }
+    }
+  }
+
+  const applySessionEvent = (envelope: EventEnvelope): void => {
+    const event = envelope.event
+    notifySessionEvent(envelope)
+    notifyExtensionStateChanged(event)
+    if (event._tag === "StreamEnded" && event.usage !== undefined) refreshSessionMetrics()
+    if (event._tag === "ErrorOccurred") {
+      log.error("agent.error", { error: event.error, eventId: envelope.id })
+    }
+    applyAgentLifecycleEvent(event)
+    applySessionMetadataEvent(event)
+  }
 
   const transportValue: ClientTransportValue = {
     client,
@@ -529,6 +610,8 @@ export function ClientProvider(props: ClientProviderProps) {
         sessionEventSubscribers.delete(cb)
       }
     },
+    applySessionSnapshot,
+    applySessionEvent,
   }
 
   const sessionValue: ClientSessionValue = {

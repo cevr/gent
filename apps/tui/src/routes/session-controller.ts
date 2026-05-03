@@ -7,7 +7,7 @@ import {
   onCleanup,
   useContext,
 } from "solid-js"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect } from "effect"
 import { autocompleteContribution } from "../extensions/client-facets.js"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
@@ -42,12 +42,11 @@ import { useKeyChain } from "../hooks/use-key-chain"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router/index"
-import { formatConnectionIssue, formatError, type UiError } from "../utils/format-error"
+import { formatError, type UiError } from "../utils/format-error"
 import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
-import { runWithReconnect } from "../utils/run-with-reconnect"
 import {
   getPromptSearchState,
   SessionUiEvent,
@@ -319,6 +318,7 @@ export function createSessionController(props: {
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
       },
+      onQueueSnapshot: setQueueState,
     },
     props.initialPrompt,
     // Gate prompt send on auth resolution — feed waits for stream + this signal
@@ -337,48 +337,6 @@ export function createSessionController(props: {
           entries,
         }),
       ),
-  })
-
-  createEffect(() => {
-    void props.sessionId
-    void props.branchId
-    const generation = client.connectionGeneration()
-    void generation
-    if (!client.isActive()) return
-    client.log.info("runtime.watch.start", { sessionId: props.sessionId, branchId: props.branchId })
-    const fiber = client.runtime.fork(
-      runWithReconnect(
-        () =>
-          client.client.session
-            .watchRuntime({
-              sessionId: props.sessionId,
-              branchId: props.branchId,
-            })
-            .pipe(
-              Stream.runForEach((next) =>
-                Effect.sync(() => {
-                  client.setConnectionIssue(null)
-                  setQueueState(next.queue)
-                }),
-              ),
-            ),
-        {
-          label: "runtime.watch",
-          log: client.log,
-          onError: (error) => {
-            client.setConnectionIssue(formatConnectionIssue(error))
-          },
-          waitForRetry: () => client.waitForTransportReady(),
-        },
-      ),
-    )
-    onCleanup(() => {
-      client.log.info("runtime.watch.cleanup", {
-        sessionId: props.sessionId,
-        branchId: props.branchId,
-      })
-      Effect.runFork(Fiber.interrupt(fiber))
-    })
   })
 
   const activity = () => {

@@ -17,7 +17,7 @@ import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core/domain/agent"
 import type { ClientLog } from "../src/utils/client-logger"
 
 const noop = () => {}
@@ -65,6 +65,20 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           messages: [],
           lastEventId: null,
           reasoningLevel: undefined,
+          runtime: {
+            _tag: "Idle" as const,
+            agent: AgentName.make("cowork"),
+            queue: emptyQueueSnapshot(),
+          },
+          metrics: {
+            turns: 0,
+            tokens: 0,
+            toolCalls: 0,
+            retries: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
         }),
       updateReasoningLevel: () => noRpcError({ reasoningLevel: undefined }),
       events: () => Stream.empty,

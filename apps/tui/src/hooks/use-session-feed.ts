@@ -9,7 +9,7 @@
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect, Fiber, Stream } from "effect"
-import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
+import type { ActiveInteraction, AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { projectMessage } from "@gent/core/domain/message.js"
 import {
@@ -22,6 +22,7 @@ import {
   extractText,
   extractReasoning,
   extractImages,
+  type QueueSnapshot,
   type ProjectedMessage,
   type ToolInteraction,
 } from "@gent/sdk"
@@ -38,6 +39,7 @@ export interface SessionFeedCallbacks {
   onInteraction: (interaction: ActiveInteraction) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
+  onQueueSnapshot: (queue: QueueSnapshot) => void
 }
 
 type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
@@ -53,7 +55,13 @@ export interface SessionFeed {
 type SessionFeedClient = Pick<ClientSessionValue, "session"> &
   Pick<
     ClientTransportValue,
-    "client" | "runtime" | "log" | "setConnectionIssue" | "waitForTransportReady"
+    | "client"
+    | "runtime"
+    | "log"
+    | "setConnectionIssue"
+    | "waitForTransportReady"
+    | "applySessionSnapshot"
+    | "applySessionEvent"
   >
 
 type SessionFeedStore = {
@@ -401,7 +409,8 @@ export function useSessionFeed(
 
                 yield* Effect.sync(() => {
                   if (currentKey !== key) return
-                  client.setConnectionIssue(null)
+                  client.applySessionSnapshot(snapshot)
+                  callbacks.onQueueSnapshot(snapshot.runtime.queue)
                   setStore("messages", buildMessages(snapshot.messages))
                 })
 
@@ -417,18 +426,33 @@ export function useSessionFeed(
                     Effect.sync(() => {
                       if (currentKey !== key) return
                       client.setConnectionIssue(null)
-                      processEvent(envelope.event, branch, key)
+                      processEnvelope(envelope, branch, key)
                     }),
                   ),
                   Effect.forkScoped,
                 )
+                const runtimeFiber = yield* client.client.session
+                  .watchRuntime({
+                    sessionId: session,
+                    branchId: branch,
+                  })
+                  .pipe(
+                    Stream.runForEach((next) =>
+                      Effect.sync(() => {
+                        if (currentKey !== key) return
+                        client.setConnectionIssue(null)
+                        callbacks.onQueueSnapshot(next.queue)
+                      }),
+                    ),
+                    Effect.forkScoped,
+                  )
 
                 yield* Effect.sync(() => {
                   if (currentKey !== key) return
                   setStreamReadyKey(key)
                 })
 
-                return yield* Fiber.join(eventsFiber)
+                return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
               }),
             {
               label: "feed.events",
@@ -454,10 +478,15 @@ export function useSessionFeed(
     }),
   )
 
-  const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {
+  const processEnvelope = (envelope: EventEnvelope, branch: BranchId, key: string) => {
     // Drop events if identity changed
     if (currentKey !== key) return
+    client.applySessionEvent(envelope)
+    processEvent(envelope.event, branch, key)
+  }
 
+  const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {
+    if (currentKey !== key) return
     client.log.debug("feed.event", { key, tag: event._tag })
 
     if (event._tag === "InteractionResolved") {

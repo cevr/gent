@@ -8,6 +8,7 @@ import {
   messagePartsSearchText,
   messagePartsText,
   messagePartsTextLines,
+  projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
   messagePartsToolCalls,
   messagePartsToolResultParts,
@@ -17,9 +18,10 @@ import {
   responsePartToToolResultPart,
   toolResultPartToResponsePart,
 } from "@gent/core/domain/message-part-projection"
-import { ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   ImagePart,
+  Message,
   ReasoningPart,
   TextPart,
   ToolCallPart,
@@ -29,6 +31,22 @@ import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("message part projection", () => {
+  const makeMessage = (
+    id: string,
+    role: "assistant" | "tool",
+    parts: ReadonlyArray<TextPart | ToolCallPart | ToolResultPart>,
+  ) =>
+    Message.Regular.make({
+      id: MessageId.make(id),
+      sessionId: SessionId.make("session-projection"),
+      branchId: BranchId.make("branch-projection"),
+      role,
+      parts,
+      createdAt: new Date(0),
+      metadata: undefined,
+      turnDurationMs: undefined,
+    })
+
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
     const textPart = new TextPart({ type: "text", text: "hello" })
@@ -165,6 +183,57 @@ describe("message part projection", () => {
         preliminary: false,
       }),
     )
+  })
+
+  test("pairs duplicate provider tool ids with the result before the next duplicate call", () => {
+    const firstCall = new ToolCallPart({
+      type: "tool-call",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      input: { path: "first.txt" },
+    })
+    const secondCall = new ToolCallPart({
+      type: "tool-call",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      input: { path: "second.txt" },
+    })
+    const firstResult = new ToolResultPart({
+      type: "tool-result",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      output: { type: "json", value: "first result" },
+    })
+    const secondResult = new ToolResultPart({
+      type: "tool-result",
+      toolCallId: ToolCallId.make("tc-1"),
+      toolName: "read",
+      output: { type: "json", value: "second result" },
+    })
+
+    const projected = projectMessagesWithToolInteractions([
+      makeMessage("m-assistant-1", "assistant", [firstCall]),
+      makeMessage("m-tool-1", "tool", [firstResult]),
+      makeMessage("m-assistant-2", "assistant", [secondCall]),
+      makeMessage("m-tool-2", "tool", [secondResult]),
+    ])
+
+    expect(projected[0]?.toolInteractions[0]).toEqual({
+      id: ToolCallId.make("tc-1"),
+      toolName: "read",
+      status: "completed",
+      input: { path: "first.txt" },
+      summary: "first result",
+      output: "first result",
+    })
+    expect(projected[2]?.toolInteractions[0]).toEqual({
+      id: ToolCallId.make("tc-1"),
+      toolName: "read",
+      status: "completed",
+      input: { path: "second.txt" },
+      summary: "second result",
+      output: "second result",
+    })
   })
 
   test("projects Effect response parts back to Gent transcript parts", () => {
