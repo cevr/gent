@@ -260,17 +260,50 @@ describe("extension command RPCs", () => {
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
             )
-            const result = yield* Effect.result(
-              client.extension.request({
+            const result = yield* client.extension
+              .request({
                 sessionId: SessionId.make("missing-extension-request-session"),
                 extensionId: ExtensionId.make("@test/commands"),
                 capabilityId: "greet",
                 intent: "write",
                 input: "should-not-run",
                 branchId: BranchId.make("missing-extension-request-branch"),
-              }),
+              })
+              .pipe(Effect.flip)
+            expect(result._tag).toBe("ExtensionProtocolError")
+            expect(result.message).toBe("Session not found for extension transport")
+            expect(invoked).toEqual([])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("RPC request rejects missing branches", () =>
+    Effect.gen(function* () {
+      invoked.length = 0
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const ext = yield* setupCommandsExt
+            const { client } = yield* Gent.test(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
             )
-            expect(result._tag).toBe("Failure")
+            const { sessionId } = yield* client.session.create({
+              cwd: "/tmp/gent-extension-request-missing-branch",
+            })
+            const result = yield* client.extension
+              .request({
+                sessionId,
+                extensionId: ExtensionId.make("@test/commands"),
+                capabilityId: "greet",
+                intent: "write",
+                input: "should-not-run",
+                branchId: BranchId.make("missing-extension-request-branch"),
+              })
+              .pipe(Effect.flip)
+            expect(result._tag).toBe("ExtensionProtocolError")
+            expect(result.message).toBe("Branch does not belong to extension transport session")
             expect(invoked).toEqual([])
           }).pipe(Effect.timeout("4 seconds")),
         ),
@@ -291,17 +324,18 @@ describe("extension command RPCs", () => {
           const second = yield* client.session.create({
             cwd: "/tmp/gent-extension-request-second",
           })
-          const result = yield* Effect.result(
-            client.extension.request({
+          const result = yield* client.extension
+            .request({
               sessionId: first.sessionId,
               extensionId: ExtensionId.make("@test/commands"),
               capabilityId: "greet",
               intent: "write",
               input: "wrong-branch",
               branchId: second.branchId,
-            }),
-          )
-          expect(result._tag).toBe("Failure")
+            })
+            .pipe(Effect.flip)
+          expect(result._tag).toBe("ExtensionProtocolError")
+          expect(result.message).toBe("Branch does not belong to extension transport session")
           expect(invoked).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
       )

@@ -240,7 +240,7 @@ export { QueueSnapshot }
 
 /** Input shape for public extension RPC dispatch.
  *  `extensionId` + `capabilityId` route to the registered request;
- *  `intent` preserves the read/write fence at the transport boundary.
+ *  `intent` is forwarded to the registry, which enforces the read/write fence.
  *
  *  `branchId` is required because extension RPCs execute against the
  *  live session runtime, not a transport-local stub. Callers must pass the

@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { BranchId, RpcId, SessionId } from "../../domain/ids.js"
-import type { ExtensionId } from "../../domain/ids.js"
+import { RpcId } from "../../domain/ids.js"
+import type { BranchId, ExtensionId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
@@ -36,8 +36,8 @@ const resolveExtensionSession = (
     readonly extensionId: ExtensionId
     readonly tag: string
     readonly phase: "command" | "request"
-    readonly sessionId: string
-    readonly branchId: string
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
   },
 ): Effect.Effect<
   { readonly sessionId: SessionId; readonly branchId: BranchId; readonly session: Session },
@@ -53,8 +53,8 @@ const resolveExtensionSession = (
       })
     }
 
-    const requestSessionId = SessionId.make(params.sessionId)
-    const requestBranchId = BranchId.make(params.branchId)
+    const requestSessionId = params.sessionId
+    const requestBranchId = params.branchId
     const session = yield* deps.sessionStorage.getSession(requestSessionId).pipe(
       Effect.mapError((error) =>
         extensionRequestError({
