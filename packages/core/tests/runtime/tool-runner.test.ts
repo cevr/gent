@@ -7,6 +7,7 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import type { ToolCallStarted } from "../../src/domain/event"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import {
   BranchId,
@@ -349,6 +350,7 @@ describe("ToolRunner", () => {
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const eventTags: Array<string> = []
+      const events: Array<ToolCallStarted> = []
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const registry = yield* ExtensionRegistry
@@ -366,6 +368,7 @@ describe("ToolRunner", () => {
               publishEvent: (event) =>
                 Effect.sync(() => {
                   eventTags.push(event._tag)
+                  if (event._tag === "ToolCallStarted") events.push(event)
                 }),
             },
           ),
@@ -376,6 +379,16 @@ describe("ToolRunner", () => {
       expect(result.sessionId).toBe(SessionId.make("session-pending"))
       expect(result.branchId).toBe(BranchId.make("branch-pending"))
       expect(eventTags).toEqual(["ToolCallStarted"])
+      expect(events).toEqual([
+        expect.objectContaining({
+          _tag: "ToolCallStarted",
+          sessionId: SessionId.make("session-pending"),
+          branchId: BranchId.make("branch-pending"),
+          toolCallId: ToolCallId.make("tc-pending"),
+          toolName: "pending",
+          input: {},
+        }),
+      ])
     }),
   )
 })

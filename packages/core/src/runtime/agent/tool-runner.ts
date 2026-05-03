@@ -269,7 +269,12 @@ const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
       Stream.run(Sink.last()),
     )
     if (terminal._tag === "None") {
-      return errorResult(toolCall, "Tool handler did not produce a final result")
+      const message = "Tool handler did not produce a final result"
+      yield* WideEvent.set({
+        toolError: ToolError.ExecutionFailed,
+        errorMessage: message,
+      })
+      return errorResult(toolCall, message)
     }
     return new ToolResultPart({
       type: "tool-result",
