@@ -1,18 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { HandoffTool } from "@gent/extensions/handoff-tool"
-import { HandoffExtension, CooldownMsg, CooldownService } from "@gent/extensions/handoff"
-import { HANDOFF_EXTENSION_ID } from "@gent/extensions/handoff-protocol"
+import { HandoffCooldown, HandoffExtension } from "@gent/extensions/handoff"
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import type { ActorRef } from "@gent/core/domain/actor"
-import { ActorEngine, type ActorEngineService } from "@gent/core/runtime/extensions/actor-engine"
-import { ActorHost } from "@gent/core/runtime/extensions/actor-host"
-import { Receptionist } from "@gent/core/runtime/extensions/receptionist"
-import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ResolvedExtensions } from "../../src/runtime/extensions/registry"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/extensions/api"
@@ -100,75 +93,50 @@ describe("HandoffTool", () => {
 })
 
 // ============================================================================
-// Cooldown actor ( regression lock — re-pinned to actor primitive in )
+// Cooldown service
 //
 // Pin the cooldown semantics from the old FSM implementation:
-// `Suppress(n)` SETS the counter to N (overwrite, not add);
-// `GetCooldown` reads it; every `TurnCompleted` decrements until zero.
+// suppress(n) SETS the counter to N (overwrite, not add);
+// get() reads it; every turnCompleted() decrements until zero.
 // ============================================================================
 
-describe("Handoff cooldown actor", () => {
-  it.live("Suppress → GetCooldown → TurnCompleted decrement round-trips through the actor", () =>
+describe("HandoffCooldown", () => {
+  it.live("suppress and turnCompleted preserve cooldown semantics", () =>
     Effect.gen(function* () {
       const contributions = yield* HandoffExtension.setup(testSetupCtx())
-      const actors = contributions.actors ?? []
-      expect(actors.length).toBe(1)
+      expect(contributions.actors ?? []).toEqual([])
+      expect((contributions.resources ?? []).length).toBe(1)
 
-      const loaded = {
-        manifest: { id: HANDOFF_EXTENSION_ID },
-        contributions: { actors },
-        scope: "builtin" as const,
-        sourcePath: "test",
-        sealedRequirements: undefined,
-      } as unknown as LoadedExtension
-      const resolved = {
-        extensions: [loaded],
-      } as unknown as ResolvedExtensions
+      const program = Effect.gen(function* () {
+        const cooldown = yield* HandoffCooldown
 
-      const layer = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
+        // Initial cooldown is 0.
+        expect(yield* cooldown.get()).toBe(0)
 
-      const askCooldown = (
-        engine: ActorEngineService,
-        ref: ActorRef<CooldownMsg>,
-      ): Effect.Effect<number, never> =>
-        engine
-          .ask(ref, CooldownMsg.GetCooldown.make({}))
-          .pipe(Effect.catchEager(() => Effect.succeed(0)))
+        // suppress(5) sets cooldown to 5.
+        yield* cooldown.suppress(5)
+        expect(yield* cooldown.get()).toBe(5)
 
-      return yield* Effect.scoped(
-        Effect.gen(function* () {
-          const engine = yield* ActorEngine
-          const reg = yield* Receptionist
-          const refs = yield* reg.find(CooldownService)
-          expect(refs.length).toBe(1)
-          const ref = refs[0]!
+        // Each turnCompleted decrements the counter.
+        yield* cooldown.turnCompleted()
+        expect(yield* cooldown.get()).toBe(4)
 
-          // Initial cooldown is 0.
-          expect(yield* askCooldown(engine, ref)).toBe(0)
+        yield* cooldown.turnCompleted()
+        yield* cooldown.turnCompleted()
+        expect(yield* cooldown.get()).toBe(2)
 
-          // Suppress(5) sets cooldown to 5.
-          yield* engine.tell(ref, CooldownMsg.Suppress.make({ count: 5 }))
-          expect(yield* askCooldown(engine, ref)).toBe(5)
+        // suppress(2) re-arms (overwrite, not add).
+        yield* cooldown.suppress(2)
+        expect(yield* cooldown.get()).toBe(2)
 
-          // Each TurnCompleted decrements the counter.
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          expect(yield* askCooldown(engine, ref)).toBe(4)
+        // Decrement clamps at zero.
+        yield* cooldown.turnCompleted()
+        yield* cooldown.turnCompleted()
+        yield* cooldown.turnCompleted()
+        expect(yield* cooldown.get()).toBe(0)
+      })
 
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          expect(yield* askCooldown(engine, ref)).toBe(2)
-
-          // Suppress(2) re-arms (overwrite, not add).
-          yield* engine.tell(ref, CooldownMsg.Suppress.make({ count: 2 }))
-          expect(yield* askCooldown(engine, ref)).toBe(2)
-
-          // Decrement clamps at zero.
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          yield* engine.tell(ref, CooldownMsg.TurnCompleted.make({}))
-          expect(yield* askCooldown(engine, ref)).toBe(0)
-        }).pipe(Effect.provide(layer)),
-      )
+      return yield* program.pipe(Effect.provide(HandoffCooldown.Live))
     }),
   )
 })

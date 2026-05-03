@@ -1,10 +1,7 @@
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Ref } from "effect"
 import {
   defineExtension,
-  behavior,
-  ServiceKey,
-  TaggedEnumClass,
-  type Behavior,
+  defineResource,
   type ExtensionHostContext,
   type Message,
   type TurnAfterInput,
@@ -17,43 +14,34 @@ import { AutoRpc } from "./auto-protocol.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
-// ── Cooldown actor ──
+// ── Cooldown service ──
 //
-// State: a single integer. Suppressed by `Suppress(count)`, decremented on
-// every `TurnCompleted`. The slot handler below tells the actor on every
-// post-turn tick.
-// `GetCooldown` is the only legitimate cross-call read — workflows / actors
-// declare effects, projections derive views, and neither owns ad-hoc state
-// peeks (per `composability-not-flags`).
+// State: a single integer. Suppressed by `suppress(count)`, decremented on
+// every `turnCompleted()`. The slot handler below advances the service on
+// every post-turn tick.
+// A process-scoped Ref is the entire product semantics here; an actor mailbox
+// was only a bridge.
 
-export const CooldownMsg = TaggedEnumClass("CooldownMsg", {
-  TurnCompleted: {},
-  Suppress: { count: Schema.Number },
-  GetCooldown: TaggedEnumClass.askVariant<number>()({}),
-})
-export type CooldownMsg = Schema.Schema.Type<typeof CooldownMsg>
-
-interface CooldownState {
-  readonly cooldown: number
+interface HandoffCooldownService {
+  readonly turnCompleted: () => Effect.Effect<void>
+  readonly suppress: (count: number) => Effect.Effect<void>
+  readonly get: () => Effect.Effect<number>
 }
 
-export const CooldownService = ServiceKey<CooldownMsg>("@gent/handoff/cooldown")
-
-const cooldownBehavior: Behavior<CooldownMsg, CooldownState, never> = {
-  initialState: { cooldown: 0 },
-  serviceKey: CooldownService,
-  receive: (msg, state, ctx) =>
+export class HandoffCooldown extends Context.Service<HandoffCooldown, HandoffCooldownService>()(
+  "@gent/handoff/Cooldown",
+) {
+  static Live: Layer.Layer<HandoffCooldown> = Layer.effect(
+    HandoffCooldown,
     Effect.gen(function* () {
-      switch (msg._tag) {
-        case "TurnCompleted":
-          return state.cooldown > 0 ? { cooldown: state.cooldown - 1 } : state
-        case "Suppress":
-          return { cooldown: msg.count }
-        case "GetCooldown":
-          yield* ctx.reply(state.cooldown)
-          return state
-      }
+      const cooldown = yield* Ref.make(0)
+      return {
+        turnCompleted: () => Ref.update(cooldown, (n) => (n > 0 ? n - 1 : 0)),
+        suppress: (count) => Ref.set(cooldown, Math.max(0, count)),
+        get: () => Ref.get(cooldown),
+      } satisfies HandoffCooldownService
     }),
+  )
 }
 
 // ── turn.after reaction — auto-handoff at context-fill threshold ──
@@ -74,14 +62,12 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
-    const cooldownRef = yield* ctx.actors.findOne(CooldownService)
-    if (cooldownRef === undefined) return
+    const cooldownOption = yield* Effect.serviceOption(HandoffCooldown)
+    if (cooldownOption._tag === "None") return
+    const cooldown = cooldownOption.value
 
-    // Decrement bridge: turnAfter is the natural place to drive the
-    // cooldown clock.
-    yield* ctx.actors
-      .tell(cooldownRef, CooldownMsg.TurnCompleted.make({}))
-      .pipe(Effect.catchEager(() => Effect.void))
+    // turnAfter is the natural place to drive the cooldown clock.
+    yield* cooldown.turnCompleted().pipe(Effect.catchEager(() => Effect.void))
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
     const autoActive = yield* ctx.extension
@@ -89,10 +75,8 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 
-    const cooldown = yield* ctx.actors
-      .ask(cooldownRef, CooldownMsg.GetCooldown.make({}))
-      .pipe(Effect.catchEager(() => Effect.succeed(0)))
-    if (cooldown > 0) return
+    const cooldownCount = yield* cooldown.get().pipe(Effect.catchEager(() => Effect.succeed(0)))
+    if (cooldownCount > 0) return
 
     const contextPercent = yield* ctx.session.estimateContextPercent()
     const handoffThreshold = 85
@@ -117,16 +101,16 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
       .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
 
     if (!decision.approved) {
-      yield* ctx.actors
-        .tell(cooldownRef, CooldownMsg.Suppress.make({ count: 5 }))
-        .pipe(Effect.catchEager(() => Effect.void))
+      yield* cooldown.suppress(5).pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   tools: [HandoffTool],
-  actors: [behavior(cooldownBehavior)],
+  resources: [
+    defineResource({ tag: HandoffCooldown, scope: "process", layer: HandoffCooldown.Live }),
+  ],
   reactions: {
     turnAfter: {
       failureMode: "isolate",
