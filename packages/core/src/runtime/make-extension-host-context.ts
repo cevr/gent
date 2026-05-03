@@ -25,7 +25,6 @@ import {
 import { BranchId, SessionId } from "../domain/ids.js"
 import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
-import type { ExtensionRuntimeService } from "./extensions/resource-host/extension-runtime.js"
 import {
   ExtensionTurnControl,
   type ExtensionTurnControlService,
@@ -42,7 +41,6 @@ import { estimateContextPercent } from "./context-estimation.js"
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
-  readonly extensionRuntime: ExtensionRuntimeService
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
@@ -262,7 +260,6 @@ const withAmbientHostContextOverrides = <A, E, R>(
 }
 
 export interface MakeAmbientExtensionHostContextDepsInput {
-  readonly extensionRuntime: ExtensionRuntimeService
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
   readonly storage: StorageService
@@ -281,7 +278,6 @@ export const makeAmbientExtensionHostContextDeps = (
     })
     return {
       platform: defaults.platform,
-      extensionRuntime: input.extensionRuntime,
       approvalService: defaults.approvalService,
       promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,

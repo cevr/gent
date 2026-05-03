@@ -34,7 +34,6 @@ import {
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { ExtensionRuntime } from "./extensions/resource-host/extension-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { buildResourceLayer } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
@@ -335,8 +334,6 @@ export const buildExtensionLayers = (
   // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
   // before spawn and forks a periodic writer. Absent → in-memory mode.
   //
-  // Order matters: ActorHost owns actor spawn/hydration, and the lightweight
-  // ExtensionRuntime marker is merged alongside the same ActorEngine context.
   const actorRuntimeLive =
     options?.actorPersistence !== undefined
       ? ActorHost.fromResolvedWithPersistence(resolved, {
@@ -345,17 +342,14 @@ export const buildExtensionLayers = (
         }).pipe(Layer.provideMerge(ActorEngine.Live))
       : ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
-  const extensionRuntimeLive = ExtensionRuntime.Live(resolved.extensions).pipe(
-    Layer.provideMerge(ExtensionTurnControl.Live),
-    Layer.provideMerge(actorRuntimeLive),
-  )
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
     DriverRegistry.fromResolved({
       modelDrivers: resolved.modelDrivers,
       externalDrivers: resolved.externalDrivers,
     }),
-    extensionRuntimeLive,
+    ExtensionTurnControl.Live,
+    actorRuntimeLive,
   )
 
   // Resource layers may declare `R` deps on services from `baseLayers`
@@ -373,11 +367,10 @@ export const buildProfileRuntime = (params: {
   Effect.gen(function* () {
     const combinedLayer = buildExtensionLayers(params.profile.resolved, {
       actorPersistence: { profileId: params.profile.cwd },
-    }).pipe(Layer.provide(ExtensionTurnControl.Live))
+    })
     const layerContext = yield* Layer.build(combinedLayer)
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)
-    const extensionRuntime = Context.get(layerContext, ExtensionRuntime)
     const actorEngine = Context.get(layerContext, ActorEngine)
     const receptionist = Context.get(layerContext, Receptionist)
     const actorHostFailures = yield* Context.get(layerContext, ActorHostFailures).snapshot
@@ -397,7 +390,6 @@ export const buildProfileRuntime = (params: {
       permissionService,
       registryService,
       driverRegistryService,
-      extensionRuntime,
       actorEngine,
       receptionist,
       actorHostFailures,

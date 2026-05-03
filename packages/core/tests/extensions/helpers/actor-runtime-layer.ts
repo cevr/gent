@@ -8,9 +8,10 @@ import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
-import { ExtensionRuntime } from "../../../src/runtime/extensions/resource-host/extension-runtime"
+import { ActorHost } from "../../../src/runtime/extensions/actor-host"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
+import { resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 export const makeActorRuntimeLayer = (config: {
@@ -20,17 +21,15 @@ export const makeActorRuntimeLayer = (config: {
 }) => {
   const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
-  const machine = ExtensionRuntime.Live(config.extensions).pipe(
-    Layer.provideMerge(turnControl),
-    Layer.provideMerge(ActorEngine.Live),
-  )
+  const resolved = resolveExtensions(config.extensions)
+  const actorRuntime = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
   // Build the process-scope Resource layer so `Resource.start` lifecycle
   // hooks fire (e.g. spawning actors that capture services into closure
   // via `ActorEngine`). When the caller passes `extensionLayers`
   // explicitly, fall back to merging only those — used by tests that
   // intentionally bypass setup.
   const baseInfra = Layer.mergeAll(
-    machine,
+    actorRuntime,
     EventStore.Memory,
     turnControl,
     ...(config.withStorage ? [storage] : []),

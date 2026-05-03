@@ -41,7 +41,6 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionRuntime } from "../runtime/extensions/resource-host/extension-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -278,11 +277,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ...(config.extraLayers ?? []),
       )
-      const extensionRuntimeLayer = ExtensionRuntime.fromExtensions(activeExtensions).pipe(
-        Layer.provideMerge(turnControlLayer),
-        Layer.provideMerge(ActorEngine.Live),
-      )
-      const runtimeDeps = Layer.merge(baseLayer, extensionRuntimeLayer)
+      const actorRuntimeLayer = ActorEngine.Live
+      const runtimeDeps = Layer.merge(baseLayer, actorRuntimeLayer)
       const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
       const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
         runtimeDeps,

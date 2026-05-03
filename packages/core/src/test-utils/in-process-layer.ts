@@ -18,7 +18,7 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { ExtensionRuntime } from "../runtime/extensions/resource-host/extension-runtime.js"
+import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -64,16 +64,14 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
-  const extensionRuntimeLive = ExtensionRuntime.Test().pipe(
-    Layer.provideMerge(ExtensionTurnControl.Live),
-  )
+  const actorRuntimeLive = Layer.mergeAll(ActorEngine.Live, ExtensionTurnControl.Live)
   const memoryStorage = Storage.MemoryWithSql()
   const baseDeps = Layer.mergeAll(
     memoryStorage,
     subTagLayers(memoryStorage),
     providerLive,
     extensionRegistryLive,
-    extensionRuntimeLive,
+    actorRuntimeLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),

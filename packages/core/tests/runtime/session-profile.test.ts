@@ -10,8 +10,6 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { Storage } from "../../src/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
 
@@ -25,10 +23,7 @@ const makeEmptyProfile = (cwd: string) =>
           modelDrivers: resolved.modelDrivers,
           externalDrivers: resolved.externalDrivers,
         }),
-        ExtensionRuntime.fromExtensions([]).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-          Layer.provideMerge(ActorEngine.Live),
-        ),
+        ActorEngine.Live,
       ),
     )
     return {
@@ -44,7 +39,6 @@ const makeEmptyProfile = (cwd: string) =>
       },
       registryService: Context.get(layerContext, ExtensionRegistry),
       driverRegistryService: Context.get(layerContext, DriverRegistry),
-      extensionRuntime: Context.get(layerContext, ExtensionRuntime),
       actorEngine: Context.get(layerContext, ActorEngine),
       receptionist: Context.get(layerContext, Receptionist),
       baseSections: [],

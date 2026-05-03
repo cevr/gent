@@ -56,10 +56,6 @@ import { DriverRegistry, type DriverRegistryService } from "../extensions/driver
 import { ActorEngine } from "../extensions/actor-engine.js"
 import { Receptionist } from "../extensions/receptionist.js"
 import {
-  ExtensionRuntime,
-  type ExtensionRuntimeService,
-} from "../extensions/resource-host/extension-runtime.js"
-import {
   ExtensionTurnControl,
   TurnControlError,
   type CurrentTurnControlOwnerService,
@@ -179,7 +175,6 @@ type LoopHandle = {
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
-    turnExtensionRuntime: ExtensionRuntimeService
     turnPermission: PermissionService
     turnBaseSections: ReadonlyArray<PromptSection>
     turnHostCtx: ExtensionHostContext
@@ -471,7 +466,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | Provider
     | ExtensionRegistry
     | DriverRegistry
-    | ExtensionRuntime
     | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
@@ -489,7 +483,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
-        const extensionRuntime = yield* ExtensionRuntime
         const actorEngine = yield* ActorEngine
         const receptionist = yield* Receptionist
         const extensionTurnControl = yield* ExtensionTurnControl
@@ -600,7 +593,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const permissionService = yield* Effect.serviceOption(Permission)
 
             const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-              extensionRuntime,
               extensionRegistry,
               storage,
               actorEngine,
@@ -629,7 +621,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.map(({ environment }) => ({
                 turnExtensionRegistry: environment.extensionRegistry,
                 turnDriverRegistry: environment.driverRegistry,
-                turnExtensionRuntime: environment.extensionRuntime,
                 turnPermission: environment.permission,
                 turnBaseSections: environment.baseSections,
                 turnHostCtx: environment.hostCtx,
@@ -799,7 +790,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               const {
                 turnExtensionRegistry,
                 turnDriverRegistry,
-                turnExtensionRuntime,
                 turnPermission,
                 turnBaseSections,
                 turnHostCtx,
@@ -891,7 +881,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   storage,
                   branchId,
                   extensionRegistry: turnExtensionRegistry,
-                  extensionRuntime: turnExtensionRuntime,
                   driverRegistry: turnDriverRegistry,
                   sessionId,
                   publishEvent: publishEventOrDie,

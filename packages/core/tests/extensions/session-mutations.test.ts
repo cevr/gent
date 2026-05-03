@@ -215,10 +215,6 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       home: "/tmp",
       platform: "test",
     } as MakeExtensionHostContextDeps["platform"],
-    extensionRuntime: {
-      send: die("ExtensionRuntime"),
-      execute: die("ExtensionRuntime"),
-    } as unknown as MakeExtensionHostContextDeps["extensionRuntime"],
     actorEngine: {
       spawn: die("ActorEngine"),
       tell: die("ActorEngine"),

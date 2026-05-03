@@ -42,10 +42,6 @@ import { EventPublisher } from "../../src/domain/event-publisher"
 import { Provider } from "../../src/providers/provider"
 import { SessionMutations } from "../../src/domain/session-mutations"
 import {
-  ExtensionRuntime,
-  type ExtensionRuntimeService,
-} from "../../src/runtime/extensions/resource-host/extension-runtime"
-import {
   SessionRuntime,
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
@@ -55,6 +51,7 @@ import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { Storage, subTagLayers } from "../../src/storage/sqlite-storage"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 
 const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
@@ -87,10 +84,7 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
     restoreSession: () => Effect.void,
   } satisfies SessionRuntimeService)
 
-const machineProbeLayer: Layer.Layer<ExtensionRuntime> = Layer.succeed(ExtensionRuntime, {
-  send: () => Effect.void,
-  execute: () => Effect.die("unexpected machine request"),
-} satisfies ExtensionRuntimeService)
+const actorRuntimeLayer = ActorEngine.Live
 
 const baseDeps = ({
   withRegistration,
@@ -116,7 +110,7 @@ const baseDeps = ({
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    machineProbeLayer,
+    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
 }

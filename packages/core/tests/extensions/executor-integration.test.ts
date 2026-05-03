@@ -37,7 +37,6 @@ import {
   ExecutorConnectionRunner,
   ExecutorConnectionRunnerLayer,
 } from "@gent/extensions/executor/connection-runner"
-import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
@@ -161,25 +160,21 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
   // both stay in the output set so the runner layer can pull them. The
   // resource-layer chain below is provideMerged onto this stack so it
   // shares the same engine instance that the host registers actors with.
-  const machine = ExtensionRuntime.Live([extension]).pipe(
-    Layer.provideMerge(turnControl),
-    Layer.provideMerge(ActorHost.fromResolved(resolved)),
-    Layer.provideMerge(ActorEngine.Live),
-  )
+  const actorRuntime = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
   // Pull every `scope: "process"` resource layer from the extension and
-  // chain them onto `machine` via `Layer.provideMerge` so the runner's
+  // chain them onto `actorRuntime` via `Layer.provideMerge` so the runner's
   // `ActorEngine | Receptionist` requirements resolve to the same
   // instance the host registers actors with.
   const extLayers = (extension.contributions.resources ?? [])
     .filter((r) => r.scope === "process")
     .map((r) => r.layer as Layer.Layer<any, never, any>)
-  // Stack the resource layers on top of `machine + storage` so each
+  // Stack the resource layers on top of `actorRuntime + storage` so each
   // resource's `ActorEngine | Receptionist | Storage | …` deps are
   // satisfied by the underlying stack. `provideMerge` keeps the
   // resource's outputs (e.g. `ExecutorConnectionRunner`) in the result
   // and forces the resource layer to activate (otherwise an unused
   // output is dead-stripped, and the connection runner never starts).
-  const baseStack = Layer.mergeAll(machine, storage)
+  const baseStack = Layer.mergeAll(actorRuntime, storage)
   const machineWithResources = extLayers.reduce<Layer.Layer<any, never, any>>(
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,

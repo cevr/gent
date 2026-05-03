@@ -62,7 +62,6 @@ import type { ActorEngine } from "../../extensions/actor-engine.js"
 import type { Receptionist } from "../../extensions/receptionist.js"
 import type { DriverRegistryService } from "../../extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "../../extensions/registry.js"
-import type { ExtensionRuntimeService } from "../../extensions/resource-host/extension-runtime.js"
 import type { ResourceManagerService } from "../../resource-manager.js"
 import type { ToolRunnerService } from "../tool-runner"
 import {
@@ -396,7 +395,6 @@ export const resolveTurnContext = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionRuntime: ExtensionRuntimeService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
@@ -638,7 +636,6 @@ export const resolveTurnPhase = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionRuntime: ExtensionRuntimeService
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent

@@ -31,10 +31,6 @@ import {
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
 import { ActorEngine, type ActorEngineService } from "./extensions/actor-engine.js"
 import { Receptionist, type ReceptionistService } from "./extensions/receptionist.js"
-import {
-  ExtensionRuntime,
-  type ExtensionRuntimeService,
-} from "./extensions/resource-host/extension-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
@@ -59,7 +55,6 @@ export interface SessionProfile {
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
-  readonly extensionRuntime: ExtensionRuntimeService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -222,10 +217,8 @@ export class SessionProfileCache extends Context.Service<
                   modelDrivers: resolved.modelDrivers,
                   externalDrivers: resolved.externalDrivers,
                 }),
-                ExtensionRuntime.fromExtensions([]).pipe(
-                  Layer.provide(ExtensionTurnControl.Live),
-                  Layer.provideMerge(ActorEngine.Live),
-                ),
+                ExtensionTurnControl.Live,
+                ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),
           )
@@ -237,7 +230,6 @@ export class SessionProfileCache extends Context.Service<
             permissionService: allowAllPermission,
             registryService: Context.get(layerContext, ExtensionRegistry),
             driverRegistryService: Context.get(layerContext, DriverRegistry),
-            extensionRuntime: Context.get(layerContext, ExtensionRuntime),
             actorEngine: Context.get(layerContext, ActorEngine),
             receptionist: Context.get(layerContext, Receptionist),
             baseSections: [],
@@ -256,7 +248,6 @@ export const sessionProfileFromRuntime = (runtime: {
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
-  readonly extensionRuntime: ExtensionRuntimeService
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -268,7 +259,6 @@ export const sessionProfileFromRuntime = (runtime: {
   permissionService: runtime.permissionService,
   registryService: runtime.registryService,
   driverRegistryService: runtime.driverRegistryService,
-  extensionRuntime: runtime.extensionRuntime,
   actorEngine: runtime.actorEngine,
   receptionist: runtime.receptionist,
   baseSections: runtime.baseSections,

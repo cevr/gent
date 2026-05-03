@@ -35,7 +35,6 @@ import { Permission } from "@gent/core/domain/permission"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -97,7 +96,7 @@ const makeRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ExtensionRuntime.Test(),
+    ActorEngine.Live,
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -140,7 +139,7 @@ const makeRuntimeLayerWithEventPublisher = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ExtensionRuntime.Test(),
+    ActorEngine.Live,
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -211,7 +210,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ExtensionRuntime.Test(),
+    ActorEngine.Live,
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,
@@ -244,7 +243,7 @@ const makeLiveToolRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ExtensionRuntime.Test(),
+    ActorEngine.Live,
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     eventStoreLayer,

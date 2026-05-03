@@ -10,7 +10,6 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
@@ -163,7 +162,7 @@ const makeLayerWithEvents = (
     providerLayer,
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
-    ExtensionRuntime.Test(),
+    ActorEngine.Live,
     ActorEngine.Live,
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
@@ -323,7 +322,7 @@ describe("external turn execution", () => {
           modelDrivers: agentsResolved.modelDrivers,
           externalDrivers: agentsResolved.externalDrivers,
         }),
-        ExtensionRuntime.Test(),
+        ActorEngine.Live,
         ActorEngine.Live,
         ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
@@ -484,7 +483,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           modelDrivers: e2eResolved.modelDrivers,
           externalDrivers: e2eResolved.externalDrivers,
         }),
-        ExtensionRuntime.Test(),
+        ActorEngine.Live,
         ActorEngine.Live,
         ExtensionTurnControl.Test(),
         // Messages go through Storage directly — EventStore path is orthogonal.
@@ -579,7 +578,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           modelDrivers: e2eResolved.modelDrivers,
           externalDrivers: e2eResolved.externalDrivers,
         }),
-        ExtensionRuntime.Test(),
+        ActorEngine.Live,
         ActorEngine.Live,
         ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
@@ -668,7 +667,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           modelDrivers: e2eResolved.modelDrivers,
           externalDrivers: e2eResolved.externalDrivers,
         }),
-        ExtensionRuntime.Test(),
+        ActorEngine.Live,
         ActorEngine.Live,
         ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
@@ -764,7 +763,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           modelDrivers: e2eResolved.modelDrivers,
           externalDrivers: e2eResolved.externalDrivers,
         }),
-        ExtensionRuntime.Test(),
+        ActorEngine.Live,
         ActorEngine.Live,
         ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),

@@ -117,11 +117,11 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Three-tier test taxonomy
 
-| Tier           | Layer                   | Exercises                      | Use for                           |
-| -------------- | ----------------------- | ------------------------------ | --------------------------------- |
-| Pure reducer   | `createActorHarness`    | State transitions, projections | Machine behavior                  |
-| Actor runtime  | `makeActorRuntimeLayer` | Direct `ExtensionRuntime`      | Supervisor, protocol, persistence |
-| RPC acceptance | `createRpcHarness`      | Full RPC → actor → reply path  | Lifecycle, scope, schema, wiring  |
+| Tier           | Layer                   | Exercises                           | Use for                           |
+| -------------- | ----------------------- | ----------------------------------- | --------------------------------- |
+| Pure reducer   | `createActorHarness`    | State transitions, projections      | Machine behavior                  |
+| Actor runtime  | `makeActorRuntimeLayer` | Direct `ActorEngine`/`Receptionist` | Supervisor, protocol, persistence |
+| RPC acceptance | `createRpcHarness`      | Full RPC → actor → reply path       | Lifecycle, scope, schema, wiring  |
 
 New extension tests should include at least one RPC acceptance test via `createRpcHarness` to catch scope lifetime bugs. Direct-runtime tests (`makeActorRuntimeLayer`) are for behavior — they bypass the per-request scope boundary that production uses.
 

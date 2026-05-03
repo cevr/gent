@@ -15,7 +15,7 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
-import type { ExtensionRuntime } from "../../src/runtime/extensions/resource-host/extension-runtime"
+import type { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
@@ -55,11 +55,7 @@ const runE2ETest = (
   steps: Parameters<typeof Provider.Sequence>[0],
   test: (
     controls: SequenceProviderControls,
-  ) => Effect.Effect<
-    void,
-    unknown,
-    AgentLoop | ExtensionRuntime | EventStore | AutoRead | AutoWrite
-  >,
+  ) => Effect.Effect<void, unknown, AgentLoop | ActorEngine | EventStore | AutoRead | AutoWrite>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
