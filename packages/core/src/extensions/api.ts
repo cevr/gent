@@ -99,8 +99,6 @@ export {
   type GentExtension,
   type ProjectionTurnContext,
   type TurnProjection,
-  type ReduceResult,
-  type ExtensionReduceContext,
   type ExtensionTurnContext,
   type SystemPromptInput,
   type ToolExecuteInput,

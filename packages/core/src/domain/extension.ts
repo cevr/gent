@@ -286,13 +286,6 @@ export interface ExtensionReactions<E = never, R = never> {
   ) => Effect.Effect<unknown, E, R>
 }
 
-// Extension State Machine — server-owned state that drives tool policy, prompt, and UI
-
-export interface ExtensionReduceContext {
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-}
-
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<ToolToken>
@@ -326,25 +319,6 @@ export interface ToolPolicyFragment {
 export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
   readonly promptSections?: ReadonlyArray<PromptSection>
-}
-
-/** Public effect union available to extension authors. */
-export const ExtensionEffectBusEmit = Schema.TaggedStruct("BusEmit", {
-  channel: Schema.String,
-  payload: Schema.Unknown,
-})
-export const ExtensionEffectSchema = ExtensionEffectBusEmit
-export type ExtensionEffect = typeof ExtensionEffectBusEmit.Type
-
-/** Result of a reducer/message handler call — always object form */
-export interface ReduceResult<State> {
-  readonly state: State
-  readonly effects?: ReadonlyArray<ExtensionEffect>
-}
-
-/** Result of a request handler call — can reply and optionally transition state. */
-export interface RequestResult<State, Reply> extends ReduceResult<State> {
-  readonly reply: Reply
 }
 
 // The legacy server slash-command contribution was deleted; human surfaces
