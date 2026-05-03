@@ -27,8 +27,8 @@ const fuzzyMatch = (text: string, query: string): boolean => {
 }
 
 const labelFor = (node: SessionTreeNode): string => {
-  const name = node.name ?? node.id.slice(0, 8)
-  const cwd = node.cwd?.split("/").filter(Boolean).pop()
+  const name = node.session.name ?? node.session.id.slice(0, 8)
+  const cwd = node.session.cwd?.split("/").filter(Boolean).pop()
   return cwd !== undefined ? `${name} · ${cwd}` : name
 }
 
@@ -52,7 +52,7 @@ const buildTreeLines = (
   const visible =
     query.length === 0 ||
     fuzzyMatch(label, query) ||
-    node.id === currentSessionId ||
+    node.session.id === currentSessionId ||
     childMatches.length > 0
 
   if (!visible) return []
@@ -64,11 +64,11 @@ const buildTreeLines = (
           .slice(0, -1)
           .map((show) => (show ? "│  " : "   "))
           .join("") + (isLast ? "└─ " : "├─ ")
-  const current = node.id === currentSessionId
+  const current = node.session.id === currentSessionId
 
   return [
     {
-      id: node.id,
+      id: node.session.id,
       line: `${prefix}${label}${current ? " •" : ""}`,
       isCurrent: current,
     },

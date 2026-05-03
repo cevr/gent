@@ -12,10 +12,10 @@ import { CommandProvider } from "../src/command"
 import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
 import { ClientProvider } from "../src/client"
-import type { GentNamespacedClient, GentRuntime, Session } from "../src/client"
+import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import { emptyQueueSnapshot, type SessionInfo, type SessionRuntime } from "@gent/sdk"
+import { emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { AgentName } from "@gent/core/domain/agent"
 import type { ClientLog } from "../src/utils/client-logger"
@@ -47,7 +47,17 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       get: () => noRpcError(null),
       delete: () => noRpcError(undefined),
       getChildren: () => noRpcError([]),
-      getTree: () => noRpcError({ id: "session-test", name: "Test Session", children: [] }),
+      getTree: () =>
+        noRpcError({
+          session: {
+            id: SessionId.make("session-test"),
+            activeBranchId: BranchId.make("branch-test"),
+            name: "Test Session",
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          },
+          children: [],
+        }),
       getSnapshot: () =>
         noRpcError({
           sessionId: SessionId.make("session-test"),
@@ -159,13 +169,13 @@ export const createMockRuntime = (): GentRuntime => ({
   },
 })
 
-const toInitialSession = (session: SessionInfo | Session | undefined): Session | undefined => {
+const toInitialSession = (session: DomainSession | Session | undefined): Session | undefined => {
   if (session === undefined) return undefined
   if ("sessionId" in session) return session
-  if (session.branchId === undefined) return undefined
+  if (session.activeBranchId === undefined) return undefined
   return {
     sessionId: session.id,
-    branchId: session.branchId,
+    branchId: session.activeBranchId,
     name: session.name ?? "Unnamed",
     reasoningLevel: session.reasoningLevel,
   }
@@ -192,7 +202,7 @@ export const renderWithProviders = (
   options?: {
     client?: GentNamespacedClient
     runtime?: GentRuntime
-    initialSession?: SessionInfo
+    initialSession?: DomainSession | Session
     initialAgent?: AgentName
     initialRoute?: AppRoute
     width?: number

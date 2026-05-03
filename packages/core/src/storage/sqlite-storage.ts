@@ -32,10 +32,6 @@ export interface StorageService {
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
-  readonly listFirstBranches: () => Effect.Effect<
-    ReadonlyArray<{ sessionId: SessionId; branchId: BranchId | undefined }>,
-    StorageError
-  >
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   /**
    * Deletes the session and every descendant. SELECT + DELETE execute inside

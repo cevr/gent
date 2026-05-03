@@ -1,35 +1,9 @@
 import type { BranchId } from "../domain/ids.js"
-import type { Branch, Session } from "../domain/message.js"
-import { BranchInfo, SessionInfo } from "./transport-contract.js"
-import type { BranchTreeNode } from "./transport-contract.js"
+import type { Branch, BranchTreeNode } from "../domain/message.js"
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
 }
-
-export const sessionToInfo = (session: Session, branchIdFallback?: BranchId): SessionInfo =>
-  new SessionInfo({
-    id: session.id,
-    name: session.name,
-    cwd: session.cwd,
-    reasoningLevel: session.reasoningLevel,
-    branchId: session.activeBranchId ?? branchIdFallback,
-    parentSessionId: session.parentSessionId,
-    parentBranchId: session.parentBranchId,
-    createdAt: session.createdAt.getTime(),
-    updatedAt: session.updatedAt.getTime(),
-  })
-
-export const branchToInfo = (branch: Branch): BranchInfo =>
-  new BranchInfo({
-    id: branch.id,
-    sessionId: branch.sessionId,
-    parentBranchId: branch.parentBranchId,
-    parentMessageId: branch.parentMessageId,
-    name: branch.name,
-    summary: branch.summary,
-    createdAt: branch.createdAt.getTime(),
-  })
 
 export const buildBranchTree = (
   branches: ReadonlyArray<Branch>,
@@ -39,12 +13,8 @@ export const buildBranchTree = (
 
   for (const branch of branches) {
     nodes.set(branch.id, {
-      id: branch.id,
-      name: branch.name,
-      summary: branch.summary,
-      parentMessageId: branch.parentMessageId,
+      branch,
       messageCount: messageCounts.get(branch.id) ?? 0,
-      createdAt: branch.createdAt.getTime(),
       children: [],
     })
   }
@@ -66,7 +36,7 @@ export const buildBranchTree = (
   }
 
   const sortNodes = (list: MutableBranchTreeNode[]) => {
-    list.sort((a, b) => a.createdAt - b.createdAt)
+    list.sort((a, b) => a.branch.createdAt.getTime() - b.branch.createdAt.getTime())
     for (const node of list) {
       if (node.children.length > 0) sortNodes(node.children)
     }

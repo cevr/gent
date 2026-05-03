@@ -32,14 +32,14 @@ const flattenTree = (
   acc: FlatNode[] = [],
 ): FlatNode[] => {
   for (const node of nodes) {
-    const name = node.name ?? node.id.slice(0, 8)
+    const name = node.branch.name ?? node.branch.id.slice(0, 8)
     const label = `${name} (${node.messageCount})`
     acc.push({
-      id: node.id,
+      id: node.branch.id,
       label,
-      summary: node.summary,
+      summary: node.branch.summary,
       depth,
-      isActive: node.id === activeBranchId,
+      isActive: node.branch.id === activeBranchId,
     })
     if (node.children.length > 0) {
       flattenTree(node.children, activeBranchId, depth + 1, acc)

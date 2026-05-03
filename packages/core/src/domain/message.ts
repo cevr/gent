@@ -156,3 +156,37 @@ export interface SessionTreeNode {
   session: Session
   children: readonly SessionTreeNode[]
 }
+
+interface SessionTreeNodeEncoded {
+  session: Schema.Codec.Encoded<typeof Session>
+  children: readonly SessionTreeNodeEncoded[]
+}
+
+export const SessionTreeNode: Schema.Codec<SessionTreeNode, SessionTreeNodeEncoded> = Schema.Struct(
+  {
+    session: Session,
+    children: Schema.Array(
+      Schema.suspend((): Schema.Codec<SessionTreeNode, SessionTreeNodeEncoded> => SessionTreeNode),
+    ),
+  },
+)
+
+export interface BranchTreeNode {
+  branch: Branch
+  messageCount: number
+  children: readonly BranchTreeNode[]
+}
+
+interface BranchTreeNodeEncoded {
+  branch: Schema.Codec.Encoded<typeof Branch>
+  messageCount: number
+  children: readonly BranchTreeNodeEncoded[]
+}
+
+export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> = Schema.Struct({
+  branch: Branch,
+  messageCount: Schema.Number,
+  children: Schema.Array(
+    Schema.suspend((): Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> => BranchTreeNode),
+  ),
+})

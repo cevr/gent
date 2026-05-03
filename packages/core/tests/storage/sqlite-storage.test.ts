@@ -80,31 +80,11 @@ describe("Storage", () => {
             updatedAt: new Date(now + 1),
           }),
         )
-        yield* storage.createBranch(
-          new Branch({
-            id: BranchId.make("s1-b1"),
-            sessionId: SessionId.make("s1"),
-            createdAt: new Date(now + 10),
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: BranchId.make("s1-b0"),
-            sessionId: SessionId.make("s1"),
-            createdAt: new Date(now),
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: BranchId.make("s2-b1"),
-            sessionId: SessionId.make("s2"),
-            createdAt: new Date(now + 5),
-          }),
-        )
-        const firstBranches = yield* storage.listFirstBranches()
-        const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-        expect(map.get(SessionId.make("s1"))).toBe(BranchId.make("s1-b0"))
-        expect(map.get(SessionId.make("s2"))).toBe(BranchId.make("s2-b1"))
+        const sessions = yield* storage.listSessions()
+        expect(sessions.map((session) => session.id)).toEqual([
+          SessionId.make("s2"),
+          SessionId.make("s1"),
+        ])
       }).pipe(Effect.provide(Storage.Test())),
     )
     it.live("updates a session", () =>

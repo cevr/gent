@@ -9,7 +9,7 @@
 import type { Effect } from "effect"
 import { Context, Layer } from "effect"
 import type { Session } from "../domain/message.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import type { SessionId } from "../domain/ids.js"
 import type { StorageError } from "./sqlite-storage.js"
 
 export interface SessionStorageService {
@@ -17,10 +17,6 @@ export interface SessionStorageService {
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
-  readonly listFirstBranches: () => Effect.Effect<
-    ReadonlyArray<{ sessionId: SessionId; branchId: BranchId | undefined }>,
-    StorageError
-  >
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   /**
    * Deletes the session and every descendant, returning the full set of

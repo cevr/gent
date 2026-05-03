@@ -42,8 +42,8 @@ import type {
   GentRpcError,
   Message,
   QueueSnapshot,
-  SessionInfo,
-  BranchInfo,
+  Session as DomainSession,
+  Branch,
   BranchTreeNode,
   ExtensionHealthSnapshot,
   SessionTreeNode,
@@ -144,8 +144,8 @@ export interface ClientSessionValue {
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: () => Effect.Effect<readonly Message[], GentRpcError>
-  listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
-  listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
+  listSessions: () => Effect.Effect<readonly DomainSession[], GentRpcError>
+  listBranches: () => Effect.Effect<readonly Branch[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
   getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
@@ -623,7 +623,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     listBranches: () => {
       const s = session()
-      if (s === null) return Effect.succeed([] as readonly BranchInfo[])
+      if (s === null) return Effect.succeed([] as readonly Branch[])
       return client.branch.list({ sessionId: s.sessionId })
     },
 

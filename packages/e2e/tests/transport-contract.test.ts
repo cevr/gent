@@ -32,13 +32,13 @@ describe("GentClient transport contract", () => {
 
             expect(createdSession).toBeDefined()
             expect(sessions.length).toBe(initialSessions.length + 1)
-            expect(createdSession?.branchId).toBe(created.branchId)
+            expect(createdSession?.activeBranchId).toBe(created.branchId)
 
             const loaded = yield* client.session
               .get({ sessionId: created.sessionId })
               .pipe(Effect.mapError((error) => new Error(String(error))))
             expect(loaded?.id).toBe(created.sessionId)
-            expect(loaded?.branchId).toBe(created.branchId)
+            expect(loaded?.activeBranchId).toBe(created.branchId)
 
             const initialSnapshot = yield* client.session
               .getSnapshot({

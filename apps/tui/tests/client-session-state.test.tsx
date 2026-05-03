@@ -79,10 +79,10 @@ describe("ClientProvider session lifecycle", () => {
         renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )
@@ -154,10 +154,10 @@ describe("ClientProvider session lifecycle", () => {
           client,
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )
@@ -226,10 +226,10 @@ describe("ClientProvider session lifecycle", () => {
           client,
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )
@@ -299,10 +299,10 @@ describe("ClientProvider session lifecycle", () => {
           client,
           initialSession: {
             id: SessionId.make("session-model"),
-            branchId: BranchId.make("branch-model"),
+            activeBranchId: BranchId.make("branch-model"),
             name: "M",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )
@@ -360,10 +360,10 @@ describe("ClientProvider session lifecycle", () => {
           client,
           initialSession: {
             id: SessionId.make("session-prev"),
-            branchId: BranchId.make("branch-prev"),
+            activeBranchId: BranchId.make("branch-prev"),
             name: "P",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )

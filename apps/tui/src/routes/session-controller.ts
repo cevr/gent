@@ -696,13 +696,13 @@ export function createSessionController(props: {
     if (currentOverlay._tag !== "tree") return
 
     const nextSession = currentOverlay.sessions.find((session) => session.id === sessionId)
-    if (nextSession === undefined || nextSession.branchId === undefined) {
+    if (nextSession === undefined || nextSession.activeBranchId === undefined) {
       client.setError("Session tree entry missing active branch")
       return
     }
 
-    client.switchSession(nextSession.id, nextSession.branchId, nextSession.name ?? "Unnamed")
-    router.navigateToSession(nextSession.id, nextSession.branchId)
+    client.switchSession(nextSession.id, nextSession.activeBranchId, nextSession.name ?? "Unnamed")
+    router.navigateToSession(nextSession.id, nextSession.activeBranchId)
   }
 
   const onForkSelect = (messageId: MessageId) => {

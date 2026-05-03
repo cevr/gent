@@ -1,9 +1,9 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
+import { Branch } from "../../domain/message.js"
 import { GentRpcError } from "../errors.js"
 import {
   ListBranchesInput,
-  BranchInfo,
   CreateBranchInput,
   CreateBranchResult,
   BranchTreeNodeSchema,
@@ -16,7 +16,7 @@ import {
 export class BranchRpcs extends RpcGroup.make(
   Rpc.make("list", {
     payload: ListBranchesInput.fields,
-    success: Schema.Array(BranchInfo),
+    success: Schema.Array(Branch),
     error: GentRpcError,
   }),
   Rpc.make("create", {

@@ -5,7 +5,7 @@
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
 import { type AppRoute, Route } from "./types"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { BranchInfo } from "../client"
+import type { Branch } from "../client"
 import { createAppRouter, type AppRouter } from "./router"
 
 export interface RouterContextValue {
@@ -15,7 +15,7 @@ export interface RouterContextValue {
   navigateToBranchPicker: (
     sessionId: SessionId,
     sessionName: string,
-    branches: readonly BranchInfo[],
+    branches: readonly Branch[],
     prompt?: string,
   ) => void
   back: () => boolean

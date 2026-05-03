@@ -82,10 +82,6 @@ const makeFailingStorageService = (
       fails("listSessions")
         ? storageFailure(storageMessage(options.message, "listSessions"))
         : base.listSessions(),
-    listFirstBranches: () =>
-      fails("listFirstBranches")
-        ? storageFailure(storageMessage(options.message, "listFirstBranches"))
-        : base.listFirstBranches(),
     updateSession: (session) =>
       fails("updateSession")
         ? storageFailure(storageMessage(options.message, "updateSession"))

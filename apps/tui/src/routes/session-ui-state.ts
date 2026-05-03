@@ -1,10 +1,10 @@
 import { Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import {
-  SessionInfo as SessionInfoSchema,
+  Session as SessionSchema,
   SessionTreeNodeSchema,
 } from "@gent/core/server/transport-contract"
-import type { SessionInfo, SessionTreeNode } from "../client/index"
+import type { DomainSession, SessionTreeNode } from "../client/index"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchEvent as PromptSearchEventSchema,
@@ -25,7 +25,7 @@ export type SessionOverlayState =
   | {
       readonly _tag: "tree"
       readonly tree: SessionTreeNode
-      readonly sessions: readonly SessionInfo[]
+      readonly sessions: readonly DomainSession[]
     }
   | { readonly _tag: "fork" }
   | { readonly _tag: "mermaid" }
@@ -50,7 +50,7 @@ export const SessionUiEvent = TaggedEnumClass("SessionUiEvent", {
   ToggleTools: {},
   OpenTree: {
     tree: SessionTreeNodeSchema,
-    sessions: Schema.Array(SessionInfoSchema),
+    sessions: Schema.Array(SessionSchema),
   },
   OpenFork: {},
   OpenMermaid: {},

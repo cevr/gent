@@ -73,7 +73,7 @@ describe("app bootstrap", () => {
             expect(state._tag).toBe("session")
             if (state._tag !== "session") return
             expect(state.prompt).toBe("bootstrap prompt")
-            expect(state.session.branchId).toBeDefined()
+            expect(state.session.activeBranchId).toBeDefined()
           }),
         )
       }),
@@ -118,19 +118,7 @@ describe("app bootstrap", () => {
                   client,
                   runtime,
                   initialRoute: bootstrap.initialRoute,
-                  initialSession: bootstrap.initialSession
-                    ? {
-                        id: bootstrap.initialSession.sessionId,
-                        name: bootstrap.initialSession.name,
-                        cwd: repoRoot,
-                        branchId: bootstrap.initialSession.branchId,
-                        reasoningLevel: bootstrap.initialSession.reasoningLevel,
-                        parentSessionId: undefined,
-                        parentBranchId: undefined,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                      }
-                    : undefined,
+                  initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,
                   height: 32,

@@ -4,8 +4,8 @@ export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/do
 export { Message } from "@gent/core/domain/message.js"
 
 export {
-  SessionInfo,
-  BranchInfo,
+  Session,
+  Branch,
   SessionSnapshot,
   SlashCommandInfo,
   DriverInfo,

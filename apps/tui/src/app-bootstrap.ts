@@ -1,26 +1,29 @@
 import { Console, Effect, Option } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
-import type { BranchId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
-import { SessionInfo as SessionInfoDto } from "@gent/sdk"
-import type { GentNamespacedClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
-import type { Session } from "./client/index"
+import type {
+  GentNamespacedClient,
+  GentRpcError,
+  Branch,
+  Session as DomainSession,
+} from "@gent/sdk"
+import type { Session as ClientSession } from "./client/index"
 import { Route } from "./router/index"
 import type { AppRoute } from "./router/index"
 
 export type InitialState =
-  | { _tag: "session"; session: SessionInfo; prompt?: string }
+  | { _tag: "session"; session: DomainSession; prompt?: string }
   | {
       _tag: "branchPicker"
-      session: SessionInfo
-      branches: readonly BranchInfo[]
+      session: DomainSession
+      branches: readonly Branch[]
       prompt?: string
     }
-  | { _tag: "headless"; session: SessionInfo; prompt: string }
+  | { _tag: "headless"; session: DomainSession; prompt: string }
 
 export interface AppBootstrap {
-  readonly initialSession: Session | undefined
+  readonly initialSession: ClientSession | undefined
   readonly initialRoute: AppRoute
   readonly debugMode: boolean
   readonly missingAuthProviders: readonly ProviderId[] | undefined
@@ -36,30 +39,30 @@ export interface InteractiveBootstrapResult {
   readonly initialAgent: AgentName | undefined
 }
 
-export const toSession = (session: SessionInfo): Session | undefined => {
-  if (session.branchId === undefined) return undefined
+export const toSession = (session: DomainSession): ClientSession | undefined => {
+  if (session.activeBranchId === undefined) return undefined
   return {
     sessionId: session.id,
-    branchId: session.branchId,
+    branchId: session.activeBranchId,
     name: session.name ?? "Unnamed",
     reasoningLevel: session.reasoningLevel,
   }
 }
 
-const toSessionInfo = (
-  result: { sessionId: SessionId; branchId: BranchId; name: string },
-  cwd: string,
-): SessionInfo =>
-  new SessionInfoDto({
-    id: result.sessionId,
-    name: result.name,
-    cwd,
-    reasoningLevel: undefined,
-    branchId: result.branchId,
-    parentSessionId: undefined,
-    parentBranchId: undefined,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+const createAndLoadSession = (input: {
+  client: Pick<GentNamespacedClient, "session">
+  cwd: string
+}): Effect.Effect<DomainSession, GentRpcError> =>
+  Effect.gen(function* () {
+    const result = yield* input.client.session.create({
+      cwd: input.cwd,
+      requestId: crypto.randomUUID(),
+    })
+    const session = yield* input.client.session.get({ sessionId: result.sessionId })
+    if (session === null) {
+      return yield* Effect.die(`created session ${result.sessionId} was not readable`)
+    }
+    return session
   })
 
 export const resolveAppBootstrap = (
@@ -74,14 +77,14 @@ export const resolveAppBootstrap = (
 
   switch (state._tag) {
     case "session": {
-      // branchId is always present for sessions created by resolveInitialState.
+      // activeBranchId is always present for sessions created by resolveInitialState.
       // Guard for corrupt session records from -s <id> with missing branch.
-      if (state.session.branchId === undefined) {
+      if (state.session.activeBranchId === undefined) {
         throw new Error(`Session ${state.session.id} has no branch — cannot render`)
       }
       return {
         initialSession: toSession(state.session),
-        initialRoute: Route.session(state.session.id, state.session.branchId, state.prompt),
+        initialRoute: Route.session(state.session.id, state.session.activeBranchId, state.prompt),
         debugMode: options.debugMode,
         missingAuthProviders,
       }
@@ -140,13 +143,13 @@ export const resolveInteractiveBootstrap = (input: {
 
 const resolveSessionRuntimeAgent = (
   client: Pick<GentNamespacedClient, "session">,
-  session: SessionInfo,
+  session: DomainSession,
 ): Effect.Effect<AgentName | undefined, GentRpcError> => {
-  if (session.branchId === undefined) return Effect.void.pipe(Effect.as(undefined))
+  if (session.activeBranchId === undefined) return Effect.void.pipe(Effect.as(undefined))
   return client.session
     .getSnapshot({
       sessionId: session.id,
-      branchId: session.branchId,
+      branchId: session.activeBranchId,
     })
     .pipe(Effect.map((snapshot) => snapshot.runtime.agent))
 }
@@ -220,8 +223,12 @@ export const resolveInitialState = (input: {
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
 
-      const result = yield* client.session.create({ cwd, requestId: crypto.randomUUID() })
-      return { _tag: "headless" as const, session: toSessionInfo(result, cwd), prompt: promptText }
+      const created = yield* createAndLoadSession({ client, cwd })
+      return {
+        _tag: "headless" as const,
+        session: created,
+        prompt: promptText,
+      }
     }
 
     if (Option.isSome(session)) {
@@ -251,7 +258,8 @@ export const resolveInitialState = (input: {
             (sessions) =>
               sessions
                 .filter((candidate) => candidate.cwd === cwd)
-                .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
+                .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0] ??
+              null,
           ),
         )
       if (existing !== null) {
@@ -271,6 +279,6 @@ export const resolveInitialState = (input: {
     }
 
     const promptText = Option.getOrUndefined(prompt)
-    const result = yield* client.session.create({ cwd, requestId: crypto.randomUUID() })
-    return { _tag: "session" as const, session: toSessionInfo(result, cwd), prompt: promptText }
+    const created = yield* createAndLoadSession({ client, cwd })
+    return { _tag: "session" as const, session: created, prompt: promptText }
   })

@@ -13,7 +13,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { useClient } from "../client/index"
-import type { SessionInfo } from "../client"
+import type { DomainSession } from "../client"
 import { useCommand } from "../command/index"
 import {
   CommandPaletteEvent,
@@ -51,11 +51,11 @@ const filterItems = (items: readonly PaletteItem[], query: string): readonly Pal
 }
 
 type SessionNode = {
-  readonly session: SessionInfo
+  readonly session: DomainSession
   readonly children: SessionNode[]
 }
 
-const buildSessionTree = (list: readonly SessionInfo[]): SessionNode[] => {
+const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
   const nodes = new Map<string, SessionNode>()
   for (const session of list) {
     nodes.set(session.id, { session, children: [] })
@@ -73,7 +73,7 @@ const buildSessionTree = (list: readonly SessionInfo[]): SessionNode[] => {
   }
 
   const sortNodes = (tree: SessionNode[]) => {
-    tree.sort((a, b) => b.session.updatedAt - a.session.updatedAt)
+    tree.sort((a, b) => b.session.updatedAt.getTime() - a.session.updatedAt.getTime())
     for (const node of tree) {
       if (node.children.length > 0) sortNodes(node.children)
     }
@@ -148,7 +148,7 @@ export function CommandPalette() {
   const sessionsLevel = (): PaletteLevel => {
     const [sessions] = createResource(
       () =>
-        new Promise<readonly SessionInfo[]>((resolve, reject) => {
+        new Promise<readonly DomainSession[]>((resolve, reject) => {
           cast(
             client.listSessions().pipe(
               Effect.tap((result) => Effect.sync(() => resolve(result))),
@@ -182,9 +182,9 @@ export function CommandPalette() {
           id: `session.${session.id}`,
           title,
           onSelect: () => {
-            if (session.branchId === undefined) return
-            client.switchSession(session.id, session.branchId, session.name ?? "Unnamed")
-            router.navigateToSession(session.id, session.branchId)
+            if (session.activeBranchId === undefined) return
+            client.switchSession(session.id, session.activeBranchId, session.name ?? "Unnamed")
+            router.navigateToSession(session.id, session.activeBranchId)
             closePalette()
           },
         })

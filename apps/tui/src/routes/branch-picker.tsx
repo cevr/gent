@@ -13,7 +13,7 @@ import { useEnv } from "../env/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { ChromePanel } from "../components/chrome-panel"
-import type { BranchInfo, BranchTreeNode } from "../client"
+import type { Branch, BranchTreeNode } from "../client"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/truncate"
@@ -22,7 +22,7 @@ import { useScopedKeyboard } from "../keyboard/context"
 export interface BranchPickerProps {
   sessionId: SessionId
   sessionName: string
-  branches: readonly BranchInfo[]
+  branches: readonly Branch[]
   prompt?: string
 }
 
@@ -30,7 +30,7 @@ type BranchPickerState =
   | { _tag: "loading"; error?: string }
   | { _tag: "ready"; selectedIndex: number; messageCounts: Map<string, number>; error?: string }
 
-const formatBranchLabel = (branch: BranchInfo, messageCount?: number): string => {
+const formatBranchLabel = (branch: Branch, messageCount?: number): string => {
   const name = branch.name ?? branch.id.slice(0, 8)
   const count = messageCount !== undefined ? ` (${messageCount})` : ""
   return `${name}${count}`
@@ -40,7 +40,7 @@ const collectCounts = (nodes: readonly BranchTreeNode[]) => {
   const map = new Map<string, number>()
   const walk = (list: readonly BranchTreeNode[]) => {
     for (const node of list) {
-      map.set(node.id, node.messageCount)
+      map.set(node.branch.id, node.messageCount)
       if (node.children.length > 0) walk(node.children)
     }
   }

@@ -1,6 +1,5 @@
 import { Effect, Stream } from "effect"
 import { EventId } from "../../domain/event.js"
-import type { SessionTreeNode as DomainSessionTreeNode } from "../../domain/message.js"
 import { WideEvent, rpcBoundary, withWideEvent } from "../../runtime/wide-event-boundary.js"
 import type {
   CreateBranchInput,
@@ -18,23 +17,16 @@ import type {
   SteerCommand as TransportSteerCommand,
   SubscribeEventsInput,
   SwitchBranchInput,
-  SessionTreeNode as RpcSessionTreeNode,
   UpdateSessionReasoningLevelInput,
   WatchRuntimeInput,
 } from "../transport-contract.js"
 import type { RpcHandlerDeps } from "./shared.js"
 import { isPublicTransportEvent, watchRuntimeStream } from "./shared.js"
+import type { SessionId } from "../../domain/ids.js"
 
-const toRpcSessionTree = (node: DomainSessionTreeNode): RpcSessionTreeNode => ({
-  id: node.session.id,
-  name: node.session.name,
-  cwd: node.session.cwd,
-  parentSessionId: node.session.parentSessionId,
-  parentBranchId: node.session.parentBranchId,
-  createdAt: node.session.createdAt.getTime(),
-  updatedAt: node.session.updatedAt.getTime(),
-  children: node.children.map(toRpcSessionTree),
-})
+type SessionIdPayload = {
+  readonly sessionId: SessionId
+}
 
 export const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "session.create": (input: CreateSessionInput) =>
@@ -55,9 +47,9 @@ export const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
   "session.list": () => deps.queries.listSessions(),
 
-  "session.get": ({ sessionId }: GetSessionTreeInput) => deps.queries.getSession(sessionId),
+  "session.get": ({ sessionId }: SessionIdPayload) => deps.queries.getSession(sessionId),
 
-  "session.delete": ({ sessionId }: GetSessionTreeInput) =>
+  "session.delete": ({ sessionId }: SessionIdPayload) =>
     deps.commands.deleteSession(sessionId).pipe(
       Effect.tap(() => WideEvent.set({ sessionId })),
       withWideEvent(rpcBoundary("session.delete")),
@@ -66,8 +58,7 @@ export const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "session.getChildren": ({ parentSessionId }: GetChildSessionsInput) =>
     deps.queries.getChildSessions(parentSessionId),
 
-  "session.getTree": ({ sessionId }: GetSessionTreeInput) =>
-    deps.queries.getSessionTree(sessionId).pipe(Effect.map(toRpcSessionTree)),
+  "session.getTree": ({ sessionId }: GetSessionTreeInput) => deps.queries.getSessionTree(sessionId),
 
   "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
     deps.queries.getSessionSnapshot({ sessionId, branchId }),

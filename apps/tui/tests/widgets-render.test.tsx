@@ -2,12 +2,7 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { SyntaxStyle } from "@opentui/core"
-import type {
-  ConnectionState,
-  ExtensionHealthSnapshot,
-  QueueEntryInfo,
-  SessionInfo,
-} from "@gent/sdk"
+import type { ConnectionState, ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
@@ -16,27 +11,27 @@ import { createMockClient, renderFrame, renderWithProviders } from "./render-har
 import { useClient, type GentRuntime } from "../src/client"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 const syntaxStyle = () => SyntaxStyle.create()
-const testSession: SessionInfo = {
+const testSession: Session = {
   id: SessionId.make("session-test"),
   name: "Test Session",
   cwd: "/tmp/gent-test",
   reasoningLevel: undefined,
-  branchId: BranchId.make("branch-test"),
+  activeBranchId: BranchId.make("branch-test"),
   parentSessionId: undefined,
   parentBranchId: undefined,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  createdAt: new Date(),
+  updatedAt: new Date(),
 }
-const nextSession: SessionInfo = {
+const nextSession: Session = {
   id: SessionId.make("session-next"),
   name: "Next Session",
   cwd: "/tmp/gent-next",
   reasoningLevel: undefined,
-  branchId: BranchId.make("branch-next"),
+  activeBranchId: BranchId.make("branch-next"),
   parentSessionId: undefined,
   parentBranchId: undefined,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  createdAt: new Date(),
+  updatedAt: new Date(),
 }
 const HealthControlsProbe = (props: {
   expose: (controls: {
@@ -50,7 +45,7 @@ const HealthControlsProbe = (props: {
     switchSession: () =>
       client.switchSession(
         nextSession.id,
-        nextSession.branchId ?? BranchId.make("branch-next"),
+        nextSession.activeBranchId ?? BranchId.make("branch-next"),
         nextSession.name ?? "Next Session",
       ),
     switchBranchSameSession: () =>
@@ -270,7 +265,7 @@ describe("TUI renderer surfaces", () => {
                         {
                           _tag: "actor-failed" as const,
                           sessionId: testSession.id,
-                          branchId: testSession.branchId,
+                          branchId: testSession.activeBranchId,
                           error: "actor boom",
                           failurePhase: "runtime" as const,
                         },
@@ -342,7 +337,7 @@ describe("TUI renderer surfaces", () => {
               {
                 _tag: "actor-failed" as const,
                 sessionId: testSession.id,
-                branchId: testSession.branchId,
+                branchId: testSession.activeBranchId,
                 error: "actor boom",
                 failurePhase: "runtime" as const,
               },
@@ -419,7 +414,7 @@ describe("TUI renderer surfaces", () => {
                                 {
                                   _tag: "actor-failed" as const,
                                   sessionId: testSession.id,
-                                  branchId: testSession.branchId,
+                                  branchId: testSession.activeBranchId,
                                   error: "actor boom",
                                   failurePhase: "runtime" as const,
                                 },
@@ -485,7 +480,7 @@ describe("TUI renderer surfaces", () => {
                                 {
                                   _tag: "actor-failed" as const,
                                   sessionId: testSession.id,
-                                  branchId: testSession.branchId,
+                                  branchId: testSession.activeBranchId,
                                   error: "actor boom",
                                   failurePhase: "runtime" as const,
                                 },

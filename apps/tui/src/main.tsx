@@ -96,7 +96,7 @@ const runHeadlessTurn = (
   runSpec?: RunSpec,
 ) =>
   Effect.gen(function* () {
-    const branchId = state.session.branchId
+    const branchId = state.session.activeBranchId
     if (branchId === undefined) {
       yield* Console.error("Error: session has no branch")
       return yield* Effect.die("session has no branch")

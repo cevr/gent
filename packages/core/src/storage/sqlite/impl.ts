@@ -106,27 +106,6 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
         Effect.mapError(mapError("Failed to list sessions")),
       ),
 
-      listFirstBranches: Effect.fn("Storage.listFirstBranches")(
-        function* () {
-          const rows = yield* sql<{
-            session_id: SessionId
-            branch_id: BranchId | null
-          }>`SELECT s.id AS session_id, b.id AS branch_id
-         FROM sessions s
-         LEFT JOIN branches b
-           ON b.session_id = s.id
-           AND b.created_at = (
-             SELECT MIN(created_at) FROM branches WHERE session_id = s.id
-           )
-         ORDER BY s.updated_at DESC`
-          return rows.map((row) => ({
-            sessionId: row.session_id,
-            branchId: row.branch_id ?? undefined,
-          }))
-        },
-        Effect.mapError(mapError("Failed to list first branches")),
-      ),
-
       updateSession: Effect.fn("Storage.updateSession")(
         function* (session) {
           yield* sql`UPDATE sessions SET name = ${session.name ?? null}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`

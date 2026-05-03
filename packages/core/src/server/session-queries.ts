@@ -1,7 +1,13 @@
 import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import type { Message, Session, SessionTreeNode } from "../domain/message.js"
+import type {
+  Branch,
+  BranchTreeNode,
+  Message,
+  Session,
+  SessionTreeNode,
+} from "../domain/message.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -10,27 +16,26 @@ import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
-import { buildBranchTree, branchToInfo, sessionToInfo } from "./session-utils.js"
+import { buildBranchTree } from "./session-utils.js"
 import { SessionSnapshot } from "./transport-contract.js"
-import type {
-  BranchInfo,
-  BranchTreeNode,
-  GetSessionSnapshotInput,
-  SessionInfo,
-} from "./transport-contract.js"
+import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
 export interface SessionQueriesService {
-  readonly listSessions: () => Effect.Effect<SessionInfo[], AppServiceError>
-  readonly getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, AppServiceError>
-  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<SessionInfo | null, AppServiceError>
+  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
+  readonly getSession: (sessionId: SessionId) => Effect.Effect<Session | null, AppServiceError>
+  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | null, AppServiceError>
   readonly getChildSessions: (
     parentSessionId: SessionId,
-  ) => Effect.Effect<SessionInfo[], AppServiceError>
+  ) => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
   readonly getSessionTree: (
     rootSessionId: SessionId,
   ) => Effect.Effect<SessionTreeNode, AppServiceError>
-  readonly listBranches: (sessionId: SessionId) => Effect.Effect<BranchInfo[], AppServiceError>
-  readonly getBranchTree: (sessionId: SessionId) => Effect.Effect<BranchTreeNode[], AppServiceError>
+  readonly listBranches: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Branch>, AppServiceError>
+  readonly getBranchTree: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<BranchTreeNode>, AppServiceError>
   readonly listMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, AppServiceError>
@@ -57,17 +62,13 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const sessionRuntime = yield* SessionRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
-        const sessions = yield* sessionStorage.listSessions()
-        const firstBranches = yield* sessionStorage.listFirstBranches()
-        const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-        return sessions.map((session) => sessionToInfo(session, branchMap.get(session.id)))
+        return yield* sessionStorage.listSessions()
       })
 
       const getSession = Effect.fn("SessionQueries.getSession")(function* (sessionId: SessionId) {
         const session = yield* sessionStorage.getSession(sessionId)
         if (session === undefined) return null
-        const branches = yield* branchStorage.listBranches(sessionId)
-        return sessionToInfo(session, branches[0]?.id)
+        return session
       })
 
       const getLastSessionByCwd = Effect.fn("SessionQueries.getLastSessionByCwd")(function* (
@@ -75,17 +76,13 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       ) {
         const session = yield* sessionStorage.getLastSessionByCwd(cwd)
         if (session === undefined) return null
-        const branches = yield* branchStorage.listBranches(session.id)
-        return sessionToInfo(session, branches[0]?.id)
+        return session
       })
 
       const getChildSessions = Effect.fn("SessionQueries.getChildSessions")(function* (
         parentSessionId: SessionId,
       ) {
-        const children = yield* relationshipStorage.getChildSessions(parentSessionId)
-        const firstBranches = yield* sessionStorage.listFirstBranches()
-        const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-        return children.map((session) => sessionToInfo(session, branchMap.get(session.id)))
+        return yield* relationshipStorage.getChildSessions(parentSessionId)
       })
 
       const buildSessionTreeNode = (
@@ -193,8 +190,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         getLastSessionByCwd,
         getChildSessions,
         getSessionTree,
-        listBranches: (sessionId) =>
-          branchStorage.listBranches(sessionId).pipe(Effect.map((xs) => xs.map(branchToInfo))),
+        listBranches: (sessionId) => branchStorage.listBranches(sessionId),
         getBranchTree,
         listMessages: (branchId) => messageStorage.listMessages(branchId),
         getQueuedMessages: ({ sessionId, branchId }) =>

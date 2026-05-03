@@ -3,7 +3,7 @@
  */
 
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { BranchInfo } from "../client"
+import type { Branch } from "../client"
 
 export type AppRoute =
   | {
@@ -16,7 +16,7 @@ export type AppRoute =
       readonly _tag: "branchPicker"
       readonly sessionId: SessionId
       readonly sessionName: string
-      readonly branches: readonly BranchInfo[]
+      readonly branches: readonly Branch[]
       readonly prompt?: string
     }
 
@@ -36,7 +36,7 @@ export const Route = {
   branchPicker: (
     sessionId: SessionId,
     sessionName: string,
-    branches: readonly BranchInfo[],
+    branches: readonly Branch[],
     prompt?: string,
   ): AppRoute => ({
     _tag: "branchPicker",

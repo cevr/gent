@@ -1,11 +1,11 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
 import { SessionId } from "../../domain/ids.js"
+import { Session } from "../../domain/message.js"
 import { GentRpcError } from "../errors.js"
 import {
   CreateSessionInput,
   CreateSessionResult,
-  SessionInfo,
   SessionTreeNodeSchema,
   GetChildSessionsInput,
   GetSessionTreeInput,
@@ -26,12 +26,12 @@ export class SessionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("list", {
-    success: Schema.Array(SessionInfo),
+    success: Schema.Array(Session),
     error: GentRpcError,
   }),
   Rpc.make("get", {
     payload: { sessionId: SessionId },
-    success: Schema.NullOr(SessionInfo),
+    success: Schema.NullOr(Session),
     error: GentRpcError,
   }),
   Rpc.make("delete", {
@@ -40,7 +40,7 @@ export class SessionRpcs extends RpcGroup.make(
   }),
   Rpc.make("getChildren", {
     payload: GetChildSessionsInput.fields,
-    success: Schema.Array(SessionInfo),
+    success: Schema.Array(Session),
     error: GentRpcError,
   }),
   Rpc.make("getTree", {

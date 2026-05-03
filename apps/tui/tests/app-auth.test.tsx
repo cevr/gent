@@ -84,10 +84,10 @@ describe("App auth gate", () => {
             runtime,
             initialSession: {
               id: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
+              activeBranchId: BranchId.make("branch-a"),
               name: "A",
-              createdAt: 0,
-              updatedAt: 0,
+              createdAt: new Date(0),
+              updatedAt: new Date(0),
             },
           },
         ),
@@ -143,10 +143,10 @@ describe("App auth gate", () => {
           initialAgent: AgentName.make("deepwork"),
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
         }),
       )
@@ -180,8 +180,26 @@ describe("App auth gate", () => {
         branch: {
           getTree: () =>
             Effect.succeed([
-              { id: BranchId.make("branch-a"), name: "Main", messageCount: 3, children: [] },
-              { id: BranchId.make("branch-b"), name: "Side", messageCount: 1, children: [] },
+              {
+                branch: {
+                  id: BranchId.make("branch-a"),
+                  sessionId: SessionId.make("session-a"),
+                  name: "Main",
+                  createdAt: new Date(0),
+                },
+                messageCount: 3,
+                children: [],
+              },
+              {
+                branch: {
+                  id: BranchId.make("branch-b"),
+                  sessionId: SessionId.make("session-a"),
+                  name: "Side",
+                  createdAt: new Date(1),
+                },
+                messageCount: 1,
+                children: [],
+              },
             ]),
         },
       })
@@ -192,14 +210,22 @@ describe("App auth gate", () => {
           runtime,
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "Session A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
           initialRoute: Route.branchPicker(SessionId.make("session-a"), "Session A", [
-            { id: BranchId.make("branch-a"), sessionId: SessionId.make("session-a"), createdAt: 0 },
-            { id: BranchId.make("branch-b"), sessionId: SessionId.make("session-a"), createdAt: 1 },
+            {
+              id: BranchId.make("branch-a"),
+              sessionId: SessionId.make("session-a"),
+              createdAt: new Date(0),
+            },
+            {
+              id: BranchId.make("branch-b"),
+              sessionId: SessionId.make("session-a"),
+              createdAt: new Date(1),
+            },
           ]),
         }),
       )
@@ -247,10 +273,10 @@ describe("App auth gate", () => {
           initialAgent: AgentName.make("cowork"),
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -318,10 +344,10 @@ describe("App auth gate", () => {
           initialAgent: AgentName.make("cowork"),
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -374,10 +400,10 @@ describe("App auth gate", () => {
           initialAgent: AgentName.make("cowork"),
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -417,10 +443,10 @@ describe("App auth gate", () => {
           initialAgent: AgentName.make("cowork"),
           initialSession: {
             id: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-a"),
+            activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: 0,
-            updatedAt: 0,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
           },
           initialRoute: Route.session(SessionId.make("session-a"), BranchId.make("branch-a")),
         }),
@@ -493,8 +519,26 @@ describe("App auth gate", () => {
           branch: {
             getTree: () =>
               Effect.succeed([
-                { id: alphaBranchId, name: "Main", messageCount: 3, children: [] },
-                { id: betaBranchId, name: "Side", messageCount: 1, children: [] },
+                {
+                  branch: {
+                    id: alphaBranchId,
+                    sessionId: alphaSessionId,
+                    name: "Main",
+                    createdAt: new Date(0),
+                  },
+                  messageCount: 3,
+                  children: [],
+                },
+                {
+                  branch: {
+                    id: betaBranchId,
+                    sessionId: alphaSessionId,
+                    name: "Side",
+                    createdAt: new Date(1),
+                  },
+                  messageCount: 1,
+                  children: [],
+                },
               ]),
           },
           auth: {
@@ -546,17 +590,27 @@ describe("App auth gate", () => {
               initialAgent: AgentName.make("cowork"),
               initialSession: {
                 id: alphaSessionId,
-                branchId: alphaBranchId,
+                activeBranchId: alphaBranchId,
                 name: "Alpha",
-                createdAt: 0,
-                updatedAt: 1,
+                createdAt: new Date(0),
+                updatedAt: new Date(1),
               },
               initialRoute: Route.branchPicker(
                 alphaSessionId,
                 "Alpha",
                 [
-                  { id: alphaBranchId, sessionId: alphaSessionId, name: "Main", createdAt: 0 },
-                  { id: betaBranchId, sessionId: alphaSessionId, name: "Side", createdAt: 1 },
+                  {
+                    id: alphaBranchId,
+                    sessionId: alphaSessionId,
+                    name: "Main",
+                    createdAt: new Date(0),
+                  },
+                  {
+                    id: betaBranchId,
+                    sessionId: alphaSessionId,
+                    name: "Side",
+                    createdAt: new Date(1),
+                  },
                 ],
                 initialPrompt,
               ),
@@ -722,10 +776,10 @@ describe("App auth gate", () => {
             initialAgent: AgentName.make("cowork"),
             initialSession: {
               id: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
+              activeBranchId: BranchId.make("branch-a"),
               name: "A",
-              createdAt: 0,
-              updatedAt: 0,
+              createdAt: new Date(0),
+              updatedAt: new Date(0),
             },
             initialRoute: Route.session(
               SessionId.make("session-a"),

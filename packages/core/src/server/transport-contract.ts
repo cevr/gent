@@ -10,7 +10,7 @@ import {
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
-import { Message } from "../domain/message.js"
+import { Branch, BranchTreeNode, Message, Session, SessionTreeNode } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
@@ -19,6 +19,7 @@ import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/ses
 // Re-export shared domain shapes — the transport contract is the same
 // identity as the domain-owned state, not a parallel copy.
 export { ExtensionActorFailurePhase, ExtensionActorStatusInfo }
+export { Branch, BranchTreeNode, Session, SessionTreeNode }
 
 /**
  * Client-generated request ID for end-to-end correlation and transport-retry
@@ -49,54 +50,8 @@ export const CreateSessionResult = Schema.Struct({
 })
 export type CreateSessionResult = typeof CreateSessionResult.Type
 
-export class SessionInfo extends Schema.Class<SessionInfo>("SessionInfo")({
-  id: SessionId,
-  name: Schema.optional(Schema.String),
-  cwd: Schema.optional(Schema.String),
-  reasoningLevel: Schema.optional(ReasoningEffort),
-  branchId: Schema.optional(BranchId),
-  parentSessionId: Schema.optional(SessionId),
-  parentBranchId: Schema.optional(BranchId),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
-}) {}
-
-export interface SessionTreeNode {
-  id: SessionId
-  name?: string
-  cwd?: string
-  parentSessionId?: SessionId
-  parentBranchId?: BranchId
-  createdAt: number
-  updatedAt: number
-  children: readonly SessionTreeNode[]
-}
-
-interface SessionTreeNodeEncoded {
-  id: string
-  name?: string
-  cwd?: string
-  parentSessionId?: string
-  parentBranchId?: string
-  createdAt: number
-  updatedAt: number
-  children: readonly SessionTreeNodeEncoded[]
-}
-
-export const SessionTreeNode: Schema.Codec<SessionTreeNode, SessionTreeNodeEncoded> = Schema.Struct(
-  {
-    id: SessionId,
-    name: Schema.optional(Schema.String),
-    cwd: Schema.optional(Schema.String),
-    parentSessionId: Schema.optional(SessionId),
-    parentBranchId: Schema.optional(BranchId),
-    createdAt: Schema.Number,
-    updatedAt: Schema.Number,
-    children: Schema.Array(Schema.suspend(() => SessionTreeNode)),
-  },
-)
 export const SessionTreeNodeSchema = SessionTreeNode
-export type SessionTreeNodeType = SessionTreeNode
+export type SessionTreeNodeType = Schema.Schema.Type<typeof SessionTreeNode>
 
 export const GetChildSessionsInput = Schema.Struct({
   parentSessionId: SessionId,
@@ -107,16 +62,6 @@ export const GetSessionTreeInput = Schema.Struct({
   sessionId: SessionId,
 })
 export type GetSessionTreeInput = typeof GetSessionTreeInput.Type
-
-export class BranchInfo extends Schema.Class<BranchInfo>("BranchInfo")({
-  id: BranchId,
-  sessionId: SessionId,
-  parentBranchId: Schema.optional(BranchId),
-  parentMessageId: Schema.optional(MessageId),
-  name: Schema.optional(Schema.String),
-  summary: Schema.optional(Schema.String),
-  createdAt: Schema.Number,
-}) {}
 
 export const ListBranchesInput = Schema.Struct({
   sessionId: SessionId,
@@ -136,35 +81,6 @@ export const CreateBranchResult = Schema.Struct({
 })
 export type CreateBranchResult = typeof CreateBranchResult.Type
 
-export interface BranchTreeNode {
-  id: BranchId
-  name?: string
-  summary?: string
-  parentMessageId?: MessageId
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNode[]
-}
-
-interface BranchTreeNodeEncoded {
-  id: string
-  name?: string
-  summary?: string
-  parentMessageId?: string
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNodeEncoded[]
-}
-
-export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> = Schema.Struct({
-  id: BranchId,
-  name: Schema.optional(Schema.String),
-  summary: Schema.optional(Schema.String),
-  parentMessageId: Schema.optional(MessageId),
-  messageCount: Schema.Number,
-  createdAt: Schema.Number,
-  children: Schema.Array(Schema.suspend(() => BranchTreeNode)),
-})
 export const BranchTreeNodeSchema = BranchTreeNode
 
 export const GetBranchTreeInput = Schema.Struct({

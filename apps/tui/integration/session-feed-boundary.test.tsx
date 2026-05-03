@@ -201,11 +201,10 @@ describe("session feed boundary", () => {
           client: createMockClient(),
           runtime,
           initialSession: {
-            id: sessionId,
+            sessionId,
             branchId,
             name: "Test Session",
-            createdAt: 0,
-            updatedAt: 0,
+            reasoningLevel: undefined,
           },
           initialRoute: Route.session(sessionId, branchId),
           cwd: repoRoot,

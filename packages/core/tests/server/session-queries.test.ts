@@ -152,9 +152,9 @@ describe("session queries", () => {
 
         const tree = yield* client.session.getTree({ sessionId: root.sessionId })
 
-        expect(tree.id).toBe(root.sessionId)
+        expect(tree.session.id).toBe(root.sessionId)
         expect(tree.children).toHaveLength(1)
-        expect(tree.children[0]?.id).toBe(child.sessionId)
+        expect(tree.children[0]?.session.id).toBe(child.sessionId)
         expect(tree.children[0]?.children).toHaveLength(1)
       }).pipe(Effect.timeout("4 seconds")),
     ),

@@ -61,19 +61,7 @@ describe("session lifecycle", () => {
                   client,
                   runtime,
                   initialRoute: bootstrap.initialRoute,
-                  initialSession: bootstrap.initialSession
-                    ? {
-                        id: bootstrap.initialSession.sessionId,
-                        name: bootstrap.initialSession.name,
-                        cwd: repoRoot,
-                        branchId: bootstrap.initialSession.branchId,
-                        reasoningLevel: bootstrap.initialSession.reasoningLevel,
-                        parentSessionId: undefined,
-                        parentBranchId: undefined,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                      }
-                    : undefined,
+                  initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,
                   height: 32,
@@ -132,19 +120,7 @@ describe("session lifecycle", () => {
                   client,
                   runtime,
                   initialRoute: bootstrap.initialRoute,
-                  initialSession: bootstrap.initialSession
-                    ? {
-                        id: bootstrap.initialSession.sessionId,
-                        name: bootstrap.initialSession.name,
-                        cwd: repoRoot,
-                        branchId: bootstrap.initialSession.branchId,
-                        reasoningLevel: bootstrap.initialSession.reasoningLevel,
-                        parentSessionId: undefined,
-                        parentBranchId: undefined,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                      }
-                    : undefined,
+                  initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,
                   height: 32,
