@@ -10,7 +10,11 @@ import {
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
-import { authorizeOpenAI, OPENAI_OAUTH_ALLOWED_MODELS } from "./oauth.js"
+import {
+  allocateOpenAIAuthorization,
+  OPENAI_OAUTH_ALLOWED_MODELS,
+  type OpenAIAuthorizationFlow,
+} from "./oauth.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -28,16 +32,9 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-type OAuthCallback = (code?: string) => Promise<{
-  type: "oauth"
-  access: string
-  refresh: string
-  expires: number
-  accountId?: string
-}>
-
 type PendingCallbackEntry = {
-  readonly cb: OAuthCallback
+  readonly flow: OpenAIAuthorizationFlow
+  readonly close: Effect.Effect<void>
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
@@ -174,30 +171,30 @@ export const buildOpenAIModelDriver = (
     authorize: (ctx): Effect.Effect<ProviderAuthorizationResult | undefined, ProviderAuthError> =>
       Effect.gen(function* () {
         if (ctx.methodIndex !== 0) return undefined
-        const { authorization, callback: cb } = yield* Effect.tryPromise({
-          try: () => authorizeOpenAI(),
-          catch: (e) =>
-            new ProviderAuthError({
-              message: `OpenAI OAuth authorization failed: ${
-                e instanceof Error ? e.message : String(e)
-              }`,
-              cause: e,
-            }),
-        })
-        // Mirror oauth.ts pendingOAuth TTL (5 min). Without this an
-        // abandoned auth attempt — user starts the flow, never
-        // completes — leaves the callback closure resident until
-        // extension teardown.
+        const { flow, close } = yield* allocateOpenAIAuthorization.pipe(
+          Effect.mapError(
+            (e) =>
+              new ProviderAuthError({
+                message: `OpenAI OAuth authorization failed: ${e.message}`,
+                cause: e,
+              }),
+          ),
+        )
+        // 5-minute TTL on abandoned auth attempts. Without this an
+        // abandoned flow leaves the redirect HTTP server resident
+        // until extension teardown. The fiber both clears the map
+        // entry and closes the OAuth scope (tears down the listener).
         const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
           Effect.flatMap(() =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               pendingCallbacks.delete(ctx.authorizationId)
+              yield* close
             }),
           ),
           Effect.forkChild,
         )
-        pendingCallbacks.set(ctx.authorizationId, { cb, timeoutFiber })
-        return authorization
+        pendingCallbacks.set(ctx.authorizationId, { flow, close, timeoutFiber })
+        return flow.authorization
       }),
     callback: (ctx) =>
       Effect.gen(function* () {
@@ -209,15 +206,16 @@ export const buildOpenAIModelDriver = (
           })
         }
         yield* Fiber.interrupt(entry.timeoutFiber)
-        const cb = entry.cb
-        const result = yield* Effect.tryPromise({
-          try: () => cb(ctx.code),
-          catch: (e) =>
-            new ProviderAuthError({
-              message: `OpenAI OAuth callback failed: ${e instanceof Error ? e.message : String(e)}`,
-              cause: e,
-            }),
-        })
+        const result = yield* entry.flow.callback(ctx.code).pipe(
+          Effect.mapError(
+            (e) =>
+              new ProviderAuthError({
+                message: `OpenAI OAuth callback failed: ${e.message}`,
+                cause: e,
+              }),
+          ),
+          Effect.ensuring(entry.close),
+        )
         yield* ctx.persist({
           type: "oauth",
           access: result.access,

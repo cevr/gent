@@ -122,14 +122,15 @@ export interface OpenAICredentialIO {
 
 const realIO: OpenAICredentialIO = {
   refresh: (refreshToken: string) =>
-    Effect.tryPromise({
-      try: () => refreshOpenAIOauth(refreshToken),
-      catch: (cause) =>
-        new ProviderAuthError({
-          message: "Failed to refresh ChatGPT OAuth credentials",
-          cause,
-        }),
-    }),
+    refreshOpenAIOauth(refreshToken).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAuthError({
+            message: `Failed to refresh ChatGPT OAuth credentials: ${cause.message}`,
+            cause,
+          }),
+      ),
+    ),
 }
 
 // ── Service tag ──
