@@ -1,16 +1,15 @@
+import { Schema } from "effect"
 import type { AgentName } from "@gent/core/domain/agent.js"
 import type { ModelId } from "@gent/core/domain/model.js"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
-export type AgentStatus =
-  | { readonly _tag: "idle" }
-  | { readonly _tag: "streaming" }
-  | { readonly _tag: "error"; readonly error: string }
+export const AgentStatus = TaggedEnumClass("AgentStatus", {
+  Idle: TaggedEnumClass.variant("idle", {}),
+  Streaming: TaggedEnumClass.variant("streaming", {}),
+  Error: TaggedEnumClass.variant("error", { error: Schema.String }),
+})
 
-export const AgentStatus = {
-  idle: (): AgentStatus => ({ _tag: "idle" }),
-  streaming: (): AgentStatus => ({ _tag: "streaming" }),
-  error: (error: string): AgentStatus => ({ _tag: "error", error }),
-} as const
+export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>
 
 export interface AgentState {
   agent: AgentName | undefined

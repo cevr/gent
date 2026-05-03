@@ -9,6 +9,7 @@ import {
 } from "@gent/core/domain/event"
 import { Message } from "@gent/core/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
+import { AgentStatus } from "../src/client/agent-state"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 
@@ -32,6 +33,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(event)).toEqual({
       status: { _tag: "streaming" },
     })
+    expect(reduceAgentLifecycle(event).status instanceof AgentStatus.Streaming).toBe(true)
   })
 
   test("keeps streaming until TurnCompleted", () => {
@@ -53,6 +55,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(turnCompleted)).toEqual({
       status: { _tag: "idle" },
     })
+    expect(reduceAgentLifecycle(turnCompleted).status instanceof AgentStatus.Idle).toBe(true)
   })
 
   test("uses user messages to enter streaming immediately", () => {
@@ -63,6 +66,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(userMessage)).toEqual({
       status: { _tag: "streaming" },
     })
+    expect(reduceAgentLifecycle(userMessage).status instanceof AgentStatus.Streaming).toBe(true)
   })
 
   test("surfaces agent switches and errors", () => {
@@ -84,5 +88,6 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(errored)).toEqual({
       status: { _tag: "error", error: "boom" },
     })
+    expect(reduceAgentLifecycle(errored).status instanceof AgentStatus.Error).toBe(true)
   })
 })

@@ -347,7 +347,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             const error = formatError(err)
             log.error("model.list.failed", { error })
-            setAgentStore({ status: AgentStatus.error(error) })
+            setAgentStore({ status: AgentStatus.Error.make({ error }) })
           }),
         ),
       ),
@@ -357,7 +357,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: props.initialSession !== undefined ? props.initialAgent : defaultAgent,
-    status: AgentStatus.idle(),
+    status: AgentStatus.Idle.make({}),
     cost: 0,
     lastModelId: undefined,
   })
@@ -483,7 +483,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     }
     const rt = snapshot.runtime
-    const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
+    const status = rt._tag === "Idle" ? AgentStatus.Idle.make({}) : AgentStatus.Streaming.make({})
     setAgentStore({
       agent: rt.agent,
       status,
@@ -522,17 +522,7 @@ export function ClientProvider(props: ClientProviderProps) {
       }
     }
     if (lifecycle.status !== undefined) {
-      switch (lifecycle.status._tag) {
-        case "idle":
-          setAgentStore({ status: AgentStatus.idle() })
-          break
-        case "streaming":
-          setAgentStore({ status: AgentStatus.streaming() })
-          break
-        case "error":
-          setAgentStore({ status: AgentStatus.error(lifecycle.status.error) })
-          break
-      }
+      setAgentStore({ status: lifecycle.status })
     }
   }
 
@@ -583,6 +573,8 @@ export function ClientProvider(props: ClientProviderProps) {
   const applyBufferedSessionEvent = (envelope: EventEnvelope): void => {
     const event = envelope.event
     notifySessionEvent(envelope)
+    // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
+    // may still invalidate extension subscribers, which must stay idempotent.
     notifyExtensionStateChanged(event)
   }
 
@@ -644,7 +636,7 @@ export function ClientProvider(props: ClientProviderProps) {
               // "none"), so the extensionHealth reset is unconditional.
               setAgentStore({
                 agent: defaultAgent,
-                status: AgentStatus.idle(),
+                status: AgentStatus.Idle.make({}),
                 cost: 0,
                 lastModelId: undefined,
               })
@@ -668,7 +660,7 @@ export function ClientProvider(props: ClientProviderProps) {
             Effect.sync(() => {
               log.error("createSession.failed", { error: String(err) })
               dispatchSession(SessionStateEvent.CreateFailed.make({}))
-              setAgentStore({ status: AgentStatus.error(formatError(err)) })
+              setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
             }),
           ),
           Effect.withSpan("TUI.createSession"),
@@ -678,7 +670,12 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name, agent) => {
       const currentSessionId = session()?.sessionId
-      setAgentStore({ agent, status: AgentStatus.idle(), cost: 0, lastModelId: undefined })
+      setAgentStore({
+        agent,
+        status: AgentStatus.Idle.make({}),
+        cost: 0,
+        lastModelId: undefined,
+      })
       setLatestInputTokens(0)
       setConnectionIssue(null)
       if (currentSessionId !== sessionId) {
@@ -695,7 +692,7 @@ export function ClientProvider(props: ClientProviderProps) {
       dispatchSession(SessionStateEvent.Clear.make({}))
       setAgentStore({
         agent: defaultAgent,
-        status: AgentStatus.idle(),
+        status: AgentStatus.Idle.make({}),
         cost: 0,
         lastModelId: undefined,
       })
@@ -801,7 +798,7 @@ export function ClientProvider(props: ClientProviderProps) {
           .pipe(
             Effect.tapError((err) =>
               Effect.sync(() => {
-                setAgentStore({ status: AgentStatus.error(formatError(err)) })
+                setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
               }),
             ),
           ),
@@ -830,7 +827,9 @@ export function ClientProvider(props: ClientProviderProps) {
     modelInfo: () =>
       resolveModelInfo(modelStore.modelsById, agentStore.agent, agentStore.lastModelId),
     setError: (error) =>
-      setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
+      setAgentStore({
+        status: error !== null ? AgentStatus.Error.make({ error }) : AgentStatus.Idle.make({}),
+      }),
   }
 
   const actionValue: ClientActionValue = {

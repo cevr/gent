@@ -241,9 +241,9 @@ describe("TaggedEnumClass — per-enum schema id namespacing", () => {
     expect(a instanceof B.Shared).toBe(false)
   })
 })
-describe("TaggedEnumClass — AgentEvent migration smoke", () => {
-  const sessionId = SessionId.make("sess_tagged_enum_smoke")
-  const branchId = BranchId.make("branch_tagged_enum_smoke")
+describe("TaggedEnumClass — AgentEvent JSON wire shape", () => {
+  const sessionId = SessionId.make("session_tagged_enum_wire_shape")
+  const branchId = BranchId.make("branch_tagged_enum_wire_shape")
   test("AgentEvent.SessionStarted JSON wire shape unchanged", () => {
     const evt = AgentEvent.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)

@@ -123,11 +123,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             // E2E test override: REPLACE the entire process-Resource layer
             // set for this extension with one merged override layer.
             //
-            // Today every migrated extension has exactly one process Resource,
-            // so this is a 1:1 swap. If an extension grows multiple process
-            // Resources, this helper silently drops the originals — fail
-            // loudly so the test gets updated to provide a complete merged
-            // override (or `layerOverrides` grows a per-resource API).
+            // This is a 1:1 process-Resource swap. If an extension grows
+            // multiple process Resources, this helper silently drops the
+            // originals — fail loudly so the test gets updated to provide a
+            // complete merged override (or `layerOverrides` grows a
+            // per-resource API).
             const existingProcessResources = (ext.contributions.resources ?? []).filter(
               (r) => r.scope === "process",
             )
