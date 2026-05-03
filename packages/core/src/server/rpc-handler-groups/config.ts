@@ -98,13 +98,13 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
     Effect.gen(function* () {
       let cwd: string | undefined
       if (sessionId !== undefined) {
-        if (deps.storage === undefined) {
+        if (deps.sessionStorage === undefined) {
           return yield* new NotFoundError({
             entity: "session",
             message: "Session not found",
           })
         }
-        const session = yield* deps.storage.getSession(SessionId.make(sessionId))
+        const session = yield* deps.sessionStorage.getSession(SessionId.make(sessionId))
         if (session === undefined) {
           return yield* new NotFoundError({
             entity: "session",

@@ -13,7 +13,8 @@ import { EventStore } from "../domain/event.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ServerIdentity } from "./server-identity.js"
@@ -44,16 +45,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const platform = yield* RuntimePlatform
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-    const storageOpt = yield* Effect.serviceOption(Storage)
-    const storage = storageOpt._tag === "Some" ? storageOpt.value : undefined
+    const sessionStorageOpt = yield* Effect.serviceOption(SessionStorage)
+    const sessionStorage = sessionStorageOpt._tag === "Some" ? sessionStorageOpt.value : undefined
+    const branchStorageOpt = yield* Effect.serviceOption(BranchStorage)
+    const branchStorage = branchStorageOpt._tag === "Some" ? branchStorageOpt.value : undefined
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const connectionTracker =
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
     const serverIdentity = yield* ServerIdentity
 
     const loadSession = (sessionId: string) => {
-      if (storage !== undefined) {
-        return storage
+      if (sessionStorage !== undefined) {
+        return sessionStorage
           .getSession(SessionId.make(sessionId))
           .pipe(Effect.orElseSucceed(() => undefined))
       }
@@ -63,7 +66,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
     const resolveSessionServices = (sessionId: string | undefined) =>
       Effect.gen(function* () {
-        if (sessionId === undefined || profileCache === undefined || storage === undefined) {
+        if (sessionId === undefined || profileCache === undefined || sessionStorage === undefined) {
           return {
             registry: extensionRegistry,
           }
@@ -95,7 +98,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       providerAuth,
       extensionRegistry,
       platform,
-      storage,
+      sessionStorage,
+      branchStorage,
       connectionTracker,
       serverIdentity,
       resolveSessionServices,

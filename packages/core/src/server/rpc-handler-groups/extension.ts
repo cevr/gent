@@ -44,7 +44,7 @@ const resolveExtensionSession = (
   ExtensionProtocolError
 > =>
   Effect.gen(function* () {
-    if (deps.storage === undefined) {
+    if (deps.sessionStorage === undefined || deps.branchStorage === undefined) {
       return yield* extensionRequestError({
         extensionId: params.extensionId,
         capabilityId: params.tag,
@@ -56,7 +56,7 @@ const resolveExtensionSession = (
     const requestSessionId = SessionId.make(params.sessionId)
     const requestBranchId =
       params.branchId === undefined ? undefined : BranchId.make(params.branchId)
-    const session = yield* deps.storage.getSession(requestSessionId).pipe(
+    const session = yield* deps.sessionStorage.getSession(requestSessionId).pipe(
       Effect.mapError((error) =>
         extensionRequestError({
           extensionId: params.extensionId,
@@ -76,7 +76,7 @@ const resolveExtensionSession = (
     }
 
     if (requestBranchId !== undefined) {
-      const branch = yield* deps.storage.getBranch(requestBranchId).pipe(
+      const branch = yield* deps.branchStorage.getBranch(requestBranchId).pipe(
         Effect.mapError((error) =>
           extensionRequestError({
             extensionId: params.extensionId,
@@ -135,14 +135,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           extensionId,
           capabilityId,
           message: "Branch unavailable for extension request",
-        })
-      }
-
-      if (deps.storage === undefined) {
-        return yield* extensionRequestError({
-          extensionId,
-          capabilityId,
-          message: "Storage unavailable for public extension request dispatch",
         })
       }
       const { registry, capabilityContext } = yield* deps.resolveSessionServices(sessionId)

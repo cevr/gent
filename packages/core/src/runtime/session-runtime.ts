@@ -23,8 +23,8 @@ import {
 } from "../domain/ids.js"
 import { Message, MessageMetadata, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { Storage } from "../storage/sqlite-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
+import { EventStorage } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
@@ -246,7 +246,7 @@ export type SessionRuntimeEntityHandlers = Entity.HandlersFrom<SessionRuntimeEnt
 type LayerRequirements<T> = T extends Layer.Layer<infer _ROut, infer _E, infer RIn> ? RIn : never
 type SessionRuntimeEntityLayerRequirements =
   | Sharding.Sharding
-  | Storage
+  | EventStorage
   | EventPublisher
   | ExtensionRegistry
   | DriverRegistry
@@ -372,18 +372,18 @@ const makeLiveSessionRuntime: Effect.Effect<
   SessionRuntimeService,
   never,
   | AgentLoop
-  | Storage
   | SessionStorage
   | BranchStorage
+  | EventStorage
   | EventPublisher
   | ExtensionRegistry
   | DriverRegistry
   | ModelRegistry
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
-  const storage = yield* Storage
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
+  const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
@@ -598,7 +598,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     getMetrics: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
-        const envelopes = yield* storage
+        const envelopes = yield* eventStorage
           .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
           .pipe(Effect.catchEager(() => Effect.succeed([])))
         let turns = 0

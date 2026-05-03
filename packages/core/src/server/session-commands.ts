@@ -26,7 +26,8 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { Storage, type StorageError } from "../storage/sqlite-storage.js"
+import type { StorageError } from "../storage/sqlite-storage.js"
+import { StorageTransaction } from "../storage/storage-transaction.js"
 import { Provider } from "../providers/provider.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import { LanguageModel } from "effect/unstable/ai"
@@ -210,7 +211,7 @@ export interface SessionCommandsService {
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
-  | Storage
+  | StorageTransaction
   | EventStore
   | EventPublisher
   | SessionStorage
@@ -220,7 +221,7 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionCwdRegistry
   | SessionRuntimeTerminator
 > = Effect.gen(function* () {
-  const storage = yield* Storage
+  const storageTransaction = yield* StorageTransaction
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -235,7 +236,7 @@ const makeSessionMutationsService: Effect.Effect<
     event: AgentEvent,
   ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
     Effect.gen(function* () {
-      const committed = yield* storage.withTransaction(
+      const committed = yield* storageTransaction.withTransaction(
         Effect.gen(function* () {
           const result = yield* mutation
           const envelope = yield* eventPublisher.append(event)
@@ -504,7 +505,7 @@ const makeSessionMutationsService: Effect.Effect<
         sessionId,
         createdAt: now,
       })
-      const committed = yield* storage
+      const committed = yield* storageTransaction
         .withTransaction(
           Effect.gen(function* () {
             yield* sessionStorage.createSession(session)
@@ -602,7 +603,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
-      const storage = yield* Storage
+      const storageTransaction = yield* StorageTransaction
       const sessionRuntime = yield* SessionRuntime
       const sessionRuntimeTerminator = yield* SessionRuntimeTerminator
       yield* sessionRuntimeTerminator.register(sessionRuntime)
@@ -791,7 +792,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        const committed = yield* storage
+        const committed = yield* storageTransaction
           .withTransaction(
             Effect.gen(function* () {
               yield* sessionStorage.createSession(session)

@@ -7,7 +7,8 @@ import type { ProviderAuthService } from "../../providers/provider-auth.js"
 import type { ConfigServiceService } from "../../runtime/config-service.js"
 import type { RuntimePlatformShape } from "../../runtime/runtime-platform.js"
 import type { SessionRuntimeService } from "../../runtime/session-runtime.js"
-import type { StorageService } from "../../storage/sqlite-storage.js"
+import type { BranchStorageService } from "../../storage/branch-storage.js"
+import type { SessionStorageService } from "../../storage/session-storage.js"
 import type { ConnectionTrackerService } from "../connection-tracker.js"
 import type { InteractionCommandsService } from "../interaction-commands.js"
 import type { ServerIdentityShape } from "../server-identity.js"
@@ -37,7 +38,8 @@ export interface RpcHandlerDeps {
   readonly providerAuth: ProviderAuthService
   readonly extensionRegistry: ExtensionRegistryService
   readonly platform: RuntimePlatformShape
-  readonly storage: StorageService | undefined
+  readonly sessionStorage: SessionStorageService | undefined
+  readonly branchStorage: BranchStorageService | undefined
   readonly connectionTracker: ConnectionTrackerService | undefined
   readonly serverIdentity: ServerIdentityShape
   readonly resolveSessionServices: (
