@@ -8,6 +8,7 @@ import { dateFromMillis, Branch, Message, Session, TextPart } from "@gent/core/d
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Provider } from "@gent/core/providers/provider"
+import { IdService } from "../../src/runtime/id-service"
 import { SessionRuntime, SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
@@ -59,6 +60,7 @@ const failingSessionCommandsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -98,6 +100,7 @@ const sendFailingSessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -113,6 +116,7 @@ const sessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -145,6 +149,7 @@ const sessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -161,6 +166,7 @@ const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionI
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
 }
@@ -187,6 +193,7 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -248,6 +255,7 @@ const racySessionCommandsLayer = (params: {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
+    IdService.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -1431,6 +1439,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
+        IdService.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -1480,6 +1489,7 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
+        IdService.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),

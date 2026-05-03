@@ -35,6 +35,7 @@ import { SessionStorage } from "@gent/core/storage/session-storage.js"
 import { BranchStorage } from "@gent/core/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
+import { IdService } from "@gent/core/runtime/id-service.js"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
 import { ref } from "@gent/core/extensions/api"
@@ -78,128 +79,131 @@ const createParentTurnMessages = (
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
   nowMillis: number,
-) => {
-  const assistant = Message.Regular.make({
-    id: MessageId.make(Bun.randomUUIDv7()),
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    role: "assistant",
-    parts: [
-      new ReasoningPart({
-        type: "reasoning",
-        text: "Scripted debug scenario. Exercise child sessions, task chrome, retries, and tool output renderers.",
-      }),
-      makeText(`Running debug inspection cycle ${iteration}.`),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: delegateToolCallId,
-        toolName: "delegate",
-        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
-      }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: reviewToolCallId,
-        toolName: "review",
-        input: { description: `Review debug cycle ${iteration}` },
-      }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: searchSessionsToolCallId,
-        toolName: "search_sessions",
-        input: { query: "tool renderer" },
-      }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: readSessionToolCallId,
-        toolName: "read_session",
-        input: {
-          sessionId: "019debug1-session",
-          goal: "Understand the renderer cleanup thread",
-        },
-      }),
-      makeText("Inspection pass complete. Check the live tool timeline and task widget."),
-    ],
-    createdAt: dateFromMillis(nowMillis + 1),
-  })
+) =>
+  Effect.gen(function* () {
+    const idService = yield* IdService
+    const assistant = Message.Regular.make({
+      id: MessageId.make(yield* idService.next),
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      role: "assistant",
+      parts: [
+        new ReasoningPart({
+          type: "reasoning",
+          text: "Scripted debug scenario. Exercise child sessions, task chrome, retries, and tool output renderers.",
+        }),
+        makeText(`Running debug inspection cycle ${iteration}.`),
+        new ToolCallPart({
+          type: "tool-call",
+          toolCallId: delegateToolCallId,
+          toolName: "delegate",
+          input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+        }),
+        new ToolCallPart({
+          type: "tool-call",
+          toolCallId: reviewToolCallId,
+          toolName: "review",
+          input: { description: `Review debug cycle ${iteration}` },
+        }),
+        new ToolCallPart({
+          type: "tool-call",
+          toolCallId: searchSessionsToolCallId,
+          toolName: "search_sessions",
+          input: { query: "tool renderer" },
+        }),
+        new ToolCallPart({
+          type: "tool-call",
+          toolCallId: readSessionToolCallId,
+          toolName: "read_session",
+          input: {
+            sessionId: "019debug1-session",
+            goal: "Understand the renderer cleanup thread",
+          },
+        }),
+        makeText("Inspection pass complete. Check the live tool timeline and task widget."),
+      ],
+      createdAt: dateFromMillis(nowMillis + 1),
+    })
 
-  const tool = Message.Regular.make({
-    id: MessageId.make(Bun.randomUUIDv7()),
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    role: "tool",
-    parts: [
-      makeJsonResult(delegateToolCallId, "delegate", {
-        output: "Explorer finished.",
-        metadata: {
-          mode: "parallel",
-          results: [
+    const tool = Message.Regular.make({
+      id: MessageId.make(yield* idService.next),
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      role: "tool",
+      parts: [
+        makeJsonResult(delegateToolCallId, "delegate", {
+          output: "Explorer finished.",
+          metadata: {
+            mode: "parallel",
+            results: [
+              {
+                _tag: "success",
+                agentName: "explore",
+                text: "Live child session completed read + grep before reporting back.",
+                usage: { input: 181, output: 64, cost: 0.01 },
+                toolCalls: [
+                  {
+                    toolName: "read",
+                    args: { path: `${params.cwd}/apps/tui/src/components/message-list.tsx` },
+                    isError: false,
+                  },
+                  {
+                    toolName: "grep",
+                    args: { pattern: "ToolFrame", path: `${params.cwd}/apps/tui/src` },
+                    isError: false,
+                  },
+                ],
+              },
+            ],
+            usage: { input: 181, output: 64, cost: 0.01 },
+          },
+        }),
+        makeJsonResult(reviewToolCallId, "review", {
+          summary: { critical: 0, high: 0, medium: 1, low: 0 },
+          comments: [
             {
-              _tag: "success",
-              agentName: "explore",
-              text: "Live child session completed read + grep before reporting back.",
-              usage: { input: 181, output: 64, cost: 0.01 },
-              toolCalls: [
-                {
-                  toolName: "read",
-                  args: { path: `${params.cwd}/apps/tui/src/components/message-list.tsx` },
-                  isError: false,
-                },
-                {
-                  toolName: "grep",
-                  args: { pattern: "ToolFrame", path: `${params.cwd}/apps/tui/src` },
-                  isError: false,
-                },
-              ],
+              file: "apps/tui/src/routes/session.tsx",
+              line: 220,
+              severity: "medium",
+              type: "bug",
+              text: "Pending steer badges should disappear as soon as the interjection flushes.",
             },
           ],
-          usage: { input: 181, output: 64, cost: 0.01 },
-        },
-      }),
-      makeJsonResult(reviewToolCallId, "review", {
-        summary: { critical: 0, high: 0, medium: 1, low: 0 },
-        comments: [
-          {
-            file: "apps/tui/src/routes/session.tsx",
-            line: 220,
-            severity: "medium",
-            type: "bug",
-            text: "Pending steer badges should disappear as soon as the interjection flushes.",
-          },
-        ],
-      }),
-      makeJsonResult(searchSessionsToolCallId, "search_sessions", {
-        totalMatches: 2,
-        sessions: [
-          {
-            sessionId: "019debug1",
-            name: "tui renderer cleanup",
-            lastActivity: "2026-03-22T18:30:00.000Z",
-            excerpts: ["tool rendering in the TUI is a bit broken"],
-          },
-        ],
-      }),
-      makeJsonResult(readSessionToolCallId, "read_session", {
-        sessionId: "019debug1-session",
-        extracted: true,
-        goal: "Understand the renderer cleanup thread",
-        content:
-          "User wanted debug mode to exercise renderer chrome, retries, and queued message semantics.",
-        messageCount: 24,
-        branchCount: 1,
-      }),
-    ],
-    createdAt: dateFromMillis(nowMillis + 2),
-  })
+        }),
+        makeJsonResult(searchSessionsToolCallId, "search_sessions", {
+          totalMatches: 2,
+          sessions: [
+            {
+              sessionId: "019debug1",
+              name: "tui renderer cleanup",
+              lastActivity: "2026-03-22T18:30:00.000Z",
+              excerpts: ["tool rendering in the TUI is a bit broken"],
+            },
+          ],
+        }),
+        makeJsonResult(readSessionToolCallId, "read_session", {
+          sessionId: "019debug1-session",
+          extracted: true,
+          goal: "Understand the renderer cleanup thread",
+          content:
+            "User wanted debug mode to exercise renderer chrome, retries, and queued message semantics.",
+          messageCount: 24,
+          branchCount: 1,
+        }),
+      ],
+      createdAt: dateFromMillis(nowMillis + 2),
+    })
 
-  return { assistant, tool }
-}
+    return { assistant, tool }
+  })
 
 const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
+    const idService = yield* IdService
     const user = Message.Regular.make({
-      id: MessageId.make(Bun.randomUUIDv7()),
+      id: MessageId.make(yield* idService.next),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "user",
@@ -219,8 +223,9 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
-    const sessionId = SessionId.make(Bun.randomUUIDv7())
-    const branchId = BranchId.make(Bun.randomUUIDv7())
+    const idService = yield* IdService
+    const sessionId = SessionId.make(yield* idService.next)
+    const branchId = BranchId.make(yield* idService.next)
     const now = yield* DateTime.nowAsDate
 
     yield* sessionStorage.createSession(
@@ -348,7 +353,7 @@ const persistDebugTurn = (
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
     const nowMillis = yield* Clock.currentTimeMillis
-    const { assistant, tool } = createParentTurnMessages(
+    const { assistant, tool } = yield* createParentTurnMessages(
       params,
       iteration,
       delegateToolCallId,
