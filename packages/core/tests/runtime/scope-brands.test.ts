@@ -77,6 +77,21 @@ describe("scope brand type fences", () => {
       Layer.succeed(SearchStorage, { sentinel: "child-search" } as never),
     )
 
+  const focusedStorageOverride = () =>
+    Layer.mergeAll(
+      Layer.succeed(SqlClient.SqlClient, { sentinel: "child-sql" } as never),
+      Layer.succeed(SessionStorage, { sentinel: "child-session" } as never),
+      Layer.succeed(BranchStorage, { sentinel: "child-branch" } as never),
+      Layer.succeed(MessageStorage, { sentinel: "child-message" } as never),
+      Layer.succeed(EventStorage, { sentinel: "child-event" } as never),
+      Layer.succeed(RelationshipStorage, { sentinel: "child-relationship" } as never),
+      Layer.succeed(StorageTransaction, { sentinel: "child-transaction" } as never),
+      Layer.succeed(CheckpointStorage, { sentinel: "child-checkpoint" } as never),
+      Layer.succeed(InteractionStorage, { sentinel: "child-interaction" } as never),
+      Layer.succeed(InteractionPendingReader, { sentinel: "child-pending" } as never),
+      Layer.succeed(SearchStorage, { sentinel: "child-search" } as never),
+    )
+
   const baseOverrides = () => ({
     storage: storageOverride(),
     eventStore: Layer.succeed(EventStore, { sentinel: "child-event-store" } as never),
@@ -300,6 +315,42 @@ describe("scope brand type fences", () => {
           return yield* InteractionPendingReader
         }).pipe(Effect.provide(composed.layer))
         expect((pending as unknown as { sentinel: string }).sentinel).toBe("child-pending")
+      }),
+    )
+  })
+
+  test("ephemeral extension layers cannot see parent broad Storage", () => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        class ExtensionStorageProbe extends Context.Service<
+          ExtensionStorageProbe,
+          { readonly storage: unknown }
+        >()("@gent/core/tests/scope-brands/ExtensionStorageProbe") {}
+
+        const parentServices = Context.empty().pipe(
+          Context.add(Storage, { sentinel: "parent-storage" } as never),
+        ) as Context.Context<never>
+
+        const extensionLayer = Layer.effect(
+          ExtensionStorageProbe,
+          Effect.gen(function* () {
+            const storage = yield* Storage
+            return { storage }
+          }),
+        )
+
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices,
+          overrides: { ...baseOverrides(), storage: focusedStorageOverride() },
+          extensionLayers: extensionLayer,
+        })
+
+        const exit = yield* Effect.gen(function* () {
+          return yield* ExtensionStorageProbe
+        }).pipe(Effect.provide(composed.layer), Effect.exit)
+
+        expect(exit._tag).toBe("Failure")
       }),
     )
   })
