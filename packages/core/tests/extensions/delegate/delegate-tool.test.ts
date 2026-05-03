@@ -40,9 +40,6 @@ const makeCtx = (overrides: {
           ModelId.make("openai/gpt-5.4"),
         ] as const),
     },
-    extension: {
-      request: () => Effect.succeed({} as never),
-    },
   })
 
 describe("Delegate Tool", () => {

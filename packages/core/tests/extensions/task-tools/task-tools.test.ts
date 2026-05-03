@@ -17,12 +17,6 @@ import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
-import type {
-  CapabilityError,
-  CapabilityNotFoundError,
-  CapabilityRef,
-} from "@gent/core/domain/capability"
 
 import type { AgentRunner } from "@gent/core/domain/agent"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
@@ -44,23 +38,8 @@ const mockRunnerSuccess: AgentRunner = {
     ),
 }
 
-const makeCtx = Effect.gen(function* () {
-  const registry = yield* ExtensionRegistry
-  const ctxBase = {
-    sessionId: SessionId.make("s1"),
-    branchId: BranchId.make("b1"),
-    cwd: "/tmp",
-    home: "/tmp",
-  }
-  const request = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
-    const e = registry
-      .getResolved()
-      .rpcRegistry.run(ref.extensionId, ref.capabilityId, input, ctxBase, {
-        intent: ref.intent,
-      })
-    return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-  }
-  return testToolContext({
+const makeCtx = Effect.succeed(
+  testToolContext({
     sessionId: SessionId.make("s1"),
     branchId: BranchId.make("b1"),
     toolCallId: ToolCallId.make("tc1"),
@@ -81,11 +60,8 @@ const makeCtx = Effect.gen(function* () {
         ),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
-    extension: {
-      request,
-    },
-  })
-})
+  }),
+)
 
 const layer = createToolTestLayer({
   ...toolPreset,

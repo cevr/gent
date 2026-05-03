@@ -379,7 +379,6 @@ const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   branchId: BranchId.make("br-acp-boundary-test"),
   cwd: "/tmp/gent-acp-boundary-test",
   home: "/tmp/gent-acp-boundary-test-home",
-  extension: {} as ExtensionHostContext["extension"],
   agent: {} as ExtensionHostContext["agent"],
   session: {} as ExtensionHostContext["session"],
   interaction: {} as ExtensionHostContext["interaction"],

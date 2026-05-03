@@ -37,9 +37,6 @@ const makeCtx = (cwd: string, home: string): ToolContext =>
     toolCallId: ToolCallId.make("tc1"),
     cwd,
     home,
-    extension: {
-      request: dieStub("request"),
-    },
     agent: {
       get: dieStub("get"),
       require: dieStub("require"),

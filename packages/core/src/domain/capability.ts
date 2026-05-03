@@ -30,8 +30,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
 
 /**
  * A single fat `CapabilityContext extends ExtensionHostContext` would expose
- * typed request dispatch, session mutation,
- * interaction, and follow-up surfaces to every read capability — making
+ * session mutation, interaction, and follow-up surfaces to every read capability — making
  * the `intent: "read"` fence dishonest at the context level even when lint
  * stops write-shaped service calls.
  *
@@ -89,9 +88,8 @@ export type ErasedCapabilityEffect<E = any> = (
 ) => Effect.Effect<any, E, any>
 
 /**
- * Reference object handed to callers so they can route + decode through the
- * runtime's Capability dispatcher. The public invoker is
- * `ExtensionHostContext.Extension.request(ref, input)`.
+ * Reference object handed to transport callers so they can route + decode
+ * through the runtime's public capability dispatcher.
  */
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: ExtensionId

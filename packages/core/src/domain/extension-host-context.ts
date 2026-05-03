@@ -1,6 +1,5 @@
 import { Schema, type Context, type Effect, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
-import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
 import { BranchId, SessionId, type MessageId } from "./ids"
 import type {
@@ -42,9 +41,6 @@ export interface ExtensionHostContext {
   readonly home: string
   readonly capabilityContext?: Context.Context<never>
 
-  /** Extension RPC */
-  readonly extension: ExtensionHostContext.Extension
-
   /** Agent registry + runner */
   readonly agent: ExtensionHostContext.Agent
 
@@ -56,16 +52,6 @@ export interface ExtensionHostContext {
 }
 
 export declare namespace ExtensionHostContext {
-  interface Extension {
-    /** Typed capability RPC into another extension. Routes by
-     *  `(extensionId, capabilityId)`, decodes via `ref.input`, validates
-     *  output via `ref.output`, and gates dispatch on `ref.intent`. */
-    readonly request: <I, O>(
-      ref: CapabilityRef<I, O>,
-      input: I,
-    ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-  }
-
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
     readonly require: (name: AgentName) => Effect.Effect<AgentDefinition>

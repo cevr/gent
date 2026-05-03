@@ -455,7 +455,7 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 ## Artifacts Extension
 
-`@gent/artifacts` — generic artifact store exposed through typed extension RPC. Any tool/extension can persist artifacts through `ctx.extension.request(...)`.
+`@gent/artifacts` — generic artifact store exposed through typed public extension RPC. In-process tools yield artifact services directly; client/UI callers use `client.extension.request(...)`.
 
 State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 

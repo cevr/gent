@@ -6,11 +6,6 @@
  */
 
 import { Context, Effect } from "effect"
-import type {
-  CapabilityError,
-  CapabilityNotFoundError,
-  CapabilityRef,
-} from "../domain/capability.js"
 import {
   ExtensionHostError,
   ExtensionHostSearchResult,
@@ -389,21 +384,6 @@ export const makeExtensionHostContext = (
     cwd: runInfo.sessionCwd ?? deps.platform.cwd,
     home: deps.platform.home,
     ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
-
-    extension: {
-      request: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
-        const rpcRegistry = deps.extensionRegistry.getResolved().rpcRegistry
-        const e = rpcRegistry.run(ref.extensionId, ref.capabilityId, input, hostCtx, {
-          intent: ref.intent,
-        })
-        const provided =
-          deps.capabilityContext !== undefined
-            ? e.pipe(Effect.provideContext(deps.capabilityContext))
-            : e
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-        return provided as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-      },
-    },
 
     agent: {
       get: (name) => deps.extensionRegistry.getAgent(name),

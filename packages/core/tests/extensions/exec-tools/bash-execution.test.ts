@@ -27,9 +27,6 @@ const stubCtx: ToolContext = {
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
-  extension: {
-    request: dieStub("request"),
-  },
   agent: {
     get: dieStub("get"),
     require: dieStub("require"),

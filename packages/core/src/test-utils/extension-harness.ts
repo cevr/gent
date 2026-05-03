@@ -145,9 +145,6 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
   home: "/tmp",
-  extension: {
-    request: dieStub("extension.request"),
-  },
   agent: {
     get: dieStub("agent.get"),
     require: dieStub("agent.require"),

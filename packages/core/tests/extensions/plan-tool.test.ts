@@ -42,9 +42,6 @@ const makeCtx = (overrides: {
       ))
   return {
     ...base,
-    extension: {
-      request: dieStub("extension.request"),
-    },
     agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
