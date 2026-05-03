@@ -34,7 +34,6 @@ import {
   sessionProfileFromRuntime,
   type SessionProfile,
 } from "../runtime/session-profile.js"
-import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
 
 /**
@@ -187,10 +186,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerLive = Provider.Debug({ delayMs: DebugSlowProviderDelayMs })
   }
 
-  // SessionCwdRegistry — fast (sessionId → cwd) cache. Registry writes happen
-  // at session creation; reads fall back to Storage on cache miss.
-  const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
-
   const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)
 
   const baseServicesLive = Layer.mergeAll(
@@ -200,7 +195,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     clusterRunnerLive,
     baseEventStoreLive,
     eventPublisherLive,
-    sessionCwdRegistryLive,
     authStorageLive,
     authStoreLive,
     authGuardLive,

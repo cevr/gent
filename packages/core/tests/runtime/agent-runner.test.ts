@@ -51,7 +51,6 @@ import { EventPublisherLive } from "../../src/server/event-publisher"
 import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { ServerProfileService } from "../../src/runtime/scope-brands"
 import {
   SessionRuntime,
@@ -150,7 +149,6 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
-    SessionCwdRegistry.Test(),
     ModelRegistry.Test(),
     ephemeralParentDeps,
   )

@@ -45,7 +45,6 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCommands } from "../server/session-commands.js"
-import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
@@ -230,9 +229,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         providerAuthLive,
         Layer.provide(FallbackFileIndexLive, BunServices.layer),
         ResourceManagerLive,
-        // SessionCwdRegistry — fast (sessionId → cwd) cache. Tests use the
-        // in-memory Test variant.
-        SessionCwdRegistry.Test(),
         ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
         ...(config.extraLayers ?? []),
       )

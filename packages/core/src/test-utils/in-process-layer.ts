@@ -28,7 +28,6 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCommands } from "../server/session-commands.js"
-import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
@@ -90,8 +89,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     // tests don't construct a real server composition root, so the test
     // layer fakes the brand with an empty extension set.
     ServerProfileService.Test(),
-    // SessionCwdRegistry — fast (sessionId → cwd) cache. In-memory Test variant.
-    SessionCwdRegistry.Test(),
     ...(config.extraLayers ?? []),
   )
 

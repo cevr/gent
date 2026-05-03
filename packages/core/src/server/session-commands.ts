@@ -1,10 +1,6 @@
 import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
-import {
-  SessionCwdRegistry,
-  type SessionCwdRegistryService,
-} from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
 import { messagePartsTextLines } from "../domain/message-part-projection.js"
@@ -132,13 +128,8 @@ const restoreSessionRuntimeState = Effect.fn("SessionCommands.restoreSessionRunt
 
 const forgetDeletedSessionRuntimeState = Effect.fn(
   "SessionCommands.forgetDeletedSessionRuntimeState",
-)(function* (input: {
-  readonly sessionId: SessionId
-  readonly eventStore: EventStoreService
-  readonly sessionCwdRegistry: SessionCwdRegistryService
-}) {
+)(function* (input: { readonly sessionId: SessionId; readonly eventStore: EventStoreService }) {
   yield* input.eventStore.removeSession(input.sessionId)
-  yield* input.sessionCwdRegistry.forget(input.sessionId)
 })
 
 // Common error union for SessionCommands mutations: storage/event errors plus
@@ -183,7 +174,6 @@ const makeSessionMutationsService: Effect.Effect<
   | BranchStorage
   | MessageStorage
   | RelationshipStorage
-  | SessionCwdRegistry
   | SessionRuntime
 > = Effect.gen(function* () {
   const storageTransaction = yield* StorageTransaction
@@ -193,7 +183,6 @@ const makeSessionMutationsService: Effect.Effect<
   const relationshipStorage = yield* RelationshipStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
-  const sessionCwdRegistry = yield* SessionCwdRegistry
   const sessionRuntime = yield* SessionRuntime
 
   const transactWithEvent = <A, E, R>(
@@ -290,7 +279,7 @@ const makeSessionMutationsService: Effect.Effect<
   const forgetDeletedSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.forgetDeletedSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* forgetDeletedSessionRuntimeState({ sessionId, eventStore, sessionCwdRegistry })
+    yield* forgetDeletedSessionRuntimeState({ sessionId, eventStore })
   })
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
@@ -470,21 +459,16 @@ const makeSessionMutationsService: Effect.Effect<
         sessionId,
         createdAt: now,
       })
-      const committed = yield* storageTransaction
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sessionStorage.createSession(session)
-            yield* branchStorage.createBranch(branch)
-            if (input.cwd !== undefined) {
-              yield* sessionCwdRegistry.record(sessionId, input.cwd)
-            }
-            const envelope = yield* eventPublisher.append(
-              SessionStarted.make({ sessionId, branchId }),
-            )
-            return { envelope }
-          }),
-        )
-        .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
+      const committed = yield* storageTransaction.withTransaction(
+        Effect.gen(function* () {
+          yield* sessionStorage.createSession(session)
+          yield* branchStorage.createBranch(branch)
+          const envelope = yield* eventPublisher.append(
+            SessionStarted.make({ sessionId, branchId }),
+          )
+          return { envelope }
+        }),
+      )
       yield* eventPublisher.deliver(committed.envelope)
       return { sessionId, branchId }
     }),
@@ -572,14 +556,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
-      const sessionCwdRegistry = yield* SessionCwdRegistry
       // SessionCommands delegates pure-mutation bodies (branch create, branch
       // fork, switch active branch, session/branch/message delete) to
       // SessionMutations so there is exactly one implementation of each. The
       // dedup wrappers below sit *above* the delegation, so retried RPCs still
-      // collapse onto a single mutation invocation. The createSession
-      // happy-path stays in this module because it co-owns the per-cwd
-      // registry pre-record + dedup-cache lifecycle.
+      // collapse onto a single mutation invocation.
       const mutations = yield* SessionMutations
 
       // ── requestId dedup ──
@@ -755,24 +736,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        const committed = yield* storageTransaction
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sessionStorage.createSession(session)
-              yield* branchStorage.createBranch(branch)
-              // Pre-record the (sessionId → cwd) binding before the first event
-              // so runtime/profile lookup can resolve the session cwd without a
-              // storage read. Headless startup can omit cwd.
-              if (input.cwd !== undefined) {
-                yield* sessionCwdRegistry.record(sessionId, input.cwd)
-              }
-              const envelope = yield* eventPublisher.append(
-                SessionStarted.make({ sessionId, branchId }),
-              )
-              return { envelope }
-            }),
-          )
-          .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
+        const committed = yield* storageTransaction.withTransaction(
+          Effect.gen(function* () {
+            yield* sessionStorage.createSession(session)
+            yield* branchStorage.createBranch(branch)
+            const envelope = yield* eventPublisher.append(
+              SessionStarted.make({ sessionId, branchId }),
+            )
+            return { envelope }
+          }),
+        )
         yield* eventPublisher.deliver(committed.envelope)
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({

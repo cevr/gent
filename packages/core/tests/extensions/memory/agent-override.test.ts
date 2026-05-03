@@ -9,7 +9,6 @@ import type { CallRecord } from "@gent/core/test-utils"
 import { Provider } from "@gent/core/providers/provider"
 import { textStep } from "@gent/core/debug/provider"
 import { EventPublisherLive } from "../../../src/server/event-publisher"
-import { SessionCwdRegistry } from "../../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../../src/server/session-commands"
 import { ResourceManagerLive } from "../../../src/runtime/resource-manager"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
@@ -69,7 +68,6 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
-    SessionCwdRegistry.Test(),
     ModelRegistry.Test(),
     Permission.Test(),
     SessionProfileCache.Test(),

@@ -41,7 +41,6 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -107,7 +106,6 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
-    SessionCwdRegistry.Test(),
     ModelRegistry.Test(),
   )
   const baseDeps =
@@ -149,7 +147,6 @@ const makeRuntimeLayerWithEventPublisher = (
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
-    SessionCwdRegistry.Test(),
     ModelRegistry.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)

@@ -15,7 +15,6 @@ import {
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
 } from "../../src/runtime/session-runtime"
-import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -100,7 +99,6 @@ const failingSessionCommandsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -143,7 +141,6 @@ const sendFailingSessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -159,7 +156,6 @@ const sessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -195,7 +191,6 @@ const sessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -212,7 +207,6 @@ const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionI
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
 }
@@ -239,7 +233,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -301,7 +294,6 @@ const racySessionCommandsLayer = (params: {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -1011,7 +1003,6 @@ describe("session.delete", () => {
         const commands = yield* SessionCommands
         const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
-        const cwdRegistry = yield* SessionCwdRegistry
 
         const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
         const child = yield* mutations.createChildSession({
@@ -1041,18 +1032,11 @@ describe("session.delete", () => {
           grandchild.branchId,
         )
 
-        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBe("/tmp/delete-parent")
-        expect(yield* cwdRegistry.lookup(child.sessionId)).toBe("/tmp/delete-child")
-        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBe("/tmp/delete-grandchild")
-
         yield* commands.deleteSession(parent.sessionId)
 
         yield* Deferred.await(parentClosed).pipe(Effect.timeout("5 seconds"))
         yield* Deferred.await(childClosed).pipe(Effect.timeout("5 seconds"))
         yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
-        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBeUndefined()
-        expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
-        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(
         Effect.provide(sessionCommandsLayerWithMachineProbe(runtimeTerminated)),
@@ -1496,7 +1480,6 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -1549,7 +1532,6 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
