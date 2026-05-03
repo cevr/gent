@@ -13,21 +13,21 @@
  */
 
 import { Effect, type Context } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 
 /**
  * Fire-and-forget a worker-supervisor restart triggered from a process
- * exit callback (Bun process exits emit a `Promise<void>`, not an
- * `Effect`). The exit handler has nothing to catch a rejection, so we
- * collapse to `Exit` and discard. The caller — the OS process exit —
+ * exit callback. The exit handler has nothing to catch a rejection, so
+ * we collapse to `Exit` and discard. The caller — the OS process exit —
  * does not observe the result.
  *
- * Pinned to `Context.Context<never>` because the worker supervisor's
- * captured services are explicitly `Effect.context<never>()` — there is
- * no caller-provided service tail to thread through.
+ * Pinned to `Context.Context<ChildProcessSpawner>` because the supervisor
+ * captures `BunServices` to spawn replacement workers from its restart
+ * effect; the captured context must thread through to the boundary.
  */
 export const runSupervisorCrashRestart = <A, E>(
-  services: Context.Context<never>,
-  restartInternal: Effect.Effect<A, E, never>,
+  services: Context.Context<ChildProcessSpawner.ChildProcessSpawner>,
+  restartInternal: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
 ): void => {
   void Effect.runPromiseExit(Effect.provide(restartInternal, services))
 }
@@ -38,14 +38,12 @@ export const runSupervisorCrashRestart = <A, E>(
  * stores on `restartPromise` to coordinate concurrent restart attempts.
  *
  * The Effect's body holds supervisor closure state (`restartPromise`,
- * `current`, etc.) — that's why this helper pins to `Effect<void, E, never>`
- * rather than rebuilding it inside the boundary. The caller stays in sync
- * of the boundary surface (which Effect to run, on which services); the
- * caller still owns its state. `E` is generic because the launch path can
- * fail with `WorkerSupervisorError`; the rejection surfaces on the awaited
- * promise.
+ * `current`, etc.) — that's why this helper pins to `Effect<void, E, R>`
+ * rather than rebuilding it inside the boundary. `E` is generic because
+ * the launch path can fail with `WorkerSupervisorError`; the rejection
+ * surfaces on the awaited promise.
  */
 export const runSupervisorBackoffRestart = <E>(
-  services: Context.Context<never>,
-  effect: Effect.Effect<void, E, never>,
+  services: Context.Context<ChildProcessSpawner.ChildProcessSpawner>,
+  effect: Effect.Effect<void, E, ChildProcessSpawner.ChildProcessSpawner>,
 ): Promise<void> => Effect.runPromiseWith(services)(effect)

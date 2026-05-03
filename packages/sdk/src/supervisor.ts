@@ -1,7 +1,20 @@
 // @effect-diagnostics asyncFunction:off — worker supervisor process launch helpers are Promise entry boundaries
-// @effect-diagnostics newPromise:off — net/server and stream readiness adapters bridge callback APIs
-// @effect-diagnostics globalTimers:off — startup readiness timeout protects the external worker boundary
-import { Cause, Clock, DateTime, Effect, Exit, Schema, type Scope } from "effect"
+// @effect-diagnostics newPromise:off — net/server bridges callback APIs at the OS boundary
+import { BunServices } from "@effect/platform-bun"
+import {
+  Cause,
+  Clock,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Schema,
+  Scope,
+  Stream,
+} from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
@@ -112,105 +125,83 @@ export const findOpenPort = (): Promise<number> =>
     })
   })
 
-const waitForWorkerReady = (
-  proc: Bun.Subprocess,
-  timeoutMs: number,
-): Effect.Effect<void, WorkerSupervisorError> =>
-  Effect.promise(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const stdout = proc.stdout
-        if (stdout === undefined || stdout === null || typeof stdout === "number") {
-          reject(new WorkerSupervisorError({ message: "worker stdout unavailable during startup" }))
-          return
-        }
+/**
+ * Drain stdout of a `ChildProcessHandle` line by line. Settle the
+ * provided `ready` Deferred when a `WORKER_READY_PREFIX` line is seen,
+ * or fail it if stdout closes / errors before that.
+ */
+const watchReadiness = (
+  proc: WorkerProcess,
+  ready: Deferred.Deferred<void, WorkerSupervisorError>,
+): Effect.Effect<void> =>
+  proc.handle.stdout.pipe(
+    Stream.decodeText(),
+    splitLines,
+    Stream.tap((line) =>
+      line.startsWith(WORKER_READY_PREFIX) ? Deferred.succeed(ready, undefined) : Effect.void,
+    ),
+    Stream.takeUntilEffect(() => Deferred.isDone(ready)),
+    Stream.runDrain,
+    Effect.matchEffect({
+      onFailure: (err) =>
+        Deferred.fail(
+          ready,
+          new WorkerSupervisorError({
+            message: `failed to read worker readiness: ${String(err)}`,
+          }),
+        ),
+      onSuccess: () =>
+        Deferred.fail(
+          ready,
+          new WorkerSupervisorError({ message: "worker stdout closed before ready" }),
+        ),
+    }),
+    Effect.asVoid,
+  )
 
-        const reader = (stdout as ReadableStream<Uint8Array>).getReader()
-        const decoder = new TextDecoder()
-        let buffer = ""
-        let settled = false
-        let ready = false
-
-        const fail = (error: WorkerSupervisorError) => {
-          if (settled) return
-          settled = true
-          clearTimeout(timeout)
-          void reader.cancel().catch(() => undefined)
-          reject(error)
-        }
-
-        const markReady = () => {
-          if (settled) return
-          settled = true
-          ready = true
-          clearTimeout(timeout)
-          resolve()
-        }
-
-        const timeout = setTimeout(() => {
-          fail(
-            new WorkerSupervisorError({
-              message: `worker did not become ready within ${timeoutMs}ms`,
-            }),
-          )
-        }, timeoutMs)
-
-        void proc.exited.then(() => {
-          if (ready) return
-          fail(
-            new WorkerSupervisorError({
-              message: `worker exited before ready${proc.exitCode !== null ? ` (${proc.exitCode})` : ""}`,
-            }),
-          )
-        })
-
-        const handleText = (text: string) => {
-          buffer += text
-          while (true) {
-            const newline = buffer.indexOf("\n")
-            if (newline === -1) return
-            const line = buffer.slice(0, newline).trim()
-            buffer = buffer.slice(newline + 1)
-            if (line.startsWith(WORKER_READY_PREFIX)) {
-              markReady()
-            }
-          }
-        }
-
-        const readLoop = (): void => {
-          void reader
-            .read()
-            .then(({ done, value }) => {
-              if (done) {
-                if (!ready) {
-                  fail(new WorkerSupervisorError({ message: "worker stdout closed before ready" }))
-                }
-                return
-              }
-              handleText(decoder.decode(value, { stream: true }))
-              readLoop()
-            })
-            .catch((error: unknown) => {
-              if (ready) return
-              fail(
-                new WorkerSupervisorError({
-                  message: `failed to read worker readiness: ${String(error)}`,
-                }),
-              )
-            })
-        }
-
-        readLoop()
-      }),
-  ).pipe(
-    Effect.mapError((error) => {
-      const message =
-        typeof error === "object" && error !== null && "message" in error
-          ? String((error as { readonly message: unknown }).message)
-          : String(error)
-      return new WorkerSupervisorError({ message })
+const splitLines = <E>(stream: Stream.Stream<string, E>): Stream.Stream<string, E> => {
+  let buffer = ""
+  return stream.pipe(
+    Stream.flatMap((chunk) => {
+      buffer += chunk
+      const parts = buffer.split("\n")
+      buffer = parts.pop() ?? ""
+      return Stream.fromIterable(parts.map((p) => p.trim()).filter((p) => p.length > 0))
     }),
   )
+}
+
+const waitForWorkerReady = (
+  proc: WorkerProcess,
+  timeoutMs: number,
+): Effect.Effect<void, WorkerSupervisorError> =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void, WorkerSupervisorError>()
+    const watcherFiber = yield* Effect.forkChild(watchReadiness(proc, ready))
+    const exitWatcherFiber = yield* Effect.forkChild(
+      Effect.gen(function* () {
+        const exitCode = yield* proc.handle.exitCode.pipe(Effect.orElseSucceed(() => null))
+        yield* Deferred.fail(
+          ready,
+          new WorkerSupervisorError({
+            message: `worker exited before ready${exitCode === null ? "" : ` (${String(exitCode)})`}`,
+          }),
+        )
+      }),
+    )
+    return yield* Deferred.await(ready).pipe(
+      Effect.timeout(Duration.millis(timeoutMs)),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.fail(
+          new WorkerSupervisorError({
+            message: `worker did not become ready within ${timeoutMs}ms`,
+          }),
+        ),
+      ),
+      Effect.ensuring(Fiber.interrupt(watcherFiber)),
+      Effect.ensuring(Fiber.interrupt(exitWatcherFiber)),
+    )
+  })
 
 const isRetryableStartupError = (error: WorkerSupervisorError): boolean =>
   error.message === "worker stdout closed before ready" ||
@@ -232,10 +223,10 @@ interface StartedWorker<Proc extends { readonly pid: number }> {
   readonly proc: Proc
 }
 
-interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }> {
+interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }, R = never> {
   readonly maxAttempts?: number
   readonly retryDelayMs?: number
-  readonly spawn: Effect.Effect<StartedWorker<Proc>, WorkerSupervisorError>
+  readonly spawn: Effect.Effect<StartedWorker<Proc>, WorkerSupervisorError, R>
   readonly waitForReady: (
     launched: StartedWorker<Proc>,
   ) => Effect.Effect<void, WorkerSupervisorError>
@@ -251,9 +242,9 @@ interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }> {
   }) => void
 }
 
-const launchWorkerUntilReady = <Proc extends { readonly pid: number }>(
-  options: LaunchWorkerUntilReadyOptions<Proc>,
-): Effect.Effect<StartedWorker<Proc> | undefined, WorkerSupervisorError> =>
+const launchWorkerUntilReady = <Proc extends { readonly pid: number }, R = never>(
+  options: LaunchWorkerUntilReadyOptions<Proc, R>,
+): Effect.Effect<StartedWorker<Proc> | undefined, WorkerSupervisorError, R> =>
   Effect.gen(function* () {
     const maxAttempts = options.maxAttempts ?? STARTUP_MAX_ATTEMPTS
     const retryDelayMs = options.retryDelayMs ?? STARTUP_RETRY_DELAY_MS
@@ -322,52 +313,65 @@ const shutdownLog = (msg: string, data?: Record<string, unknown>): Effect.Effect
     })
   })
 
-const stopSubprocess = (proc: Bun.Subprocess): Effect.Effect<void> =>
+/** A live worker subprocess: handle + per-handle scope + last observed exit code. */
+interface WorkerProcess {
+  readonly pid: number
+  readonly handle: ChildProcessSpawner.ChildProcessHandle
+  readonly handleScope: Scope.Closeable
+  readonly exitCodeRef: { exitCode: number | null }
+  readonly exitWatcher: Fiber.Fiber<void, never>
+}
+
+/**
+ * Stop a worker subprocess. SIGTERM first, then SIGKILL after
+ * `SHUTDOWN_TIMEOUT_MS` if the process is still alive.
+ *
+ * NOTE: `handle.kill({ forceKillAfter })` from `effect/unstable/process`
+ * applies the timeout to the *signal-send* operation, not to the wait
+ * for the process to exit. Workers that trap SIGTERM (e.g. for graceful
+ * shutdown) would hang `handle.kill` indefinitely. We bound the wait
+ * ourselves and fall back to a raw `process.kill(pid, "SIGKILL")`.
+ */
+const stopWorker = (proc: WorkerProcess): Effect.Effect<void> =>
   Effect.gen(function* () {
-    yield* shutdownLog("stop.start", { pid: proc.pid, exitCode: proc.exitCode })
-    if (proc.exitCode !== null) return
-    const sentTerm = yield* Effect.sync(() => {
-      try {
-        process.kill(proc.pid, "SIGTERM")
-        return true
-      } catch {
-        return false
-      }
-    })
-    if (sentTerm) {
-      yield* shutdownLog("stop.sigterm", { pid: proc.pid })
-    } else {
-      yield* shutdownLog("stop.sigterm-failed", { pid: proc.pid })
+    yield* shutdownLog("stop.start", { pid: proc.pid, exitCode: proc.exitCodeRef.exitCode })
+    if (proc.exitCodeRef.exitCode !== null) {
+      yield* Scope.close(proc.handleScope, Exit.void).pipe(Effect.ignore)
       return
     }
-    const exited = Effect.promise(() => proc.exited).pipe(Effect.as("exited" as const))
-    const timedOut = Effect.sleep(`${SHUTDOWN_TIMEOUT_MS} millis`).pipe(
-      Effect.as("timeout" as const),
+
+    // SIGTERM via the handle; bound the exit-wait so trapped workers can be force-killed.
+    const sigterm = proc.handle.kill({ killSignal: "SIGTERM" }).pipe(
+      Effect.timeout(Duration.millis(SHUTDOWN_TIMEOUT_MS)),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.gen(function* () {
+          yield* shutdownLog("stop.timeout", { pid: proc.pid })
+          // Direct SIGKILL — bypass the handle so we don't re-await the same Deferred
+          yield* Effect.sync(() => {
+            try {
+              process.kill(proc.pid, "SIGKILL")
+            } catch {}
+          })
+          // Now wait for exit, bounded again
+          yield* proc.handle.exitCode.pipe(
+            Effect.timeout(Duration.millis(SHUTDOWN_TIMEOUT_MS)),
+            Effect.catchTag("TimeoutError", () => Effect.void),
+            Effect.catchEager(() => Effect.void),
+          )
+        }),
+      ),
+      Effect.catchEager((err) =>
+        shutdownLog("stop.kill-failed", { pid: proc.pid, error: String(err) }),
+      ),
     )
-    const result = yield* Effect.raceFirst(exited, timedOut)
-    if (result === "timeout") {
-      yield* shutdownLog("stop.timeout", { pid: proc.pid })
-      const sentKill = yield* Effect.sync(() => {
-        try {
-          process.kill(proc.pid, "SIGKILL")
-          return true
-        } catch {
-          return false
-        }
-      })
-      if (!sentKill) {
-        return
-      }
-      yield* shutdownLog("stop.sigkill", { pid: proc.pid })
-      yield* Effect.promise(() => proc.exited)
-      yield* shutdownLog("stop.killed", { pid: proc.pid })
-    } else {
-      yield* shutdownLog("stop.exited-gracefully", { pid: proc.pid })
-    }
+    yield* sigterm
+    yield* shutdownLog("stop.killed", { pid: proc.pid })
+    yield* Fiber.interrupt(proc.exitWatcher).pipe(Effect.ignore)
+    yield* Scope.close(proc.handleScope, Exit.void).pipe(Effect.ignore)
   }).pipe(Effect.catchEager(() => Effect.void))
 
-const killSubprocessSync = (proc: Bun.Subprocess | undefined) => {
-  if (proc === undefined || proc.exitCode !== null) return
+const killWorkerSync = (proc: WorkerProcess | undefined) => {
+  if (proc === undefined || proc.exitCodeRef.exitCode !== null) return
   try {
     // SIGKILL — the parent is exiting and can't wait for graceful shutdown.
     // SIGTERM alone leaves orphans if the worker is busy (e.g. SQLite WAL checkpoint).
@@ -380,10 +384,14 @@ const killSubprocessSync = (proc: Bun.Subprocess | undefined) => {
 const spawnWorkerProcess = (
   options: WorkerSupervisorOptions,
   port: number,
-): Effect.Effect<{ readonly port: number; readonly url: string; readonly proc: Bun.Subprocess }> =>
-  Effect.promise(async () => {
+): Effect.Effect<
+  StartedWorker<WorkerProcess>,
+  WorkerSupervisorError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
     const mode = options.mode ?? "default"
-    const launch = await resolveWorkerLaunch()
+    const launch = yield* Effect.promise(() => resolveWorkerLaunch())
     const env = {
       ...Bun.env,
       ...options.env,
@@ -398,13 +406,43 @@ const spawnWorkerProcess = (
           }
         : {}),
     }
-    const proc = Bun.spawn([launch.runtimePath, launch.serverEntryPath], {
+    const handleScope = yield* Scope.make()
+    const handle = yield* ChildProcess.make(launch.runtimePath, [launch.serverEntryPath], {
       cwd: options.cwd,
       env,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "inherit",
     })
+      .asEffect()
+      .pipe(
+        Scope.provide(handleScope),
+        Effect.mapError(
+          (err) => new WorkerSupervisorError({ message: `failed to spawn worker: ${String(err)}` }),
+        ),
+        Effect.tapError(() => Scope.close(handleScope, Exit.void).pipe(Effect.ignore)),
+      )
+
+    const exitCodeRef = { exitCode: null as number | null }
+    const exitWatcher = yield* Effect.forkDetach(
+      handle.exitCode.pipe(
+        Effect.tap((code) =>
+          Effect.sync(() => {
+            exitCodeRef.exitCode = Number(code)
+          }),
+        ),
+        Effect.asVoid,
+        Effect.catchEager(() => Effect.void),
+      ),
+    )
+
+    const proc: WorkerProcess = {
+      pid: Number(handle.pid),
+      handle,
+      handleScope,
+      exitCodeRef,
+      exitWatcher,
+    }
     return { port, url: `http://${WORKER_HOST}:${port}/rpc`, proc }
   })
 
@@ -455,7 +493,7 @@ export const startWorkerSupervisor = (
 ): Effect.Effect<WorkerSupervisor, WorkerSupervisorError, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const supervisorServices = yield* Effect.context<never>()
+      const supervisorServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>()
       const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
       const assignedPort = yield* Effect.promise(findOpenPort).pipe(
         Effect.mapError(
@@ -469,7 +507,7 @@ export const startWorkerSupervisor = (
       let restartCount = 0
       let stopped = false
       const restartTimestamps: number[] = []
-      let current: Bun.Subprocess | undefined
+      let current: WorkerProcess | undefined
       let restartPromise: Promise<void> | undefined
       let state: WorkerLifecycleState = {
         _tag: "starting",
@@ -478,7 +516,7 @@ export const startWorkerSupervisor = (
       }
       const isShared = options.shared === true
       const handleProcessExit = () => {
-        killSubprocessSync(current)
+        killWorkerSync(current)
       }
       const disarmProcessExit = () => {
         if (!isShared) process.off("exit", handleProcessExit)
@@ -494,11 +532,18 @@ export const startWorkerSupervisor = (
         for (const listener of listeners) listener(next)
       }
 
-      const launchCurrent = Effect.gen(function* () {
-        const readyWorker = yield* launchWorkerUntilReady({
+      const launchCurrent: Effect.Effect<
+        void,
+        WorkerSupervisorError,
+        ChildProcessSpawner.ChildProcessSpawner
+      > = Effect.gen(function* () {
+        const readyWorker = yield* launchWorkerUntilReady<
+          WorkerProcess,
+          ChildProcessSpawner.ChildProcessSpawner
+        >({
           spawn: spawnWorkerProcess(options, assignedPort),
           waitForReady: (launched) => waitForWorkerReady(launched.proc, startupTimeoutMs),
-          stop: stopSubprocess,
+          stop: stopWorker,
           sleep: (delayMs) => Effect.sleep(`${delayMs} millis`),
           setCurrent: (proc) => {
             current = proc
@@ -522,112 +567,126 @@ export const startWorkerSupervisor = (
           restartCount,
         })
 
-        void readyWorker.proc.exited.then(() => {
-          if (stopped) return
-          if (current?.pid !== readyWorker.proc.pid) return
+        // Watch for unexpected exits to trigger restart. Forked detached so
+        // the supervisor's acquireRelease body completes; the watcher is
+        // interrupted when the supervisor scope closes.
+        yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            const code = yield* readyWorker.proc.handle.exitCode.pipe(
+              Effect.orElseSucceed(() => null as number | null),
+            )
+            if (stopped) return
+            if (current?.pid !== readyWorker.proc.pid) return
 
-          // Shared mode: exit code 0 is intentional idle shutdown — don't restart
-          if (isShared && readyWorker.proc.exitCode === 0) {
-            stopped = true
-            emit({ _tag: "stopped", port: assignedPort, restartCount })
-            return
-          }
+            // Shared mode: exit code 0 is intentional idle shutdown — don't restart
+            if (isShared && code === 0) {
+              stopped = true
+              emit({ _tag: "stopped", port: assignedPort, restartCount })
+              return
+            }
 
-          runSupervisorCrashRestart(
-            supervisorServices,
-            restartInternal({
-              exitCode: readyWorker.proc.exitCode,
-              previousPid: readyWorker.proc.pid,
-            }),
-          )
-        })
+            yield* Effect.sync(() =>
+              runSupervisorCrashRestart(
+                supervisorServices,
+                restartInternal({
+                  exitCode: code === null ? null : Number(code),
+                  previousPid: readyWorker.proc.pid,
+                }),
+              ),
+            )
+          }),
+        )
       })
 
-      const restartInternal = Effect.fn("WorkerSupervisor.restartInternal")(function* (input?: {
+      const restartInternal: (input?: {
         exitCode: number | null
         previousPid: number | undefined
-      }) {
-        if (stopped) return
-        if (restartPromise !== undefined) {
-          const inFlight = restartPromise
-          yield* Effect.promise(() => inFlight)
-          return
-        }
-
-        restartCount += 1
-        const isCrash = input !== undefined
-        const now = yield* Clock.currentTimeMillis
-
-        // Only track crash-triggered restarts for loop detection (not manual)
-        if (isCrash) {
-          restartTimestamps.push(now)
-
-          // Prune timestamps outside the window
-          while (
-            restartTimestamps.length > 0 &&
-            (restartTimestamps[0] ?? 0) < now - RESTART_WINDOW_MS
-          ) {
-            restartTimestamps.shift()
-          }
-
-          // Crash-loop detection: too many crash restarts in window → permanent failure
-          if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
-            restartPromise = undefined
-            emit({
-              _tag: "failed",
-              port: assignedPort,
-              restartCount,
-              message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
-              exitCode: input.exitCode,
-            })
+      }) => Effect.Effect<void, WorkerSupervisorError, ChildProcessSpawner.ChildProcessSpawner> =
+        Effect.fn("WorkerSupervisor.restartInternal")(function* (input?: {
+          exitCode: number | null
+          previousPid: number | undefined
+        }) {
+          if (stopped) return
+          if (restartPromise !== undefined) {
+            const inFlight = restartPromise
+            yield* Effect.promise(() => inFlight)
             return
           }
-        }
 
-        emit({
-          _tag: "restarting",
-          port: assignedPort,
-          restartCount,
-          previousPid: input?.previousPid,
-          exitCode: input?.exitCode ?? null,
-        })
+          restartCount += 1
+          const isCrash = input !== undefined
+          const now = yield* Clock.currentTimeMillis
 
-        // Exponential backoff only for crash restarts
-        const backoffMs = isCrash
-          ? Math.min(BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1), BACKOFF_MAX_MS)
-          : 0
+          // Only track crash-triggered restarts for loop detection (not manual)
+          if (isCrash) {
+            restartTimestamps.push(now)
 
-        restartPromise = runSupervisorBackoffRestart(
-          supervisorServices,
-          Effect.gen(function* () {
-            yield* Effect.sleep(`${backoffMs} millis`)
-            const proc = current
-            if (proc !== undefined) {
-              yield* stopSubprocess(proc)
+            // Prune timestamps outside the window
+            while (
+              restartTimestamps.length > 0 &&
+              (restartTimestamps[0] ?? 0) < now - RESTART_WINDOW_MS
+            ) {
+              restartTimestamps.shift()
             }
-            yield* launchCurrent
-          }).pipe(
-            Effect.catchEager((error) =>
-              Effect.andThen(
-                Effect.sync(() => {
-                  restartPromise = undefined
-                  emit({
-                    _tag: "failed",
-                    port: assignedPort,
-                    restartCount,
-                    message: error.message,
-                    exitCode: input?.exitCode ?? current?.exitCode ?? null,
-                  })
-                }),
-                Effect.fail(error),
+
+            // Crash-loop detection: too many crash restarts in window → permanent failure
+            if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
+              restartPromise = undefined
+              emit({
+                _tag: "failed",
+                port: assignedPort,
+                restartCount,
+                message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
+                exitCode: input.exitCode,
+              })
+              return
+            }
+          }
+
+          emit({
+            _tag: "restarting",
+            port: assignedPort,
+            restartCount,
+            previousPid: input?.previousPid,
+            exitCode: input?.exitCode ?? null,
+          })
+
+          // Exponential backoff only for crash restarts
+          const backoffMs = isCrash
+            ? Math.min(BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1), BACKOFF_MAX_MS)
+            : 0
+
+          restartPromise = runSupervisorBackoffRestart(
+            supervisorServices,
+            Effect.gen(function* () {
+              yield* Effect.sleep(`${backoffMs} millis`)
+              const proc = current
+              if (proc !== undefined) {
+                yield* stopWorker(proc)
+              }
+              yield* launchCurrent
+            }).pipe(
+              Effect.catchEager((error) =>
+                Effect.andThen(
+                  Effect.sync(() => {
+                    restartPromise = undefined
+                    emit({
+                      _tag: "failed",
+                      port: assignedPort,
+                      restartCount,
+                      message: error.message,
+                      exitCode: input?.exitCode ?? current?.exitCodeRef.exitCode ?? null,
+                    })
+                  }),
+                  Effect.fail(error),
+                ),
               ),
             ),
-          ),
-        )
+          )
 
-        const inFlight = restartPromise
-        yield* Effect.promise(() => inFlight)
-      })
+          const inFlight = restartPromise
+          yield* Effect.promise(() => inFlight)
+        })
 
       yield* launchCurrent.pipe(
         Effect.catchEager((error) =>
@@ -635,7 +694,7 @@ export const startWorkerSupervisor = (
             disarmProcessExit()
             const proc = current
             current = undefined
-            if (proc !== undefined) yield* stopSubprocess(proc)
+            if (proc !== undefined) yield* stopWorker(proc)
             return yield* error
           }),
         ),
@@ -648,7 +707,7 @@ export const startWorkerSupervisor = (
         disarmProcessExit()
         const proc = current
         current = undefined
-        if (proc !== undefined) yield* stopSubprocess(proc)
+        if (proc !== undefined) yield* stopWorker(proc)
         emit({ _tag: "stopped", port: assignedPort, restartCount })
         yield* shutdownLog("supervisor.stop.done")
       }).pipe(Effect.catchEager(() => Effect.void))
@@ -666,11 +725,15 @@ export const startWorkerSupervisor = (
           }
         },
         stop,
-        restart: restartInternal(),
+        restart: Effect.provide(restartInternal(), supervisorServices),
       } satisfies WorkerSupervisor
     }),
     (supervisor) => supervisor.stop,
-  )
+    // Provide BunServices so callers don't have to wire ChildProcessSpawner
+    // explicitly. Matches the `Gent.server` ergonomics — the SDK is the
+    // platform-bun edge.
+    // @effect-diagnostics-next-line strictEffectProvide:off
+  ).pipe(Effect.provide(BunServices.layer))
 
 export const WorkerSupervisorInternal = {
   isRetryableStartupError,
