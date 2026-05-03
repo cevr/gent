@@ -117,8 +117,8 @@ export const createDependencies = (config: DependenciesConfig) => {
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
 
   // Resolve and build the launch cwd profile runtime once. Server startup and
-  // SessionProfileCache share this same profile so launch cwd actor persistence
-  // has a single owner.
+  // SessionProfileCache share this same profile so cwd-scoped resources have a
+  // single owner.
   const profileLayers = Layer.unwrap(
     Effect.gen(function* () {
       const runtime = yield* resolveProfileRuntime({

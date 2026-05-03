@@ -3,8 +3,8 @@
 ## Overview
 
 Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
-extensions, UI actions (slash commands / palette), scoped resources, actors,
-turn reactions, agents, and LLM drivers.
+extensions, UI actions (slash commands / palette), scoped resources, turn
+reactions, agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
 typed array of values built with small factories. gent is a library used
@@ -35,7 +35,7 @@ That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
 ## Named Concepts
 
-You need at most 9 concepts to write a complete extension:
+You need at most 8 concepts to write a complete extension:
 
 | #   | Concept           | What it is                                       |
 | --- | ----------------- | ------------------------------------------------ |
@@ -44,10 +44,9 @@ You need at most 9 concepts to write a complete extension:
 | 3   | `request`         | Extension-to-extension typed RPC (read or write) |
 | 4   | `action`          | Human-triggered UI affordance (slash / palette)  |
 | 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration    |
-| 6   | `behavior`        | Actor behavior for long-lived state              |
-| 7   | `reactions`       | Turn/message/tool-result hooks                   |
-| 8   | `defineAgent`     | Spawnable subagent                               |
-| 9   | `PermissionRule`  | Allow/deny rule for tool patterns                |
+| 6   | `reactions`       | Turn/message/tool-result hooks                   |
+| 7   | `defineAgent`     | Spawnable subagent                               |
+| 8   | `PermissionRule`  | Allow/deny rule for tool patterns                |
 
 All imports come from one path: `@gent/core/extensions/api`.
 
@@ -197,8 +196,9 @@ export default defineExtension({
 ## Resource (long-lived state)
 
 A Resource declares its scope (lifetime) and carries a service Layer plus
-optional schedule and lifecycle hooks. Stateful actors live in the `actors:`
-bucket, not in Resource fields.
+optional schedule and lifecycle hooks. Extension-owned state should live in
+scoped services/resources; true actor protocols belong at their owning runtime
+boundary through Effect Entity/RPC, not in extension authoring buckets.
 
 | Scope     | Lifetime                |
 | --------- | ----------------------- |
@@ -223,25 +223,6 @@ class MyService extends Context.Tag("MyService")<
 export default defineExtension({
   id: "my-service-ext",
   resources: [defineResource({ tag: MyService, scope: "process", layer: MyService.Live })],
-})
-```
-
-### Actors
-
-Declare long-lived state as actors:
-
-```ts
-import { behavior, defineExtension } from "@gent/core/extensions/api"
-import { Effect } from "effect"
-
-const Counter = behavior({
-  initialState: { count: 0 },
-  receive: (_msg, state) => Effect.succeed(state),
-})
-
-export default defineExtension({
-  id: "counter",
-  actors: [Counter],
 })
 ```
 
@@ -281,7 +262,7 @@ builtin).
 | `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
 | `packages/extensions/src/task-tools`    | `tool` + `request` + scoped storage resource |
 | `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
-| `packages/extensions/src/auto.ts`       | `actors:` + `reactions:` + scoped resources  |
+| `packages/extensions/src/auto.ts`       | `reactions:` + scoped workflow services      |
 
 ## Migration Notes
 

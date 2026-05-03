@@ -20,6 +20,7 @@ import {
   getToolMetadata,
   request,
   tool,
+  validatePackageShape,
 } from "@gent/core/extensions/api"
 import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
@@ -320,6 +321,21 @@ describe("defineExtension", () => {
         expect(rendered).toContain(
           "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
         )
+      }
+    }),
+  )
+
+  it.live("unknown runtime-loaded contribution buckets fail activation", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        validatePackageShape({ id: ExtensionId.make("legacy-actors") }, { actors: [] } as never),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = JSON.stringify(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("unknown contribution bucket")
+        expect(rendered).toContain("actors")
       }
     }),
   )

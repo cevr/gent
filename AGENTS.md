@@ -85,7 +85,7 @@ packages/core/src/       # Everything non-UI
   domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
   storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
   providers/             # AI SDK adapters
-  runtime/               # SessionRuntime, AgentLoop internals, actors, profiles, context-estimation, retry
+  runtime/               # SessionRuntime, AgentLoop internals, profiles, context-estimation, retry
   tools/                 # Tool implementations
   server/                # transport contract, commands, queries, handlers, startup wiring
   test-utils/            # Mock layers, sequence recording, in-process layer
@@ -117,13 +117,13 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Three-tier test taxonomy
 
-| Tier           | Layer                   | Exercises                           | Use for                           |
-| -------------- | ----------------------- | ----------------------------------- | --------------------------------- |
-| Pure reducer   | `createActorHarness`    | State transitions, projections      | Machine behavior                  |
-| Actor runtime  | `makeActorRuntimeLayer` | Direct `ActorEngine`/`Receptionist` | Supervisor, protocol, persistence |
-| RPC acceptance | `createRpcHarness`      | Full RPC → actor → reply path       | Lifecycle, scope, schema, wiring  |
+| Tier           | Layer               | Exercises                       | Use for                           |
+| -------------- | ------------------- | ------------------------------- | --------------------------------- |
+| Pure reducer   | local reducer tests | State transitions, projections  | Pure state behavior               |
+| Runtime        | `baseLocalLayer()`  | Real services and storage       | Supervisor, protocol, persistence |
+| RPC acceptance | `createRpcHarness`  | Full RPC → runtime → reply path | Lifecycle, scope, schema, wiring  |
 
-New extension tests should include at least one RPC acceptance test via `createRpcHarness` to catch scope lifetime bugs. Direct-runtime tests (`makeActorRuntimeLayer`) are for behavior — they bypass the per-request scope boundary that production uses.
+New extension tests should include at least one RPC acceptance test via `createRpcHarness` to catch scope lifetime bugs. Direct service tests are for behavior — they bypass the per-request scope boundary that production uses.
 
 ### Test layers
 
@@ -135,11 +135,6 @@ const { layer: providerLayer, controls } =
 // Full in-process stack (AppServicesLive + real event store + real storage)
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
 const layer = baseLocalLayer()
-
-// Shared actor runtime layer (consolidates test boilerplate)
-// Import relative from test file, e.g. "./helpers/actor-runtime-layer"
-import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
-const layer = makeActorRuntimeLayer({ extensions, withStorage: true })
 
 // RPC acceptance harness (real per-request scopes)
 // Import relative from test file, e.g. "./helpers/rpc-harness"

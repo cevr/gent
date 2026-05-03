@@ -3,7 +3,7 @@
  *
  * Namespaced by extension ID. JSON files at ~/.gent/extensions/<id>/storage/<key>.json.
  * No schema validation — JSON in, JSON out. For extensions that need
- * durable state without the full extension actor runtime.
+ * durable state without adding a dedicated storage service.
  *
  * Effect-native interface: every method returns an Effect. ExtensionStorageError
  * is the boundary error. Validation failures (bad key/id) fail synchronously

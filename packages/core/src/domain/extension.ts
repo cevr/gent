@@ -3,12 +3,11 @@ import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { ToolToken } from "./capability/tool.js"
-import { BranchId, ExtensionId, SessionId, type ToolCallId } from "./ids"
+import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { PermissionResult } from "./permission.js"
 
@@ -56,7 +55,6 @@ export type ExtensionStatusInfo =
       readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "active"
-      readonly actor?: ExtensionActorStatusInfo
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     }
   | ({
@@ -64,37 +62,8 @@ export type ExtensionStatusInfo =
       readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "failed"
-      readonly actor?: ExtensionActorStatusInfo
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
-
-export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
-export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
-
-const ExtensionActorStatusFields = {
-  extensionId: ExtensionId,
-  sessionId: SessionId,
-  branchId: Schema.optional(BranchId),
-}
-
-export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
-  Starting: TaggedEnumClass.variant("starting", ExtensionActorStatusFields),
-  Running: TaggedEnumClass.variant("running", {
-    ...ExtensionActorStatusFields,
-    restartCount: Schema.optional(Schema.Number),
-  }),
-  Restarting: TaggedEnumClass.variant("restarting", {
-    ...ExtensionActorStatusFields,
-    restartCount: Schema.Number,
-  }),
-  Failed: TaggedEnumClass.variant("failed", {
-    ...ExtensionActorStatusFields,
-    error: Schema.String,
-    failurePhase: ExtensionActorFailurePhase,
-    restartCount: Schema.optional(Schema.Number),
-  }),
-})
-export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 
 export type ExtensionScope = "builtin" | "user" | "project"
 
@@ -358,8 +327,6 @@ export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
-
-// Extension Actor — OTP-inspired unified state model
 
 /** Public effect union available to extension authors. */
 export const ExtensionEffectBusEmit = Schema.TaggedStruct("BusEmit", {

@@ -6,39 +6,27 @@ import {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { ExtensionId } from "@gent/core/domain/ids"
 
 describe("buildExtensionHealthSnapshot", () => {
-  test("merges activation, actor, and scheduler failures into typed issue rows", () => {
-    const snapshot = buildExtensionHealthSnapshot(
-      [
-        {
-          manifest: { id: ExtensionId.make("@gent/memory") },
-          scope: "builtin",
-          sourcePath: "builtin",
-          status: "failed",
-          phase: "startup",
-          error: "startup boom",
-        },
-        {
-          manifest: { id: ExtensionId.make("@gent/plan") },
-          scope: "builtin",
-          sourcePath: "builtin",
-          status: "active",
-          scheduledJobFailures: [{ jobId: "reflect", error: "launchd boom" }],
-        },
-      ],
-      [
-        {
-          _tag: "failed",
-          extensionId: ExtensionId.make("@gent/plan"),
-          sessionId: SessionId.make("s1") as never,
-          branchId: BranchId.make("b1") as never,
-          error: "actor boom",
-          failurePhase: "runtime",
-        },
-      ],
-    )
+  test("merges activation and scheduler failures into typed issue rows", () => {
+    const snapshot = buildExtensionHealthSnapshot([
+      {
+        manifest: { id: ExtensionId.make("@gent/memory") },
+        scope: "builtin",
+        sourcePath: "builtin",
+        status: "failed",
+        phase: "startup",
+        error: "startup boom",
+      },
+      {
+        manifest: { id: ExtensionId.make("@gent/plan") },
+        scope: "builtin",
+        sourcePath: "builtin",
+        status: "active",
+        scheduledJobFailures: [{ jobId: "reflect", error: "launchd boom" }],
+      },
+    ])
 
     expect(snapshot._tag).toBe("degraded")
     if (snapshot._tag !== "degraded") return
@@ -64,13 +52,6 @@ describe("buildExtensionHealthSnapshot", () => {
         sourcePath: "builtin",
         _tag: "degraded",
         issues: [
-          {
-            _tag: "actor-failed",
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            error: "actor boom",
-            failurePhase: "runtime",
-          },
           {
             _tag: "scheduled-job-failed",
             jobId: "reflect",
@@ -134,10 +115,9 @@ describe("buildExtensionHealthSnapshot", () => {
         scope: "builtin",
         sourcePath: "builtin",
         issues: [
-          ExtensionHealthIssue.ActorFailed.make({
-            sessionId: SessionId.make("s1") as never,
-            error: "actor boom",
-            failurePhase: "runtime",
+          ExtensionHealthIssue.ScheduledJobFailed.make({
+            jobId: "reflect",
+            error: "launchd boom",
           }),
         ],
       }),
@@ -148,10 +128,9 @@ describe("buildExtensionHealthSnapshot", () => {
       sourcePath: "builtin",
       issues: [
         {
-          _tag: "actor-failed",
-          sessionId: SessionId.make("s1"),
-          error: "actor boom",
-          failurePhase: "runtime",
+          _tag: "scheduled-job-failed",
+          jobId: "reflect",
+          error: "launchd boom",
         },
       ],
     })
@@ -169,11 +148,9 @@ describe("buildExtensionHealthSnapshot", () => {
           _tag: "degraded",
           issues: [
             {
-              _tag: "actor-failed",
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              error: "actor boom",
-              failurePhase: "runtime",
+              _tag: "scheduled-job-failed",
+              jobId: "reflect",
+              error: "launchd boom",
             },
           ],
         },
@@ -184,11 +161,9 @@ describe("buildExtensionHealthSnapshot", () => {
     expect(decoded._tag).toBe("degraded")
     if (decoded._tag !== "degraded") return
     expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
-      _tag: "actor-failed",
-      sessionId: SessionId.make("s1"),
-      branchId: BranchId.make("b1"),
-      error: "actor boom",
-      failurePhase: "runtime",
+      _tag: "scheduled-job-failed",
+      jobId: "reflect",
+      error: "launchd boom",
     })
 
     const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
@@ -199,11 +174,9 @@ describe("buildExtensionHealthSnapshot", () => {
           _tag: "degraded",
           issues: [
             {
-              _tag: "actor-failed",
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              error: "actor boom",
-              failurePhase: "runtime",
+              _tag: "scheduled-job-failed",
+              jobId: "reflect",
+              error: "launchd boom",
             },
           ],
         },

@@ -56,15 +56,17 @@ const HealthControlsProbe = (props: {
       ),
     clearSession: () => client.clearSession(),
   })
-  const failedActors = () => {
+  const failedScheduled = () => {
     const health = client.extensionHealth()
     return health._tag === "degraded"
       ? health.degradedExtensions
-          .filter((extension) => extension.issues.some((issue) => issue._tag === "actor-failed"))
+          .filter((extension) =>
+            extension.issues.some((issue) => issue._tag === "scheduled-job-failed"),
+          )
           .map((extension) => extension.manifest.id)
       : []
   }
-  return <text>{failedActors().join(",")}</text>
+  return <text>{failedScheduled().join(",")}</text>
 }
 const createMutableRuntime = (initialState: ConnectionState) => {
   let state = initialState
@@ -243,7 +245,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/memory")
     }),
   )
-  it.live("ConnectionWidget surfaces failed session actors", () =>
+  it.live("ConnectionWidget surfaces failed scheduled jobs", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <ConnectionWidget />, {
@@ -263,11 +265,9 @@ describe("TUI renderer surfaces", () => {
                       _tag: "degraded" as const,
                       issues: [
                         {
-                          _tag: "actor-failed" as const,
-                          sessionId: testSession.id,
-                          branchId: testSession.activeBranchId,
-                          error: "actor boom",
-                          failurePhase: "runtime" as const,
+                          _tag: "scheduled-job-failed" as const,
+                          jobId: "reflect",
+                          error: "launchd boom",
                         },
                       ],
                     },
@@ -280,7 +280,7 @@ describe("TUI renderer surfaces", () => {
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
-      expect(frame).toContain("failed session actors")
+      expect(frame).toContain("failed scheduled jobs")
       expect(frame).toContain("@gent/plan")
     }),
   )
@@ -335,11 +335,9 @@ describe("TUI renderer surfaces", () => {
             _tag: "degraded" as const,
             issues: [
               {
-                _tag: "actor-failed" as const,
-                sessionId: testSession.id,
-                branchId: testSession.activeBranchId,
-                error: "actor boom",
-                failurePhase: "runtime" as const,
+                _tag: "scheduled-job-failed" as const,
+                jobId: "reflect",
+                error: "launchd boom",
               },
             ],
           },
@@ -360,7 +358,7 @@ describe("TUI renderer surfaces", () => {
           }),
         }),
       )
-      expect(renderFrame(setup)).toContain("failed session actors")
+      expect(renderFrame(setup)).toContain("failed scheduled jobs")
       expect(callCount).toBe(1)
       currentHealth = {
         _tag: "healthy",
@@ -376,7 +374,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(callCount).toBe(2)
-      expect(frame).not.toContain("failed session actors")
+      expect(frame).not.toContain("failed scheduled jobs")
       expect(frame).not.toContain("@gent/plan")
     }),
   )
@@ -412,11 +410,9 @@ describe("TUI renderer surfaces", () => {
                               _tag: "degraded" as const,
                               issues: [
                                 {
-                                  _tag: "actor-failed" as const,
-                                  sessionId: testSession.id,
-                                  branchId: testSession.activeBranchId,
-                                  error: "actor boom",
-                                  failurePhase: "runtime" as const,
+                                  _tag: "scheduled-job-failed" as const,
+                                  jobId: "reflect",
+                                  error: "launchd boom",
                                 },
                               ],
                             },
@@ -439,7 +435,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).not.toContain("failed session actors")
+      expect(frame).not.toContain("failed scheduled jobs")
       expect(frame).not.toContain("@gent/plan")
     }),
   )
@@ -478,11 +474,9 @@ describe("TUI renderer surfaces", () => {
                               _tag: "degraded" as const,
                               issues: [
                                 {
-                                  _tag: "actor-failed" as const,
-                                  sessionId: testSession.id,
-                                  branchId: testSession.activeBranchId,
-                                  error: "actor boom",
-                                  failurePhase: "runtime" as const,
+                                  _tag: "scheduled-job-failed" as const,
+                                  jobId: "reflect",
+                                  error: "launchd boom",
                                 },
                               ],
                             },
@@ -505,7 +499,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).toContain("failed session actors")
+      expect(frame).toContain("failed scheduled jobs")
       expect(frame).toContain("@gent/plan")
     }),
   )

@@ -42,7 +42,7 @@ export interface ExtensionHostContext {
   readonly home: string
   readonly capabilityContext?: Context.Context<never>
 
-  /** Extension actor RPC */
+  /** Extension RPC */
   readonly extension: ExtensionHostContext.Extension
 
   /** Agent registry + runner */

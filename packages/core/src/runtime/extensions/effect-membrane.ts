@@ -97,9 +97,9 @@ export const restoreErasedLayer = <I, E = never, R = never>(
 /**
  * Restore a phantom type after reading from an explicitly erased runtime store.
  *
- * Keep this helper for host-owned storage membranes only: actor refs, ask
- * replies, streams, and similar values whose real type is fixed by the key/ref
- * used at the call site but cannot be represented inside a heterogeneous map.
+ * Keep this helper for host-owned storage membranes only: request replies,
+ * streams, and similar values whose real type is fixed by the key/ref used at
+ * the call site but cannot be represented inside a heterogeneous map.
  */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- call sites recover phantom types from erased stores
 export const restoreErasedValue = <A>(value: unknown): A =>

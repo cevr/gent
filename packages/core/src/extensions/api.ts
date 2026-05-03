@@ -488,6 +488,28 @@ const validateDriverIds = (contribs: ExtensionContributions): string | undefined
   return undefined
 }
 
+const allowedContributionBuckets = new Set([
+  "resources",
+  "tools",
+  "commands",
+  "rpc",
+  "agents",
+  "reactions",
+  "modelDrivers",
+  "externalDrivers",
+])
+
+const validateKnownBuckets = (contribs: ExtensionContributions): string | undefined => {
+  for (const key of Object.keys(contribs)) {
+    if (!allowedContributionBuckets.has(key)) {
+      return `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
+        allowedContributionBuckets,
+      ).join(", ")}`
+    }
+  }
+  return undefined
+}
+
 /** Internal: cross-bucket validation invoked by `defineExtension` and
  *  `setupExtension` (the loader runs it defensively on raw `{ manifest, setup }`
  *  objects that bypassed `defineExtension`). */
@@ -496,7 +518,7 @@ export const validatePackageShape = (
   contribs: ExtensionContributions,
 ): Effect.Effect<void, ExtensionLoadError> =>
   Effect.gen(function* () {
-    const checks = [validateCapabilities, validateAgents, validateDriverIds]
+    const checks = [validateKnownBuckets, validateCapabilities, validateAgents, validateDriverIds]
     for (const check of checks) {
       const message = check(contribs)
       if (message !== undefined) {

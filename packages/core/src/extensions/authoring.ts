@@ -3,8 +3,8 @@
  *
  * This file is intentionally smaller than `extensions/api`: it exports the
  * primitives extension authors should reach for by default, while advanced
- * runtime, provider, actor-engine, and test plumbing stays on explicit domain
- * subpaths or the full-power `extensions/api` facade.
+ * runtime, provider, and test plumbing stays on explicit domain subpaths or
+ * the full-power `extensions/api` facade.
  *
  * @module
  */

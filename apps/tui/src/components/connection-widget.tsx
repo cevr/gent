@@ -20,11 +20,6 @@ export function ConnectionWidget() {
       .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
       .map((extension) => extension.manifest.id)
   }
-  const failedActors = () => {
-    return degradedExtensions()
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "actor-failed"))
-      .map((extension) => extension.manifest.id)
-  }
   const failedScheduledJobs = () => {
     return degradedExtensions().flatMap((extension) =>
       extension.issues.flatMap((issue) =>
@@ -33,24 +28,21 @@ export function ConnectionWidget() {
     )
   }
   const hasFailedExtensions = () => failedExtensions().length > 0
-  const hasFailedActors = () => failedActors().length > 0
   const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>
     client.isReconnecting() ||
     client.connectionIssue() !== null ||
     disconnectedReason() !== null ||
     hasFailedExtensions() ||
-    hasFailedActors() ||
     hasFailedScheduledJobs()
   const accent = () => {
     if (client.isReconnecting()) return theme.warning
-    if (hasFailedExtensions() || hasFailedActors() || hasFailedScheduledJobs()) return theme.warning
+    if (hasFailedExtensions() || hasFailedScheduledJobs()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
     if (hasFailedExtensions()) return "extension activation degraded"
-    if (hasFailedActors()) return "extension runtime degraded"
     if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
     if (disconnectedReason() !== null) return "runtime unavailable"
     return client.connectionIssue() ?? ""
@@ -97,14 +89,6 @@ export function ConnectionWidget() {
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
                 failed extensions: {failedExtensions().join(", ")}
-              </span>
-            </text>
-          </Show>
-          <Show when={hasFailedActors()}>
-            <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.text }}>
-                failed session actors: {failedActors().join(", ")}
               </span>
             </text>
           </Show>

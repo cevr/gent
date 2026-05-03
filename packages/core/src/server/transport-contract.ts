@@ -8,7 +8,6 @@ import {
   ListAuthProvidersPayload,
 } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
-import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, BranchTreeNode, Message, Session, SessionTreeNode } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
@@ -16,9 +15,6 @@ import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
-// Re-export shared domain shapes — the transport contract is the same
-// identity as the domain-owned state, not a parallel copy.
-export { ExtensionActorFailurePhase, ExtensionActorStatusInfo }
 export { Branch, BranchTreeNode, Session, SessionTreeNode }
 
 /**
@@ -307,13 +303,6 @@ export const ExtensionHealthIssue = TaggedEnumClass("ExtensionHealthIssue", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
   }),
-  ActorFailed: TaggedEnumClass.variant("actor-failed", {
-    sessionId: SessionId,
-    branchId: Schema.optional(BranchId),
-    error: Schema.String,
-    failurePhase: ExtensionActorFailurePhase,
-    restartCount: Schema.optional(Schema.Number),
-  }),
   ScheduledJobFailed: TaggedEnumClass.variant("scheduled-job-failed", {
     jobId: Schema.String,
     error: Schema.String,
@@ -327,20 +316,12 @@ const ExtensionHealthIdentityFields = {
   sourcePath: Schema.String,
 }
 
-const HealthyExtensionActorStatusInfo = Schema.Union([
-  ExtensionActorStatusInfo.Starting,
-  ExtensionActorStatusInfo.Running,
-  ExtensionActorStatusInfo.Restarting,
-])
-
 export const ExtensionHealth = TaggedEnumClass("ExtensionHealth", {
   Healthy: TaggedEnumClass.variant("healthy", {
     ...ExtensionHealthIdentityFields,
-    actor: Schema.optional(HealthyExtensionActorStatusInfo),
   }),
   Degraded: TaggedEnumClass.variant("degraded", {
     ...ExtensionHealthIdentityFields,
-    actor: Schema.optional(HealthyExtensionActorStatusInfo),
     issues: Schema.NonEmptyArray(ExtensionHealthIssue),
   }),
 })
