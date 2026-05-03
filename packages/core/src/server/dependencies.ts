@@ -192,7 +192,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     fileLockServiceLive,
     providerLive,
     Layer.provide(FileIndexLive, runtimePlatformLive),
-    SessionCommands.SessionRuntimeTerminatorLive,
     FetchHttpClient.layer,
   )
 
@@ -295,8 +294,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     allDeps,
   )
 
-  const sessionMutationsLive = Layer.provide(SessionCommands.SessionMutationsLive, allDeps)
-
   const sessionRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.sync(() => {
@@ -307,7 +304,12 @@ export const createDependencies = (config: DependenciesConfig) => {
         return SessionRuntime.LiveWithEntity({ baseSections })
       }),
     ),
-    Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionMutationsLive),
+    Layer.mergeAll(allDeps, sessionProfileCacheLive),
+  )
+
+  const sessionMutationsLive = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.merge(allDeps, sessionRuntimeLive),
   )
 
   const allWithRuntime = Layer.mergeAll(
@@ -315,10 +317,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     sessionProfileCacheLive,
     sessionMutationsLive,
     sessionRuntimeLive,
-    Layer.provide(
-      SessionCommands.RegisterSessionRuntimeTerminatorLive,
-      Layer.mergeAll(allDeps, sessionRuntimeLive),
-    ),
   )
 
   const agentRuntimeLive = Layer.provide(

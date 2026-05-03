@@ -70,23 +70,22 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     ModelRegistry.Test(),
     Permission.Test(),
     SessionProfileCache.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
-  const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
-    Layer.merge(baseDeps, eventPublisherLayer),
-  )
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.LiveWithEntity({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
   return Layer.provideMerge(
     SessionCommands.Live,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer),
   ) as Layer.Layer<SessionCommands | MessageStorage | SequenceRecorder>
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>

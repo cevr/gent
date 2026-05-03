@@ -97,7 +97,6 @@ const failingSessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     SessionRuntime.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
@@ -141,7 +140,6 @@ const sendFailingSessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     failingRuntimeLayer,
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -158,7 +156,6 @@ const sessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     SessionRuntime.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -195,7 +192,6 @@ const sessionCommandsLayerWithMachineProbe = (
     runtimeTerminated === undefined
       ? SessionRuntime.Test()
       : sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -210,15 +206,9 @@ const sessionCommandsLayerWithMachineProbe = (
 const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
   const storageLayer = SqliteStorage.MemoryWithSql()
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  const terminatorRegistrationLayer = Layer.provide(
-    SessionCommands.RegisterSessionRuntimeTerminatorLive,
-    Layer.mergeAll(runtimeLayer, SessionCommands.SessionRuntimeTerminatorLive),
-  )
   const deps = Layer.mergeAll(
     storageLayer,
     runtimeLayer,
-    SessionCommands.SessionRuntimeTerminatorLive,
-    terminatorRegistrationLayer,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -246,7 +236,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     storageLayer,
     failingSessionStorageLayer,
     sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -309,7 +298,6 @@ const racySessionCommandsLayer = (params: {
     storageLayer,
     racingSessionStorageLayer,
     sessionRuntimeProbeLayer(params.runtimeTerminated),
-    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -1505,7 +1493,6 @@ describe("requestId idempotency", () => {
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
-        SessionCommands.SessionRuntimeTerminatorLive,
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
@@ -1559,7 +1546,6 @@ describe("requestId idempotency", () => {
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
-        SessionCommands.SessionRuntimeTerminatorLive,
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),

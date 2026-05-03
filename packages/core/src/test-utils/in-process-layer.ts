@@ -92,7 +92,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     ServerProfileService.Test(),
     // SessionCwdRegistry — fast (sessionId → cwd) cache. In-memory Test variant.
     SessionCwdRegistry.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     ...(config.extraLayers ?? []),
   )
 
@@ -101,25 +100,17 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     EventPublisherLive,
     Layer.merge(baseDeps, eventStoreLive),
   )
-  const sessionMutationsLive = Layer.provide(
-    SessionCommands.SessionMutationsLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
-  )
 
   const sessionRuntimeLive = Layer.provide(
     SessionRuntime.LiveWithEntity({
       baseSections: [{ id: "base", content: "test system prompt", priority: 0 }],
     }),
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionMutationsLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
   )
 
-  // Wire the live SessionRuntime into the terminator's empty Ref. Without
-  // this, terminator.terminateSession / restoreSession silently no-op,
-  // hiding the runtime-side cleanup half from any test that boots through
-  // AppServicesLive.
-  const registerTerminatorLive = Layer.provide(
-    SessionCommands.RegisterSessionRuntimeTerminatorLive,
-    Layer.mergeAll(baseDeps, sessionRuntimeLive),
+  const sessionMutationsLive = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionRuntimeLive),
   )
 
   return Layer.provideMerge(
@@ -128,9 +119,8 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
       baseDeps,
       eventStoreLive,
       eventPublisherLive,
-      sessionMutationsLive,
       sessionRuntimeLive,
-      registerTerminatorLive,
+      sessionMutationsLive,
       ServerIdentity.Test(),
     ),
   )

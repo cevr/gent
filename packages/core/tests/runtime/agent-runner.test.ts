@@ -151,17 +151,16 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     ModelRegistry.Test(),
     ephemeralParentDeps,
   )
-  const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
-    Layer.merge(baseDeps, eventPublisherLayer),
-  )
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.LiveWithEntity({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))

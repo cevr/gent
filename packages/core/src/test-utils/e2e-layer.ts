@@ -233,7 +233,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         // SessionCwdRegistry — fast (sessionId → cwd) cache. Tests use the
         // in-memory Test variant.
         SessionCwdRegistry.Test(),
-        SessionCommands.SessionRuntimeTerminatorLive,
         ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
         ...(config.extraLayers ?? []),
       )
@@ -249,10 +248,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         EventPublisherLive,
         Layer.merge(baseDeps, baseEventStoreLive),
       )
-      const sessionMutationsLive = Layer.provide(
-        SessionCommands.SessionMutationsLive,
-        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive),
-      )
       const approvalLayer =
         config.approvalLayer === undefined
           ? ApprovalService.Test()
@@ -263,20 +258,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         SessionRuntime.LiveWithEntity({
           baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
         }),
-        Layer.mergeAll(
-          depsWithApproval,
-          baseEventStoreLive,
-          eventPublisherLive,
-          toolRunnerLive,
-          sessionMutationsLive,
-        ),
+        Layer.mergeAll(depsWithApproval, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
       )
-
-      // Wire the live SessionRuntime into the terminator's empty Ref so
-      // terminateSession/restoreSession actually fire (otherwise they no-op).
-      const registerTerminatorLive = Layer.provide(
-        SessionCommands.RegisterSessionRuntimeTerminatorLive,
-        Layer.mergeAll(baseDeps, sessionRuntimeLive),
+      const sessionMutationsLive = Layer.provide(
+        SessionCommands.SessionMutationsLive,
+        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive, sessionRuntimeLive),
       )
 
       return Layer.provideMerge(
@@ -288,7 +274,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           toolRunnerLive,
           sessionMutationsLive,
           sessionRuntimeLive,
-          registerTerminatorLive,
           ServerIdentity.Test(),
         ),
       )

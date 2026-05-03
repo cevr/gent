@@ -108,7 +108,6 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     ModelRegistry.Test(),
   )
   const baseDeps =
@@ -116,14 +115,15 @@ const makeRuntimeLayer = (
       ? baseDepsWithoutProfile
       : Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
-  const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+  const sessionRuntimeLayer = Layer.provide(
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.merge(baseDeps, eventPublisherLayer),
   )
-  return Layer.provideMerge(
-    sessionRuntimeLayers({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
+  return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const makeRuntimeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
@@ -150,17 +150,22 @@ const makeRuntimeLayerWithEventPublisher = (
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
-    SessionCommands.SessionRuntimeTerminatorLive,
     ModelRegistry.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
-  const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+  const sessionRuntimeLayer = Layer.provide(
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.merge(baseDeps, providedEventPublisherLayer),
   )
-  return Layer.provideMerge(
-    sessionRuntimeLayers({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, providedEventPublisherLayer, sessionMutationsLayer),
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, providedEventPublisherLayer, sessionRuntimeLayer),
+  )
+  return Layer.mergeAll(
+    baseDeps,
+    providedEventPublisherLayer,
+    sessionRuntimeLayer,
+    sessionMutationsLayer,
   )
 }
 const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
