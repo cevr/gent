@@ -141,7 +141,7 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
    * `StartR` is the additional services `start` may yield beyond the
    * resource's own service `A` and the layer's `R`. Useful when the
    * lifecycle action needs runtime services provided by sibling base
-   * layers (e.g. `ActorEngine`) without forcing the resource's layer
+   * layers without forcing the resource's layer
    * itself to depend on them.
    */
   readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>

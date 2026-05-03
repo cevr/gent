@@ -249,25 +249,6 @@ export const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS actor_inbox (
-      command_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      command_kind TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      status TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      started_at INTEGER,
-      completed_at INTEGER,
-      last_error TEXT,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS agent_loop_checkpoints (
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
@@ -295,16 +276,6 @@ export const initSchema = Effect.gen(function* () {
     )
   `)
 
-  yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS actor_persistence (
-      profile_id TEXT NOT NULL,
-      persistence_key TEXT NOT NULL,
-      state_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (profile_id, persistence_key)
-    )
-  `)
-
   yield* assertForeignKeyIntegrity()
 
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
@@ -320,12 +291,6 @@ export const initSchema = Effect.gen(function* () {
   )
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_events_session_tag ON events(session_id, event_tag, id)`,
-  )
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_actor_inbox_status ON actor_inbox(status, updated_at)`,
-  )
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_actor_inbox_target ON actor_inbox(session_id, branch_id, status)`,
   )
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_agent_loop_checkpoints_updated ON agent_loop_checkpoints(updated_at)`,

@@ -10,7 +10,7 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 - `Profile` — cwd-scoped policy and extension graph: permissions, drivers, reactions, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` / `Action` — independent callable leaves for model tools, extension RPC, and human UI actions.
-- `Resource` — long-lived services, schedules, and lifecycle. Stateful actors live in the `actors:` bucket as Behaviors.
+- `Resource` — long-lived services, schedules, lifecycle, and extension-owned state.
 - `Reaction` — turn/message/tool-result hooks for prompt, policy, runtime, and client state derivation.
 
 Everything else is adapter code around those nouns.
@@ -315,10 +315,10 @@ Rules:
 
 - registration shape is structural — builtins, user, and project extensions share the same setup path
 - dispatch compiles once, then runs from typed registries and explicit runtime slots
-- actor snapshot schema is enforced at runtime — invalid public snapshots are dropped, not passed through
+- public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
 - activation/startup failures degrade the extension instead of crashing host startup
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
-- actor side effects cross explicit slots (`reactions:`, declared `services`), not ambient service lookup inside Behavior handlers
+- stateful side effects cross explicit slots (`reactions:`, declared `services`), not ambient service lookup inside handlers
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
@@ -328,7 +328,7 @@ One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?,
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, and `workflow` kinds. After W10-PhaseB the FSM `machine?` slot is gone — stateful actor extensions declare `actors:` instead (see Actor Substrate below). See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, `workflow`, and local actor buckets. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, a future Effect Entity/RPC owner. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
@@ -366,21 +366,17 @@ Other notes:
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
 
-### Extension Actor Substrate
+### Extension State
 
-After W10-PhaseB collapsed the old FSM resource slot and the new `actors:` bucket into one path, all stateful extensions are `Behavior<M, S, R>` actors managed by `ActorHost` and discovered through the `Receptionist`. There is no per-session FSM lifecycle to inspect — Behaviors are process-scoped, and event-backed client widgets subscribe to the normal session event stream.
+Gent no longer ships a local actor substrate for extensions. The old
+`actors:` bucket, `Behavior`, `ServiceKey`, receptionist discovery, local
+mailboxes, and actor persistence tables were deleted in Wave 17. Builtin
+stateful extensions now use ordinary scoped Effect services/resources and
+publish product events through the normal session event stream.
 
-**ActorHost** (`runtime/extensions/actor-host.ts`):
-
-- Profile-scoped: one `ActorHost` per cwd-profile, spawning each `actors:` Behavior once per profile and registering its `ActorRef` against the Behavior's `ServiceKey` in the Receptionist.
-- Durable commit boundary: durable actor mutations are written to `actor_persistence` before buffered ask replies are released.
-- Snapshot writer: periodic and finalizer snapshots remain backup/compaction paths; on respawn the host loads the stored state and resumes from there.
-- Supervision: actor defects report death to the host; the host restarts within the behavior's budget or quarantines the actor while siblings keep running.
-
-**Receptionist + ActorEngine** (`runtime/extensions/receptionist.ts`, `runtime/extensions/actor-engine.ts`):
-
-- `Receptionist.findOne(serviceKey)` resolves the live `ActorRef`. `ActorEngine.tell(ref, msg)` is fire-and-forget; `ActorEngine.ask(ref, msg)` is request/reply with timeout.
-- One `ActorEngine` instance is wired at the composition boundary so `ActorHost` and direct actor callers share the same actor map.
+True actor protocols should be introduced at their owning runtime boundary
+using Effect Entity/RPC rather than recreating mailbox, discovery, persistence,
+or ask/reply infrastructure inside extension authoring.
 
 **Event-backed client invalidation**:
 
@@ -461,13 +457,13 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 `@gent/artifacts` — generic artifact store exposed through typed extension RPC. Any tool/extension can persist artifacts through `ctx.extension.request(...)`.
 
-Actor state: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
+State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 
 Plan, audit, and review tools save artifacts deterministically after producing results. The `@gent/plan` extension is tool-only (no actor) — planning results are persisted as artifacts.
 
 ## Auto Loop Extension
 
-`@gent/auto` — iterative workflow driver backed by a `Behavior` actor plus
+`@gent/auto` — iterative workflow driver backed by scoped services plus
 `reactions.toolResult` / `turnAfter`.
 
 State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: `review` tool completion between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.

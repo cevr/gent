@@ -449,17 +449,12 @@ describe("Stable authoring entrypoint locks (compile-time)", () => {
     type _Request = AuthoringApi.RequestToken
     type _Action = AuthoringApi.ActionToken
     type _HostContext = AuthoringApi.ExtensionHostContext
-    type _Actor = AuthoringApi.ActorRef<unknown, unknown>
 
     void ext
     expect(true).toBe(true)
   })
 
   test("authoring entrypoint does not expose runtime engines or provider plumbing", () => {
-    // @ts-expect-error — actor engine is runtime plumbing, not default authoring surface
-    type _BadActorEngine = AuthoringApi.ActorEngine
-    // @ts-expect-error — receptionist is runtime plumbing, not default authoring surface
-    type _BadReceptionist = AuthoringApi.Receptionist
     // @ts-expect-error — provider auth internals belong to advanced/domain imports
     type _BadProviderAuthInfo = AuthoringApi.ProviderAuthInfo
     // @ts-expect-error — turn executor belongs to advanced driver imports

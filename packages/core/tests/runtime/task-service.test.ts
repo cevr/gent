@@ -5,7 +5,6 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -20,8 +19,6 @@ const makeLayer = () => {
   const baseDeps = Layer.mergeAll(
     storageLayer,
     EventStore.Memory,
-    ActorEngine.Live,
-    ActorEngine.Live,
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )

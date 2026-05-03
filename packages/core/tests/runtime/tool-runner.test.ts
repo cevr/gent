@@ -6,7 +6,6 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
@@ -33,8 +32,6 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorEngine.Live,
-        ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -76,8 +73,6 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorEngine.Live,
-        ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -125,8 +120,6 @@ describe("ToolRunner", () => {
         Permission.Test(),
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorEngine.Live,
-        ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -179,8 +172,6 @@ describe("ToolRunner", () => {
         denyAllPermission,
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        ActorEngine.Live,
-        ActorEngine.Live,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)

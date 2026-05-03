@@ -203,16 +203,6 @@ export {
   defineResource,
   resource,
 } from "../domain/contribution.js"
-export {
-  ServiceKey,
-  ActorAskTimeout,
-  type ActorContext,
-  type ActorRef,
-  type Behavior,
-  type ServiceKey as ServiceKeyT,
-} from "../domain/actor.js"
-export { ActorEngine } from "../runtime/extensions/actor-engine.js"
-export { Receptionist } from "../runtime/extensions/receptionist.js"
 
 // Typed capability factories. Extension registries dispatch by factory-origin
 // metadata baked into the lowering.

@@ -81,14 +81,6 @@ export type {
 } from "../domain/resource.js"
 
 export {
-  ServiceKey,
-  ActorAskTimeout,
-  type ActorContext,
-  type ActorRef,
-  type Behavior,
-} from "../domain/actor.js"
-
-export {
   type ExtensionHostContext,
   ExtensionHostError,
   ExtensionHostSearchResult,

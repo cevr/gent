@@ -557,51 +557,5 @@ export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlCli
         },
         Effect.mapError(mapError("Failed to get session detail")),
       ),
-
-      saveActorState: Effect.fn("Storage.saveActorState")(
-        function* (params: { profileId: string; persistenceKey: string; stateJson: string }) {
-          const updatedAt = yield* Clock.currentTimeMillis
-          yield* sql`INSERT OR REPLACE INTO actor_persistence (profile_id, persistence_key, state_json, updated_at) VALUES (${params.profileId}, ${params.persistenceKey}, ${params.stateJson}, ${updatedAt})`
-        },
-        Effect.mapError(mapError("Failed to save actor state")),
-      ),
-
-      loadActorState: Effect.fn("Storage.loadActorState")(
-        function* (params: { profileId: string; persistenceKey: string }) {
-          const rows = yield* sql<{
-            state_json: string
-            updated_at: number
-          }>`SELECT state_json, updated_at FROM actor_persistence WHERE profile_id = ${params.profileId} AND persistence_key = ${params.persistenceKey}`
-          const row = rows[0]
-          if (row === undefined) return undefined
-          return { stateJson: row.state_json, updatedAt: row.updated_at }
-        },
-        Effect.mapError(mapError("Failed to load actor state")),
-      ),
-
-      listActorStatesForProfile: Effect.fn("Storage.listActorStatesForProfile")(
-        function* (profileId: string) {
-          const rows = yield* sql<{
-            profile_id: string
-            persistence_key: string
-            state_json: string
-            updated_at: number
-          }>`SELECT profile_id, persistence_key, state_json, updated_at FROM actor_persistence WHERE profile_id = ${profileId}`
-          return rows.map((r) => ({
-            profileId: r.profile_id,
-            persistenceKey: r.persistence_key,
-            stateJson: r.state_json,
-            updatedAt: r.updated_at,
-          }))
-        },
-        Effect.mapError(mapError("Failed to list actor states")),
-      ),
-
-      deleteActorStatesForProfile: Effect.fn("Storage.deleteActorStatesForProfile")(
-        function* (profileId: string) {
-          yield* sql`DELETE FROM actor_persistence WHERE profile_id = ${profileId}`
-        },
-        Effect.mapError(mapError("Failed to delete actor states")),
-      ),
     } satisfies StorageService
   })

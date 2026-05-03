@@ -11,7 +11,6 @@ import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { compileExtensionReactions } from "../../../src/runtime/extensions/extension-reactions"
-import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
@@ -93,7 +92,7 @@ describe("SkillsExtension via RPC", () => {
       const section = result.promptSections.find((s) => s.id === "skills")
       expect(section?.content).toContain("effect-v4")
       expect(section?.content).toContain("react")
-    }).pipe(Effect.provide(ActorEngine.Live)),
+    }),
   )
 
   it.live(

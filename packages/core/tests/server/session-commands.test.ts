@@ -15,7 +15,6 @@ import {
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
 } from "../../src/runtime/session-runtime"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
@@ -100,7 +99,6 @@ const failingSessionCommandsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
-    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -146,7 +144,6 @@ const sendFailingSessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -165,7 +162,6 @@ const sessionCommandsLayer = () => {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    ActorEngine.Live,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -194,7 +190,6 @@ const sessionCommandsLayerWithMachineProbe = (
   runtimeRestored?: Array<SessionId>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
-  const actorRuntimeLayer = ActorEngine.Live
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
@@ -205,7 +200,6 @@ const sessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -217,7 +211,6 @@ const sessionCommandsLayerWithMachineProbe = (
 const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
   const storageLayer = Storage.MemoryWithSql()
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  const actorRuntimeLayer = ActorEngine.Live
   const terminatorRegistrationLayer = Layer.provide(
     SessionCommands.RegisterSessionRuntimeTerminatorLive,
     Layer.mergeAll(runtimeLayer, SessionCommands.SessionRuntimeTerminatorLive),
@@ -231,7 +224,6 @@ const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionI
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
@@ -253,7 +245,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
       }
     }),
   ).pipe(Layer.provide(baseSessionStorage))
-  const actorRuntimeLayer = ActorEngine.Live
   const deps = Layer.mergeAll(
     storageLayer,
     baseSessionStorage,
@@ -263,7 +254,6 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -320,8 +310,6 @@ const racySessionCommandsLayer = (params: {
       }
     }),
   ).pipe(Layer.provide(baseSubTags))
-
-  const actorRuntimeLayer = ActorEngine.Live
   const deps = Layer.mergeAll(
     storageLayer,
     baseSubTags,
@@ -331,7 +319,6 @@ const racySessionCommandsLayer = (params: {
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(
@@ -1529,7 +1516,6 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(
@@ -1585,7 +1571,6 @@ describe("requestId idempotency", () => {
         EventStore.Memory,
         EventPublisher.Test(),
         Provider.Debug(),
-        ActorEngine.Live,
         SessionCwdRegistry.Test(),
       )
       const layer = Layer.provideMerge(

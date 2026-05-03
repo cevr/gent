@@ -16,7 +16,6 @@ import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
-import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
@@ -64,8 +63,6 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorEngine.Live,
-    ActorEngine.Live,
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),

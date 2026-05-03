@@ -1,7 +1,6 @@
 import { Effect, Layer, Stream } from "effect"
 import { EventStore, EventStoreError, type EventStoreService } from "../domain/event.js"
 import { StorageError } from "../domain/storage-error.js"
-import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { CheckpointStorage, type CheckpointStorageService } from "../storage/checkpoint-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
@@ -170,35 +169,13 @@ const makeFailingStorageService = (
       fails("getSessionDetail")
         ? storageFailure(storageMessage(options.message, "getSessionDetail"))
         : base.getSessionDetail(sessionId),
-    saveActorState: (params) =>
-      fails("saveActorState")
-        ? storageFailure(storageMessage(options.message, "saveActorState"))
-        : base.saveActorState(params),
-    loadActorState: (params) =>
-      fails("loadActorState")
-        ? storageFailure(storageMessage(options.message, "loadActorState"))
-        : base.loadActorState(params),
-    listActorStatesForProfile: (profileId) =>
-      fails("listActorStatesForProfile")
-        ? storageFailure(storageMessage(options.message, "listActorStatesForProfile"))
-        : base.listActorStatesForProfile(profileId),
-    deleteActorStatesForProfile: (profileId) =>
-      fails("deleteActorStatesForProfile")
-        ? storageFailure(storageMessage(options.message, "deleteActorStatesForProfile"))
-        : base.deleteActorStatesForProfile(profileId),
   }
 }
 
 export const FailingStorage = (
   options: FailingLayerOptions<StorageOperation>,
 ): Layer.Layer<
-  | Storage
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | ActorPersistenceStorage,
+  Storage | SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
   never,
   Storage
 > =>
@@ -212,7 +189,6 @@ export const FailingStorage = (
         MessageStorage.fromStorage(service),
         EventStorage.fromStorage(service),
         RelationshipStorage.fromStorage(service),
-        ActorPersistenceStorage.fromStorage(service),
       )
     }),
   )

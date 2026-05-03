@@ -14,7 +14,6 @@ import { BranchStorage } from "./branch-storage.js"
 import { MessageStorage } from "./message-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
-import { ActorPersistenceStorage } from "./actor-persistence-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 export { StorageError }
 
@@ -112,27 +111,6 @@ export interface StorageService {
     },
     StorageError
   >
-
-  // Actor persistence (profile-scoped, key-namespaced).
-  readonly saveActorState: (params: {
-    profileId: string
-    persistenceKey: string
-    stateJson: string
-  }) => Effect.Effect<void, StorageError>
-  readonly loadActorState: (params: {
-    profileId: string
-    persistenceKey: string
-  }) => Effect.Effect<{ stateJson: string; updatedAt: number } | undefined, StorageError>
-  readonly listActorStatesForProfile: (profileId: string) => Effect.Effect<
-    ReadonlyArray<{
-      profileId: string
-      persistenceKey: string
-      stateJson: string
-      updatedAt: number
-    }>,
-    StorageError
-  >
-  readonly deleteActorStatesForProfile: (profileId: string) => Effect.Effect<void, StorageError>
 }
 
 const mapStartupError = (error: unknown): StorageError =>
@@ -159,12 +137,7 @@ const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient
 const subTagLayersFromService = (
   s: StorageService,
 ): Layer.Layer<
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | ActorPersistenceStorage
+  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage
 > =>
   Layer.mergeAll(
     SessionStorage.fromStorage(s),
@@ -172,7 +145,6 @@ const subTagLayersFromService = (
     MessageStorage.fromStorage(s),
     EventStorage.fromStorage(s),
     RelationshipStorage.fromStorage(s),
-    ActorPersistenceStorage.fromStorage(s),
   )
 
 /**
@@ -183,12 +155,7 @@ const subTagLayersFromService = (
 export const subTagLayers = <E, R>(
   base: Layer.Layer<Storage, E, R>,
 ): Layer.Layer<
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | ActorPersistenceStorage,
+  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
   E,
   R
 > =>
@@ -208,12 +175,7 @@ export const subTagLayers = <E, R>(
  * avoids double-instantiating the base layer (no `base` argument needed).
  */
 const subTagsFromContext: Layer.Layer<
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | ActorPersistenceStorage,
+  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
   never,
   Storage
 > = Layer.unwrap(
@@ -262,8 +224,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage
-    | ActorPersistenceStorage,
+    | RelationshipStorage,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -302,8 +263,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage
-    | ActorPersistenceStorage,
+    | RelationshipStorage,
     StorageError
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
@@ -333,8 +293,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage
-    | ActorPersistenceStorage,
+    | RelationshipStorage,
     StorageError
   > => Storage.MemoryWithSql()
 }

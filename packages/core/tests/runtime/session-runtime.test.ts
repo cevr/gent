@@ -36,7 +36,6 @@ import { Permission } from "@gent/core/domain/permission"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -97,8 +96,6 @@ const makeRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorEngine.Live,
-    ActorEngine.Live,
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -141,8 +138,6 @@ const makeRuntimeLayerWithEventPublisher = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorEngine.Live,
-    ActorEngine.Live,
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -212,8 +207,6 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorEngine.Live,
-    ActorEngine.Live,
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -246,8 +239,6 @@ const makeLiveToolRuntimeLayer = (
       modelDrivers: resolvedExtensions.modelDrivers,
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
-    ActorEngine.Live,
-    ActorEngine.Live,
     eventStoreLayer,
     recorderLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

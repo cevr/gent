@@ -26,7 +26,6 @@ import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
-import { ActorPersistenceStorage } from "@gent/core/storage/actor-persistence-storage"
 import { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { BuiltinEventSink, EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
@@ -208,9 +207,6 @@ describe("scope brand type fences", () => {
         omitted(yield* Effect.serviceOption(EventStorage).pipe(Effect.provide(composed.layer)))
         omitted(
           yield* Effect.serviceOption(RelationshipStorage).pipe(Effect.provide(composed.layer)),
-        )
-        omitted(
-          yield* Effect.serviceOption(ActorPersistenceStorage).pipe(Effect.provide(composed.layer)),
         )
         omitted(
           yield* Effect.serviceOption(InteractionPendingReader).pipe(

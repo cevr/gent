@@ -422,6 +422,11 @@ Verification: session runtime tests, recovery/checkpoint tests, queue tests,
 
 ### C10 - `refactor(extensions): remove actor bucket or replace with effect entities`
 
+Status: complete. Builtin stateful extensions migrated off the local actor
+engine, and the local `actors:` contribution bucket plus `Behavior`,
+`ServiceKey`, `Receptionist`, `ActorHost`, `ActorEngine`, actor persistence
+storage, actor persistence schema, and `askVariant` reply branding were deleted.
+
 Migrate builtin stateful extensions away from `ActorEngine` view/receptionist
 discovery:
 

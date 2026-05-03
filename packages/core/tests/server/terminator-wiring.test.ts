@@ -51,7 +51,6 @@ import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { Storage, subTagLayers } from "../../src/storage/sqlite-storage"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 
 const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
@@ -89,8 +88,6 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
     restoreSession: () => Effect.void,
   } satisfies SessionRuntimeService)
 
-const actorRuntimeLayer = ActorEngine.Live
-
 const baseDeps = ({
   withRegistration,
   runtimeLayer,
@@ -115,7 +112,6 @@ const baseDeps = ({
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
-    actorRuntimeLayer,
     SessionCwdRegistry.Test(),
   )
 }

@@ -42,7 +42,6 @@ import { getToolEffect } from "@gent/core/extensions/api"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { AgentName } from "@gent/core/domain/agent"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
@@ -589,9 +588,7 @@ describe("Executor runtime lifecycle", () => {
                 reactions: contributions.reactions,
               },
             }
-            const layerContext = yield* Layer.build(
-              Layer.merge(makeRuntimeLayer(extension), ActorEngine.Live),
-            )
+            const layerContext = yield* Layer.build(makeRuntimeLayer(extension))
             const compiled = compileExtensionReactions([extension])
             yield* waitFor(
               Context.get(layerContext, ExecutorRead)

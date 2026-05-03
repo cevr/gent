@@ -34,7 +34,6 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
@@ -85,16 +84,11 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
     },
   ]),
 )
-const withEventPublisher = (
-  baseEventStoreLayer: Layer.Layer<EventStore>,
-  actorRuntimeLayer: Layer.Layer<ActorEngine> = ActorEngine.Live,
-) =>
+const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
   Layer.provide(
     EventPublisherLive,
     Layer.mergeAll(
       baseEventStoreLayer,
-      actorRuntimeLayer,
-      ActorEngine.Live,
       testRegistryLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
@@ -124,8 +118,6 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       storageLayer,
       eventStoreLayer,
       registryLayer,
-      ActorEngine.Live,
-      ActorEngine.Live,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
@@ -141,8 +133,6 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     }),
     providerLayer,
     ToolRunner.Test(),
-    ActorEngine.Live,
-    ActorEngine.Live,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
