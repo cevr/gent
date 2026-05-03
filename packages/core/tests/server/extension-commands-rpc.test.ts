@@ -31,7 +31,7 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
-import { action, request, tool } from "@gent/core/extensions/api"
+import { action, CapabilityError, request, tool } from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 class ProfileToken extends Context.Service<
@@ -190,6 +190,67 @@ describe("extension command RPCs", () => {
           cwd: "/tmp/gent-extension-request-session",
         },
       ])
+    }),
+  )
+  it.live("RPC request exposes live session queueFollowUp capability", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/queue-follow-up-request")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          rpc: [
+            request({
+              id: "queue-follow-up",
+              extensionId,
+              intent: "write",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: (input, ctx) =>
+                ctx.session.queueFollowUp({ content: input }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "queue-follow-up",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { client } = yield* Gent.test(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({
+              cwd: "/tmp/gent-extension-queue-follow-up",
+            })
+            yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "queue-follow-up",
+              intent: "write",
+              input: "queued through public rpc",
+            })
+            const queue = yield* client.queue.get({ sessionId, branchId })
+            expect(queue.steering).toEqual([])
+            expect(queue.followUp).toEqual([
+              expect.objectContaining({
+                _tag: "follow-up",
+                content: "queued through public rpc",
+              }),
+            ])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
     }),
   )
   it.live("RPC request rejects missing sessions instead of using launch cwd", () =>

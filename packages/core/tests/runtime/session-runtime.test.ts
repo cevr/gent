@@ -433,6 +433,64 @@ describe("SessionRuntime", () => {
       )
     }),
   )
+  it.live("queueFollowUp validates the session branch before enqueueing", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const first = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("runtime-queue-first"),
+            branchId: BranchId.make("runtime-queue-first-branch"),
+          })
+          const second = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("runtime-queue-second"),
+            branchId: BranchId.make("runtime-queue-second-branch"),
+          })
+          const exit = yield* Effect.exit(
+            sessionRuntime.queueFollowUp({
+              sessionId: first.sessionId,
+              branchId: second.branchId,
+              content: "wrong branch",
+            }),
+          )
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          }
+          const firstQueue = yield* sessionRuntime.getQueuedMessages(first)
+          const secondQueue = yield* sessionRuntime.getQueuedMessages(second)
+          expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+          expect(secondQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("queueFollowUp persists a durable follow-up for an idle session branch", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const target = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("runtime-queue-direct"),
+            branchId: BranchId.make("runtime-queue-direct-branch"),
+          })
+          yield* sessionRuntime.queueFollowUp({
+            ...target,
+            content: "direct follow-up",
+          })
+          const queue = yield* sessionRuntime.getQueuedMessages(target)
+          expect(queue.steering).toEqual([])
+          expect(queue.followUp).toEqual([
+            expect.objectContaining({ _tag: "follow-up", content: "direct follow-up" }),
+          ])
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
   it.live("control-plane dispatch checks session existence without resolving profiles", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([])
