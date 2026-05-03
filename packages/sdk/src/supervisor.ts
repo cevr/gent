@@ -1,6 +1,6 @@
 // @effect-diagnostics asyncFunction:off — worker supervisor process launch helpers are Promise entry boundaries
 // @effect-diagnostics newPromise:off — net/server bridges callback APIs at the OS boundary
-import { BunServices } from "@effect/platform-bun"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   Cause,
   Clock,
@@ -10,6 +10,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Schema,
   Scope,
   Stream,
@@ -294,8 +295,6 @@ const launchWorkerUntilReady = <Proc extends { readonly pid: number }, R = never
     return launched
   })
 
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { appendFileSync } from "node:fs"
 import { getLogPaths } from "@gent/core/runtime/log-paths"
 
 const ShutdownLogJson = Schema.encodeSync(
@@ -305,13 +304,15 @@ const ShutdownLogJson = Schema.encodeSync(
 const shutdownLog = (msg: string, data?: Record<string, unknown>): Effect.Effect<void> =>
   Effect.gen(function* () {
     const ts = (yield* DateTime.nowAsDate).toISOString()
-    yield* Effect.sync(() => {
-      const entry = { ts, level: "info", source: "supervisor", msg, ...data }
-      try {
-        appendFileSync(getLogPaths().client, ShutdownLogJson(entry) + "\n")
-      } catch {}
-    })
-  })
+    const fs = yield* FileSystem.FileSystem
+    const entry = { ts, level: "info", source: "supervisor", msg, ...data }
+    yield* fs
+      .writeFileString(getLogPaths().client, ShutdownLogJson(entry) + "\n", { flag: "a" })
+      .pipe(Effect.ignore)
+  }).pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off shutdown logging seam, isolated FS effect
+    Effect.provide(BunFileSystem.layer),
+  )
 
 /** A live worker subprocess: handle + per-handle scope + last observed exit code. */
 interface WorkerProcess {
