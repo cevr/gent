@@ -1,4 +1,5 @@
 import { Effect, Layer, Context } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -96,6 +97,12 @@ export const createDependencies = (config: DependenciesConfig) => {
     persistenceMode === "memory"
       ? Storage.MemoryWithSql()
       : Storage.LiveWithSql(config.dbPath ?? ".gent/data.db")
+  const clusterRunnerLive = Layer.provide(
+    SingleRunner.layer({
+      runnerStorage: persistenceMode === "memory" ? "memory" : "sql",
+    }),
+    storageLive,
+  )
   // Base event store: raw storage-backed publish/subscribe storage
   const baseEventStoreLive =
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
@@ -183,6 +190,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
+    clusterRunnerLive,
     storageSubTags,
     baseEventStoreLive,
     eventPublisherLive,
@@ -309,7 +317,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.unwrap(
       Effect.gen(function* () {
         const baseSections = yield* BasePromptSectionsTag
-        return SessionRuntime.Live({ baseSections })
+        return SessionRuntime.LiveWithEntity({ baseSections })
       }),
     ),
     Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionMutationsLive),

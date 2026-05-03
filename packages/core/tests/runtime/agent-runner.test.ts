@@ -1,5 +1,6 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import {
   Provider,
   finishPart,
@@ -112,6 +113,10 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
   ])
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
   const storageLayer = Storage.TestWithSql()
+  const clusterRunnerLayer = Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    storageLayer,
+  )
   const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
@@ -126,6 +131,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
   )
   const baseDeps = Layer.mergeAll(
     storageLayer,
+    clusterRunnerLayer,
     eventStoreLayer,
     eventPublisherLayer,
     registryLayer,
@@ -151,12 +157,14 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.Live({ baseSections: [] }),
+    SessionRuntime.LiveWithEntity({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
-  return Layer.mergeAll(deps, runnerLayer)
+  return Layer.mergeAll(deps, runnerLayer) as Layer.Layer<
+    AgentRunnerService | Storage | EventStore | SequenceRecorder
+  >
 }
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(

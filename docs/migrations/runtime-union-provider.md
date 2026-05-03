@@ -14,7 +14,7 @@ New mental model:
 
 - `SessionRuntime` is the only public runtime owner
 - writes flow through typed `SessionRuntime` methods
-- reads flow through `getState`, `watchState`, `getQueuedMessages`, `getMetrics`
+- reads flow through `getState`, `watchState`, `getQueuedMessages`, `drainQueuedMessages`, `getMetrics`
 
 ### Old
 

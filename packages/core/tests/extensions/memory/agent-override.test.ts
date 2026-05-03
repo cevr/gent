@@ -1,6 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { ExtensionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
@@ -47,8 +48,14 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const storageLayer = Storage.TestWithSql()
+  const clusterRunnerLayer = Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    storageLayer,
+  )
   const baseDeps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    storageLayer,
+    clusterRunnerLayer,
     providerLayer,
     eventStoreLayer,
     recorderLayer,
@@ -76,13 +83,13 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.Live({ baseSections: [] }),
+    SessionRuntime.LiveWithEntity({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
   return Layer.provideMerge(
     SessionCommands.Live,
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer, sessionRuntimeLayer),
-  )
+  ) as Layer.Layer<SessionCommands | Storage | SequenceRecorder>
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls

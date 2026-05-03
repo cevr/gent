@@ -9,6 +9,7 @@
  */
 
 import { Effect, Layer, Ref } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import { BunServices } from "@effect/platform-bun"
 import {
   AgentName,
@@ -179,6 +180,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Extension layers may require SqlClient — provide it below via
       // `provideMerge(resourceLayer, baseDeps)`.
       const storageLayer = Storage.MemoryWithSql()
+      const clusterRunnerLive = Layer.provide(
+        SingleRunner.layer({ runnerStorage: "memory" }),
+        storageLayer,
+      )
       // `buildResourceLayer` returns `ErasedResourceLayer = Layer.Layer<any>` — the
       // membrane that `resource-layer.ts` uses to merge heterogeneous extension
       // Resource layers. No additional cast needed here.
@@ -218,6 +223,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const baseDepsCore = Layer.mergeAll(
         BunServices.layer,
         storageLayer,
+        clusterRunnerLive,
         subTagLayers(storageLayer),
         config.providerLayer,
         extensionRegistryLive,
@@ -264,7 +270,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
       const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(
-        SessionRuntime.Live({
+        SessionRuntime.LiveWithEntity({
           baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
         }),
         Layer.mergeAll(

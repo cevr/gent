@@ -6,6 +6,7 @@
  */
 
 import { Layer } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
 import { ExtensionId } from "../domain/ids.js"
@@ -65,8 +66,13 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   )
   const actorRuntimeLive = ActorEngine.Live
   const memoryStorage = Storage.MemoryWithSql()
+  const clusterRunnerLive = Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    memoryStorage,
+  )
   const baseDeps = Layer.mergeAll(
     memoryStorage,
+    clusterRunnerLive,
     subTagLayers(memoryStorage),
     providerLive,
     extensionRegistryLive,
@@ -103,7 +109,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   )
 
   const sessionRuntimeLive = Layer.provide(
-    SessionRuntime.Live({
+    SessionRuntime.LiveWithEntity({
       baseSections: [{ id: "base", content: "test system prompt", priority: 0 }],
     }),
     Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionMutationsLive),

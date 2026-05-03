@@ -2,6 +2,7 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
@@ -74,6 +75,10 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
     },
   ])
 }
+const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
+  SessionRuntime.LiveWithEntity(baseSections)
+const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof Storage.TestWithSql>) =>
+  Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: ReadonlyArray<ToolToken> = [],
@@ -82,8 +87,10 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const storageLayer = Storage.TestWithSql()
   const baseDepsWithoutProfile = Layer.mergeAll(
-    Storage.TestWithSql(),
+    storageLayer,
+    makeClusterRunnerLayer(storageLayer),
     providerLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
@@ -113,7 +120,7 @@ const makeRuntimeLayer = (
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
 }
@@ -124,8 +131,10 @@ const makeRuntimeLayerWithEventPublisher = (
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const storageLayer = Storage.TestWithSql()
   const baseDeps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    storageLayer,
+    makeClusterRunnerLayer(storageLayer),
     providerLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
@@ -151,7 +160,7 @@ const makeRuntimeLayerWithEventPublisher = (
     Layer.merge(baseDeps, providedEventPublisherLayer),
   )
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.mergeAll(baseDeps, providedEventPublisherLayer, sessionMutationsLayer),
   )
 }
@@ -192,8 +201,10 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const storageLayer = Storage.TestWithSql()
   const baseDeps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    storageLayer,
+    makeClusterRunnerLayer(storageLayer),
     checkpointStorageLayer(options),
     providerLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
@@ -214,7 +225,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.merge(baseDeps, eventPublisherLayer),
   )
 }
@@ -225,8 +236,10 @@ const makeLiveToolRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const storageLayer = Storage.TestWithSql()
   const baseDeps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    storageLayer,
+    makeClusterRunnerLayer(storageLayer),
     providerLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
@@ -248,7 +261,7 @@ const makeLiveToolRuntimeLayer = (
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    sessionRuntimeLayers({ baseSections: [] }),
     Layer.merge(deps, eventPublisherLayer),
   )
 }
@@ -837,7 +850,7 @@ describe("SessionRuntime", () => {
       )
     }),
   )
-  it.live("dispatch ApplySteer interjects ahead of queued follow-ups", () =>
+  it.live("steer interject interrupts the active turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* Provider.Sequence([
         {
@@ -890,11 +903,11 @@ describe("SessionRuntime", () => {
           yield* controls.emitAll(0)
           const messages = yield* waitFor(
             storage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 3,
+            (current) => current.filter((message) => message.role === "assistant").length === 2,
             5000,
             "interjected turn completion",
           )
-          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
+          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
           yield* controls.assertDone()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )

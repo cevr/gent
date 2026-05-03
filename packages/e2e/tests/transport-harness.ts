@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, type Config, type Layer } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -8,9 +8,10 @@ import {
   type InProcessLayerConfig,
 } from "@gent/core/test-utils/in-process-layer.js"
 import { Provider, type SignalProviderControls } from "@gent/core/providers/provider.js"
+import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
-import { Gent, type GentClientBundle } from "@gent/sdk"
+import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
 import { createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 import { ignoreSyncDefect } from "../src/effect-test-adapters"
 export { waitFor } from "./seam-fixture"
@@ -20,11 +21,19 @@ const defaultConfig: InProcessLayerConfig = {
   extraLayers: [GitReader.Test],
 }
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
+type HarnessLayerError = Config.ConfigError | StorageError
 export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
-  _baseLocalLayer(defaultConfig, providerMode)
+  _baseLocalLayer(defaultConfig, providerMode) satisfies Layer.Layer<
+    RpcHandlersContext,
+    HarnessLayerError
+  >
 export const baseLocalLayerWithProvider = (
   providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0],
-) => _baseLocalLayerWithProvider(providerLayer, defaultConfig)
+) =>
+  _baseLocalLayerWithProvider(providerLayer, defaultConfig) satisfies Layer.Layer<
+    RpcHandlersContext,
+    HarnessLayerError
+  >
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 

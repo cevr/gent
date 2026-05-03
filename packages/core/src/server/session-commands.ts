@@ -134,8 +134,9 @@ class SessionRuntimeTerminator extends Context.Service<
       return {
         register: (runtime) => Ref.set(runtimeRef, runtime),
         terminateSession: (sessionId) =>
-          withRuntime((runtime) => runtime.terminateSession(sessionId)),
-        restoreSession: (sessionId) => withRuntime((runtime) => runtime.restoreSession(sessionId)),
+          withRuntime((runtime) => runtime.terminateSession(sessionId).pipe(Effect.ignore)),
+        restoreSession: (sessionId) =>
+          withRuntime((runtime) => runtime.restoreSession(sessionId).pipe(Effect.ignore)),
       } satisfies SessionRuntimeTerminatorService
     }),
   )

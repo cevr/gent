@@ -11,6 +11,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { SingleRunner } from "effect/unstable/cluster"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
@@ -478,6 +479,10 @@ const buildEphemeralLayer = (params: {
     Context.get(params.parentServices as Context.Context<unknown>, tag)
 
   const storageLayer = Storage.MemoryWithSql()
+  const clusterRunnerLayer = Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    storageLayer,
+  )
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const approvalLayer = ApprovalService.LiveAutoResolve
   const parentRuntimePlatformLayer = Layer.succeed(RuntimePlatform, parentService(RuntimePlatform))
@@ -523,12 +528,13 @@ const buildEphemeralLayer = (params: {
     ToolRunner.Live,
     Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimePlatformLayer),
   )
-  const sessionRuntimeLayer = SessionRuntime.Live({
+  const sessionRuntimeLayer = SessionRuntime.LiveWithEntity({
     baseSections: params.config.baseSections ?? [],
   }).pipe(
     Layer.provide(
       Layer.provideMerge(
         Layer.mergeAll(
+          clusterRunnerLayer,
           eventPublisherLayer,
           toolRunnerLayer,
           ResourceManagerLive,
