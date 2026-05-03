@@ -1,4 +1,4 @@
-import { Schema, type Effect, type PlatformError } from "effect"
+import { Schema, type Context, type Effect, type PlatformError } from "effect"
 import type { ActorAskTimeout, ActorRef, ServiceKey } from "./actor"
 import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
@@ -42,6 +42,7 @@ export interface ExtensionHostContext {
   readonly agentName?: AgentName
   readonly cwd: string
   readonly home: string
+  readonly capabilityContext?: Context.Context<never>
 
   /** Extension actor RPC */
   readonly extension: ExtensionHostContext.Extension

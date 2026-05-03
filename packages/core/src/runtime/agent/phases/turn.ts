@@ -465,6 +465,9 @@ export const resolveTurnContext = (params: {
       cwd: params.hostCtx.cwd,
       home: params.hostCtx.home,
       sessionCwd: params.hostCtx.cwd,
+      ...(params.hostCtx.capabilityContext !== undefined
+        ? { capabilityContext: params.hostCtx.capabilityContext }
+        : {}),
       turn: turnCtx,
     }
     const interceptedMessages =

@@ -1,29 +1,13 @@
 /**
- * Executor actor — pure FSM hosted on a `Behavior` ().
+ * Executor state — volatile process-local state for the executor resource.
  *
- * States: Idle | Connecting{cwd} | Ready{...} | Error{message}
- *
- * Connection work lives in `connection-runner.ts` — a `Layer.scoped`
- * observer that subscribes to this actor's state via
- * `ActorEngine.subscribeState` and forks the connection effect on entry
- * to `Connecting`. The actor itself stays sync-only and free of side
- * effects.
- *
- * No persistence: connection state is volatile per process. Restoring a
- * `Ready{baseUrl}` snapshot would point at a sidecar URL that no longer
- * exists. The next process starts from `Idle` and re-bootstraps via
- * autoStart (handled by the connection runner).
+ * No persistence: a restored `Ready{baseUrl}` snapshot would point at a
+ * sidecar URL that no longer exists. The next process starts from `Idle` and
+ * re-bootstraps via autoStart.
  */
 
-import { Effect, Schema } from "effect"
-import {
-  behavior,
-  ServiceKey,
-  TaggedEnumClass,
-  type ActorView,
-  type Behavior,
-  type PromptSection,
-} from "@gent/core/extensions/api"
+import { Schema } from "effect"
+import { TaggedEnumClass, type ActorView, type PromptSection } from "@gent/core/extensions/api"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 
@@ -41,28 +25,6 @@ export const ExecutorState = TaggedEnumClass("ExecutorState", {
   Error: { message: Schema.String },
 })
 export type ExecutorState = Schema.Schema.Type<typeof ExecutorState>
-
-// ── Messages ──
-//
-// The public transport now enters through `ExecutorRpc`; these messages
-// remain the private actor mailbox language used by the controller and
-// connection runner.
-
-export const ExecutorMsg = TaggedEnumClass("ExecutorMsg", {
-  Connect: { cwd: Schema.String },
-  Connected: {
-    mode: ExecutorMode,
-    baseUrl: Schema.String,
-    scopeId: Schema.String,
-    executorPrompt: Schema.optional(Schema.String),
-  },
-  ConnectionFailed: { message: Schema.String },
-  Disconnect: {},
-  GetSnapshot: {},
-})
-export type ExecutorMsg = Schema.Schema.Type<typeof ExecutorMsg>
-
-export const ExecutorService = ServiceKey<ExecutorMsg>("@gent/executor/workflow")
 
 // ── UI Model (kept for tooling that consumes the projection shape) ──
 
@@ -93,14 +55,13 @@ export const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => 
   }
 }
 
-// ── Actor view (prompt + tool policy) ──
+// ── Turn projection (prompt + tool policy) ──
 //
-// Pure derivation from `ExecutorState`, sampled via
-// `ActorEngine.peekView` from turn reactions. Replaces the
-// retired `ExecutorProjection` (): when state is `Ready` and an
-// `executorPrompt` is present, contribute the executor-guidance prompt
-// section; otherwise exclude `execute`/`resume` from the active policy
-// until the connection is up.
+// Pure derivation from `ExecutorState`, sampled by ExecutorRuntime's
+// turnProjection reaction. When state is `Ready` and an `executorPrompt`
+// is present, contribute the executor-guidance prompt section; otherwise
+// exclude `execute`/`resume` from the active policy until the connection
+// is up.
 
 const buildExecutorPrompt = (instructions: string): string =>
   [
@@ -174,36 +135,9 @@ export const transitionConnectionFailed = (
 
 export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
   // `Ready → Idle` and `Connecting → Idle` both honor user disconnect
-  // intent. The connection runner observes the state stream and
-  // interrupts the in-flight `runConnection` fork when state leaves
-  // `Connecting`, so a Disconnect mid-handshake cancels the sidecar
-  // resolve before it can race the actor back to Ready.
+  // intent. The runtime service interrupts the in-flight connection fork
+  // before writing Idle, so a disconnect mid-handshake cancels the sidecar
+  // resolve before it can race back to Ready.
   if (state._tag === "Ready" || state._tag === "Connecting") return ExecutorState.Idle.make({})
   return state
 }
-
-// ── Behavior ──
-
-export const executorBehavior: Behavior<ExecutorMsg, ExecutorState, never> = {
-  initialState: ExecutorState.Idle.make({}),
-  serviceKey: ExecutorService,
-  view: viewForState,
-  receive: (msg, state, ctx) =>
-    Effect.gen(function* () {
-      switch (msg._tag) {
-        case "Connect":
-          return transitionConnect(state, msg.cwd)
-        case "Connected":
-          return transitionConnected(state, msg)
-        case "ConnectionFailed":
-          return transitionConnectionFailed(state, msg.message)
-        case "Disconnect":
-          return transitionDisconnect(state)
-        case "GetSnapshot":
-          yield* ctx.reply(projectSnapshot(state))
-          return state
-      }
-    }),
-}
-
-export const executorActor = behavior(executorBehavior)

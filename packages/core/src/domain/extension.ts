@@ -1,4 +1,4 @@
-import type { Effect, FileSystem, Path } from "effect"
+import type { Context, Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
@@ -339,6 +339,7 @@ export interface ProjectionTurnContext {
   readonly home: string
   /** Session-scoped working directory, if the session was opened in a specific cwd. */
   readonly sessionCwd?: string
+  readonly capabilityContext?: Context.Context<never>
   readonly turn: ExtensionTurnContext
 }
 

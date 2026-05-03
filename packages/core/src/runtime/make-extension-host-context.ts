@@ -298,6 +298,7 @@ export const makeExtensionHostContext = (
     agentName: runInfo.agentName,
     cwd: runInfo.sessionCwd ?? deps.platform.cwd,
     home: deps.platform.home,
+    ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
 
     extension: {
       request: <I, O>(ref: CapabilityRef<I, O>, input: I) => {

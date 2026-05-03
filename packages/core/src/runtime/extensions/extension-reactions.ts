@@ -153,7 +153,9 @@ const runReaction = <Input>(
 ) =>
   Effect.gen(function* () {
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous ExtensionReaction
-    const exit = yield* exitErasedEffect(() => reaction.slot.handler(input, ctx))
+    const exit = yield* exitErasedEffect(() =>
+      provideHostContext(ctx, reaction.slot.handler(input, ctx)),
+    )
     if (exit._tag === "Success") return
     const cause = exit.cause
     switch (reaction.slot.failureMode) {
@@ -184,6 +186,22 @@ const runReaction = <Input>(
     }
   })
 
+const provideHostContext = <A, E, R>(
+  ctx: ExtensionHostContext,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  ctx.capabilityContext === undefined
+    ? effect
+    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+
+const provideProjectionContext = <A, E, R>(
+  ctx: ProjectionTurnContext,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  ctx.capabilityContext === undefined
+    ? effect
+    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+
 const collectTurnProjection = (
   projection: ExtensionTurnProjection | undefined,
   sectionsById: Map<string, PromptSection>,
@@ -198,11 +216,14 @@ const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot, ctx: Projec
   sealErasedEffect(
     () =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous turn-projection slot
-      slot.handler(ctx).pipe(
-        Effect.map((projection) => ({
-          promptSections: projection.promptSections ?? [],
-          policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
-        })),
+      provideProjectionContext(
+        ctx,
+        slot.handler(ctx).pipe(
+          Effect.map((projection) => ({
+            promptSections: projection.promptSections ?? [],
+            policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
+          })),
+        ),
       ),
     {
       onFailure: (error) =>
@@ -297,7 +318,7 @@ export const compileExtensionReactions = (
         for (const slot of messageInputSlots) {
           current = yield* sealErasedEffect(
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous message-input slot
-            () => slot.handler({ ...input, content: current }, ctx),
+            () => provideHostContext(ctx, slot.handler({ ...input, content: current }, ctx)),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.message-input.failed").pipe(
@@ -327,7 +348,7 @@ export const compileExtensionReactions = (
         for (const slot of permissionCheckSlots) {
           current = yield* sealErasedEffect(
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous permission-check slot
-            () => slot.handler({ ...input, current }, ctx),
+            () => provideHostContext(ctx, slot.handler({ ...input, current }, ctx)),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.permission-check.failed").pipe(
@@ -357,7 +378,8 @@ export const compileExtensionReactions = (
         for (const slot of contextMessagesSlots) {
           current = yield* sealErasedEffect(
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous context-messages slot
-            () => slot.handler({ ...input, messages: current }, ctx.host),
+            () =>
+              provideHostContext(ctx.host, slot.handler({ ...input, messages: current }, ctx.host)),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.context-messages.failed").pipe(
@@ -387,7 +409,11 @@ export const compileExtensionReactions = (
         for (const slot of systemPromptSlots) {
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous system-prompt slot
           current = yield* sealErasedEffect(
-            () => slot.handler({ ...input, basePrompt: current }, ctx.host),
+            () =>
+              provideHostContext(
+                ctx.host,
+                slot.handler({ ...input, basePrompt: current }, ctx.host),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.system-prompt.failed").pipe(
@@ -464,7 +490,7 @@ export const compileExtensionReactions = (
         for (const slot of toolExecuteSlots) {
           current = yield* sealErasedEffect(
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-execute slot
-            () => slot.handler({ ...input, current }, ctx),
+            () => provideHostContext(ctx, slot.handler({ ...input, current }, ctx)),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.tool-execute.failed").pipe(
@@ -494,7 +520,7 @@ export const compileExtensionReactions = (
         for (const slot of toolResultSlots) {
           const next = yield* sealErasedEffect(
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
-            () => slot.handler({ ...input, result: current }, ctx),
+            () => provideHostContext(ctx, slot.handler({ ...input, result: current }, ctx)),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.tool-result.failed").pipe(

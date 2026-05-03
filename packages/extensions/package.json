@@ -75,8 +75,6 @@
     "./exec-tools/protocol.js": "./src/exec-tools/protocol.ts",
     "./executor/actor": "./src/executor/actor.ts",
     "./executor/actor.js": "./src/executor/actor.ts",
-    "./executor/connection-runner": "./src/executor/connection-runner.ts",
-    "./executor/connection-runner.js": "./src/executor/connection-runner.ts",
     "./executor/controller": "./src/executor/controller.ts",
     "./executor/controller.js": "./src/executor/controller.ts",
     "./executor/domain": "./src/executor/domain.ts",

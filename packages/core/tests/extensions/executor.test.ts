@@ -5,7 +5,6 @@ import {
   transitionConnected,
   transitionConnectionFailed,
   transitionDisconnect,
-  executorBehavior,
   viewForState,
 } from "@gent/extensions/executor/actor"
 import {
@@ -17,12 +16,11 @@ import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/
 
 // ── State machine ──
 //
-// Pure transitions are exposed as standalone functions; the Behavior
-// composes them into a `receive` switch. We test the transitions
-// directly — that's the /c test pattern. End-to-end coverage
-// (actor mailbox + connection runner) lives in the integration test.
+// Pure transitions are exposed as standalone functions. The runtime
+// service composes them with the sidecar connection lifecycle; integration
+// coverage lives in executor-integration.test.ts.
 
-const idle = executorBehavior.initialState
+const idle = ExecutorState.Idle.make({})
 const connectingFrom = (cwd = "/test") => transitionConnect(idle, cwd)
 
 describe("Executor state machine", () => {
@@ -90,11 +88,9 @@ describe("Executor state machine", () => {
   })
 
   test("Disconnect while Connecting → Idle (cancels in-flight handshake)", () => {
-    // The connection runner observes the state stream and interrupts
-    // the in-flight `runConnection` fork when state leaves Connecting,
-    // so honoring user disconnect intent is safe — late `Connected`
-    // tells from a cancelled fork would no-op against Idle anyway via
-    // `transitionConnected`'s state guard.
+    // The runtime service interrupts the in-flight connection fiber when
+    // state leaves Connecting. Late completion is guarded by generation
+    // checks and the pure transition keeps Idle stable.
     const next = transitionDisconnect(connectingFrom())
     expect(next._tag).toBe("Idle")
   })
@@ -115,23 +111,13 @@ describe("Executor state machine", () => {
   })
 })
 
-// ── Actor view (new path) ──
+// ── Runtime turn projection ──
 //
-// `ExecutorActorConfig.derive` is gone. Prompt/policy come from
-// `viewForState(state)` — a pure function of `ExecutorState` sampled by
-// turn reactions via `ActorEngine.peekView`. We test it directly.
+// Prompt/policy come from `viewForState(state)` — a pure function of
+// `ExecutorState` sampled by the process-scoped ExecutorRuntime turn
+// projection reaction. We test the pure projection directly.
 
 describe("executor viewForState — prompt + tool policy", () => {
-  test("executorBehavior.view is wired so turn reactions sample it", () => {
-    // Regression-locks the seam: if `view` is unset on the
-    // behavior, `ActorEngine.peekView` returns undefined and the
-    // executor-guidance prompt section / policy exclusions never
-    // reach prompt assembly — even though `viewForState` itself
-    // would still pass its pure tests.
-    expect(executorBehavior.view).toBeDefined()
-    expect(executorBehavior.view).toBe(viewForState)
-  })
-
   test("Idle: excludes execute + resume, no prompt section", () => {
     const view = viewForState(ExecutorState.Idle.make({}))
     expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })

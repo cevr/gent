@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Data, Effect, Exit } from "effect"
+import { Cause, Context, Data, Effect, Exit, Ref } from "effect"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type {
   ContextMessagesInput,
@@ -54,6 +54,14 @@ const makeExt = (
 class BoomError extends Data.TaggedError("@gent/core/tests/extension-reactions/BoomError")<{
   readonly reason: string
 }> {}
+
+class ReactionCounter extends Context.Service<
+  ReactionCounter,
+  {
+    readonly increment: Effect.Effect<void>
+    readonly get: Effect.Effect<number>
+  }
+>()("@gent/core/tests/extension-reactions/ReactionCounter") {}
 
 describe("runtime slots", () => {
   it.live("normalizeMessageInput is a pass-through without explicit rewrites", () => {
@@ -433,6 +441,48 @@ describe("runtime slots", () => {
       expect(calls).toEqual(["continue", "isolate", "halt"])
     })
   })
+
+  it.live("turnAfter reactions run inside capability context", () =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make(0)
+      const counter = {
+        increment: Ref.update(ref, (n) => n + 1),
+        get: Ref.get(ref),
+      }
+      const slots = compileExtensionReactions([
+        makeExt("resource-backed", "builtin", {
+          reactions: {
+            turnAfter: {
+              failureMode: "halt",
+              handler: () =>
+                Effect.gen(function* () {
+                  const service = yield* ReactionCounter
+                  yield* service.increment
+                }),
+            },
+          },
+        }),
+      ])
+      const hostCtx = {
+        ...stubHostCtx,
+        capabilityContext: Context.make(ReactionCounter, counter),
+      } satisfies ExtensionHostContext
+
+      yield* slots.emitTurnAfter(
+        {
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+          durationMs: 10,
+          agentName: AgentName.make("cowork"),
+          interrupted: false,
+        } satisfies TurnAfterInput,
+        hostCtx,
+      )
+
+      const count = yield* counter.get
+      expect(count).toBe(1)
+    }),
+  )
 
   it.live("turnBefore explicit reactions fire in scope order", () => {
     const calls: string[] = []

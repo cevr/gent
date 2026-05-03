@@ -1,23 +1,20 @@
 import { describe, expect, it } from "effect-bun-test"
 /**
  * Executor integration tests — tool execution with mocked services,
- * and actor lifecycle through the actor primitive.
+ * and runtime lifecycle through the process-scoped executor resource.
  *
- * The executor uses a `Behavior` actor + Layer-scoped
- * `ExecutorConnectionRunner`. Connection state is volatile
- * per process — the actor has no persistence — so the old "state
- * persists via durability" test is gone; cross-extension Receptionist
- * discovery is exercised end-to-end here via typed Executor RPC/controller
- * services, while the actor remains the source of truth for connection state.
+ * Connection state is volatile per process, so the old "state persists via
+ * durability" test is gone. Public commands exercise the typed Executor
+ * RPC/controller services end-to-end.
  */
 import { Deferred, Effect, Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Provider } from "@gent/core/providers/provider"
 import { Gent } from "@gent/sdk"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { executorActor } from "@gent/extensions/executor/actor"
 import {
   type ExecutorMcpToolResult,
   type ResolvedExecutorSettings,
@@ -33,16 +30,10 @@ import {
   ExecutorWrite,
 } from "@gent/extensions/executor/controller"
 import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
-import {
-  ExecutorConnectionRunner,
-  ExecutorConnectionRunnerLayer,
-} from "@gent/extensions/executor/connection-runner"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
-import { ActorHost } from "../../src/runtime/extensions/actor-host"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
-import { resolveExtensions, type ResolvedExtensions } from "../../src/runtime/extensions/registry"
+import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
 import { getToolEffect } from "@gent/core/extensions/api"
@@ -80,7 +71,7 @@ const waitingResult: ExecutorMcpToolResult = {
   isError: false,
   executionId: "exec-abc-123",
 }
-// ── Actor lifecycle helpers ──
+// ── Runtime lifecycle helpers ──
 const mockEndpoint = {
   mode: "local" as const,
   baseUrl: "http://127.0.0.1:4788",
@@ -93,10 +84,9 @@ const mockInspection = {
 }
 /**
  * Build a `LoadedExtension` carrying:
- *   - `actors: [executorActor]` — Behavior spawned by ActorHost.
- *   - `resources` — sidecar+bridge layer for the tools, plus the
- *     ExecutorConnectionRunner layer so connection work fires on entry
- *     to `Connecting`.
+ *   - `resources` — sidecar+bridge plus ExecutorRuntime in one resource layer.
+ *     The controller depends on sidecar+bridge, so the layer is composed with
+ *     `provideMerge` instead of relying on sibling resource cross-wiring.
  */
 const makeExecutorExtension = (overrides?: {
   sidecar?: Parameters<typeof ExecutorSidecar.Test>[0]
@@ -120,31 +110,18 @@ const makeExecutorExtension = (overrides?: {
     ...overrides?.bridge,
   })
   const sidecarBridgeLayer = Layer.merge(sidecarLayer, bridgeLayer)
-  // Connection runner layer — its R channel is closed by providing the
-  // sidecar+bridge here so the resource's residual R is `ActorEngine |
-  // Receptionist`, which the runtime supplies.
-  const runnerLayer = ExecutorConnectionRunnerLayer("/test").pipe(Layer.provide(sidecarBridgeLayer))
+  const executorLayer = Layer.provideMerge(ExecutorControllerLive("/test"), sidecarBridgeLayer)
   const extension: LoadedExtension = {
     manifest: { id: EXECUTOR_EXTENSION_ID },
     scope: "builtin",
     sourcePath: "builtin",
     contributions: {
       rpc: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
-      actors: [executorActor],
       resources: [
         defineResource({
           scope: "process",
-          layer: ExecutorControllerLive,
+          layer: executorLayer,
         }),
-        defineResource({
-          tag: ExecutorConnectionRunner,
-          scope: "process",
-          layer: runnerLayer as Layer.Layer<ExecutorConnectionRunner>,
-        }),
-        defineResource({
-          scope: "process",
-          layer: sidecarBridgeLayer as Layer.Layer<unknown>,
-        }) as never,
       ],
     },
   }
@@ -152,27 +129,10 @@ const makeExecutorExtension = (overrides?: {
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
   const storage = Layer.orDie(Storage.Test())
-  const resolved = { extensions: [extension] } as unknown as ResolvedExtensions
-  // Build the actor runtime stack: `ActorEngine.Live` provides engine +
-  // Receptionist; `ActorHost.fromResolved` spawns contributed behaviors;
-  // both stay in the output set so the runner layer can pull them. The
-  // resource-layer chain below is provideMerged onto this stack so it
-  // shares the same engine instance that the host registers actors with.
-  const actorRuntime = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
-  // Pull every `scope: "process"` resource layer from the extension and
-  // chain them onto `actorRuntime` via `Layer.provideMerge` so the runner's
-  // `ActorEngine | Receptionist` requirements resolve to the same
-  // instance the host registers actors with.
   const extLayers = (extension.contributions.resources ?? [])
     .filter((r) => r.scope === "process")
     .map((r) => r.layer as Layer.Layer<any, never, any>)
-  // Stack the resource layers on top of `actorRuntime + storage` so each
-  // resource's `ActorEngine | Receptionist | Storage | …` deps are
-  // satisfied by the underlying stack. `provideMerge` keeps the
-  // resource's outputs (e.g. `ExecutorConnectionRunner`) in the result
-  // and forces the resource layer to activate (otherwise an unused
-  // output is dead-stripped, and the connection runner never starts).
-  const baseStack = Layer.mergeAll(actorRuntime, storage)
+  const baseStack = Layer.mergeAll(storage, BunServices.layer)
   const machineWithResources = extLayers.reduce<Layer.Layer<any, never, any>>(
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,
@@ -325,14 +285,12 @@ describe("Executor tools", () => {
     }),
   )
 })
-// ── Actor lifecycle ──
+// ── Runtime lifecycle ──
 //
-// The runner observes the actor's state via `engine.subscribeState` and
-// drives the sidecar connection on entry to `Connecting`. Snapshot reads
-// route through `ExecutorRead.snapshot()` and `ExecutorWrite` commands,
-// exercising end-to-end cross-extension Receptionist discovery without
-// the retired actor-route protocol shim.
-describe("Executor actor lifecycle", () => {
+// The runtime owns state and drives sidecar connection fibers directly.
+// Snapshot reads route through `ExecutorRead.snapshot()` and
+// `ExecutorWrite` commands.
+describe("Executor runtime lifecycle", () => {
   it.live(
     "autoStart=true → Idle → Connecting → Ready",
     () => {
@@ -356,8 +314,7 @@ describe("Executor actor lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
       return narrowR(
         Effect.gen(function* () {
-          // autoStart=false means the runner does not tell `Connect` —
-          // actor stays Idle.
+          // autoStart=false means the runtime does not connect.
           yield* waitForExecutorStatus("idle")
           const reply = yield* executorSnapshot
           expect(reply.status).toBe("idle")
@@ -540,10 +497,7 @@ describe("Executor actor lifecycle", () => {
   )
   // No persistence test: connection state is volatile per process. A
   // restored `Ready{baseUrl}` would point at a sidecar URL that no
-  // longer exists; the actor ships without `persistence` and re-bootstraps
-  // from `Idle` via autoStart. Cross-process persistence is covered by
-  // `actor-host.test.ts > fromResolvedWithPersistence round-trips state`
-  // for actors that DO opt in.
+  // longer exists; the runtime re-bootstraps from `Idle` via autoStart.
   // Regression lock: Disconnect mid-handshake must cancel
   // the in-flight `runConnection` fork. Without the cancel, the
   // sidecar resolve eventually `tell`s `Connected` and pushes the
@@ -564,11 +518,11 @@ describe("Executor actor lifecycle", () => {
       return narrowR(
         Effect.gen(function* () {
           const executor = yield* ExecutorWrite
-          // Wait until the actor enters Connecting (autoStart fired).
+          // Wait until the runtime enters Connecting (autoStart fired).
           yield* waitForExecutorStatus("connecting")
           // Disconnect mid-handshake.
           yield* executor.disconnect()
-          // Actor should land on Idle promptly (Connecting → Idle).
+          // Runtime should land on Idle promptly (Connecting → Idle).
           yield* waitForExecutorStatus("idle")
           // Now release the (cancelled) in-flight handshake. If it races
           // back to Ready, the regression has reappeared.
@@ -583,13 +537,10 @@ describe("Executor actor lifecycle", () => {
     },
     10000,
   )
-  // Regression lock: production composer must cross-wire
-  // `ActorEngine | Receptionist` into the resource layer's R channel.
-  // `Layer.mergeAll(baseLayers, resourceLayer)` does NOT cross-wire,
-  // so the `ExecutorConnectionRunner` layer would build silently dead
-  // (its bootstrap fork swallows the "Service not found" defect).
-  // Validation: drive autoStart through `buildExtensionLayers` (the
-  // production composer) and assert state reaches `ready`.
+  // Regression lock: the executor resource composes its own dependent
+  // services, and the production composer feeds platform/base services
+  // into that resource layer. Validation: drive autoStart through
+  // `buildExtensionLayers` and assert state reaches `ready`.
   it.live(
     "buildExtensionLayers wires runner so autoStart reaches Ready",
     () => {
@@ -598,6 +549,7 @@ describe("Executor actor lifecycle", () => {
       const layer = buildExtensionLayers(resolved).pipe(
         Layer.provideMerge(Storage.Test()),
         Layer.provideMerge(EventStore.Memory),
+        Layer.provideMerge(BunServices.layer),
       )
       return narrowR(
         Effect.gen(function* () {
