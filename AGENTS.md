@@ -107,7 +107,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Test philosophy
 
-- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `Provider.Sequence` for LLM responses.
+- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `SqliteStorage.TestWithSql()` with in-memory SQLite + `Provider.Sequence` for LLM responses.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM provider (via `Provider.Sequence` / `Provider.Debug`). Use real services inside the boundary.
 - **`Provider.Test()` and `EventStore.Test()` are deleted** — use `Provider.Sequence([...])` or `Provider.Debug()` for provider mocking, `EventStore.Memory` for in-memory event stores. Provider statics (`Provider.Sequence`, `Provider.Signal`, `Provider.Debug`, `Provider.Failing`) and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/providers/provider`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
@@ -152,9 +152,8 @@ assertSequence(calls, [
 
 | File                                               | Purpose                                             |
 | -------------------------------------------------- | --------------------------------------------------- | ------ | ----- | -------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`      | Storage service tags and SQLite layer assembly      |
+| `packages/core/src/storage/sqlite-storage.ts`      | SQLite layer composition for focused storage tags   |
 | `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/storage/sqlite/impl.ts`         | SQLite-backed focused sub-tag implementation        |
 | `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
 | `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
 | `packages/core/src/server/transport-contract.ts`   | shared client contract                              |

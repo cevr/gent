@@ -49,6 +49,15 @@ export class ReasoningPart extends Schema.Class<ReasoningPart>("ReasoningPart")(
   text: Schema.String,
 }) {}
 
+export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+  id: ToolCallId,
+  toolName: Schema.String,
+  status: Schema.Literals(["running", "completed", "error"]),
+  input: Schema.UndefinedOr(Schema.Unknown),
+  summary: Schema.UndefinedOr(Schema.String),
+  output: Schema.UndefinedOr(Schema.String),
+}) {}
+
 export const MessagePart = Schema.Union([
   TextPart,
   ImagePart,
@@ -101,6 +110,20 @@ export type Message = typeof Message.Type
 export type RegularMessage = Extract<Message, { _tag: "regular" }>
 export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
+const ProjectedMessageFields = {
+  ...MessageFields,
+  toolInteractions: Schema.Array(ToolInteraction),
+}
+
+export const ProjectedMessage = TaggedEnumClass("ProjectedMessage", {
+  Regular: TaggedEnumClass.variant("regular", ProjectedMessageFields),
+  Interjection: TaggedEnumClass.variant("interjection", {
+    ...ProjectedMessageFields,
+    role: Schema.Literal("user"),
+  }),
+})
+export type ProjectedMessage = typeof ProjectedMessage.Type
+
 export const copyMessageToBranch = (
   message: Message,
   params: {
@@ -122,6 +145,26 @@ export const copyMessageToBranch = (
   return message._tag === "interjection"
     ? Message.Interjection.make({ ...fields, role: "user" })
     : Message.Regular.make(fields)
+}
+
+export const projectMessage = (
+  message: Message,
+  toolInteractions: ReadonlyArray<ToolInteraction>,
+): ProjectedMessage => {
+  const fields = {
+    id: message.id,
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    role: message.role,
+    parts: message.parts,
+    createdAt: message.createdAt,
+    toolInteractions,
+    ...(message.turnDurationMs !== undefined ? { turnDurationMs: message.turnDurationMs } : {}),
+    ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
+  }
+  return message._tag === "interjection"
+    ? ProjectedMessage.Interjection.make({ ...fields, role: "user" })
+    : ProjectedMessage.Regular.make(fields)
 }
 
 // Session

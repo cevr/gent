@@ -13,7 +13,7 @@ tests/            # Integration tests (bun test)
 | Package      | Purpose                       | Key Export                                            |
 | ------------ | ----------------------------- | ----------------------------------------------------- |
 | `core`       | Schemas, service interfaces   | `Message`, `EventStore`, `ToolRegistry`, `Permission` |
-| `storage`    | SQLite via bun:sqlite         | `Storage.Live(path)`, `Storage.Test()`                |
+| `storage`    | SQLite via bun:sqlite         | `SqliteStorage.LiveWithSql(path)`, focused tags       |
 | `tools`      | File/process tools            | `AllTools`, `defineTool`                              |
 | `providers`  | ai-sdk wrapper                | `Provider.Live`, `StreamChunk` variants               |
 | `runtime`    | Agent orchestration           | `AgentLoop.Live(config)`                              |

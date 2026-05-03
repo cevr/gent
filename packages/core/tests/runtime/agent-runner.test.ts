@@ -158,7 +158,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
   return Layer.mergeAll(deps, runnerLayer) as Layer.Layer<
-    AgentRunnerService | Storage | SessionStorage | BranchStorage | EventStore | SequenceRecorder
+    AgentRunnerService | SessionStorage | BranchStorage | EventStore | SequenceRecorder
   >
 }
 // Extra services the parent context needs for ephemeral child runtime

@@ -11,20 +11,19 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import { projectMessage } from "@gent/core/domain/message.js"
 import {
   messagePartImage,
   messagePartReasoning,
   messagePartText,
   messagePartToolCall,
-  messagePartsToolInteractions,
-  buildToolResultMapFromMessages,
-  type ToolResultState,
 } from "@gent/core/domain/message-part-projection.js"
 import {
   extractText,
   extractReasoning,
   extractImages,
-  type Message as DomainMessage,
+  type ProjectedMessage,
+  type ToolInteraction,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
 import type { SessionEvent } from "../components/session-event-label"
@@ -68,10 +67,13 @@ const isMessage = (item: SessionItem): item is Message =>
 // ── Build messages from raw ──
 
 const buildSegments = (
-  parts: DomainMessage["parts"],
-  resultMap: ReadonlyMap<string, ToolResultState>,
+  parts: ProjectedMessage["parts"],
+  toolInteractions: ReadonlyArray<ToolInteraction>,
 ): AssistantSegment[] => {
   const segments: AssistantSegment[] = []
+  const interactionsById = new Map(
+    toolInteractions.map((interaction) => [String(interaction.id), interaction]),
+  )
   for (const part of parts) {
     const text = messagePartText(part)
     if (text !== undefined) {
@@ -93,7 +95,7 @@ const buildSegments = (
 
     const tc = messagePartToolCall(part)
     if (tc !== undefined) {
-      const toolCall = messagePartsToolInteractions([part], resultMap)[0]
+      const toolCall = interactionsById.get(tc.id)
       if (toolCall === undefined) continue
       segments.push({
         _tag: "tool-call",
@@ -104,13 +106,12 @@ const buildSegments = (
   return segments
 }
 
-const buildMessages = (msgs: readonly DomainMessage[]): Message[] => {
-  const resultMap = buildToolResultMapFromMessages(msgs)
+const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
-    const toolCalls = [...messagePartsToolInteractions(m.parts, resultMap)]
-    const segments = m.role === "assistant" ? buildSegments(m.parts, resultMap) : undefined
+    const toolCalls = [...m.toolInteractions]
+    const segments = m.role === "assistant" ? buildSegments(m.parts, m.toolInteractions) : undefined
     const message = {
       id: m.id,
       role: m.role,
@@ -130,7 +131,7 @@ const buildMessages = (msgs: readonly DomainMessage[]): Message[] => {
 
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
-  message: DomainMessage,
+  message: ProjectedMessage,
 ) => {
   const next = buildMessages([message])[0]
   if (next === undefined) return
@@ -478,7 +479,7 @@ export function useSessionFeed(
     switch (event._tag) {
       case "MessageReceived":
         if (event.message.role === "user") {
-          upsertReceivedMessage(setStore, event.message)
+          upsertReceivedMessage(setStore, projectMessage(event.message, []))
         }
         break
 

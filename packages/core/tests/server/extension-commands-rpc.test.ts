@@ -581,12 +581,19 @@ describe("extension command RPCs", () => {
           const createdBranchPart = snapshot.messages
             .flatMap((message) => message.parts)
             .find((part) => part.type === "tool-result" && part.toolName === "create-branch")
+          const createdBranchInteraction = snapshot.messages
+            .flatMap((message) => message.toolInteractions)
+            .find((interaction) => interaction.toolName === "create-branch")
           const createdBranchId =
             createdBranchPart && createdBranchPart.type === "tool-result"
               ? createdBranchPart.output.value
               : undefined
-          expect(typeof createdBranchId).toBe("string")
+          if (typeof createdBranchId !== "string") {
+            throw new Error("expected create-branch tool result to contain branch id")
+          }
           expect(createdBranchId).not.toBe(branchId)
+          expect(createdBranchInteraction?.status).toBe("completed")
+          expect(createdBranchInteraction?.output).toBe(createdBranchId)
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),

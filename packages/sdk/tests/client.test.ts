@@ -11,10 +11,7 @@ import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
-import {
-  buildToolResultMapFromMessages,
-  messagePartsToolInteractions,
-} from "@gent/core/domain/message-part-projection"
+import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
 describe("sdk client helpers", () => {
   test("sdk entrypoint exports the public constructors", () => {
@@ -40,25 +37,47 @@ describe("sdk client helpers", () => {
   })
 
   test("canonical tool interactions expose running calls", () => {
-    const parts = [
-      ToolCallPart.make({
-        type: "tool-call" as const,
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        input: { path: "/foo" },
-      }),
-    ]
-    const calls = messagePartsToolInteractions(parts, new Map())
-    expect(calls.length).toBe(1)
-    expect(calls[0]?.id).toBe("tc1")
-    expect(calls[0]?.toolName).toBe("read")
-    expect(calls[0]?.status).toBe("running")
+    const message = Message.Regular.make({
+      id: MessageId.make("m1"),
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+      role: "assistant",
+      parts: [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: { path: "/foo" },
+        }),
+      ],
+      createdAt: new Date(),
+    })
+    const projected = projectMessagesWithToolInteractions([message])[0]
+    expect(projected?.toolInteractions.length).toBe(1)
+    expect(projected?.toolInteractions[0]?.id).toBe(ToolCallId.make("tc1"))
+    expect(projected?.toolInteractions[0]?.toolName).toBe("read")
+    expect(projected?.toolInteractions[0]?.status).toBe("running")
   })
 
-  test("canonical tool result state indexes tool outputs by call id", () => {
+  test("canonical tool interactions include completed results", () => {
     const messages: DomainMessage[] = [
       Message.Regular.make({
         id: MessageId.make("m1"),
+        sessionId: SessionId.make("s1"),
+        branchId: BranchId.make("b1"),
+        role: "assistant",
+        parts: [
+          ToolCallPart.make({
+            type: "tool-call",
+            toolCallId: ToolCallId.make("tc1"),
+            toolName: "read",
+            input: { path: "/foo" },
+          }),
+        ],
+        createdAt: new Date(),
+      }),
+      Message.Regular.make({
+        id: MessageId.make("m2"),
         sessionId: SessionId.make("s1"),
         branchId: BranchId.make("b1"),
         role: "tool",
@@ -73,9 +92,9 @@ describe("sdk client helpers", () => {
         createdAt: new Date(),
       }),
     ]
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.size).toBe(1)
-    expect(map.get("tc1")?.output).toBe("file contents")
+    const projected = projectMessagesWithToolInteractions(messages)[0]
+    expect(projected?.toolInteractions[0]?.status).toBe("completed")
+    expect(projected?.toolInteractions[0]?.output).toBe("file contents")
   })
 
   test("namespaced client exposes every RPC key from GentRpcs", () => {

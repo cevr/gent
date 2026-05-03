@@ -32,10 +32,12 @@ import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
 import type {
   Message,
   MessagePart,
+  ProjectedMessage,
   TextPart,
   ReasoningPart,
   ToolCallPart,
   ToolResultPart,
+  ToolInteraction,
 } from "@gent/core/domain/message.js"
 import {
   messagePartsImages,
@@ -75,6 +77,8 @@ export type {
   MessageId,
   QueueEntryInfo,
   QueueSnapshot,
+  ProjectedMessage,
+  ToolInteraction,
 }
 export type {
   GentLifecycle,

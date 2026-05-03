@@ -55,6 +55,8 @@ export type {
   ReasoningPart,
   ToolCallPart,
   ToolResultPart,
+  ProjectedMessage,
+  ToolInteraction,
   PermissionRule,
   SessionId,
   BranchId,

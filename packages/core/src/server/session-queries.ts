@@ -8,6 +8,7 @@ import type {
   Session,
   SessionTreeNode,
 } from "../domain/message.js"
+import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -132,6 +133,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         }
 
         const messages = yield* messageStorage.listMessages(input.branchId)
+        const projectedMessages = projectMessagesWithToolInteractions(messages)
         const lastEventId = yield* eventStorage.getLatestEventId({
           sessionId: input.sessionId,
           branchId: input.branchId,
@@ -175,7 +177,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           sessionId: input.sessionId,
           branchId: input.branchId,
           name: session.name,
-          messages,
+          messages: projectedMessages,
           lastEventId: lastEventId ?? null,
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,

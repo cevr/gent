@@ -2,10 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { extractText, extractImages, Message, type Message as DomainMessage } from "@gent/sdk"
 import { type MessagePart, ToolCallPart, ToolResultPart, TextPart } from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import {
-  buildToolResultMapFromMessages,
-  messagePartsToolInteractions,
-} from "@gent/core/domain/message-part-projection"
+import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
@@ -86,51 +83,7 @@ describe("extractImages", () => {
   })
 })
 
-describe("messagePartsToolInteractions", () => {
-  test("extracts running tool calls from parts", () => {
-    const parts: MessagePart[] = [
-      {
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        input: { path: "/foo" },
-      },
-      { type: "text", text: "Some text" },
-      {
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc2"),
-        toolName: "edit",
-        input: { path: "/bar" },
-      },
-    ]
-
-    const calls = messagePartsToolInteractions(parts, new Map())
-    expect(calls.length).toBe(2)
-    expect(calls[0]).toEqual({
-      id: "tc1",
-      toolName: "read",
-      status: "running",
-      input: { path: "/foo" },
-      summary: undefined,
-      output: undefined,
-    })
-    expect(calls[1]).toEqual({
-      id: "tc2",
-      toolName: "edit",
-      status: "running",
-      input: { path: "/bar" },
-      summary: undefined,
-      output: undefined,
-    })
-  })
-
-  test("returns empty array when no tool calls", () => {
-    const parts: MessagePart[] = [{ type: "text", text: "Just text" }]
-    expect(messagePartsToolInteractions(parts, new Map())).toEqual([])
-  })
-})
-
-describe("buildToolResultMapFromMessages", () => {
+describe("projectMessagesWithToolInteractions", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
     Message.Regular.make({
       id: MessageId.make(Bun.randomUUIDv7()),
@@ -142,7 +95,6 @@ describe("buildToolResultMapFromMessages", () => {
       turnDurationMs: undefined,
     })
 
-  // Helper to create tool result parts with all required fields
   const toolResult = (toolCallId: string, value: unknown, isError = false): MessagePart =>
     ToolResultPart.make({
       type: "tool-result",
@@ -151,7 +103,54 @@ describe("buildToolResultMapFromMessages", () => {
       output: { type: isError ? "error-json" : "json", value },
     })
 
-  test("builds map from tool messages", () => {
+  test("exposes running tool calls on projected messages", () => {
+    const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: { path: "/foo" },
+        }),
+        TextPart.make({ type: "text", text: "Some text" }),
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc2"),
+          toolName: "edit",
+          input: { path: "/bar" },
+        }),
+      ]),
+    ]
+
+    const projected = projectMessagesWithToolInteractions(messages)[0]
+    expect(projected?.toolInteractions).toEqual([
+      {
+        id: ToolCallId.make("tc1"),
+        toolName: "read",
+        status: "running",
+        input: { path: "/foo" },
+        summary: undefined,
+        output: undefined,
+      },
+      {
+        id: ToolCallId.make("tc2"),
+        toolName: "edit",
+        status: "running",
+        input: { path: "/bar" },
+        summary: undefined,
+        output: undefined,
+      },
+    ])
+  })
+
+  test("returns empty interactions when no tool calls", () => {
+    const projected = projectMessagesWithToolInteractions([
+      makeMsg("assistant", [TextPart.make({ type: "text", text: "Just text" })]),
+    ])[0]
+    expect(projected?.toolInteractions).toEqual([])
+  })
+
+  test("joins tool calls with tool-message results", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
         ToolCallPart.make({
@@ -164,129 +163,133 @@ describe("buildToolResultMapFromMessages", () => {
       makeMsg("tool", [toolResult("tc1", "file contents here")]),
     ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.size).toBe(1)
-    expect(map.get("tc1")).toEqual({
+    const projected = projectMessagesWithToolInteractions(messages)[0]
+    expect(projected?.toolInteractions[0]).toEqual({
+      id: ToolCallId.make("tc1"),
+      toolName: "read",
+      status: "completed",
+      input: {},
       summary: "file contents here",
       output: "file contents here",
-      isError: false,
     })
   })
 
   test("handles error results", () => {
-    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", "File not found", true)])]
+    const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+      ]),
+      makeMsg("tool", [toolResult("tc1", "File not found", true)]),
+    ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.get("tc1")).toEqual({
+    const projected = projectMessagesWithToolInteractions(messages)[0]
+    expect(projected?.toolInteractions[0]).toEqual({
+      id: ToolCallId.make("tc1"),
+      toolName: "read",
+      status: "error",
+      input: {},
       summary: "File not found",
       output: "File not found",
-      isError: true,
     })
   })
 
   test("truncates long output in summary", () => {
     const longText = "x".repeat(150)
-    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", longText)])]
+    const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+      ]),
+      makeMsg("tool", [toolResult("tc1", longText)]),
+    ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    const result = map.get("tc1")!
-    expect(result.summary.length).toBe(103) // 100 + "..."
-    expect(result.summary.endsWith("...")).toBe(true)
+    const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
+    const summary = result.summary
+    if (summary === undefined) throw new Error("expected projected tool summary")
+    expect(summary.length).toBe(103) // 100 + "..."
+    expect(summary.endsWith("...")).toBe(true)
     expect(result.output).toBe(longText) // full output preserved
   })
 
   test("summary uses first line only", () => {
     const multiline = "First line\nSecond line\nThird line"
-    const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", multiline)])]
+    const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+      ]),
+      makeMsg("tool", [toolResult("tc1", multiline)]),
+    ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.get("tc1")?.summary).toBe("First line")
+    expect(projectMessagesWithToolInteractions(messages)[0]?.toolInteractions[0]?.summary).toBe(
+      "First line",
+    )
   })
 
   test("handles object output", () => {
     const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+      ]),
       makeMsg("tool", [toolResult("tc1", { files: ["a.ts", "b.ts"] })]),
     ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    const result = map.get("tc1")!
+    const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
     expect(result.summary).toBe('{"files":["a.ts","b.ts"]}')
     expect(result.output).toContain('"files"')
   })
 
   test("handles multiple tool results", () => {
     const messages: DomainMessage[] = [
+      makeMsg("assistant", [
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc1"),
+          toolName: "read",
+          input: {},
+        }),
+        ToolCallPart.make({
+          type: "tool-call",
+          toolCallId: ToolCallId.make("tc2"),
+          toolName: "edit",
+          input: {},
+        }),
+      ]),
       makeMsg("tool", [toolResult("tc1", "result1"), toolResult("tc2", "result2")]),
     ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.size).toBe(2)
-    expect(map.get("tc1")?.output).toBe("result1")
-    expect(map.get("tc2")?.output).toBe("result2")
+    const interactions = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions
+    expect(interactions.length).toBe(2)
+    expect(interactions[0]?.output).toBe("result1")
+    expect(interactions[1]?.output).toBe("result2")
   })
 
-  test("ignores non-tool messages", () => {
+  test("ignores tool results without matching message-local calls", () => {
     const messages: DomainMessage[] = [
       makeMsg("user", [TextPart.make({ type: "text", text: "Hello" })]),
       makeMsg("assistant", [TextPart.make({ type: "text", text: "Hi there" })]),
+      makeMsg("tool", [toolResult("tc1", "orphan")]),
     ]
 
-    const map = buildToolResultMapFromMessages(messages)
-    expect(map.size).toBe(0)
-  })
-})
-
-describe("messagePartsToolInteractions with results", () => {
-  test("joins tool calls with results from map", () => {
-    const parts: MessagePart[] = [
-      {
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        input: { path: "/foo" },
-      },
-    ]
-    const resultMap = new Map([
-      ["tc1", { summary: "50 lines", output: "full content", isError: false }],
-    ])
-
-    const calls = messagePartsToolInteractions(parts, resultMap)
-    expect(calls[0]).toEqual({
-      id: "tc1",
-      toolName: "read",
-      status: "completed",
-      input: { path: "/foo" },
-      summary: "50 lines",
-      output: "full content",
-    })
-  })
-
-  test("marks error results with error status", () => {
-    const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
-    ]
-    const resultMap = new Map([
-      ["tc1", { summary: "Error", output: "File not found", isError: true }],
-    ])
-
-    const calls = messagePartsToolInteractions(parts, resultMap)
-    expect(calls[0]?.status).toBe("error")
-  })
-
-  test("missing result marks tool call as running", () => {
-    const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
-    ]
-    const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
-
-    const calls = messagePartsToolInteractions(parts, resultMap)
-    expect(calls[0]).toEqual({
-      id: "tc1",
-      toolName: "read",
-      status: "running",
-      input: {},
-      summary: undefined,
-      output: undefined,
-    })
+    const projected = projectMessagesWithToolInteractions(messages)
+    expect(projected.flatMap((message) => message.toolInteractions)).toEqual([])
   })
 })

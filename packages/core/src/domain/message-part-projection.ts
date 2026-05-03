@@ -10,6 +10,9 @@ import {
   ToolResultPart,
   type Message,
   type MessagePart,
+  type ProjectedMessage,
+  type ToolInteraction,
+  projectMessage,
 } from "./message.js"
 
 export interface ImagePartProjection {
@@ -33,16 +36,7 @@ export interface ToolResultPartProjection {
   readonly isError: boolean
 }
 
-export interface ToolInteractionState {
-  readonly id: string
-  readonly toolName: string
-  readonly status: "running" | "completed" | "error"
-  readonly input: unknown | undefined
-  readonly summary: string | undefined
-  readonly output: string | undefined
-}
-
-export interface ToolResultState {
+interface ToolResultState {
   readonly summary: string
   readonly output: string
   readonly isError: boolean
@@ -155,7 +149,7 @@ export const messagePartsToolResultParts = (
 ): ReadonlyArray<ToolResultPart> =>
   parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
 
-export const buildToolResultMapFromMessages = (
+const buildToolResultMapFromMessages = (
   messages: ReadonlyArray<Message>,
 ): ReadonlyMap<string, ToolResultState> => {
   const resultMap = new Map<string, ToolResultState>()
@@ -172,16 +166,17 @@ export const buildToolResultMapFromMessages = (
   return resultMap
 }
 
-export const messagePartsToolInteractions = (
+const messagePartsToolInteractions = (
   parts: ReadonlyArray<MessagePart>,
   resultMap: ReadonlyMap<string, ToolResultState>,
-): ReadonlyArray<ToolInteractionState> =>
+): ReadonlyArray<ToolInteraction> =>
   messagePartsToolCalls(parts).map((toolCall) => {
-    const result = resultMap.get(toolCall.id)
-    let status: ToolInteractionState["status"] = "running"
+    const id = ToolCallId.make(toolCall.id)
+    const result = resultMap.get(id)
+    let status: ToolInteraction["status"] = "running"
     if (result !== undefined) status = result.isError ? "error" : "completed"
     return {
-      id: toolCall.id,
+      id,
       toolName: toolCall.toolName,
       status,
       input: toolCall.input,
@@ -189,6 +184,15 @@ export const messagePartsToolInteractions = (
       output: result?.output,
     }
   })
+
+export const projectMessagesWithToolInteractions = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyArray<ProjectedMessage> => {
+  const resultMap = buildToolResultMapFromMessages(messages)
+  return messages.map((message) =>
+    projectMessage(message, messagePartsToolInteractions(message.parts, resultMap)),
+  )
+}
 
 /**
  * Human-readable transcript display. Renders user-visible text plus tool

@@ -9,7 +9,13 @@ import {
 } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
-import { Branch, BranchTreeNode, Message, Session, SessionTreeNode } from "../domain/message.js"
+import {
+  Branch,
+  BranchTreeNode,
+  ProjectedMessage,
+  Session,
+  SessionTreeNode,
+} from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
@@ -137,7 +143,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.optional(Schema.String),
-  messages: Schema.Array(Message),
+  messages: Schema.Array(ProjectedMessage),
   lastEventId: Schema.NullOr(Schema.Number),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),

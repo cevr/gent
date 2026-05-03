@@ -78,7 +78,7 @@ ORDER BY mc.ordinal ASC
 
 **Read:** `packages/core/src/storage/sqlite-storage.ts` (full file)
 
-Service pattern: `Storage` is a `Context.Tag`, `Storage.Live(dbPath)` returns a Layer.
+Service pattern: `SqliteStorage.LiveWithSql(dbPath)` returns a Layer that provides the focused storage tags.
 
 **Key operations:**
 
