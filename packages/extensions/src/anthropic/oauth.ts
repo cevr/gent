@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Option, Schema } from "effect"
+import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import * as os from "node:os"
@@ -13,7 +13,9 @@ import { ProviderAuthError, runProcess } from "@gent/core/extensions/api"
  * an explicit `source` so callers spell out which account they mean.
  */
 export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
-const CREDENTIALS_FILE = `${os.homedir()}/.claude/.credentials.json`
+
+const credentialsFilePath = (path: Path.Path): string =>
+  path.join(os.homedir(), ".claude", ".credentials.json")
 
 const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
@@ -66,30 +68,38 @@ const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, Provid
     ),
   )
 
-const readCredentialsFile = (): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
+const readCredentialsFile = (): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError,
+  FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
-    const file = Bun.file(CREDENTIALS_FILE)
-    const exists = yield* Effect.tryPromise({
-      try: () => file.exists(),
-      catch: (e) =>
-        new ProviderAuthError({
-          message: `Failed to read Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-          cause: e,
-        }),
-    })
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const credentialsFile = credentialsFilePath(path)
+    const exists = yield* fs.exists(credentialsFile).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read Claude credentials file: ${e.message}`,
+            cause: e,
+          }),
+      ),
+    )
     if (!exists) {
       return yield* new ProviderAuthError({
-        message: `Failed to read Claude credentials file: Credentials file not found: ${CREDENTIALS_FILE}`,
+        message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
       })
     }
-    const raw = yield* Effect.tryPromise({
-      try: () => file.text(),
-      catch: (e) =>
-        new ProviderAuthError({
-          message: `Failed to read Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-          cause: e,
-        }),
-    })
+    const raw = yield* fs.readFileString(credentialsFile).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read Claude credentials file: ${e.message}`,
+            cause: e,
+          }),
+      ),
+    )
     return yield* decodeCredentials(raw)
   })
 
@@ -193,7 +203,11 @@ export const shouldFallBackToCli = (source: string): boolean => source === PRIMA
  */
 export const readClaudeCodeCredentials = (
   source: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> => {
+): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> => {
   if (process.platform !== "darwin") {
     return readCredentialsFile()
   }
@@ -279,7 +293,7 @@ export interface ClaudeAccount {
 export const listClaudeAccounts = (): Effect.Effect<
   ReadonlyArray<ClaudeAccount>,
   never,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const sources = yield* listClaudeCodeKeychainServices().pipe(
@@ -388,42 +402,32 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const writeBackCredentials = (
   creds: ClaudeCredentials,
   source: string,
-): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<
+  void,
+  ProviderAuthError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
     if (process.platform !== "darwin") {
-      const file = Bun.file(CREDENTIALS_FILE)
-      const exists = yield* Effect.tryPromise({
-        try: () => file.exists(),
-        catch: (e) =>
-          new ProviderAuthError({
-            message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-            cause: e,
-          }),
-      })
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const credentialsFile = credentialsFilePath(path)
+      const mapFsError = (e: { readonly message: string }) =>
+        new ProviderAuthError({
+          message: `Failed to write Claude credentials file: ${e.message}`,
+          cause: e,
+        })
+      const exists = yield* fs.exists(credentialsFile).pipe(Effect.mapError(mapFsError))
       const raw = exists
-        ? yield* Effect.tryPromise({
-            try: () => file.text(),
-            catch: (e) =>
-              new ProviderAuthError({
-                message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-          })
+        ? yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
         : '{"claudeAiOauth":{}}'
       const updated = updateCredentialBlob(raw, creds)
       if (updated === undefined) return
-      yield* Effect.tryPromise({
-        try: () => Bun.write(CREDENTIALS_FILE, updated),
-        catch: (e) =>
-          new ProviderAuthError({
-            message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-            cause: e,
-          }),
-      })
+      yield* fs.writeFileString(credentialsFile, updated).pipe(Effect.mapError(mapFsError))
       // Counsel  deep — chmod 0600 after write so the credentials
       // file isn't world-readable on first creation. Matches the
       // opencode reference's keychain.ts:297 behavior.
-      yield* runProcess("chmod", ["600", CREDENTIALS_FILE], { stdout: "ignore" }).pipe(
+      yield* runProcess("chmod", ["600", credentialsFile], { stdout: "ignore" }).pipe(
         Effect.mapError(
           (e) =>
             new ProviderAuthError({
@@ -597,7 +601,11 @@ const spawnClaudeCli = (): Effect.Effect<
  */
 export const refreshClaudeCodeCredentials = (
   source: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
     const current = yield* readClaudeCodeCredentials(source).pipe(
       Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
