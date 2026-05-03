@@ -9,13 +9,11 @@
  * `request({...})`, and `action({...})` at
  * `domain/capability/{tool,request,action}.ts`.
  *
- * Resource keeps an identity smart constructor (`resource`) below — it
- * exists to widen variance at the bucket boundary, not to lower a legacy
- * shape.
+ * Resource keeps an identity smart constructor (`resource`) below; it exists
+ * to widen variance at the bucket boundary.
  *
- * Codex BLOCK on  design: drivers split into `modelDrivers` and
- * `externalDrivers` — one untagged `drivers: []` would smuggle back the
- * ambiguity 's correlated union fixed.
+ * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
+ * `drivers: []` bucket would erase the correlated union.
  *
  * @module
  */

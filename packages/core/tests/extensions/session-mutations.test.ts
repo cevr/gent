@@ -480,7 +480,7 @@ describe("session mutation primitives", () => {
       expect(testStorage.sessions.has(childId)).toBe(false)
     }),
   )
-  it.live("deleteSession propagates command facade failure without storage fallback", () =>
+  it.live("deleteSession propagates mutation failure without storage fallback", () =>
     Effect.gen(function* () {
       const testStorage = createTestStorage()
       seedSession(testStorage)
@@ -508,7 +508,7 @@ describe("session mutation primitives", () => {
       expect(testStorage.sessions.has(childId)).toBe(true)
     }),
   )
-  it.live("deleteSession routes through command facade", () =>
+  it.live("deleteSession routes through session mutations", () =>
     Effect.gen(function* () {
       const testStorage = createTestStorage()
       seedSession(testStorage)

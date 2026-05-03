@@ -26,7 +26,7 @@ describe("truncate", () => {
 })
 
 describe("messagePartsDisplayText", () => {
-  test("read-session subpath keeps renderMessageParts compatibility export", () => {
+  test("read-session subpath exports renderMessageParts", () => {
     const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
     expect(renderMessageParts(parts)).toBe(messagePartsDisplayText(parts))
   })

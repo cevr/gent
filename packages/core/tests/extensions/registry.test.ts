@@ -24,9 +24,9 @@ import {
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
 import { failingLanguageModel } from "../helpers/failing-language-model"
-// Test helper: build a no-op model Capability directly. Post- the
-// `tool({...})` factory rejects the legacy `{ name, params, execute }`
-// shape, so test fixtures here construct the lowered Capability literal.
+// Test helper: build a no-op model Capability directly. The `tool({...})`
+// factory rejects metadata-free tool records, so fixtures here construct the
+// lowered Capability literal.
 const makeTool = (name: string): ToolToken =>
   tool({
     id: name,

@@ -101,7 +101,7 @@ export interface ToolCapabilityContext extends ModelCapabilityContext {
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
  *  standalone leaf with no shared capability parent.
  *
- *  `Params` is a `Schema.Decoder<I, never>` — the LLM bridge needs to
+ *  `Params` is a `Schema.Decoder<I, never>` — the tool adapter needs to
  *  decode JSON synchronously without resolving services, so the decoder
  *  may not have a context requirement. */
 export interface ToolInput<
@@ -122,7 +122,7 @@ export interface ToolInput<
   readonly destructive?: boolean
   /**
    * Schema for `execute` input. Must have no context requirement so the
-   * LLM-bridge can decode JSON synchronously without resolving services.
+   * tool adapter can decode JSON synchronously without resolving services.
    * `Schema.Decoder<I, never>` ⊆ `Schema.Schema<I, _, never>`.
    */
   readonly params: Params

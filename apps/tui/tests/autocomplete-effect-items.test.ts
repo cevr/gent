@@ -4,13 +4,10 @@
  * layer, mirroring how `autocomplete-popup-boundary.ts` dispatches
  * Effect-typed results to the resource.
  *
- * This locks the  proof path counsel called out: the existing
- * `extension-effect-setup.test.ts` only proves an Effect-typed `setup` resolves
- * `FileSystem | Path`. Here we prove the *contribution-time* adapter path
- * (Effect items() → runtime.runPromise → typed transport → decoded reply)
- * matches the legacy `ctx.ask` semantics: success returns the items, missing
- * session yields a typed `NoActiveSessionError` that the popup adapter
- * normalizes to `[]`.
+ * This proves the contribution-time adapter path:
+ * Effect items() → runtime.runPromise → typed transport → decoded reply.
+ * Success returns the items; missing session yields a typed
+ * `NoActiveSessionError` that the popup adapter normalizes to `[]`.
  */
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"

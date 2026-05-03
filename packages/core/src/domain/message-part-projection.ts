@@ -217,10 +217,9 @@ const buildToolResultPairings = (
     const results = resultMap.get(toolCallId) ?? []
     let resultIndex = 0
     for (const call of calls) {
-      while (
-        resultIndex < results.length &&
-        comparePosition(results[resultIndex] ?? call.position, call.position) <= 0
-      ) {
+      while (resultIndex < results.length) {
+        const candidate = results[resultIndex]
+        if (candidate === undefined || comparePosition(candidate, call.position) > 0) break
         resultIndex++
       }
       const result = results[resultIndex]

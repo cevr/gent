@@ -65,7 +65,7 @@ export interface E2ELayerConfig {
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** AgentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: AgentRunner
-  /** Approval service override. Default auto-approves for legacy E2E tests. */
+  /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher>
   /** Optional per-cwd profile cache for shared-server routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
@@ -137,8 +137,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
               )
             }
             // Test override layers are heterogeneous; the harness erases R/E
-            // at this boundary the same way the legacy `layerContribution`
-            // did. Production paths flow through `collectProcessLayers`.
+            // at this boundary. Production paths flow through
+            // `collectProcessLayers`.
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
             // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>

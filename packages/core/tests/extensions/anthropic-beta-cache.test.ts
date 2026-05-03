@@ -130,8 +130,7 @@ describe("AnthropicBetaCache — clear-on-model-change", () => {
             // Different model under same env → cache cleared.
             const haiku = yield* cache.getExcluded("claude-haiku-4-5", "flag-a")
             expect(haiku.size).toBe(0)
-            // Switching back doesn't restore the prior learning either —
-            // matches legacy "clear-on-modelId-change" semantics.
+            // Switching back doesn't restore the prior learning either.
             const opus = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
             expect(opus.size).toBe(0)
           }),

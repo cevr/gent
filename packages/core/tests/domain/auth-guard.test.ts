@@ -249,7 +249,7 @@ describe("ListAuthProvidersPayload schema", () => {
     expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
   })
 
-  bunTest("accepts neither (back-compat with launch-cwd default)", () => {
+  bunTest("accepts omitted filters for launch-cwd defaults", () => {
     const query = decode({})
     expect(query.agentName).toBeUndefined()
     expect(query.sessionId).toBeUndefined()

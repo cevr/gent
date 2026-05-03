@@ -104,7 +104,7 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   ]
 }
 describe("auth.listProviders", () => {
-  it.live("returns providers without sessionId (back-compat with launch-cwd default)", () =>
+  it.live("returns launch-cwd providers without sessionId", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
@@ -184,27 +184,25 @@ describe("auth.listProviders", () => {
         }).pipe(Effect.timeout("4 seconds")),
       ),
   )
-  it.live(
-    "legacy RPC path: driver.set followed by no-sessionId listProviders honors override",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
-          const drivers = (yield* client.driver.list()).drivers
-          const externalDriver = drivers.find((d) => d._tag === "external")
-          if (externalDriver === undefined) return
-          yield* client.driver.set({
-            agentName: AgentName.make("cowork"),
-            driver: ExternalDriverRef.make({ id: externalDriver.id }),
-          })
-          // No sessionId → launch cwd path. Under ConfigService.Test this
-          // still works because driver.set writes to the in-memory user
-          // ref that `get(undefined)` also reads.
-          const list = yield* client.auth.listProviders({ agentName: AgentName.make("cowork") })
-          expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
+  it.live("driver.set followed by no-sessionId listProviders honors launch-cwd override", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const drivers = (yield* client.driver.list()).drivers
+        const externalDriver = drivers.find((d) => d._tag === "external")
+        if (externalDriver === undefined) return
+        yield* client.driver.set({
+          agentName: AgentName.make("cowork"),
+          driver: ExternalDriverRef.make({ id: externalDriver.id }),
+        })
+        // No sessionId → launch cwd path. Under ConfigService.Test this
+        // still works because driver.set writes to the in-memory user
+        // ref that `get(undefined)` also reads.
+        const list = yield* client.auth.listProviders({ agentName: AgentName.make("cowork") })
+        expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
   it.live("rejects auth provider listing for a deleted session", () =>
     Effect.scoped(

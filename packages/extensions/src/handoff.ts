@@ -18,8 +18,7 @@ const EXTENSION_ID = HANDOFF_EXTENSION_ID
 // State: a single integer. Suppressed by `suppress(count)`, decremented on
 // every `turnCompleted()`. The slot handler below advances the service on
 // every post-turn tick.
-// A process-scoped Ref is the entire product semantics here; an actor mailbox
-// was only a bridge.
+// A process-scoped Ref is the entire product semantics here.
 
 interface HandoffCooldownService {
   readonly turnCompleted: () => Effect.Effect<void>

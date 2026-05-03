@@ -29,9 +29,8 @@ export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
 /**
  * Per-job failure descriptor returned by `reconcileScheduledJobs`.
  *
- * Same shape as the legacy `SchedulerFailure`/`ScheduledJobFailureInfo`
- * pair so the existing extension-health snapshot serializer (in
- * `server/extension-health.ts`) consumes this without change.
+ * Failure descriptor consumed by the extension-health snapshot serializer in
+ * `server/extension-health.ts`.
  */
 export interface SchedulerFailure {
   readonly extensionId: ExtensionId

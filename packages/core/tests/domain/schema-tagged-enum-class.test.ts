@@ -4,7 +4,7 @@
  * Tests cover the direct-constructor contract:
  * - per-variant TaggedClass identity (`instanceof` survives decode)
  * - constructor surface (`MyEnum.Variant.make({...})`)
- * - no legacy nested constructor surface
+ * - no nested constructor surface
  * - PascalCase member enforcement
  * - explicit wire-tag preservation via `TaggedEnumClass.variant(...)`
  * - direct-member guards / match helpers

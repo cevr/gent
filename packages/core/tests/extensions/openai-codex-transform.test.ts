@@ -435,8 +435,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
   )
   it.live("does NOT rewrite paths that are not exactly chat/completions or responses", () =>
     Effect.gen(function* () {
-      // Counsel correction: legacy used `includes(...)` which would match
-      // sub-resources. Lock to exact equality.
+      // Exact path equality avoids rewriting sub-resources.
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       yield* Effect.promise(() =>
@@ -575,9 +574,8 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
   it.live("body without an `input` array passes through unchanged on Codex paths", () =>
     Effect.gen(function* () {
       // Chat-completions payloads (`messages` instead of `input`) are
-      // forwarded as-is to the Codex endpoint — the backend tolerates
-      // the legacy shape today, and the SDK only emits this form on
-      // /chat/completions today.
+      // forwarded as-is to the Codex endpoint while the SDK emits this form on
+      // /chat/completions.
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       const original = { model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }

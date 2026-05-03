@@ -374,37 +374,32 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
       expect(response.status).toBe(429)
     }),
   )
-  it.live(
-    "transport failure (HttpClientError) once then 200 — retried like legacy fetch synthetic-500",
-    () =>
-      Effect.gen(function* () {
-        // Legacy `fetchOnce` (oauth.ts:813-838) caught thrown fetch errors,
-        // mapped them to a synthetic 500 response, and retried. The new
-        // middleware widens retry to ALL errors in the channel — both
-        // TransientResponseError (429/529) and HttpClientError from the
-        // wire — preserving that resilience contract.
-        initAnthropicKeychainEnv({})
-        const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-        const cache = yield* Effect.promise(() => buildBetaCache())
-        const fakeState: FakeClientState = {
-          captured: [],
-          responder: (call) =>
-            call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
-        }
-        const transform = buildKeychainTransformClient(creds, cache)
-        const wrapped = transform(makeFakeClient(fakeState))
-        const response = yield* Effect.promise(() =>
-          runWithTestClock(
-            wrapped
-              .post("https://api.anthropic.com/v1/messages", {
-                body: jsonBody({ model: "claude-opus-4-6" }),
-              })
-              .pipe(Effect.orDie),
-          ),
-        )
-        expect(fakeState.captured).toHaveLength(2)
-        expect(response.status).toBe(200)
-      }),
+  it.live("transport failure (HttpClientError) once then 200 is retried", () =>
+    Effect.gen(function* () {
+      // Middleware retries both TransientResponseError (429/529) and
+      // HttpClientError from the wire, preserving the resilience contract.
+      initAnthropicKeychainEnv({})
+      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const cache = yield* Effect.promise(() => buildBetaCache())
+      const fakeState: FakeClientState = {
+        captured: [],
+        responder: (call) =>
+          call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
+      }
+      const transform = buildKeychainTransformClient(creds, cache)
+      const wrapped = transform(makeFakeClient(fakeState))
+      const response = yield* Effect.promise(() =>
+        runWithTestClock(
+          wrapped
+            .post("https://api.anthropic.com/v1/messages", {
+              body: jsonBody({ model: "claude-opus-4-6" }),
+            })
+            .pipe(Effect.orDie),
+        ),
+      )
+      expect(fakeState.captured).toHaveLength(2)
+      expect(response.status).toBe(200)
+    }),
   )
   it.live("3 consecutive transport failures — budget exhausted, error propagates", () =>
     Effect.gen(function* () {

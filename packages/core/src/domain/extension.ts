@@ -321,9 +321,8 @@ export interface TurnProjection {
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
 
-// The legacy server slash-command contribution was deleted; human surfaces
-// now come from `commands:` action leaves. The TUI's separate client-facet
-// `_kind: "command"` model is unrelated.
+// Human server surfaces come from `commands:` action leaves. The TUI's separate
+// client-facet `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnStreamPart, TurnError } from "./driver.js"

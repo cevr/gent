@@ -338,7 +338,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("public extension api does not expose runtime engine tags or server routers", () => {
-    // @ts-expect-error — legacy machine execution is not authoring surface
+    // @ts-expect-error — machine execution is not authoring surface
     type _BadMachineExecute = PublicExtensionApi.MachineExecute
     // @ts-expect-error — tool runner is runtime plumbing, not extension authoring api
     type _BadToolRunner = PublicExtensionApi.ToolRunner

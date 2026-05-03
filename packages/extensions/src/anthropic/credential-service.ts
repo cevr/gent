@@ -108,12 +108,9 @@ export class AnthropicCredentialService extends Context.Service<
     AnthropicCredentialService.layerFromIO(realIO, authInfo)
 
   /**
-   * Counsel  fix: cache cell Ref provided externally so its lifetime
-   * can be hoisted above the per-`resolveModel` layer build. Without
-   * this, every `Provider.stream`/`Provider.generate` call re-allocates
-   * the Ref and the cache effectively disables itself. The legacy code
-   * achieved the same by holding the cell in extension-closure scope
-   * (`credentialCache: CredentialCache = { creds: null, at: 0 }`).
+   * Cache cell Ref provided externally so its lifetime is hoisted above the
+   * per-`resolveModel` layer build. Without this, every model call reallocates
+   * the Ref and effectively disables the cache.
    */
   static layerFromRef = (
     cellRef: Ref.Ref<CredentialCacheCell>,

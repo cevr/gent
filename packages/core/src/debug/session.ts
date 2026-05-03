@@ -180,9 +180,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     sessionId,
     branchId,
     role: "assistant",
-    parts: [
-      makeText("The old duplicate chrome came from the legacy tool header in the message list."),
-    ],
+    parts: [makeText("The duplicate chrome came from rendering both tool summary surfaces.")],
     createdAt: nowPlus(-45_000),
   })
 

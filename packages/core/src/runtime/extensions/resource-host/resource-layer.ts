@@ -1,9 +1,9 @@
 /**
  * Resource service/lifecycle assembly.
  *
- * Keeps heterogeneous Resource layer erasure and lifecycle finalizer policy out
- * of the resource-host facade. Schedule reconciliation owns its own protocol;
- * this module owns only service layers plus start/stop.
+ * Owns heterogeneous Resource layer erasure and lifecycle finalizer policy.
+ * Schedule reconciliation owns its own protocol; this module owns only service
+ * layers plus start/stop.
  *
  * @module
  */

@@ -505,6 +505,9 @@ export function useSessionFeed(
   const processBufferedEvent = (event: AgentEvent, key: string) => {
     if (currentKey !== key) return
 
+    // Snapshot data already contains message, lifecycle, and metrics state.
+    // Buffered replay only hydrates event-only UI state that is absent from the
+    // snapshot, such as pending interactions.
     if (event._tag === "InteractionResolved") {
       callbacks.onInteractionDismissed(event.requestId)
       return

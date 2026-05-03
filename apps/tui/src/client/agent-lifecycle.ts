@@ -1,10 +1,15 @@
-import type { AgentEvent } from "@gent/core/domain/event"
+import { Schema } from "effect"
 import type { AgentName } from "@gent/core/domain/agent"
+import type { AgentEvent } from "@gent/core/domain/event"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
-export type AgentLifecycleStatus =
-  | { readonly _tag: "idle" }
-  | { readonly _tag: "streaming" }
-  | { readonly _tag: "error"; readonly error: string }
+export const AgentLifecycleStatus = TaggedEnumClass("AgentLifecycleStatus", {
+  Idle: TaggedEnumClass.variant("idle", {}),
+  Streaming: TaggedEnumClass.variant("streaming", {}),
+  Error: TaggedEnumClass.variant("error", { error: Schema.String }),
+})
+
+export type AgentLifecycleStatus = Schema.Schema.Type<typeof AgentLifecycleStatus>
 
 export interface AgentLifecycleUpdate {
   readonly status?: AgentLifecycleStatus
@@ -14,19 +19,21 @@ export interface AgentLifecycleUpdate {
 export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate => {
   switch (event._tag) {
     case "StreamStarted":
-      return { status: { _tag: "streaming" } }
+      return { status: AgentLifecycleStatus.Streaming.make({}) }
 
     case "TurnCompleted":
-      return { status: { _tag: "idle" } }
+      return { status: AgentLifecycleStatus.Idle.make({}) }
 
     case "ErrorOccurred":
-      return { status: { _tag: "error", error: event.error } }
+      return { status: AgentLifecycleStatus.Error.make({ error: event.error }) }
 
     case "AgentSwitched":
       return { preferredAgent: event.toAgent }
 
     case "MessageReceived":
-      if (event.message.role === "user") return { status: { _tag: "streaming" } }
+      if (event.message.role === "user") {
+        return { status: AgentLifecycleStatus.Streaming.make({}) }
+      }
       return {}
 
     default:

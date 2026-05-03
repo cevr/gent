@@ -1,7 +1,6 @@
 /**
  * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
- * provided `runtime: ManagedRuntime`. The legacy sync `setup(ctx)` arm
- * was deleted; only the Effect shape is accepted now.
+ * provided `runtime: ManagedRuntime`. Only the Effect setup shape is accepted.
  */
 import { afterAll, beforeAll } from "bun:test"
 import { describe, it, expect } from "effect-bun-test"
@@ -54,9 +53,8 @@ describe("loadTuiExtensions Effect setup", () => {
     }),
   )
   // Regression lock — discovered (not pre-imported) modules with an
-  // Effect-valued `setup` must pass `importExtension`'s shape validator. The
-  // bridge is only reachable if the validator accepts the value; rejecting
-  // non-functions silently dropped the entire discovered population.
+  // Effect-valued `setup` must pass `importExtension`'s shape validator.
+  // Rejecting Effect values silently drops the entire discovered population.
   describe("discovered Effect-setup modules", () => {
     const tmpRoot = join(import.meta.dir, "../.tmp-c9-1-discovery")
     const userDir = join(tmpRoot, "user")

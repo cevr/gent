@@ -6,8 +6,8 @@
  * carries the unifying concept: "this extension owns a long-lived service
  * with optional periodic work and optional startup/shutdown."
  *
- * The `scope` discriminator is the load-bearing addition over the legacy
- * kinds — every Resource declares its lifetime as one of:
+ * The `scope` discriminator is load-bearing: every Resource declares its
+ * lifetime as one of:
  *
  *   - `"process"`  — survives for the server's lifetime; requires `ServerScope`
  *   - `"cwd"`      — survives per-cwd; requires `CwdScope`
@@ -74,12 +74,10 @@ export interface ResourceSchedule {
  *   The `R` channel must include `ScopeOf<S>` so the typed scope brand
  *   gates instantiation.
  * - `scope` — the lifetime, declared at the type level via the literal.
- * - `start` / `stop` — optional startup + shutdown effects. Replaces the
- *   `LifecycleContribution` `phase: "startup" | "shutdown"` discriminator.
+ * - `start` / `stop` — optional startup + shutdown effects.
  *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
  *   may not fail (failures are not propagated through scope teardown).
- * - `schedule` — periodic jobs reconciled at host startup. Replaces the
- *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
+ * - `schedule` — periodic jobs reconciled at host startup.
  * - `runtime` — explicit runtime slots for long-lived behavior that reacts
  *   to turns/messages or enriches tool results without going through a
  *   string-keyed middleware registry.

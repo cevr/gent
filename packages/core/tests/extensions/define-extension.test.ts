@@ -326,7 +326,7 @@ describe("defineExtension", () => {
   it.live("unknown runtime-loaded contribution buckets fail activation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
-        validatePackageShape({ id: ExtensionId.make("legacy-actors") }, { actors: [] } as never),
+        validatePackageShape({ id: ExtensionId.make("unknown-bucket") }, { actors: [] } as never),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -340,7 +340,7 @@ describe("defineExtension", () => {
 
   it.live("unknown defineExtension buckets fail activation before normalization", () =>
     Effect.gen(function* () {
-      const ext = defineExtension({ id: "legacy-actors", actors: [] } as never)
+      const ext = defineExtension({ id: "unknown-bucket", actors: [] } as never)
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {

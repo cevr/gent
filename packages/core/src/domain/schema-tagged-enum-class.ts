@@ -7,7 +7,7 @@
  *
  * Variant member names are PascalCase API names. The wire `_tag` defaults to
  * that member name, or can be pinned with `TaggedEnumClass.variant(...)` for
- * persisted/transported legacy tags:
+ * stable persisted/transported tags:
  *
  * ```ts
  * export const Message = TaggedEnumClass("Message", {

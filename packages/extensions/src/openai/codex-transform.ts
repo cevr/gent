@@ -99,10 +99,9 @@ const ensureBetaToken = (existing: string | undefined, requiredToken: string): s
  *     `instructions` string (joined by `\n\n`)
  *   - `store: false` to prevent server-side conversation persistence
  *
- * Inputs without an `input` array (e.g. chat-completions `messages`
- * payloads) pass through untouched — the Codex backend tolerates the
- * legacy shape today, and locking it would prevent the SDK from
- * gradually migrating to `/responses`.
+ * Inputs without an `input` array (e.g. chat-completions `messages` payloads)
+ * pass through untouched so the SDK can gradually move provider traffic toward
+ * `/responses`.
  */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)

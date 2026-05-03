@@ -1,15 +1,11 @@
 /**
  * ClientEffect — the Effect-typed authoring surface for TUI client extensions.
  *
- * The legacy `(ctx) => ReadonlyArray<ClientContribution>` shape leaked Promise
- * surfaces (`AsyncFileSystem`, `Promise<reply>` from `ask`, `items` returning
- * sync OR Promise). The redesign replaces it with an Effect-typed `setup`
- * that reads its dependencies from `ClientDeps` and returns
- * `ReadonlyArray<ClientContribution>` through an Effect, with errors
- * surfaced on the typed `ClientSetupError` channel.
+ * Extension setup reads dependencies from `ClientDeps` and returns
+ * `ReadonlyArray<ClientContribution>` through an Effect, with errors surfaced
+ * on the typed `ClientSetupError` channel.
  *
- * The runtime accepts only the Effect setup shape. `AsyncFileSystem` and the
- * Promise-typed `ask` surface were deleted with the legacy client setup path.
+ * The runtime accepts only the Effect setup shape.
  *
  * Solid integration: extensions return contributions; the TUI shell owns one
  * per-provider `ManagedRuntime` widened with the union of services any

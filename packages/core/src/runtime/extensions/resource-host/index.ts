@@ -1,7 +1,7 @@
 /**
  * ResourceHost — substrate for long-lived state declared by extension Resources.
  *
- * This facade exports the independent host pieces:
+ * This module exports the independent host pieces:
  * - Resource service/lifecycle layer assembly.
  * - Schedule collection + reconciliation.
  *

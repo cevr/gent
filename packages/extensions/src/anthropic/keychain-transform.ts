@@ -57,10 +57,8 @@
  *      `HttpClient.retryTransient` covers 408/429/500/502/503/504 but
  *      NOT 529, so we re-raise both as a typed `TransientResponseError`
  *      via `HttpClient.transformResponse` and let `Effect.retry` see it.
- *   2. Transport failures (`HttpClientError` from the wire) — matches
- *      legacy `fetchOnce`/`fetchWithRetry` semantics (deleted in
- *      Commit 4) which mapped thrown fetch errors to a synthetic 500
- *      and retried under the same budget.
+ *   2. Transport failures (`HttpClientError` from the wire) — retried under
+ *      the same budget as transient HTTP responses.
  * The catch-tag at the end folds the terminal 429/529 back into the
  * success channel; transport failures that exhaust the budget propagate
  * as `HttpClientError` (the SDK's expected error type).
@@ -177,9 +175,9 @@ const withHeaders = (
 
 /**
  * Decode the request body to a string for model-id extraction. The
- * Anthropic SDK serializes JSON bodies as Uint8Array; legacy callers
- * (Vercel-style) used Raw strings. Anything else (FormData / Stream /
- * Empty) returns undefined and the parser short-circuits to "unknown".
+ * Anthropic SDK serializes JSON bodies as Uint8Array; some caller surfaces use
+ * Raw strings. Anything else (FormData / Stream / Empty) returns undefined and
+ * the parser short-circuits to "unknown".
  */
 const requestBodyText = (req: HttpClientRequest.HttpClientRequest): string | undefined => {
   if (req.body._tag === "Uint8Array") return new TextDecoder().decode(req.body.body)
@@ -300,15 +298,9 @@ export const buildKeychainTransformClient =
               HttpClientResponse.HttpClientResponse,
               LongContextBetaError | HttpClientError
             > => {
-              // 400-only: the legacy guard included 429 too, but in
-              // legacy 429s came post-transient-retry (the inner layer
-              // never saw raw 429s). Counsel  flagged this as a
-              // parity drift in the new stack where the long-context
-              // layer wraps the transient layer. Narrowing to 400
-              // restores legacy semantics: 429s flow through to the
-              // outer transient layer untouched, and the only real
-              // long-context signal (the 400 body marker) still
-              // triggers retry.
+              // Only 400 response bodies carry Anthropic's long-context beta
+              // marker. 429s flow through to the transient retry layer
+              // untouched.
               if (response.status !== 400) {
                 return Effect.succeed(response)
               }
@@ -349,9 +341,7 @@ export const buildKeychainTransformClient =
       // Retry: 2 retries (3 attempts total) with exponential backoff
       // starting at 1s. Retries both:
       //   - 429/529 responses (Anthropic rate-limit + Overloaded)
-      //   - Transport failures (HttpClientError from the wire), matching
-      //     the legacy `fetchOnce` semantics (deleted in Commit 4) which
-      //     mapped thrown fetch errors to a synthetic 500 and retried.
+      //   - Transport failures (HttpClientError from the wire).
       // `transformResponse` re-raises 429/529 as a typed failure so
       // `Effect.retry` can react. The catch-tag at the end folds the
       // terminal 429/529 back into the success channel after the budget

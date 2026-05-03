@@ -96,8 +96,6 @@ describe("memory vault turn projection", () => {
         expect(result.promptSections?.[0]!.content).toContain("SQLite Gotcha")
       }),
   )
-  // TODO(c2): "ui projector returns counts and entries" — removed.
-  // Memory vault UI surface is gone in  (projection.ui no longer exists).
 })
 describe("memory vault turn projection — read-only and scoped", () => {
   projectionTest("query does not create vault directories (read-only contract)", () =>
@@ -135,6 +133,3 @@ describe("memory vault turn projection — read-only and scoped", () => {
       }),
   )
 })
-// TODO(c2): "session-memory projection helpers" — removed.
-// `projectSessionMemoryTurn` and `projectSessionMemorySnapshot` were
-// internal helpers for the deleted UI snapshot pipeline.

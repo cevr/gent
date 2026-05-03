@@ -87,6 +87,6 @@ export const makeToolContext = (
   toolCallId,
 })
 
-// `ToolDefinition` is the internal lowered LLM-tool shape consumed by the
-// provider bridge and tool-runner registry. Authoring stays on the typed
+// `ToolDefinition` is the internal lowered LLM-tool shape consumed by provider
+// adapters and the tool-runner registry. Authoring stays on the typed
 // `tool({...})` factory at `domain/capability/tool.ts`.

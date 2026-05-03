@@ -475,10 +475,9 @@ export const parseOAuthResponse = (
  * `readClaudeCodeCredentials` call sees them. Costs zero LLM tokens —
  * matches the path `griffinmartin/opencode-claude-auth` discovered.
  *
- * Falls back to the legacy `claude -p . --model haiku` spawn (which
- * triggers the CLI's own refresh logic) when the direct refresh fails
- * for any reason — auth-server downtime, refresh-token revoked, schema
- * change, etc.
+ * Falls back to `claude -p . --model haiku` (which triggers the CLI's own
+ * refresh logic) when the direct refresh fails for any reason — auth-server
+ * downtime, refresh-token revoked, schema change, etc.
  */
 const refreshViaOAuth = (
   refreshToken: string,
@@ -667,10 +666,8 @@ export const isLongContextError = (responseBody: string): boolean =>
  * Both are fixed by deriving candidates from the model's actual
  * outgoing betas and giving each one a retry slot.
  *
- * Pure variant takes the betaFlags env explicitly — used by the new
- * `keychain-transform` middleware so it doesn't depend on the module-
- * global `_env`. The wrapper below feeds in `_env.betaFlags` for
- * legacy callers.
+ * Pure variant takes the betaFlags env explicitly. The wrapper below feeds in
+ * `_env.betaFlags` for callers that share the module-global environment.
  */
 export const getLongContextBetasForWith = (
   modelId: string,
@@ -713,10 +710,9 @@ export const getBillingHeaderInputs = (): { version: string; entrypoint: string 
 /**
  * Pull the `model` field from a JSON request body. Returns "unknown"
  * for missing/non-string bodies or unparseable JSON. Pure — both the
- * legacy fetcher and the new `keychainTransformClient` middleware
- * read this from their respective request shapes (string body /
- * Uint8Array body) and call this helper to derive the model id used
- * for header construction.
+ * request pipelines read this from their respective request shapes (string
+ * body / Uint8Array body) and call this helper to derive the model id used for
+ * header construction.
  */
 export const parseModelIdFromBody = (bodyText: string | undefined): string => {
   if (bodyText === undefined || bodyText === "") return "unknown"

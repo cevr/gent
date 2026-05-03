@@ -36,7 +36,7 @@ const baseInterjectionMessage = (
     createdAt: new Date(0),
   })
 
-describe("AI transcript bridge", () => {
+describe("AI transcript projection", () => {
   test("converts visible Gent messages to Effect Prompt messages without Gent metadata", () => {
     const prompt = toPrompt(
       [

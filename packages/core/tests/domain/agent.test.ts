@@ -25,7 +25,7 @@ describe("AgentName brand", () => {
 })
 
 describe("AgentRunResult", () => {
-  test("Success preserves wire tag 'success' for back-compat", () => {
+  test("Success uses the stable wire tag 'success'", () => {
     const result = AgentRunResult.Success.make({
       text: "ok",
       sessionId: SessionId.make("s1"),
@@ -34,7 +34,7 @@ describe("AgentRunResult", () => {
     expect(result._tag).toBe("success")
   })
 
-  test("Failure preserves wire tag 'error' for back-compat", () => {
+  test("Failure uses the stable wire tag 'error'", () => {
     const result = AgentRunResult.Failure.make({ error: "boom" })
     expect(result._tag).toBe("error")
   })

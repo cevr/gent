@@ -242,11 +242,11 @@ describe("extension activation isolation", () => {
       // The tool list is "things audience-authorized as model"; cross-audience
       // sharing of an id is fine.
       const result = yield* validateLoadedExtensions([
-        makeLoaded("legacy-tool", {
+        makeLoaded("model-tool", {
           tools: [
             tool({
               id: "shared_name",
-              description: "legacy",
+              description: "model",
               params: {} as never,
               execute: () => Effect.void,
             }),
@@ -256,7 +256,7 @@ describe("extension activation isolation", () => {
       ])
 
       expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
-        ExtensionId.make("legacy-tool"),
+        ExtensionId.make("model-tool"),
         ExtensionId.make("rpc-only"),
       ])
       expect(result.failed).toEqual([])
