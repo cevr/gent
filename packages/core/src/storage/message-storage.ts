@@ -8,7 +8,7 @@ import type { Effect } from "effect"
 import { Context, Layer } from "effect"
 import type { Message } from "../domain/message.js"
 import type { BranchId, MessageId } from "../domain/ids.js"
-import type { StorageError } from "./sqlite-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
 
 export interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>

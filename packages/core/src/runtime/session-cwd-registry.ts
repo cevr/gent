@@ -5,7 +5,7 @@
  * belongs to so it can dispatch through THAT profile, not the server's
  * primary cwd. This service caches
  * `(sessionId → cwd)` writes from session-creation paths and falls back to
- * `Storage.getSession` for cold-cache lookups (recovery / out-of-band publish).
+ * `SessionStorage.getSession` for cold-cache lookups (recovery / out-of-band publish).
  *
  * Writes are eager at the two business-meaningful spots:
  *   1. `SessionCommands.createSession` — top-level user session creation.
@@ -18,7 +18,8 @@
 
 import { Context, Effect, Layer, Ref } from "effect"
 import type { SessionId } from "../domain/ids.js"
-import { Storage, type StorageService, type StorageError } from "../storage/sqlite-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
+import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
 
 export interface SessionCwdRegistryService {
   /** Record the cwd for a sessionId (idempotent — last writer wins). */
@@ -38,10 +39,10 @@ export class SessionCwdRegistry extends Context.Service<
   SessionCwdRegistry,
   SessionCwdRegistryService
 >()("@gent/core/src/runtime/session-cwd-registry/SessionCwdRegistry") {
-  static Live: Layer.Layer<SessionCwdRegistry, never, Storage> = Layer.effect(
+  static Live: Layer.Layer<SessionCwdRegistry, never, SessionStorage> = Layer.effect(
     SessionCwdRegistry,
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const storage = yield* SessionStorage
       const cacheRef = yield* Ref.make<Map<SessionId, string>>(new Map())
       return makeRegistry(cacheRef, storage)
     }),
@@ -74,7 +75,7 @@ export class SessionCwdRegistry extends Context.Service<
 
 const makeRegistry = (
   cacheRef: Ref.Ref<Map<SessionId, string>>,
-  storage: StorageService,
+  storage: SessionStorageService,
 ): SessionCwdRegistryService => {
   const record: SessionCwdRegistryService["record"] = (sessionId, cwd) =>
     Ref.update(cacheRef, (m) => {

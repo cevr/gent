@@ -10,7 +10,7 @@ import type { Effect } from "effect"
 import { Context, Layer } from "effect"
 import type { Session } from "../domain/message.js"
 import type { SessionId } from "../domain/ids.js"
-import type { StorageError } from "./sqlite-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
 
 export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>

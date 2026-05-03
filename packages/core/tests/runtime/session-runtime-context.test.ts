@@ -28,6 +28,7 @@ import {
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
 import { Storage, StorageError, type StorageService } from "@gent/core/storage/sqlite-storage"
+import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/domain/read-only"
 import type { ExternalDriverContribution } from "@gent/core/domain/driver"
@@ -90,6 +91,7 @@ describe("resolveSessionEnvironment", () => {
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               const storage = yield* Storage
+              const sessionStorage = yield* SessionStorage
               const extensionRegistry = yield* ExtensionRegistry
               const platform = yield* RuntimePlatform
               const profileCache = yield* SessionProfileCache
@@ -105,7 +107,7 @@ describe("resolveSessionEnvironment", () => {
               const resolved = yield* resolveSessionEnvironment({
                 sessionId: SessionId.make("session-runtime-context-profile"),
                 branchId: BranchId.make("branch-runtime-context-profile"),
-                storage,
+                sessionStorage,
                 profileCache,
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
                   storage,
@@ -191,6 +193,7 @@ describe("resolveSessionEnvironment", () => {
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               const storage = yield* Storage
+              const sessionStorage = yield* SessionStorage
               const extensionRegistry = yield* ExtensionRegistry
               const platform = yield* RuntimePlatform
               const now = new Date()
@@ -205,7 +208,7 @@ describe("resolveSessionEnvironment", () => {
               const resolved = yield* resolveSessionEnvironment({
                 sessionId: SessionId.make("session-runtime-context-request"),
                 branchId: BranchId.make("branch-runtime-context-request"),
-                storage,
+                sessionStorage,
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
                   storage,
                   extensionRegistry,
@@ -299,6 +302,7 @@ describe("resolveSessionEnvironment", () => {
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const storage = yield* Storage
+                const sessionStorage = yield* SessionStorage
                 const extensionRegistry = yield* ExtensionRegistry
                 const platform = yield* RuntimePlatform
                 const now = new Date()
@@ -328,7 +332,7 @@ describe("resolveSessionEnvironment", () => {
                 const resolved = yield* resolveSessionEnvironment({
                   sessionId: SessionId.make("session-runtime-context-resource"),
                   branchId: BranchId.make("branch-runtime-context-resource"),
-                  storage,
+                  sessionStorage,
                   profileCache,
                   hostDeps: yield* makeAmbientExtensionHostContextDeps({
                     storage,
@@ -425,6 +429,7 @@ describe("resolveSessionEnvironment", () => {
           )
           yield* Effect.gen(function* () {
             const storage = yield* Storage
+            const sessionStorage = yield* SessionStorage
             const extensionRegistry = yield* ExtensionRegistry
             const platform = yield* RuntimePlatform
             const now = new Date()
@@ -454,7 +459,7 @@ describe("resolveSessionEnvironment", () => {
             const resolved = yield* resolveSessionEnvironment({
               sessionId: SessionId.make("session-runtime-context-wide"),
               branchId: BranchId.make("branch-runtime-context-wide"),
-              storage,
+              sessionStorage,
               profileCache,
               hostDeps: yield* makeAmbientExtensionHostContextDeps({
                 storage,
@@ -516,12 +521,13 @@ describe("resolveSessionEnvironment", () => {
       )
       yield* Effect.gen(function* () {
         const storage = yield* Storage
+        const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          storage,
+          sessionStorage,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
             extensionRegistry,
@@ -556,17 +562,22 @@ describe("resolveSessionEnvironment", () => {
       )
       yield* Effect.gen(function* () {
         const storage = yield* Storage
+        const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
         const failingStorage: StorageService = {
           ...storage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
+        const failingSessionStorage: SessionStorageService = {
+          ...sessionStorage,
+          getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
+        }
         const exit = yield* Effect.exit(
           resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            storage: failingStorage,
+            sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               storage: failingStorage,
               extensionRegistry,
@@ -587,7 +598,7 @@ describe("resolveSessionEnvironment", () => {
           resolveSessionEnvironmentOrFail({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            storage: failingStorage,
+            sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               storage: failingStorage,
               extensionRegistry,
@@ -648,6 +659,7 @@ describe("resolveSessionEnvironment", () => {
       )
       yield* Effect.gen(function* () {
         const storage = yield* Storage
+        const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
         const defaultDriverRegistry = yield* DriverRegistry
@@ -686,7 +698,7 @@ describe("resolveSessionEnvironment", () => {
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
-          storage,
+          sessionStorage,
           profileCache: fakeProfileCache,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,

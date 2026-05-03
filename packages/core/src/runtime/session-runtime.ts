@@ -24,6 +24,8 @@ import {
 import { Message, MessageMetadata, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -369,10 +371,19 @@ interface RunPromptInput {
 const makeLiveSessionRuntime: Effect.Effect<
   SessionRuntimeService,
   never,
-  AgentLoop | Storage | EventPublisher | ExtensionRegistry | DriverRegistry | ModelRegistry
+  | AgentLoop
+  | Storage
+  | SessionStorage
+  | BranchStorage
+  | EventPublisher
+  | ExtensionRegistry
+  | DriverRegistry
+  | ModelRegistry
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
   const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const eventPublisher = yield* EventPublisher
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
@@ -398,7 +409,7 @@ const makeLiveSessionRuntime: Effect.Effect<
   // tombstones do not survive restart, and branch ids are globally addressable
   // enough that session-only checks hide cross-session mistakes.
   const requireSessionBranch = (target: SessionRuntimeTarget) =>
-    resolveExistingSessionBranch({ storage, ...target }).pipe(
+    resolveExistingSessionBranch({ sessionStorage, branchStorage, ...target }).pipe(
       Effect.mapError(
         (cause) =>
           new SessionRuntimeError({
@@ -416,7 +427,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     const resolved = yield* resolveSessionEnvironmentOrFail({
       sessionId: input.sessionId,
       branchId: input.branchId,
-      storage,
+      sessionStorage,
       hostDeps,
       profileCache,
       defaults: {

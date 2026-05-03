@@ -8,7 +8,7 @@ import type { Effect } from "effect"
 import { Context, Layer } from "effect"
 import type { AgentEvent, AgentEventTag, EventEnvelope } from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
-import type { StorageError } from "./sqlite-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
 
 export interface EventStorageService {
   readonly appendEvent: (

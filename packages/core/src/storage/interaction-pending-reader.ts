@@ -21,7 +21,7 @@ import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "../domain/read-only.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { InteractionStorage } from "./interaction-storage.js"
-import type { StorageError } from "./sqlite-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
 
 /** A pending interaction surfaced through the read-only boundary. */
 export interface PendingInteraction {

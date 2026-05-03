@@ -5,7 +5,9 @@ import type { Branch, Session } from "../domain/message.js"
 import type { AgentName } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import { StorageError, type StorageService } from "../storage/sqlite-storage.js"
+import { StorageError } from "../domain/storage-error.js"
+import type { BranchStorageService } from "../storage/branch-storage.js"
+import type { SessionStorageService } from "../storage/session-storage.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import {
@@ -125,7 +127,7 @@ export const AllowAllPermission: PermissionService = {
 interface ResolveSessionEnvironmentParams {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly storage: StorageService
+  readonly sessionStorage: SessionStorageService
   readonly hostDeps: MakeExtensionHostContextDeps
   readonly profileCache?: SessionProfileCacheService
   readonly defaults: SessionEnvironmentDefaults
@@ -172,7 +174,7 @@ export const resolveSessionEnvironment = (
   params: ResolveSessionEnvironmentParams,
 ): Effect.Effect<ResolvedSessionEnvironment> =>
   Effect.gen(function* () {
-    const session = yield* params.storage
+    const session = yield* params.sessionStorage
       .getSession(params.sessionId)
       .pipe(Effect.orElseSucceed(() => undefined))
     return yield* buildResolvedSessionEnvironment({ ...params, session })
@@ -182,24 +184,25 @@ export const resolveSessionEnvironmentOrFail = (
   params: ResolveSessionEnvironmentParams,
 ): Effect.Effect<ResolvedSessionEnvironment, StorageError> =>
   Effect.gen(function* () {
-    const session = yield* params.storage.getSession(params.sessionId)
+    const session = yield* params.sessionStorage.getSession(params.sessionId)
     return yield* buildResolvedSessionEnvironment({ ...params, session })
   })
 
 export const resolveExistingSessionBranch = (params: {
-  readonly storage: StorageService
+  readonly sessionStorage: SessionStorageService
+  readonly branchStorage: BranchStorageService
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }): Effect.Effect<ExistingSessionBranch, StorageError> =>
   Effect.gen(function* () {
-    const session = yield* params.storage.getSession(params.sessionId)
+    const session = yield* params.sessionStorage.getSession(params.sessionId)
     if (session === undefined) {
       return yield* new StorageError({
         message: `Session not found: ${params.sessionId}`,
       })
     }
 
-    const branch = yield* params.storage.getBranch(params.branchId)
+    const branch = yield* params.branchStorage.getBranch(params.branchId)
     if (branch === undefined || branch.sessionId !== params.sessionId) {
       return yield* new StorageError({
         message: `Branch not found for session: ${params.sessionId}/${params.branchId}`,

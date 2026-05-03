@@ -2,7 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type { InteractionRequestRecord } from "../domain/interaction-request.js"
 import { InteractionRequestId, type SessionId, type BranchId } from "../domain/ids.js"
-import { StorageError } from "./sqlite-storage.js"
+import { StorageError } from "../domain/storage-error.js"
 
 interface InteractionRequestRow {
   request_id: string

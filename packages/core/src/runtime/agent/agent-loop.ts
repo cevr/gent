@@ -48,6 +48,7 @@ import { ModelRegistry } from "../model-registry.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
+import { SessionStorage } from "../../storage/session-storage.js"
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
@@ -460,6 +461,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     AgentLoop,
     never,
     | Storage
+    | SessionStorage
     | CheckpointStorage
     | Provider
     | ExtensionRegistry
@@ -474,6 +476,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       AgentLoop,
       Effect.gen(function* () {
         const storage = yield* Storage
+        const sessionStorage = yield* SessionStorage
         const checkpointStorage = yield* CheckpointStorage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
@@ -606,7 +609,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const resolveTurnProfile = resolveSessionEnvironment({
               sessionId,
               branchId,
-              storage,
+              sessionStorage,
               hostDeps,
               profileCache,
               defaults: {

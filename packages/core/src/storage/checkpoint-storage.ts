@@ -2,7 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
-import { StorageError } from "./sqlite-storage.js"
+import { StorageError } from "../domain/storage-error.js"
 
 interface AgentLoopCheckpointRow {
   session_id: SessionId

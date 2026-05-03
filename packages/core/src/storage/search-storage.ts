@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { StorageError } from "./sqlite-storage.js"
+import { StorageError } from "../domain/storage-error.js"
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 

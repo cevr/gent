@@ -25,6 +25,7 @@ import {
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
+import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import { toPrompt } from "../providers/ai-transcript.js"
@@ -215,6 +216,7 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionStorage
   | BranchStorage
   | MessageStorage
+  | RelationshipStorage
   | SessionCwdRegistry
   | SessionRuntimeTerminator
 > = Effect.gen(function* () {
@@ -222,6 +224,7 @@ const makeSessionMutationsService: Effect.Effect<
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
+  const relationshipStorage = yield* RelationshipStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const sessionCwdRegistry = yield* SessionCwdRegistry
@@ -273,7 +276,7 @@ const makeSessionMutationsService: Effect.Effect<
           operation: "deleteBranch",
         })
       }
-      const childSessions = yield* storage.getChildSessions(input.sessionId)
+      const childSessions = yield* relationshipStorage.getChildSessions(input.sessionId)
       if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
         return yield* new InvalidStateError({
           message: `Cannot delete branch "${input.branchId}" with child sessions`,
@@ -297,7 +300,7 @@ const makeSessionMutationsService: Effect.Effect<
       if (sessionId === undefined || seen.has(sessionId)) continue
       seen.add(sessionId)
       sessionIds.push(sessionId)
-      const children = yield* storage.getChildSessions(sessionId)
+      const children = yield* relationshipStorage.getChildSessions(sessionId)
       for (const child of children) {
         queue.push(child.id)
       }
