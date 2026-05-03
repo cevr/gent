@@ -1228,21 +1228,13 @@ describe("session.delete", () => {
           )
           expectSessionNotFound(watchExit)
 
-          const stateExit = yield* Effect.exit(
-            client.actor.getState({
+          const snapshotExit = yield* Effect.exit(
+            client.session.getSnapshot({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
           )
-          expectSessionNotFound(stateExit)
-
-          const metricsExit = yield* Effect.exit(
-            client.actor.getMetrics({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-          )
-          expectSessionNotFound(metricsExit)
+          expectSessionNotFound(snapshotExit)
 
           const queueExit = yield* Effect.exit(
             client.queue.get({

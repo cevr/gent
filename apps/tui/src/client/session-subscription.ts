@@ -147,14 +147,14 @@ export const createSessionSubscriptionEffect = (params: SessionSubscriptionEffec
           const s = session()
           if (s !== null) {
             runtime.cast(
-              client.actor.getMetrics({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
-                Effect.tap((metrics) =>
+              client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
+                Effect.tap((snapshot) =>
                   Effect.sync(() => {
                     setAgentStore({
-                      cost: metrics.costUsd,
-                      lastModelId: metrics.lastModelId,
+                      cost: snapshot.metrics.costUsd,
+                      lastModelId: snapshot.metrics.lastModelId,
                     })
-                    setLatestInputTokens(metrics.lastInputTokens)
+                    setLatestInputTokens(snapshot.metrics.lastInputTokens)
                   }),
                 ),
                 Effect.catchEager(() => Effect.void),

@@ -20,7 +20,6 @@ import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import { buildActorRpcHandlers } from "./rpc-handler-groups/actor.js"
 import { buildConfigRpcHandlers } from "./rpc-handler-groups/config.js"
 import { buildExtensionRpcHandlers } from "./rpc-handler-groups/extension.js"
 import { buildServerRpcHandlers } from "./rpc-handler-groups/server.js"
@@ -117,7 +116,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       ...buildSessionRpcHandlers(deps),
       ...buildConfigRpcHandlers(deps),
       ...buildExtensionRpcHandlers(deps),
-      ...buildActorRpcHandlers(deps),
       ...buildServerRpcHandlers(deps),
     }
   }),
