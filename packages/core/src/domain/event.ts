@@ -625,6 +625,4 @@ export class EventStore extends Context.Service<EventStore, EventStoreService>()
   static Memory: Layer.Layer<EventStore> = Layer.unwrap(
     makeMemoryEventStore.pipe(Effect.map((service) => Layer.succeed(EventStore, service))),
   )
-
-  static Live: Layer.Layer<EventStore> = EventStore.Memory
 }
