@@ -269,7 +269,7 @@ const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
       Stream.run(Sink.last()),
     )
     if (terminal._tag === "None") {
-      return yield* Effect.die("Tool handler did not produce a final result")
+      return errorResult(toolCall, "Tool handler did not produce a final result")
     }
     return new ToolResultPart({
       type: "tool-result",
@@ -414,9 +414,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                 return yield* failure
               }
 
-              const message = Schema.isSchemaError(failure)
-                ? formatSchemaError(toolCall.toolName, failure)
-                : errorMessageFromAiError(toolCall.toolName, failure)
+              const message = errorMessageFromAiError(toolCall.toolName, failure)
               yield* WideEvent.set({
                 toolError:
                   AiError.isAiError(failure) &&

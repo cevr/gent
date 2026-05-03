@@ -348,8 +348,10 @@ describe("ToolRunner", () => {
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
+      const eventTags: Array<string> = []
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
+        const registry = yield* ExtensionRegistry
         return yield* Effect.flip(
           runner.run(
             { toolCallId: ToolCallId.make("tc-pending"), toolName: "pending", input: {} },
@@ -359,6 +361,13 @@ describe("ToolRunner", () => {
               toolCallId: ToolCallId.make("tc-pending"),
               agentName: AgentName.make("cowork"),
             }),
+            {
+              registry,
+              publishEvent: (event) =>
+                Effect.sync(() => {
+                  eventTags.push(event._tag)
+                }),
+            },
           ),
         )
       }).pipe(Effect.provide(layer))
@@ -366,6 +375,7 @@ describe("ToolRunner", () => {
       expect(result.requestId).toBe(InteractionRequestId.make("req-pending"))
       expect(result.sessionId).toBe(SessionId.make("session-pending"))
       expect(result.branchId).toBe(BranchId.make("branch-pending"))
+      expect(eventTags).toEqual(["ToolCallStarted"])
     }),
   )
 })
