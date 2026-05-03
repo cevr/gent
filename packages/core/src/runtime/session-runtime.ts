@@ -757,7 +757,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
   }): Layer.Layer<SessionRuntime | AgentLoop, never, SessionRuntimeEntityLayerRequirements> =>
     SessionRuntime.Live(config).pipe(Layer.provideMerge(SessionRuntime.EntityLive(config)))
 
-  static Test = (): Layer.Layer<SessionRuntime> =>
+  static Test = (overrides: Partial<SessionRuntimeService> = {}): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {
       sendUserMessage: () => Effect.void,
       recordToolResult: () => Effect.void,
@@ -788,5 +788,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       watchState: () => Effect.succeed(Stream.empty),
       terminateSession: () => Effect.void,
       restoreSession: () => Effect.void,
+      ...overrides,
     })
 }

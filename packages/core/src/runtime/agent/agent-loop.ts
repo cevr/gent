@@ -2198,7 +2198,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       }),
     )
 
-  static Test = (): Layer.Layer<AgentLoop> =>
+  static Test = (overrides: Partial<AgentLoopService> = {}): Layer.Layer<AgentLoop> =>
     Layer.succeed(AgentLoop, {
       runOnce: () => Effect.void,
       submit: () => Effect.void,
@@ -2220,5 +2220,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }),
         ),
       watchState: () => Effect.succeed(Stream.empty),
+      ...overrides,
     })
 }

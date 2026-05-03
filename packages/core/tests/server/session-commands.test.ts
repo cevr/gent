@@ -5,16 +5,10 @@ import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis, Branch, Message, Session, TextPart } from "@gent/core/domain/message"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Provider } from "@gent/core/providers/provider"
-import {
-  SessionRuntime,
-  SessionRuntimeError,
-  SessionRuntimeStateSchema,
-  type SessionRuntimeService,
-} from "../../src/runtime/session-runtime"
+import { SessionRuntime, SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -50,40 +44,6 @@ const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
     return closed
   })
-
-const idleRuntimeState = SessionRuntimeStateSchema.Idle.make({
-  agent: "cowork" as const,
-  queue: emptyQueueSnapshot(),
-})
-
-const makeSessionRuntimeStub = (
-  overrides: Partial<SessionRuntimeService> = {},
-): SessionRuntimeService => ({
-  sendUserMessage: () => Effect.void,
-  recordToolResult: () => Effect.void,
-  invokeTool: () => Effect.void,
-  steer: () => Effect.void,
-  respondInteraction: () => Effect.void,
-  runPrompt: () => Effect.void,
-  queueFollowUp: () => Effect.void,
-  drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-  getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-  getState: () => Effect.succeed(idleRuntimeState),
-  getMetrics: () =>
-    Effect.succeed({
-      turns: 0,
-      tokens: 0,
-      toolCalls: 0,
-      retries: 0,
-      durationMs: 0,
-      costUsd: 0,
-      lastInputTokens: 0,
-    }),
-  watchState: () => Effect.succeed(Stream.empty),
-  terminateSession: () => Effect.void,
-  restoreSession: () => Effect.void,
-  ...overrides,
-})
 
 const failingPublisherLayer = Layer.succeed(EventPublisher, {
   append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
@@ -129,12 +89,9 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
 
 const sendFailingSessionCommandsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql()
-  const failingRuntimeLayer = Layer.succeed(
-    SessionRuntime,
-    makeSessionRuntimeStub({
-      sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
-    }),
-  )
+  const failingRuntimeLayer = SessionRuntime.Test({
+    sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
+  })
   const deps = Layer.mergeAll(
     storageLayer,
     failingRuntimeLayer,
@@ -164,19 +121,16 @@ const sessionCommandsLayer = () => {
 }
 
 const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array<SessionId>) =>
-  Layer.succeed(
-    SessionRuntime,
-    makeSessionRuntimeStub({
-      terminateSession: (sessionId) =>
-        Effect.sync(() => {
-          terminated.push(sessionId)
-        }),
-      restoreSession: (sessionId) =>
-        Effect.sync(() => {
-          restored?.push(sessionId)
-        }),
-    }),
-  )
+  SessionRuntime.Test({
+    terminateSession: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+    restoreSession: (sessionId) =>
+      Effect.sync(() => {
+        restored?.push(sessionId)
+      }),
+  })
 
 const sessionCommandsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
@@ -1464,15 +1418,12 @@ describe("requestId idempotency", () => {
   it.live("duplicate sendMessage requestId sends to runtime only once", () =>
     Effect.gen(function* () {
       let dispatchCount = 0
-      const countingRuntime = Layer.succeed(
-        SessionRuntime,
-        makeSessionRuntimeStub({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        }),
-      )
+      const countingRuntime = SessionRuntime.Test({
+        sendUserMessage: () =>
+          Effect.sync(() => {
+            dispatchCount++
+          }),
+      })
       const storageLayer = SqliteStorage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
@@ -1516,15 +1467,12 @@ describe("requestId idempotency", () => {
   it.live("concurrent duplicate sendMessage requestIds dispatch only once", () =>
     Effect.gen(function* () {
       let dispatchCount = 0
-      const countingRuntime = Layer.succeed(
-        SessionRuntime,
-        makeSessionRuntimeStub({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        }),
-      )
+      const countingRuntime = SessionRuntime.Test({
+        sendUserMessage: () =>
+          Effect.sync(() => {
+            dispatchCount++
+          }),
+      })
       const storageLayer = SqliteStorage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
