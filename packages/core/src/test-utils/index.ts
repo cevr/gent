@@ -4,7 +4,8 @@ import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
 import {
   finishPart,
   textDeltaPart,
@@ -205,14 +206,15 @@ export const ensureStorageParents = (input: {
   readonly branchId?: BranchId | string | undefined
 }) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
     const sessionId = SessionId.make(input.sessionId)
     const branchId = input.branchId === undefined ? undefined : BranchId.make(input.branchId)
     const now = yield* DateTime.nowAsDate
 
-    const session = yield* storage.getSession(sessionId)
+    const session = yield* sessionStorage.getSession(sessionId)
     if (session === undefined) {
-      yield* storage
+      yield* sessionStorage
         .createSession(
           new Session({
             id: sessionId,
@@ -224,9 +226,9 @@ export const ensureStorageParents = (input: {
     }
 
     if (branchId !== undefined) {
-      const branch = yield* storage.getBranch(branchId)
+      const branch = yield* branchStorage.getBranch(branchId)
       if (branch === undefined) {
-        yield* storage
+        yield* branchStorage
           .createBranch(
             new Branch({
               id: branchId,
