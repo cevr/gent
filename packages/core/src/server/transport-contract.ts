@@ -388,11 +388,21 @@ export class GentConnectionError extends Schema.TaggedErrorClass<GentConnectionE
   { message: Schema.String },
 ) {}
 
-export type ConnectionState =
-  | { readonly _tag: "connecting" }
-  | { readonly _tag: "connected"; readonly pid?: number; readonly generation: number }
-  | { readonly _tag: "reconnecting"; readonly attempt: number; readonly generation: number }
-  | { readonly _tag: "disconnected"; readonly reason: string }
+export const ConnectionState = TaggedEnumClass("ConnectionState", {
+  Connecting: TaggedEnumClass.variant("connecting", {}),
+  Connected: TaggedEnumClass.variant("connected", {
+    pid: Schema.optional(Schema.Number),
+    generation: Schema.Number,
+  }),
+  Reconnecting: TaggedEnumClass.variant("reconnecting", {
+    attempt: Schema.Number,
+    generation: Schema.Number,
+  }),
+  Disconnected: TaggedEnumClass.variant("disconnected", {
+    reason: Schema.String,
+  }),
+})
+export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
 
 export interface GentLifecycle {
   readonly getState: () => ConnectionState

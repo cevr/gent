@@ -1,6 +1,7 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
+import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import { runProcess } from "../utils/run-process.js"
 
 // Auth Storage Error
@@ -34,6 +35,24 @@ export interface KeychainRunResult {
   readonly stdout: string
   readonly stderr: string
 }
+
+/**
+ * Classified outcome of a `security` invocation. The shell-boundary
+ * exit-code wrapper distinguishes "missing item" (exit 44) from "real
+ * failure" (any other non-zero) so callers never have to re-infer
+ * presence vs. operational error from raw exit codes.
+ */
+export const KeychainExit = TaggedEnumClass("KeychainExit", {
+  Ok: TaggedEnumClass.variant("ok", {
+    stdout: Schema.String,
+  }),
+  ItemNotFound: TaggedEnumClass.variant("item-not-found", {}),
+  Failure: TaggedEnumClass.variant("failure", {
+    exitCode: Schema.Number,
+    stderr: Schema.String,
+  }),
+})
+export type KeychainExit = Schema.Schema.Type<typeof KeychainExit>
 
 export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService>()(
   "@gent/core/src/domain/auth-storage/AuthStorage",
@@ -86,11 +105,6 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
         // has to re-infer "missing vs broken".
         const ITEM_NOT_FOUND_EXIT = 44
 
-        type KeychainExit =
-          | { readonly _tag: "ok"; readonly stdout: string }
-          | { readonly _tag: "item-not-found" }
-          | { readonly _tag: "failure"; readonly exitCode: number; readonly stderr: string }
-
         const defaultRunSecurity = (
           args: ReadonlyArray<string>,
         ): Effect.Effect<KeychainRunResult, AuthStorageError> =>
@@ -117,26 +131,25 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
 
         const runSecurity = (args: ReadonlyArray<string>): Effect.Effect<KeychainExit> =>
           runSecurityRaw(args).pipe(
-            Effect.map((result) => {
+            Effect.map((result): KeychainExit => {
               if (result.exitCode === 0)
-                return { _tag: "ok", stdout: result.stdout.trim() } as KeychainExit
-              if (result.exitCode === ITEM_NOT_FOUND_EXIT)
-                return { _tag: "item-not-found" } as KeychainExit
-              return {
-                _tag: "failure",
+                return KeychainExit.Ok.make({ stdout: result.stdout.trim() })
+              if (result.exitCode === ITEM_NOT_FOUND_EXIT) return KeychainExit.ItemNotFound.make({})
+              return KeychainExit.Failure.make({
                 exitCode: result.exitCode,
                 stderr: result.stderr.trim(),
-              } as KeychainExit
+              })
             }),
             // Spawn-level failures are rare (binary missing) — surface them
             // as a generic shell-boundary failure so callers can classify
             // uniformly instead of distinguishing spawn vs exit codes.
             Effect.catchEager((e) =>
-              Effect.succeed({
-                _tag: "failure" as const,
-                exitCode: -1,
-                stderr: e.message,
-              } satisfies KeychainExit),
+              Effect.succeed(
+                KeychainExit.Failure.make({
+                  exitCode: -1,
+                  stderr: e.message,
+                }),
+              ),
             ),
           )
 

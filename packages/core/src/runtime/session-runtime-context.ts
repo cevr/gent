@@ -32,18 +32,10 @@ export interface SessionEnvironment {
   readonly hostCtx: ExtensionHostContext
 }
 
-export interface SessionFound {
-  readonly _tag: "SessionFound"
-  readonly session: Session
+export interface ResolvedSessionEnvironment {
+  readonly session: Session | undefined
   readonly environment: SessionEnvironment
 }
-
-export interface SessionMissing {
-  readonly _tag: "SessionMissing"
-  readonly environment: SessionEnvironment
-}
-
-export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 
 export interface ExistingSessionBranch {
   readonly session: Session
@@ -156,15 +148,7 @@ const buildResolvedSessionEnvironment = (
       hostDeps: params.hostDeps,
     })
 
-    if (params.session === undefined) {
-      return {
-        _tag: "SessionMissing",
-        environment,
-      }
-    }
-
     return {
-      _tag: "SessionFound",
       session: params.session,
       environment,
     }

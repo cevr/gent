@@ -8,7 +8,8 @@
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
-import { Clock, Effect, Layer, Context } from "effect"
+import { Clock, Effect, Layer, Context, Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class.js"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
@@ -46,18 +47,24 @@ import { findOpenPort } from "./supervisor.js"
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
 type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
 
-export type StateSpec =
-  | { readonly _tag: "sqlite"; readonly home?: string; readonly dbPath?: string }
-  | { readonly _tag: "memory" }
+export const StateSpec = TaggedEnumClass("StateSpec", {
+  Sqlite: TaggedEnumClass.variant("sqlite", {
+    home: Schema.optional(Schema.String),
+    dbPath: Schema.optional(Schema.String),
+  }),
+  Memory: TaggedEnumClass.variant("memory", {}),
+})
+export type StateSpec = Schema.Schema.Type<typeof StateSpec>
 
-export type ProviderSpec =
-  | { readonly _tag: "live" }
-  | {
-      readonly _tag: "mock"
-      readonly delayMs?: number
-      readonly failing?: boolean
-      readonly retries?: boolean
-    }
+export const ProviderSpec = TaggedEnumClass("ProviderSpec", {
+  Live: TaggedEnumClass.variant("live", {}),
+  Mock: TaggedEnumClass.variant("mock", {
+    delayMs: Schema.optional(Schema.Number),
+    failing: Schema.optional(Schema.Boolean),
+    retries: Schema.optional(Schema.Boolean),
+  }),
+})
+export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
 export interface GentServerOptions {
   readonly cwd: string
@@ -71,9 +78,15 @@ export interface GentServerOptions {
 }
 
 /** Public opaque server handle. */
-export type GentServer =
-  | { readonly _tag: "owned"; readonly url: string }
-  | { readonly _tag: "attached"; readonly url: string }
+export const GentServer = TaggedEnumClass("GentServer", {
+  Owned: TaggedEnumClass.variant("owned", {
+    url: Schema.String,
+  }),
+  Attached: TaggedEnumClass.variant("attached", {
+    url: Schema.String,
+  }),
+})
+export type GentServer = Schema.Schema.Type<typeof GentServer>
 
 // ── Internal state for owned servers ──
 
@@ -93,24 +106,21 @@ export const getOwnedInternal = (server: GentServer): OwnedServerInternal | unde
 // ── Factories ──
 
 export const state = {
-  sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec => ({
-    _tag: "sqlite",
-    ...(options?.home !== undefined ? { home: options.home } : {}),
-    ...(options?.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
-  }),
-  memory: (): StateSpec => ({ _tag: "memory" }),
+  sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec =>
+    StateSpec.Sqlite.make({
+      ...(options?.home !== undefined ? { home: options.home } : {}),
+      ...(options?.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
+    }),
+  memory: (): StateSpec => StateSpec.Memory.make({}),
 } as const
 
 export const provider = {
-  live: (): ProviderSpec => ({ _tag: "live" }),
+  live: (): ProviderSpec => ProviderSpec.Live.make({}),
   mock: (options?: {
     readonly delayMs?: number
     readonly failing?: boolean
     readonly retries?: boolean
-  }): ProviderSpec => ({
-    _tag: "mock",
-    ...(options ?? {}),
-  }),
+  }): ProviderSpec => ProviderSpec.Mock.make({ ...(options ?? {}) }),
 } as const
 
 // ── Provider layer from spec ──
@@ -261,7 +271,7 @@ const buildOwnedServer = (
         scope,
       ).pipe(Effect.orDie)
 
-      const server: GentServer = { _tag: "owned", url }
+      const server: GentServer = GentServer.Owned.make({ url })
       ownedInternals.set(server, {
         handlerContext: handlersContext,
         port,
@@ -353,7 +363,7 @@ const resolveServerInternal = (
           buildFingerprint: fingerprint,
         })
         if (alive) {
-          return { _tag: "attached" as const, url: existing.rpcUrl }
+          return GentServer.Attached.make({ url: existing.rpcUrl })
         }
       }
       // Stale — only signal when the live process proves it owns this registry identity.
@@ -404,7 +414,7 @@ const resolveServerInternal = (
               buildFingerprint: fingerprint,
             })
             if (alive) {
-              return { _tag: "attached" as const, url: retryEntry.rpcUrl }
+              return GentServer.Attached.make({ url: retryEntry.rpcUrl })
             }
             return yield* new GentConnectionError({
               message: "Lock contention: new server did not pass identity probe",

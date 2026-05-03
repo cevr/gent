@@ -10,11 +10,11 @@ export {
   SlashCommandInfo,
   DriverInfo,
   DriverListResult,
+  ConnectionState,
   GentConnectionError,
 } from "@gent/core/server/transport-contract.js"
 export type {
   GentLifecycle,
-  ConnectionState,
   BranchTreeNode,
   SessionRuntime,
   CreateSessionResult,

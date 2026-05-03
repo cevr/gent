@@ -2,7 +2,8 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { SyntaxStyle } from "@opentui/core"
-import type { ConnectionState, ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk"
+import { ConnectionState } from "@gent/sdk"
+import type { ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
@@ -325,7 +326,7 @@ describe("TUI renderer surfaces", () => {
   )
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
     Effect.gen(function* () {
-      const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
+      const lifecycle = createMutableRuntime(ConnectionState.Connected.make({ generation: 0 }))
       let callCount = 0
       let currentHealth: ExtensionHealthSnapshot = {
         _tag: "degraded",
@@ -367,10 +368,10 @@ describe("TUI renderer surfaces", () => {
         _tag: "healthy",
         extensions: [],
       }
-      lifecycle.emit({ _tag: "reconnecting", attempt: 1, generation: 1 })
+      lifecycle.emit(ConnectionState.Reconnecting.make({ attempt: 1, generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      lifecycle.emit({ _tag: "connected", generation: 1 })
+      lifecycle.emit(ConnectionState.Connected.make({ generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.yieldNow

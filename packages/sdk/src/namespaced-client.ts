@@ -1,10 +1,7 @@
 import type { Effect, Fiber } from "effect"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
-import type {
-  GentConnectionError,
-  GentLifecycle,
-  ConnectionState,
-} from "@gent/core/server/transport-contract.js"
+import { ConnectionState } from "@gent/core/server/transport-contract.js"
+import type { GentConnectionError, GentLifecycle } from "@gent/core/server/transport-contract.js"
 
 // ---------------------------------------------------------------------------
 // Namespaced client — typed nested view over the flat RPC transport
@@ -50,7 +47,8 @@ export interface GentRuntime<Services = unknown> {
   readonly lifecycle: GentLifecycle
 }
 
-export type { GentConnectionError, GentLifecycle, ConnectionState }
+export type { GentConnectionError, GentLifecycle }
+export { ConnectionState }
 
 // ---------------------------------------------------------------------------
 // Adapter factory — builds a GentNamespacedClient from the flat RPC transport

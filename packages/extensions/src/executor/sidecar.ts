@@ -22,7 +22,7 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord, runProcess } from "@gent/core/extensions/api"
+import { isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
 import {
@@ -85,10 +85,19 @@ interface SidecarRegistryFile {
   readonly sidecars: Record<string, RegisteredSidecar>
 }
 
-type PortProbe =
-  | { readonly _tag: "free"; readonly port: number }
-  | { readonly _tag: "reusable"; readonly port: number; readonly scope: ScopeInfo }
-  | { readonly _tag: "occupied"; readonly port: number }
+const PortProbe = TaggedEnumClass("PortProbe", {
+  Free: TaggedEnumClass.variant("free", {
+    port: Schema.Number,
+  }),
+  Reusable: TaggedEnumClass.variant("reusable", {
+    port: Schema.Number,
+    scope: ScopeInfo,
+  }),
+  Occupied: TaggedEnumClass.variant("occupied", {
+    port: Schema.Number,
+  }),
+})
+type PortProbe = Schema.Schema.Type<typeof PortProbe>
 
 // ── Service interface ──
 
@@ -200,12 +209,15 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           return fetchScope(baseUrl).pipe(
             Effect.map(
               (scope): PortProbe =>
-                scope.dir === cwd ? { _tag: "reusable", port, scope } : { _tag: "occupied", port },
+                scope.dir === cwd
+                  ? PortProbe.Reusable.make({ port, scope })
+                  : PortProbe.Occupied.make({ port }),
             ),
             Effect.catchEager(() =>
               isPortFree(port).pipe(
                 Effect.map(
-                  (free): PortProbe => (free ? { _tag: "free", port } : { _tag: "occupied", port }),
+                  (free): PortProbe =>
+                    free ? PortProbe.Free.make({ port }) : PortProbe.Occupied.make({ port }),
                 ),
               ),
             ),
@@ -218,11 +230,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             for (let offset = 0; offset < PORT_SCAN_LIMIT; offset++) {
               probes.push(yield* probePort(cwd, DEFAULT_PORT_SEED + offset))
             }
-            const reusable = probes.find(
-              (p): p is PortProbe & { _tag: "reusable" } => p._tag === "reusable",
-            )
+            const reusable = probes.find(PortProbe.guards.Reusable)
             if (reusable) return { reusable, freePort: undefined } as const
-            const free = probes.find((p) => p._tag === "free")
+            const free = probes.find(PortProbe.guards.Free)
             return { reusable: undefined, freePort: free?.port } as const
           })
 

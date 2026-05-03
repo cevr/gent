@@ -15,7 +15,7 @@ import { ClientProvider } from "../src/client"
 import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import { emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
+import { ConnectionState, emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { dateFromMillis } from "@gent/core/domain/message"
@@ -176,9 +176,9 @@ export const createMockRuntime = (): GentRuntime => ({
   fork: Effect.runFork as never,
   run: Effect.runPromise as never,
   lifecycle: {
-    getState: () => ({ _tag: "connected" as const, generation: 0 }),
+    getState: () => ConnectionState.Connected.make({ generation: 0 }),
     subscribe: (listener) => {
-      listener({ _tag: "connected", generation: 0 })
+      listener(ConnectionState.Connected.make({ generation: 0 }))
       return () => {}
     },
     restart: Effect.void,

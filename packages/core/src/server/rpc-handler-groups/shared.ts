@@ -1,4 +1,5 @@
 import { Effect, Stream, type Context } from "effect"
+import type { DriverRef } from "../../domain/agent.js"
 import type { AuthGuardService } from "../../domain/auth-guard.js"
 import type { AuthStoreService } from "../../domain/auth-store.js"
 import type { EventEnvelope, EventStoreService } from "../../domain/event.js"
@@ -54,13 +55,13 @@ export const isPublicTransportEvent = (envelope: EventEnvelope) =>
 
 export const invalidateExternalDriversFor = (
   registry: DriverRegistryService,
-  prev: { readonly _tag: "model" | "external"; readonly id?: string } | undefined,
-  next: { readonly _tag: "model" | "external"; readonly id?: string } | undefined,
+  prev: DriverRef | undefined,
+  next: DriverRef | undefined,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const ids = new Set<string>()
-    if (prev?._tag === "external" && typeof prev.id === "string") ids.add(prev.id)
-    if (next?._tag === "external" && typeof next.id === "string") ids.add(next.id)
+    if (prev?._tag === "external") ids.add(prev.id)
+    if (next?._tag === "external") ids.add(next.id)
     for (const id of ids) {
       const driver = yield* registry.getExternal(id)
       if (driver !== undefined) yield* driver.invalidate()

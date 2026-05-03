@@ -435,9 +435,9 @@ const makeLiveSessionRuntime: Effect.Effect<
         baseSections: [],
       },
     }).pipe(
-      Effect.flatMap((result) =>
-        result._tag === "SessionFound"
-          ? Effect.succeed(result)
+      Effect.flatMap(({ session, environment }) =>
+        session !== undefined
+          ? Effect.succeed({ session, environment })
           : Effect.fail(
               new SessionRuntimeError({
                 message: `Session not found: ${input.sessionId}`,

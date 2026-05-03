@@ -107,7 +107,7 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           })
-          expect(resolved._tag).toBe("SessionFound")
+          expect(resolved.session).toBeDefined()
           expect(resolved.environment.cwd).toBe(secondary)
           expect(resolved.environment.hostCtx.cwd).toBe(secondary)
           expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
@@ -165,7 +165,7 @@ describe("resolveSessionEnvironment", () => {
           }),
           defaults,
         })
-        expect(resolved._tag).toBe("SessionMissing")
+        expect(resolved.session).toBeUndefined()
         expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
         expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
@@ -216,7 +216,7 @@ describe("resolveSessionEnvironment", () => {
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
-          expect(exit.value._tag).toBe("SessionMissing")
+          expect(exit.value.session).toBeUndefined()
         }
         const strict = yield* Effect.exit(
           resolveSessionEnvironmentOrFail({
@@ -334,7 +334,7 @@ describe("resolveSessionEnvironment", () => {
         })
         const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
-        expect(resolved._tag).toBe("SessionFound")
+        expect(resolved.session).toBeDefined()
         expect(resolved.environment.cwd).toBe("/tmp/profile-driver-scope")
         expect(fromProfile?.id).toBe("profile-driver")
         expect(fromDefault).toBeUndefined()

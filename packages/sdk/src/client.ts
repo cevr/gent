@@ -10,8 +10,8 @@ import {
 } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import {
+  ConnectionState,
   GentConnectionError,
-  type ConnectionState,
   type GentLifecycle,
   type SteerCommand,
   type Session,
@@ -82,7 +82,6 @@ export type {
 }
 export type {
   GentLifecycle,
-  ConnectionState,
   SteerCommand,
   Session,
   Branch,
@@ -95,7 +94,7 @@ export type {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 }
-export { GentConnectionError }
+export { ConnectionState, GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
 export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
 
@@ -203,7 +202,7 @@ const connectWs = (
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     let generation = 0
-    let currentState: ConnectionState = { _tag: "connecting" }
+    let currentState: ConnectionState = ConnectionState.Connecting.make({})
     const listeners = new Set<(state: ConnectionState) => void>()
 
     const emit = (state: ConnectionState) => {
@@ -213,11 +212,11 @@ const connectWs = (
 
     const hooksLayer = Layer.succeed(RpcClient.ConnectionHooks, {
       onConnect: Effect.sync(() => {
-        emit({ _tag: "connected", generation })
+        emit(ConnectionState.Connected.make({ generation }))
       }),
       onDisconnect: Effect.sync(() => {
         generation++
-        emit({ _tag: "reconnecting", attempt: generation, generation })
+        emit(ConnectionState.Reconnecting.make({ attempt: generation, generation }))
       }),
     })
 
@@ -284,7 +283,10 @@ export const Gent = {
       const services = yield* Effect.context<R | Scope.Scope>()
       return {
         client: makeNamespacedClient(rpcClient),
-        runtime: makeRuntime(services, staticLifecycle({ _tag: "connected", generation: 0 })),
+        runtime: makeRuntime(
+          services,
+          staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
+        ),
       }
     }),
 
@@ -323,7 +325,10 @@ export const Gent = {
           const services = yield* Effect.context<Scope.Scope>()
           return {
             client: makeNamespacedClient(rpcClient),
-            runtime: makeRuntime(services, staticLifecycle({ _tag: "connected", generation: 0 })),
+            runtime: makeRuntime(
+              services,
+              staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
+            ),
           }
         }
         case "attached":
