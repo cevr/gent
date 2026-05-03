@@ -572,8 +572,8 @@ const buildEphemeralLayer = (params: {
     ),
   )
   // Each override family maps to all Tags that should be omitted from the
-  // parent (e.g. storage -> Storage + focused sub-Tags). Adding a new storage
-  // sub-Tag updates the explicit builder, not every ephemeral call site.
+  // parent. Adding a new storage sub-Tag updates the explicit builder, not
+  // every ephemeral call site.
   const composed = buildEphemeralRuntime({
     parent: params.parentProfile,
     parentServices: params.parentServices,
