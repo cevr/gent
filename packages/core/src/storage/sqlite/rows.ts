@@ -27,8 +27,6 @@ export const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
 export const decodeMessageMetadata = Schema.decodeUnknownOption(MessageMetadataJson)
 export const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
 
-export const MESSAGES_FTS_SCHEMA_VERSION = "1"
-
 export const decodeEvent = (json: string) =>
   decodeEventJson(json).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)))
 // Row types
@@ -199,28 +197,3 @@ export const indexMessageSearch = Effect.fn("Storage.indexMessageSearch")(functi
   yield* sql`DELETE FROM messages_fts WHERE message_id = ${message.id}`
   yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
 })
-
-export const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex")(
-  function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql<MessageChunkRow>`SELECT
-      m.id,
-      m.session_id,
-      m.branch_id,
-      m.kind,
-      m.role,
-      m.created_at,
-      m.turn_duration_ms,
-      m.metadata,
-      mc.ordinal as chunk_ordinal,
-      c.part_json as chunk_part_json
-    FROM messages m
-    LEFT JOIN message_chunks mc ON mc.message_id = m.id
-    LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-    ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
-    const messages = yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
-      decodeStoredMessage(row, partJsons),
-    )
-    yield* Effect.forEach(messages, (message) => indexMessageSearch(message), { discard: true })
-  },
-)

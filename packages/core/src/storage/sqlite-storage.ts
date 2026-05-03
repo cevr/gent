@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { Effect, Layer, Schema, FileSystem, Path } from "effect"
+import { Effect, Layer, FileSystem, Path } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { CheckpointStorage } from "./checkpoint-storage.js"
@@ -15,12 +15,7 @@ import { StorageTransaction } from "./storage-transaction.js"
 import { StorageError } from "../domain/storage-error.js"
 export { StorageError }
 
-import { initSchema, configureSqliteConnection } from "./schema.js"
-
-const mapStartupError = (error: unknown): StorageError =>
-  Schema.is(StorageError)(error)
-    ? error
-    : new StorageError({ message: "Failed to initialize SQLite storage", cause: error })
+import { StorageInitLive } from "./schema.js"
 
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
@@ -57,6 +52,16 @@ const provideFocusedRepositories = <E, R>(
   )
 }
 
+const ensureDbDirectory = (dbPath: string) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = path.dirname(dbPath)
+      yield* fs.makeDirectory(dir, { recursive: true })
+    }),
+  )
+
 const makeLiveSqliteLayer = (
   dbPath: string,
 ): Layer.Layer<
@@ -64,23 +69,14 @@ const makeLiveSqliteLayer = (
   StorageError | PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = path.dirname(dbPath)
-      yield* fs.makeDirectory(dir, { recursive: true })
-      yield* configureSqliteConnection().pipe(Effect.mapError(mapStartupError))
-      yield* initSchema.pipe(Effect.mapError(mapStartupError))
-    }),
-  ).pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+  StorageInitLive.pipe(
+    Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))),
+    Layer.provideMerge(ensureDbDirectory(dbPath)),
+  )
 
-const makeMemorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = Layer.effectDiscard(
-  Effect.gen(function* () {
-    yield* configureSqliteConnection().pipe(Effect.mapError(mapStartupError))
-    yield* initSchema.pipe(Effect.mapError(mapStartupError))
-  }),
-).pipe(Layer.provideMerge(memorySqliteClientLayer))
+const makeMemorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = StorageInitLive.pipe(
+  Layer.provideMerge(memorySqliteClientLayer),
+)
 
 export const SqliteStorage = {
   // Load-bearing: `deleteSession`'s atomic SELECT+DELETE relies on @effect/sql-sqlite-bun's

@@ -1,6 +1,5 @@
 import { describe, it, expect, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Database } from "bun:sqlite"
 import { Effect, Exit, FileSystem, Layer, Path, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
@@ -166,168 +165,7 @@ describe("Storage", () => {
         }).pipe(Effect.provide(layer))
       }).pipe(Effect.provide(BunServices.layer)),
     )
-    it.scoped("resets incompatible storage schemas before accepting writes", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const dir = yield* fs.makeTempDirectoryScoped()
-        const dbPath = path.join(dir, "gent.db")
-        const db = new Database(dbPath)
-        db.run(`
-          CREATE TABLE sessions (
-            id TEXT PRIMARY KEY,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-          )
-        `)
-        db.run(`
-          CREATE TABLE branches (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-          )
-        `)
-        db.run(`
-          CREATE TABLE messages (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            branch_id TEXT NOT NULL,
-            kind TEXT,
-            role TEXT NOT NULL,
-            parts TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            turn_duration_ms INTEGER,
-            metadata TEXT
-          )
-        `)
-        db.run(`
-          CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            branch_id TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            description TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            owner TEXT,
-            agent_type TEXT,
-            prompt TEXT,
-            cwd TEXT,
-            metadata TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-          )
-        `)
-        db.run(`
-          CREATE TABLE task_deps (
-            task_id TEXT NOT NULL,
-            blocked_by_id TEXT NOT NULL,
-            PRIMARY KEY (task_id, blocked_by_id),
-            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-            FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
-          )
-        `)
-        db.run(`CREATE VIRTUAL TABLE retired_fts USING fts5(content)`)
-        db.run(`CREATE VIEW retired_message_view AS SELECT id FROM messages`)
-        db.run(`
-          CREATE TRIGGER retired_message_touch
-          AFTER INSERT ON messages
-          BEGIN
-            INSERT INTO retired_fts(content) VALUES (new.id);
-          END
-        `)
-        db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
-          "retired-session",
-          0,
-          0,
-        ])
-        db.run(`INSERT INTO branches (id, session_id, created_at) VALUES (?, ?, ?)`, [
-          "retired-branch",
-          "retired-session",
-          0,
-        ])
-        db.run(
-          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ["retired-message", "retired-session", "retired-branch", "user", "[]", 0],
-        )
-        db.run(
-          `INSERT INTO tasks (id, session_id, branch_id, subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ["retired-task", "retired-session", "retired-branch", "old task", 0, 0],
-        )
-        db.run(`INSERT INTO task_deps (task_id, blocked_by_id) VALUES (?, ?)`, [
-          "retired-task",
-          "retired-task",
-        ])
-        db.run(`INSERT INTO retired_fts(content) VALUES (?)`, ["old index"])
-        db.close()
-
-        const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
-          Layer.provide(BunFileSystem.layer),
-          Layer.provide(BunServices.layer),
-        )
-        yield* Effect.gen(function* () {
-          const sessions = yield* SessionStorage
-          const branches = yield* BranchStorage
-          const messages = yield* MessageStorage
-          const sql = yield* SqlClient.SqlClient
-          const columns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(messages)`)
-          const tables = yield* sql<{ name: string }>`
-            SELECT name FROM sqlite_schema WHERE type = ${"table"} AND name NOT LIKE ${"sqlite_%"}
-          `
-          const views = yield* sql<{ name: string }>`
-            SELECT name FROM sqlite_schema WHERE type = ${"view"}
-          `
-          const triggers = yield* sql<{ name: string }>`
-            SELECT name FROM sqlite_schema WHERE type = ${"trigger"}
-          `
-          const foreignKeys = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
-          const coreVersion = yield* sql<{
-            value: string
-          }>`SELECT value FROM storage_meta WHERE key = ${"core_schema_version"}`
-          expect(tables.map((table) => table.name)).not.toContain("tasks")
-          expect(tables.map((table) => table.name)).not.toContain("task_deps")
-          expect(tables.map((table) => table.name)).not.toContain("retired_fts")
-          expect(tables.some((table) => table.name.startsWith("retired_fts_"))).toBe(false)
-          expect(views.map((view) => view.name)).not.toContain("retired_message_view")
-          expect(triggers.map((trigger) => trigger.name)).not.toContain("retired_message_touch")
-          expect(foreignKeys[0]?.foreign_keys).toBe(1)
-          expect(coreVersion[0]?.value).toBe("1")
-          expect(columns.map((column) => column.name)).not.toContain("parts")
-          yield* sessions.createSession(
-            new Session({
-              id: SessionId.make("reset-session"),
-              createdAt: FIXED_NOW,
-              updatedAt: FIXED_NOW,
-            }),
-          )
-          yield* branches.createBranch(
-            new Branch({
-              id: BranchId.make("reset-branch"),
-              sessionId: SessionId.make("reset-session"),
-              createdAt: FIXED_NOW,
-            }),
-          )
-          yield* messages.createMessage(
-            Message.Regular.make({
-              id: "reset-message",
-              sessionId: SessionId.make("reset-session"),
-              branchId: BranchId.make("reset-branch"),
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "fresh write" })],
-              createdAt: FIXED_NOW,
-            }),
-          )
-          const messagesResult = yield* messages.listMessages(BranchId.make("reset-branch"))
-          expect(messagesResult).toHaveLength(1)
-          expect(messagesResult[0]?.parts).toEqual([
-            new TextPart({ type: "text", text: "fresh write" }),
-          ])
-        }).pipe(Effect.provide(layer))
-      }).pipe(Effect.provide(BunServices.layer)),
-    )
-    it.scoped("does not rebuild current-version FTS projection on every startup", () =>
+    it.scoped("migrator runs forward-only and is idempotent on reboot", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -337,58 +175,30 @@ describe("Storage", () => {
           Layer.provide(BunFileSystem.layer),
           Layer.provide(BunServices.layer),
         )
-        const sessionId = SessionId.make("fts-version-session")
-        const branchId = BranchId.make("fts-version-branch")
-        const messageId = MessageId.make("fts-version-message")
+        const sessionId = SessionId.make("migrator-session")
+
         yield* Effect.gen(function* () {
           const sessions = yield* SessionStorage
-          const branches = yield* BranchStorage
-          const messages = yield* MessageStorage
           yield* sessions.createSession(
-            new Session({
-              id: sessionId,
-              createdAt: FIXED_NOW,
-              updatedAt: FIXED_NOW,
-            }),
-          )
-          yield* branches.createBranch(
-            new Branch({
-              id: branchId,
-              sessionId,
-              createdAt: FIXED_NOW,
-            }),
-          )
-          yield* messages.createMessage(
-            Message.Regular.make({
-              id: messageId,
-              sessionId,
-              branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "versioned fts projection" })],
-              createdAt: FIXED_NOW,
-            }),
+            new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
           )
           const sql = yield* SqlClient.SqlClient
-          const version = yield* sql<{
-            value: string
-          }>`SELECT value FROM storage_meta WHERE key = ${"messages_fts_schema_version"}`
-          expect(version[0]?.value).toBe("1")
+          const migrations = yield* sql<{
+            name: string
+          }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
+          expect(migrations.map((row) => row.name)).toEqual(["init"])
         }).pipe(Effect.provide(layer))
 
-        const db = new Database(dbPath)
-        db.query(`DELETE FROM messages_fts WHERE message_id = ?`).run(messageId)
-        db.close()
-
+        // Reboot — migrator must not re-run the init migration.
         yield* Effect.gen(function* () {
+          const sessions = yield* SessionStorage
+          const found = yield* sessions.getSession(sessionId)
+          expect(found?.id).toBe(sessionId)
           const sql = yield* SqlClient.SqlClient
-          const version = yield* sql<{
-            value: string
-          }>`SELECT value FROM storage_meta WHERE key = ${"messages_fts_schema_version"}`
-          const ftsRows = yield* sql<{
-            count: number
-          }>`SELECT COUNT(*) as count FROM messages_fts WHERE message_id = ${messageId}`
-          expect(version[0]?.value).toBe("1")
-          expect(ftsRows[0]?.count).toBe(0)
+          const migrations = yield* sql<{
+            name: string
+          }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
+          expect(migrations.map((row) => row.name)).toEqual(["init"])
         }).pipe(Effect.provide(layer))
       }).pipe(Effect.provide(BunServices.layer)),
     )
