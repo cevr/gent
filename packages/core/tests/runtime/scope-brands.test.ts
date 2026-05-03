@@ -39,6 +39,7 @@ import { PromptPresenter } from "../../src/domain/prompt-presenter"
 import { ResourceManager } from "../../src/runtime/resource-manager"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { RuntimePlatform, type RuntimePlatformShape } from "../../src/runtime/runtime-platform"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
@@ -56,6 +57,7 @@ describe("scope brand type fences", () => {
   const storageOverride = () =>
     Layer.mergeAll(
       Layer.succeed(SqlClient.SqlClient, { sentinel: "child-sql" } as never),
+      Layer.succeed(Storage, { sentinel: "child-storage" } as never),
       Layer.succeed(SessionStorage, { sentinel: "child-session" } as never),
       Layer.succeed(BranchStorage, { sentinel: "child-branch" } as never),
       Layer.succeed(MessageStorage, { sentinel: "child-message" } as never),
@@ -164,32 +166,37 @@ describe("scope brand type fences", () => {
     void _badOverrides
   })
 
-  test("ephemeral extension layers receive child-owned SqlClient", () => {
+  test("ephemeral extension layers receive child-owned SqlClient and parent services", () => {
     return Effect.runPromise(
       Effect.gen(function* () {
         class ExtensionSqlProbe extends Context.Service<
           ExtensionSqlProbe,
-          { readonly sql: unknown }
+          { readonly sql: unknown; readonly platform: RuntimePlatformShape }
         >()("@gent/core/tests/scope-brands/ExtensionSqlProbe") {}
 
         const parentSql = { sentinel: "parent-sql" } as never
-        const parentServicesWithSql = Context.add(
-          parentServices,
-          SqlClient.SqlClient,
-          parentSql,
+        const parentPlatform = RuntimePlatform.of({
+          cwd: "/parent-cwd",
+          home: "/parent-home",
+          platform: "parent-platform",
+        })
+        const parentServicesWithDependencies = Context.empty().pipe(
+          Context.add(SqlClient.SqlClient, parentSql),
+          Context.add(RuntimePlatform, parentPlatform),
         ) as Context.Context<never>
 
         const extensionLayer = Layer.effect(
           ExtensionSqlProbe,
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient
-            return { sql }
+            const platform = yield* RuntimePlatform
+            return { sql, platform }
           }),
         )
 
         const composed = buildEphemeralRuntime({
           parent: serverParent,
-          parentServices: parentServicesWithSql,
+          parentServices: parentServicesWithDependencies,
           overrides: baseOverrides(),
           extensionLayers: extensionLayer,
         })
@@ -199,6 +206,7 @@ describe("scope brand type fences", () => {
         }).pipe(Effect.provide(composed.layer))
 
         expect((probe.sql as { sentinel: string }).sentinel).toBe("child-sql")
+        expect(probe.platform.platform).toBe("parent-platform")
       }),
     )
   })
@@ -222,7 +230,7 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("ephemeral storage override omits Storage and replaces focused sub-Tags", () => {
+  test("ephemeral storage override replaces Storage and focused sub-Tags", () => {
     // Construct a parent context with Storage + SessionStorage +
     // InteractionPendingReader. After the storage override family is applied,
     // the parent's versions must be stripped — the child's in-memory
@@ -251,8 +259,10 @@ describe("scope brand type fences", () => {
           overrides: { ...baseOverrides(), storage: childStorageLayer },
         })
 
-        const broad = yield* Effect.serviceOption(Storage).pipe(Effect.provide(composed.layer))
-        expect(broad._tag).toBe("None")
+        const broad = yield* Effect.gen(function* () {
+          return yield* Storage
+        }).pipe(Effect.provide(composed.layer))
+        expect((broad as unknown as { sentinel: string }).sentinel).toBe("child-storage")
 
         const session = yield* Effect.gen(function* () {
           return yield* SessionStorage

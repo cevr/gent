@@ -58,6 +58,7 @@ export interface EphemeralRuntimeOverrides {
 
 type EphemeralStorageProvides =
   | SqlClient.SqlClient
+  | Storage
   | SessionStorage
   | BranchStorage
   | MessageStorage
@@ -137,7 +138,7 @@ export const buildEphemeralRuntime = <Provides>(
   const extensionLayer =
     typedExtensionLayer === undefined
       ? undefined
-      : Layer.provideMerge(typedExtensionLayer, inputs.overrides.storage)
+      : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, inputs.overrides.storage))
 
   // Merge order is parent → extension layers fed by child storage → child overrides. Last writer wins.
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
