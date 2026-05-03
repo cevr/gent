@@ -1,7 +1,7 @@
 /**
  * EventStorage — focused service for agent event persistence + queries.
  *
- * Split from the `Storage` god-interface ().
+ * Split from the `Storage` god-interface.
  */
 
 import { Clock, Context, Effect, Layer } from "effect"
@@ -132,7 +132,4 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
       } satisfies EventStorageService
     }),
   )
-
-  static fromStorage = (s: EventStorageService): Layer.Layer<EventStorage> =>
-    Layer.succeed(EventStorage, s)
 }

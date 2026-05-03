@@ -1,7 +1,7 @@
 /**
  * BranchStorage — focused service for branch CRUD + message counting.
  *
- * Split from the `Storage` god-interface ().
+ * Split from the `Storage` god-interface.
  */
 
 import { Context, Effect, Layer } from "effect"
@@ -148,7 +148,4 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
       } satisfies BranchStorageService
     }),
   )
-
-  static fromStorage = (s: BranchStorageService): Layer.Layer<BranchStorage> =>
-    Layer.succeed(BranchStorage, s)
 }

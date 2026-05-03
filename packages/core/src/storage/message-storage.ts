@@ -1,7 +1,7 @@
 /**
  * MessageStorage — focused service for message CRUD.
  *
- * Split from the `Storage` god-interface ().
+ * Split from the `Storage` god-interface.
  */
 
 import { Context, Effect, Layer } from "effect"
@@ -181,7 +181,4 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
       } satisfies MessageStorageService
     }),
   )
-
-  static fromStorage = (s: MessageStorageService): Layer.Layer<MessageStorage> =>
-    Layer.succeed(MessageStorage, s)
 }

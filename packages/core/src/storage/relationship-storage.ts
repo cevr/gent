@@ -142,7 +142,4 @@ export class RelationshipStorage extends Context.Service<
       } satisfies RelationshipStorageService
     }),
   )
-
-  static fromStorage = (s: RelationshipStorageService): Layer.Layer<RelationshipStorage> =>
-    Layer.succeed(RelationshipStorage, s)
 }

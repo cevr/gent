@@ -1,7 +1,7 @@
 /**
  * SessionStorage — focused service for session CRUD.
  *
- * Split from the `Storage` god-interface (). Each consumer yields
+ * Split from the `Storage` god-interface. Each consumer yields
  * only the narrow Tag it needs; the full SQLite implementation provides
  * all sub-Tags through `Storage.LiveWithSql` / `Storage.MemoryWithSql`.
  */
@@ -129,7 +129,4 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
       } satisfies SessionStorageService
     }),
   )
-
-  static fromStorage = (s: SessionStorageService): Layer.Layer<SessionStorage> =>
-    Layer.succeed(SessionStorage, s)
 }
