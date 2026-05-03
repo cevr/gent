@@ -41,6 +41,7 @@ import {
   signalIfIdentityOwned,
 } from "./server-registry.js"
 import { findOpenPort } from "./supervisor.js"
+import { randomServerId } from "./random-id-adapter.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
@@ -176,7 +177,7 @@ const buildOwnedServer = (
       )
       const url = `http://127.0.0.1:${port}/rpc`
       const home = resolveHome(options, stateSpec)
-      const serverId = Bun.randomUUIDv7()
+      const serverId = randomServerId()
       const buildFingerprint = yield* resolveBuildFingerprint.pipe(
         // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(BunServices.layer),

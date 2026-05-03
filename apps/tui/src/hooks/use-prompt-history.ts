@@ -10,6 +10,7 @@ import { isRecord } from "@gent/core/domain/guards.js"
 import { homedir } from "os"
 import { makeDirectory, writeFileString } from "../platform/fs-runtime-boundary"
 import { joinPath } from "../platform/path-runtime"
+import { readPromptHistoryFile } from "./prompt-history-adapter"
 
 const MAX_ENTRIES = 100
 const CACHE_DIR = joinPath(homedir(), ".cache", "gent")
@@ -85,12 +86,9 @@ export function usePromptHistory(): PromptHistory {
   const ensureLoaded = () => {
     if (store.loaded) return
     store.loaded = true
-    const file = Bun.file(HISTORY_PATH)
-    void file
-      .exists()
-      .then((exists) => (exists ? file.text() : ""))
+    void readPromptHistoryFile(HISTORY_PATH)
       .then((raw) => {
-        if (raw.length === 0) return
+        if (raw === null || raw.length === 0) return
         const data: unknown = JSON.parse(raw)
         if (isRecord(data) && Array.isArray(data["entries"])) {
           const entries = data["entries"].filter((e: unknown): e is string => typeof e === "string")

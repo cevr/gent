@@ -5,7 +5,7 @@ import { useRenderer } from "@opentui/solid"
 import type { Theme, ThemeJson, ThemeMode } from "./types"
 import { resolveTheme, generateSystemTheme } from "./resolve"
 import { DEFAULT_THEMES } from "./default-themes"
-import { detectColorScheme } from "./detect"
+import { detectColorScheme } from "./detect-adapter"
 
 interface ThemeContextValue {
   theme: Theme

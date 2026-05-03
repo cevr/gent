@@ -15,6 +15,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { getToolId, type ToolToken } from "@gent/core/extensions/api"
+import { inspectValue, startCodemodeListener } from "./mcp-codemode-adapter.js"
 
 export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
@@ -166,7 +167,7 @@ const createMcpServerForRequest = (
         let text: string
         if (value === undefined) text = "(no result)"
         else if (typeof value === "string") text = value
-        else text = Bun.inspect(value)
+        else text = inspectValue(value)
         return { content: [{ type: "text" as const, text }] }
       })
       .catch((err: unknown) => ({
@@ -194,8 +195,7 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
     // Stateless: fresh Server+Transport per request. MCP SDK's Server.connect()
     // can only be called once per instance, so we create a new server for each
     // incoming request.
-    const bunServer = Bun.serve({
-      port: 0,
+    const listener = startCodemodeListener({
       fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/mcp" && req.method === "POST") {
@@ -209,15 +209,11 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
       },
     })
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- port is always defined when Bun.serve succeeds
-    const port = bunServer.port as number
-    const url = `http://127.0.0.1:${port}`
+    const url = `http://127.0.0.1:${listener.port}`
 
     return {
       url,
-      port,
-      stop: () => {
-        bunServer.stop()
-      },
+      port: listener.port,
+      stop: listener.stop,
     } satisfies CodemodeServer
   })

@@ -25,6 +25,7 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
+import { whichExecutor } from "./which-adapter.js"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,
@@ -303,7 +304,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const resolveBinary = Effect.gen(function* () {
           // Try PATH first
-          const fromPath = yield* Effect.sync(() => Bun.which("executor"))
+          const fromPath = yield* Effect.sync(whichExecutor)
           if (fromPath) return fromPath
 
           // Fallback: package resolution → bootstrap if needed
