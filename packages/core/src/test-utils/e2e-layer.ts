@@ -46,7 +46,7 @@ import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
-import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
 import {
   reconcileLoadedExtensions,
@@ -214,7 +214,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         BunServices.layer,
         storageLayer,
         clusterRunnerLive,
-        subTagLayers(storageLayer),
         config.providerLayer,
         extensionRegistryLive,
         driverRegistryLive,

@@ -50,7 +50,7 @@ import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
-import { Storage, subTagLayers } from "../../src/storage/sqlite-storage"
+import { Storage } from "../../src/storage/sqlite-storage"
 
 const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
@@ -105,7 +105,6 @@ const baseDeps = ({
     : Layer.empty
   return Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     runtimeLayer,
     terminatorLayer,
     registerLayer,

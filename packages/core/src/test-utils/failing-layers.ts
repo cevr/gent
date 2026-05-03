@@ -1,19 +1,12 @@
 import { Effect, Layer, Stream } from "effect"
 import { EventStore, EventStoreError, type EventStoreService } from "../domain/event.js"
 import { StorageError } from "../domain/storage-error.js"
-import { BranchStorage } from "../storage/branch-storage.js"
 import { CheckpointStorage, type CheckpointStorageService } from "../storage/checkpoint-storage.js"
-import { EventStorage } from "../storage/event-storage.js"
 import {
   InteractionStorage,
   type InteractionStorageService,
 } from "../storage/interaction-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
-import { Storage, type StorageService } from "../storage/sqlite-storage.js"
 
-export type StorageOperation = keyof StorageService
 export type EventStoreOperation = keyof EventStoreService
 export type CheckpointStorageOperation = keyof CheckpointStorageService
 export type InteractionStorageOperation = keyof InteractionStorageService
@@ -38,9 +31,6 @@ const shouldFail =
   (operation: Operation): boolean =>
     operations.has(operation)
 
-const storageMessage = (message: string | undefined, operation: StorageOperation): string =>
-  message ?? `Injected storage failure: ${operation}`
-
 const checkpointMessage = (
   message: string | undefined,
   operation: CheckpointStorageOperation,
@@ -53,145 +43,6 @@ const interactionMessage = (
 
 const eventStoreMessage = (message: string | undefined, operation: EventStoreOperation): string =>
   message ?? `Injected event store failure: ${operation}`
-
-const makeFailingStorageService = (
-  base: StorageService,
-  options: FailingLayerOptions<StorageOperation>,
-): StorageService => {
-  const fails = shouldFail(operationSet(options.operations))
-
-  return {
-    withTransaction: (effect) =>
-      fails("withTransaction")
-        ? storageFailure(storageMessage(options.message, "withTransaction"))
-        : base.withTransaction(effect),
-    createSession: (session) =>
-      fails("createSession")
-        ? storageFailure(storageMessage(options.message, "createSession"))
-        : base.createSession(session),
-    getSession: (id) =>
-      fails("getSession")
-        ? storageFailure(storageMessage(options.message, "getSession"))
-        : base.getSession(id),
-    getLastSessionByCwd: (cwd) =>
-      fails("getLastSessionByCwd")
-        ? storageFailure(storageMessage(options.message, "getLastSessionByCwd"))
-        : base.getLastSessionByCwd(cwd),
-    listSessions: () =>
-      fails("listSessions")
-        ? storageFailure(storageMessage(options.message, "listSessions"))
-        : base.listSessions(),
-    updateSession: (session) =>
-      fails("updateSession")
-        ? storageFailure(storageMessage(options.message, "updateSession"))
-        : base.updateSession(session),
-    deleteSession: (id) =>
-      fails("deleteSession")
-        ? storageFailure(storageMessage(options.message, "deleteSession"))
-        : base.deleteSession(id),
-    createBranch: (branch) =>
-      fails("createBranch")
-        ? storageFailure(storageMessage(options.message, "createBranch"))
-        : base.createBranch(branch),
-    getBranch: (id) =>
-      fails("getBranch")
-        ? storageFailure(storageMessage(options.message, "getBranch"))
-        : base.getBranch(id),
-    listBranches: (sessionId) =>
-      fails("listBranches")
-        ? storageFailure(storageMessage(options.message, "listBranches"))
-        : base.listBranches(sessionId),
-    deleteBranch: (id) =>
-      fails("deleteBranch")
-        ? storageFailure(storageMessage(options.message, "deleteBranch"))
-        : base.deleteBranch(id),
-    updateBranchSummary: (branchId, summary) =>
-      fails("updateBranchSummary")
-        ? storageFailure(storageMessage(options.message, "updateBranchSummary"))
-        : base.updateBranchSummary(branchId, summary),
-    countMessages: (branchId) =>
-      fails("countMessages")
-        ? storageFailure(storageMessage(options.message, "countMessages"))
-        : base.countMessages(branchId),
-    countMessagesByBranches: (branchIds) =>
-      fails("countMessagesByBranches")
-        ? storageFailure(storageMessage(options.message, "countMessagesByBranches"))
-        : base.countMessagesByBranches(branchIds),
-    createMessage: (message) =>
-      fails("createMessage")
-        ? storageFailure(storageMessage(options.message, "createMessage"))
-        : base.createMessage(message),
-    createMessageIfAbsent: (message) =>
-      fails("createMessageIfAbsent")
-        ? storageFailure(storageMessage(options.message, "createMessageIfAbsent"))
-        : base.createMessageIfAbsent(message),
-    getMessage: (id) =>
-      fails("getMessage")
-        ? storageFailure(storageMessage(options.message, "getMessage"))
-        : base.getMessage(id),
-    listMessages: (branchId) =>
-      fails("listMessages")
-        ? storageFailure(storageMessage(options.message, "listMessages"))
-        : base.listMessages(branchId),
-    deleteMessages: (branchId, afterMessageId) =>
-      fails("deleteMessages")
-        ? storageFailure(storageMessage(options.message, "deleteMessages"))
-        : base.deleteMessages(branchId, afterMessageId),
-    updateMessageTurnDuration: (messageId, durationMs) =>
-      fails("updateMessageTurnDuration")
-        ? storageFailure(storageMessage(options.message, "updateMessageTurnDuration"))
-        : base.updateMessageTurnDuration(messageId, durationMs),
-    appendEvent: (event, appendOptions) =>
-      fails("appendEvent")
-        ? storageFailure(storageMessage(options.message, "appendEvent"))
-        : base.appendEvent(event, appendOptions),
-    listEvents: (params) =>
-      fails("listEvents")
-        ? storageFailure(storageMessage(options.message, "listEvents"))
-        : base.listEvents(params),
-    getLatestEventId: (params) =>
-      fails("getLatestEventId")
-        ? storageFailure(storageMessage(options.message, "getLatestEventId"))
-        : base.getLatestEventId(params),
-    getLatestEvent: (params) =>
-      fails("getLatestEvent")
-        ? storageFailure(storageMessage(options.message, "getLatestEvent"))
-        : base.getLatestEvent(params),
-    getChildSessions: (parentSessionId) =>
-      fails("getChildSessions")
-        ? storageFailure(storageMessage(options.message, "getChildSessions"))
-        : base.getChildSessions(parentSessionId),
-    getSessionAncestors: (sessionId) =>
-      fails("getSessionAncestors")
-        ? storageFailure(storageMessage(options.message, "getSessionAncestors"))
-        : base.getSessionAncestors(sessionId),
-    getSessionDetail: (sessionId) =>
-      fails("getSessionDetail")
-        ? storageFailure(storageMessage(options.message, "getSessionDetail"))
-        : base.getSessionDetail(sessionId),
-  }
-}
-
-export const FailingStorage = (
-  options: FailingLayerOptions<StorageOperation>,
-): Layer.Layer<
-  Storage | SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
-  never,
-  Storage
-> =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const service = makeFailingStorageService(yield* Storage, options)
-      return Layer.mergeAll(
-        Layer.succeed(Storage, service),
-        SessionStorage.fromStorage(service),
-        BranchStorage.fromStorage(service),
-        MessageStorage.fromStorage(service),
-        EventStorage.fromStorage(service),
-        RelationshipStorage.fromStorage(service),
-      )
-    }),
-  )
 
 export const FailingCheckpointStorage = (
   options: FailingLayerOptions<CheckpointStorageOperation>,
