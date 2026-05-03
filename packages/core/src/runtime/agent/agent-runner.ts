@@ -520,6 +520,7 @@ const buildEphemeralLayer = (params: {
   const parentProviderLayer = Layer.succeed(Provider, parentService(Provider))
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
+  const parentIdServiceLayer = Layer.succeed(IdService, parentService(IdService))
   const promptPresenterLayer = Layer.provide(
     PromptPresenterLive,
     Layer.mergeAll(
@@ -568,6 +569,7 @@ const buildEphemeralLayer = (params: {
           parentProviderLayer,
           parentConfigLayer,
           parentModelRegistryLayer,
+          parentIdServiceLayer,
         ),
         storageLayer,
       ),

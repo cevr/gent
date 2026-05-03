@@ -33,6 +33,7 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
+import { IdService } from "../../src/runtime/id-service"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
@@ -208,6 +209,7 @@ const makeLayerWithEvents = (
     ResourceManagerLive,
     ModelRegistry.Test(),
     ConfigService.Test(),
+    IdService.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -411,6 +413,7 @@ describe("external turn execution", () => {
         BunServices.layer,
         ResourceManagerLive,
         ModelRegistry.Test(),
+        IdService.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
@@ -565,6 +568,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ResourceManagerLive,
         ModelRegistry.Test(),
+        IdService.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
@@ -645,6 +649,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ResourceManagerLive,
         ModelRegistry.Test(),
+        IdService.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
@@ -740,6 +745,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ResourceManagerLive,
         ModelRegistry.Test(),
+        IdService.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
@@ -834,6 +840,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ResourceManagerLive,
         ModelRegistry.Test(),
+        IdService.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(

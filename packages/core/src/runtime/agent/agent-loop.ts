@@ -45,6 +45,7 @@ import {
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { ConfigService } from "../config-service.js"
+import { IdService } from "../id-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -480,6 +481,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ResourceManager
     | ConfigService
     | ModelRegistry
+    | IdService
   > =>
     Layer.effect(
       AgentLoop,
@@ -501,6 +503,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
+        const idService = yield* IdService
         // Yield ConfigService at setup so the captured service shape is
         // available to inner closures without leaking the requirement
         // into Stream/Machine task signatures.
@@ -1790,7 +1793,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
             case "Interject": {
               const interjectMessage = Message.Interjection.make({
-                id: MessageId.make(Bun.randomUUIDv7()),
+                id: MessageId.make(yield* idService.next),
                 sessionId: command.command.sessionId,
                 branchId: command.command.branchId,
                 role: "user",
@@ -1994,7 +1997,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         service = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
             const userMessage = Message.Regular.make({
-              id: MessageId.make(Bun.randomUUIDv7()),
+              id: MessageId.make(yield* idService.next),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
@@ -2073,7 +2076,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           queueFollowUp: Effect.fn("AgentLoop.queueFollowUp")(function* (input) {
             const message = Message.Regular.make({
-              id: MessageId.make(Bun.randomUUIDv7()),
+              id: MessageId.make(yield* idService.next),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
