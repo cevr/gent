@@ -8,6 +8,7 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { Effect, Fiber } from "effect"
 import { createEffect, onCleanup, type Accessor } from "solid-js"
+import { waitFor } from "../utils/wait-for"
 
 interface ScrollSyncOptions {
   /** The scrollbox ref getter */
@@ -24,13 +25,13 @@ interface ScrollSyncOptions {
 export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
   const { getRef, retries = 15, retryDelay = 30 } = options
 
-  const syncScroll = (id: string): boolean => {
+  const syncScroll = (id: string): true | undefined => {
     const scrollRef = getRef()
-    if (scrollRef === undefined) return false
+    if (scrollRef === undefined) return undefined
 
     const children = scrollRef.getChildren()
     const target = children.find((child) => child.id === id)
-    if (target === undefined) return false
+    if (target === undefined) return undefined
 
     const relativeY = target.y - scrollRef.y
     const viewportHeight = scrollRef.height
@@ -46,16 +47,17 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
 
   createEffect(() => {
     const id = selectedId()
-    const syncWithRetry = (remaining: number): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const synced = yield* Effect.sync(() => syncScroll(id))
-        if (synced || remaining <= 0) return
-        yield* Effect.sleep(`${retryDelay} millis`)
-        yield* syncWithRetry(remaining - 1)
-      })
-
     const fiber = Effect.runFork(
-      Effect.sleep("10 millis").pipe(Effect.andThen(syncWithRetry(retries))),
+      Effect.sleep("10 millis").pipe(
+        Effect.andThen(
+          waitFor(() => syncScroll(id), {
+            label: `scroll-target ${id}`,
+            intervalMs: retryDelay,
+            timeoutMs: retries * retryDelay,
+          }),
+        ),
+        Effect.ignore,
+      ),
     )
     onCleanup(() => {
       Effect.runFork(Fiber.interrupt(fiber))
