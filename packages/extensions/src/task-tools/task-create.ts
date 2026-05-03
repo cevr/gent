@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { tool, ref, AgentName, TaskId } from "@gent/core/extensions/api"
-import { TaskAddDepRequest, TaskCreateRequest } from "./requests.js"
+import { tool, AgentName, TaskId } from "@gent/core/extensions/api"
+import { TaskService } from "../task-tools-service.js"
 
 export const TaskCreateParams = Schema.Struct({
   subject: Schema.String.annotate({ description: "Brief task title in imperative form" }),
@@ -25,7 +25,10 @@ export const TaskCreateTool = tool({
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,
   execute: Effect.fn("TaskCreateTool.execute")(function* (params, ctx) {
-    const task = yield* ctx.extension.request(ref(TaskCreateRequest), {
+    const taskService = yield* TaskService
+    const task = yield* taskService.create({
+      sessionId: ctx.sessionId,
+      branchId: ctx.branchId,
       subject: params.subject,
       description: params.description,
       agentType: params.agent,
@@ -35,10 +38,7 @@ export const TaskCreateTool = tool({
 
     if (params.blockedBy !== undefined) {
       for (const depId of params.blockedBy) {
-        yield* ctx.extension.request(ref(TaskAddDepRequest), {
-          taskId: task.id,
-          blockedById: TaskId.make(depId),
-        })
+        yield* taskService.addDep(task.id, TaskId.make(depId))
       }
     }
 

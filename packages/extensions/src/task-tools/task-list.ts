@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { tool, ref, ToolNeeds } from "@gent/core/extensions/api"
-import { TaskListRequest } from "./requests.js"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { TaskService } from "../task-tools-service.js"
 
 export const TaskListParams = Schema.Struct({})
 
@@ -10,7 +10,8 @@ export const TaskListTool = tool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
-    const tasks = yield* ctx.extension.request(ref(TaskListRequest), {})
+    const taskService = yield* TaskService
+    const tasks = yield* taskService.list(ctx.sessionId, ctx.branchId)
 
     if (tasks.length === 0) {
       return { tasks: [], summary: "No tasks" }

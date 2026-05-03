@@ -2,17 +2,16 @@ import { Effect, Schema } from "effect"
 import {
   tool,
   ToolNeeds,
-  ref,
   AgentName,
   getDurableAgentRunSessionId,
   makeRunSpec,
-  TaskId,
   type AgentRunError,
   type AgentRunResult,
   type SessionId,
   type Task,
+  type TaskId,
 } from "@gent/core/extensions/api"
-import { TaskCreateRequest, TaskGetRequest, TaskUpdateRequest } from "../task-tools/requests.js"
+import { TaskService } from "../task-tools-service.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -82,26 +81,25 @@ export const DelegateTool = tool({
     }
 
     /** Check if task is still in a non-terminal state before writing completion */
-    const isTaskStillActive = (taskId: string) =>
-      ctx.extension.request(ref(TaskGetRequest), { taskId: TaskId.make(taskId) }).pipe(
-        Effect.map(
-          (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
-        ),
-        Effect.catchEager(() => Effect.succeed(false)),
-      )
+    const isTaskStillActive = (taskId: TaskId) =>
+      Effect.gen(function* () {
+        const taskService = yield* TaskService
+        const task = yield* taskService.get(taskId)
+        return task !== undefined && task.status !== "stopped" && task.status !== "failed"
+      }).pipe(Effect.catchEager(() => Effect.succeed(false)))
 
     const spawnBackgroundTask = (task: Task, agent: { name: AgentName }) =>
       Effect.gen(function* () {
+        const taskService = yield* TaskService
         // Set task to in_progress
-        yield* ctx.extension
-          .request(ref(TaskUpdateRequest), { taskId: task.id, status: "in_progress" })
+        yield* taskService
+          .update(task.id, { status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
         const resolvedAgent = yield* ctx.agent.get(agent.name)
         if (resolvedAgent === undefined) {
-          yield* ctx.extension
-            .request(ref(TaskUpdateRequest), {
-              taskId: task.id,
+          yield* taskService
+            .update(task.id, {
               status: "failed",
               metadata: { error: `Unknown agent: ${agent.name}` },
             })
@@ -122,9 +120,8 @@ export const DelegateTool = tool({
         if (!active) return
 
         if (result._tag === "success") {
-          yield* ctx.extension
-            .request(ref(TaskUpdateRequest), {
-              taskId: task.id,
+          yield* taskService
+            .update(task.id, {
               status: "completed",
               owner: result.sessionId,
               metadata: {
@@ -136,9 +133,8 @@ export const DelegateTool = tool({
             })
             .pipe(Effect.catchEager(() => Effect.void))
         } else {
-          yield* ctx.extension
-            .request(ref(TaskUpdateRequest), {
-              taskId: task.id,
+          yield* taskService
+            .update(task.id, {
               status: "failed",
               metadata: {
                 ...(typeof task.metadata === "object" && task.metadata !== null
@@ -155,8 +151,11 @@ export const DelegateTool = tool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const task = yield* ctx.extension
-        .request(ref(TaskCreateRequest), {
+      const taskService = yield* TaskService
+      const task = yield* taskService
+        .create({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
           subject: params.description ?? params.task ?? "background task",
           agentType: resolved.agent.name,
           prompt: params.task,
@@ -183,8 +182,11 @@ export const DelegateTool = tool({
       for (const item of tasks) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const task = yield* ctx.extension
-          .request(ref(TaskCreateRequest), {
+        const taskService = yield* TaskService
+        const task = yield* taskService
+          .create({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
             subject: summarizeTaskSubject(item.task),
             agentType: resolved.agent.name,
             prompt: item.task,

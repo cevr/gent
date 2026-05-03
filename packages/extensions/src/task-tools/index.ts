@@ -7,8 +7,8 @@
  *     TaskDelete, TaskAddDep, TaskRemoveDep
  *   - Layer: TaskStorage.Live + TaskService.Live
  *
- * The extension has no actor. Typed request capabilities call `TaskService`
- * through `ctx.extension.request(ref, input)`.
+ * The extension has no actor. LLM tools yield `TaskService` directly; typed
+ * request capabilities remain the public/client transport surface.
  *
  * @module
  */
