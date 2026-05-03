@@ -37,10 +37,10 @@ const resolveExtensionSession = (
     readonly tag: string
     readonly phase: "command" | "request"
     readonly sessionId: string
-    readonly branchId?: string
+    readonly branchId: string
   },
 ): Effect.Effect<
-  { readonly sessionId: SessionId; readonly branchId?: BranchId; readonly session: Session },
+  { readonly sessionId: SessionId; readonly branchId: BranchId; readonly session: Session },
   ExtensionProtocolError
 > =>
   Effect.gen(function* () {
@@ -54,8 +54,7 @@ const resolveExtensionSession = (
     }
 
     const requestSessionId = SessionId.make(params.sessionId)
-    const requestBranchId =
-      params.branchId === undefined ? undefined : BranchId.make(params.branchId)
+    const requestBranchId = BranchId.make(params.branchId)
     const session = yield* deps.sessionStorage.getSession(requestSessionId).pipe(
       Effect.mapError((error) =>
         extensionRequestError({
@@ -75,25 +74,23 @@ const resolveExtensionSession = (
       })
     }
 
-    if (requestBranchId !== undefined) {
-      const branch = yield* deps.branchStorage.getBranch(requestBranchId).pipe(
-        Effect.mapError((error) =>
-          extensionRequestError({
-            extensionId: params.extensionId,
-            capabilityId: params.tag,
-            phase: params.phase,
-            message: `Branch lookup failed: ${error.message}`,
-          }),
-        ),
-      )
-      if (branch === undefined || branch.sessionId !== requestSessionId) {
-        return yield* extensionRequestError({
+    const branch = yield* deps.branchStorage.getBranch(requestBranchId).pipe(
+      Effect.mapError((error) =>
+        extensionRequestError({
           extensionId: params.extensionId,
           capabilityId: params.tag,
           phase: params.phase,
-          message: "Branch does not belong to extension transport session",
-        })
-      }
+          message: `Branch lookup failed: ${error.message}`,
+        }),
+      ),
+    )
+    if (branch === undefined || branch.sessionId !== requestSessionId) {
+      return yield* extensionRequestError({
+        extensionId: params.extensionId,
+        capabilityId: params.tag,
+        phase: params.phase,
+        message: "Branch does not belong to extension transport session",
+      })
     }
 
     return { sessionId: requestSessionId, branchId: requestBranchId, session }
@@ -128,13 +125,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           extensionId,
           capabilityId,
           message: "Session cwd unavailable for extension request",
-        })
-      }
-      if (scope.branchId === undefined) {
-        return yield* extensionRequestError({
-          extensionId,
-          capabilityId,
-          message: "Branch unavailable for extension request",
         })
       }
       const { registry, capabilityContext } = yield* deps.resolveSessionServices(sessionId)
