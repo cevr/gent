@@ -155,12 +155,20 @@ export const createAcpSessionManager = (
       let codemode: CodemodeServer | undefined
       let codemodeScope: Scope.Closeable | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
-        codemodeScope = yield* Scope.make()
+        const localCodemodeScope = yield* Scope.make()
+        codemodeScope = localCodemodeScope
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
-          Scope.provide(codemodeScope),
+          Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
+          // Close codemode scope first so its bound port releases even if
+          // startCodemodeServer fails after `platform.serve` returned, then
+          // tear down the spawned ACP child process.
           Effect.tapError(() =>
-            killProc.pipe(Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore))),
+            Scope.close(localCodemodeScope, Exit.void).pipe(
+              Effect.ignore,
+              Effect.andThen(killProc),
+              Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore)),
+            ),
           ),
         )
       }

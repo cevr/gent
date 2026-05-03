@@ -403,10 +403,15 @@ export const createClaudeCodeSessionManager = (
       let codemodeScope: Scope.Closeable | undefined
       let mcpServers: { gent: { type: "http"; url: string } } | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
-        codemodeScope = yield* Scope.make()
+        const localCodemodeScope = yield* Scope.make()
+        codemodeScope = localCodemodeScope
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
-          Scope.provide(codemodeScope),
+          Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
+          // Close codemode scope on startup failure so any port bound by
+          // `platform.serve` is released even if startCodemodeServer fails
+          // after acquireRelease resolved.
+          Effect.tapError(() => Scope.close(localCodemodeScope, Exit.void).pipe(Effect.ignore)),
         )
         mcpServers = { gent: { type: "http", url: `${codemode.url}/mcp` } }
       }
