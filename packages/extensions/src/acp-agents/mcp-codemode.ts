@@ -102,7 +102,7 @@ const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig[
           }
         }
 
-        return async (args: unknown) => runTool(toolName, args)
+        return (args: unknown) => runTool(toolName, args)
       },
     },
   )
@@ -116,7 +116,7 @@ const createMcpServerForRequest = (
 ) => {
   const server = new Server({ name: "gent", version: "0.0.0" }, { capabilities: { tools: {} } })
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [
       {
         name: "execute",
@@ -132,7 +132,7 @@ const createMcpServerForRequest = (
     ],
   }))
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, (request) => {
     const { name, arguments: args } = request.params
 
     if (name !== "execute" || typeof args?.["code"] !== "string") {
@@ -142,26 +142,23 @@ const createMcpServerForRequest = (
       }
     }
 
-    try {
-      // Wrap in async function — the ACP agent must use `return` to send back results.
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
-      const fn = new Function(
-        "gent",
-        `"use strict"; return (async function() { ${args["code"]} })()`,
-      )
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- new Function returns Function, narrowing to callable shape
-      const result: unknown = await (fn as (gent: unknown) => Promise<unknown>)(proxy)
-      let text: string
-      if (result === undefined) {
-        text = "(no result)"
-      } else if (typeof result === "string") {
-        text = result
-      } else {
-        text = JSON.stringify(result, null, 2)
-      }
-      return { content: [{ type: "text" as const, text }] }
-    } catch (err) {
-      return {
+    return Promise.resolve()
+      .then(() => {
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
+        const fn = new Function(
+          "gent",
+          `"use strict"; return (async function() { ${args["code"]} })()`,
+        )
+        return Promise.resolve(Reflect.apply(fn, undefined, [proxy]) as unknown)
+      })
+      .then((value) => {
+        let text: string
+        if (value === undefined) text = "(no result)"
+        else if (typeof value === "string") text = value
+        else text = Bun.inspect(value)
+        return { content: [{ type: "text" as const, text }] }
+      })
+      .catch((err: unknown) => ({
         content: [
           {
             type: "text" as const,
@@ -169,8 +166,7 @@ const createMcpServerForRequest = (
           },
         ],
         isError: true,
-      }
-    }
+      }))
   })
 
   return server
@@ -189,16 +185,14 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
     // incoming request.
     const bunServer = Bun.serve({
       port: 0,
-      async fetch(req) {
+      fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/mcp" && req.method === "POST") {
           const mcpServer = createMcpServerForRequest(proxy, toolDescription)
           const transport = new WebStandardStreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
           })
-          await mcpServer.connect(transport)
-          const response = await transport.handleRequest(req)
-          return response
+          return mcpServer.connect(transport).then(() => transport.handleRequest(req))
         }
         return new Response("Not found", { status: 404 })
       },

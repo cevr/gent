@@ -1,5 +1,5 @@
-import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { Clock, Effect, Schema } from "effect"
+import { dateFromMillis, tool, ToolNeeds } from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
@@ -34,7 +34,7 @@ export const SearchSessionsParams = Schema.Struct({
 
 // Date parsing
 
-export function parseRelativeDate(s: string): number | undefined {
+export function parseRelativeDate(s: string, now: number): number | undefined {
   const match = s.match(/^(\d+)([dwm])$/)
   if (match === null) {
     // Try ISO date
@@ -45,7 +45,6 @@ export function parseRelativeDate(s: string): number | undefined {
 
   const amount = parseInt(match[1] ?? "0", 10)
   const unit = match[2] ?? ""
-  const now = Date.now()
   const MS_DAY = 86400000
 
   switch (unit) {
@@ -81,7 +80,8 @@ export const SearchSessionsTool = tool({
     // Parse date range
     let dateAfter: number | undefined
     if (params.dateRange !== undefined) {
-      dateAfter = parseRelativeDate(params.dateRange)
+      const now = yield* Clock.currentTimeMillis
+      dateAfter = parseRelativeDate(params.dateRange, now)
       if (dateAfter === undefined) {
         return yield* new SearchSessionsError({
           message: `Invalid date range: ${params.dateRange}. Use ISO date or relative (7d, 2w, 1m)`,
@@ -122,7 +122,7 @@ export const SearchSessionsTool = tool({
       .map((s) => ({
         sessionId: s.sessionId,
         name: s.sessionName ?? "(unnamed)",
-        lastActivity: new Date(s.lastActivity).toISOString(),
+        lastActivity: dateFromMillis(s.lastActivity).toISOString(),
         excerpts: s.snippets,
       }))
 

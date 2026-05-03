@@ -12,7 +12,7 @@
  * Mirrors `anthropic-keychain-transform.test.ts`.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type { Cause } from "effect"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
@@ -73,6 +73,9 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     }
     return Effect.succeed(HttpClientResponse.fromWeb(request, result))
   })
+const JsonRecord = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+const decodeJsonRecord = (raw: string): Effect.Effect<Record<string, unknown>> =>
+  Schema.decodeUnknownEffect(JsonRecord)(raw).pipe(Effect.orDie)
 // ── Service-instance extraction ──
 // Capture the credential-service "instance" by running its layer once
 // and grabbing the service from context. The transform takes this
@@ -83,16 +86,15 @@ const buildCreds = (
 ): Promise<OpenAICredentialServiceShape> => {
   const layer = OpenAICredentialService.layerFromIO(io, authInfo)
   return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        return yield* OpenAICredentialService
-      }).pipe(Effect.provide(layer)),
+    Layer.build(layer).pipe(
+      Effect.scoped,
+      Effect.map((ctx) => Context.get(ctx, OpenAICredentialService)),
     ),
   )
 }
 // Real Clock here (no TestClock) — `expires` must be a real future
 // Unix-millis timestamp comfortably outside the 60s freshness margin.
-const FAR_FUTURE_MS = () => Date.now() + 10 * 60 * 60 * 1000
+const FAR_FUTURE_MS = 1_800_000_000_000
 const validAuthInfo = (
   overrides?: Partial<{
     access: string
@@ -103,7 +105,7 @@ const validAuthInfo = (
   type: "oauth",
   access: overrides?.access ?? "fresh-access",
   refresh: overrides?.refresh ?? "fresh-refresh",
-  expires: FAR_FUTURE_MS(),
+  expires: FAR_FUTURE_MS,
   ...(overrides?.accountId !== undefined ? { accountId: overrides.accountId } : {}),
 })
 const noopRefreshIO = (): OpenAICredentialIO => ({
@@ -275,12 +277,9 @@ describe("codexTransformClient — auth headers (O2)", () => {
       expect(seen.method).toBe("POST")
       expect(seen.url).toBe("https://api.openai.com/v1/embeddings")
       expect(seen.body).toBeDefined()
-      const parsed = JSON.parse(seen.body ?? "{}") as {
-        model: string
-        input: string
-      }
-      expect(parsed.model).toBe("text-embedding-3-small")
-      expect(parsed.input).toBe("hello")
+      const parsed = yield* decodeJsonRecord(seen.body ?? "{}")
+      expect(parsed["model"]).toBe("text-embedding-3-small")
+      expect(parsed["input"]).toBe("hello")
       // No Codex beta header on non-Codex paths.
       expect(seen.headers["openai-beta"]).toBeUndefined()
     }),
@@ -350,7 +349,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
             return Effect.succeed<OpenAICredentials>({
               access: "rotated-access",
               refresh: "rotated-refresh",
-              expires: FAR_FUTURE_MS(),
+              expires: FAR_FUTURE_MS,
             })
           }
           return Effect.fail(new ProviderAuthError({ message: "should not be called twice" }))
@@ -528,13 +527,10 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
             }),
           ),
         )
-        const parsed = JSON.parse(state.captured[0]!.body!) as {
-          instructions?: string
-          input?: unknown[]
-        }
-        expect(parsed.instructions).toBe("string-instructions")
+        const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
+        expect(parsed["instructions"]).toBe("string-instructions")
         // Structured system item retained in input (alongside the user msg).
-        expect(parsed.input).toEqual([structured, { role: "user", content: "hi" }])
+        expect(parsed["input"]).toEqual([structured, { role: "user", content: "hi" }])
       }),
   )
   it.live(
@@ -559,16 +555,11 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         )
         const seen = state.captured[0]!
         expect(seen.body).toBeDefined()
-        const parsed = JSON.parse(seen.body!) as {
-          instructions?: string
-          input?: unknown[]
-          store?: boolean
-          model?: string
-        }
-        expect(parsed.instructions).toBe("You are gent.\n\nBe terse.")
-        expect(parsed.input).toEqual([{ role: "user", content: "hi" }])
-        expect(parsed.store).toBe(false)
-        expect(parsed.model).toBe("gpt-5.4")
+        const parsed = yield* decodeJsonRecord(seen.body!)
+        expect(parsed["instructions"]).toBe("You are gent.\n\nBe terse.")
+        expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
+        expect(parsed["store"]).toBe(false)
+        expect(parsed["model"]).toBe("gpt-5.4")
       }),
   )
   it.live("body without an `input` array passes through unchanged on Codex paths", () =>
@@ -586,7 +577,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
           }),
         ),
       )
-      const parsed = JSON.parse(state.captured[0]!.body!)
+      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed).toEqual(original)
     }),
   )
@@ -603,10 +594,8 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
           }),
         ),
       )
-      const parsed = JSON.parse(state.captured[0]!.body!) as {
-        store?: boolean
-      }
-      expect(parsed.store).toBeUndefined()
+      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
+      expect(parsed["store"]).toBeUndefined()
     }),
   )
   it.live(
@@ -625,14 +614,10 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
             }),
           ),
         )
-        const parsed = JSON.parse(state.captured[0]!.body!) as {
-          instructions?: string
-          input?: unknown[]
-          store?: boolean
-        }
-        expect(parsed.instructions).toBeUndefined()
-        expect(parsed.input).toEqual([{ role: "user", content: "hi" }])
-        expect(parsed.store).toBe(false)
+        const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
+        expect(parsed["instructions"]).toBeUndefined()
+        expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
+        expect(parsed["store"]).toBe(false)
       }),
   )
   it.live("non-Codex path: body untouched even when it carries an input array", () =>
@@ -650,7 +635,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
           }),
         ),
       )
-      const parsed = JSON.parse(state.captured[0]!.body!)
+      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed).toEqual(original)
       expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/embeddings")
     }),
@@ -698,12 +683,12 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
               ? {
                   access: "stale-access",
                   refresh: "stale-refresh",
-                  expires: FAR_FUTURE_MS(),
+                  expires: FAR_FUTURE_MS,
                 }
               : {
                   access: "rotated-access",
                   refresh: "rotated-refresh",
-                  expires: FAR_FUTURE_MS(),
+                  expires: FAR_FUTURE_MS,
                 }
           }),
       }
@@ -750,7 +735,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
           Effect.succeed<OpenAICredentials>({
             access: "always-stale",
             refresh: "always-stale-refresh",
-            expires: FAR_FUTURE_MS(),
+            expires: FAR_FUTURE_MS,
           }),
       }
       const stalAuthInfo: ProviderAuthInfo = {
@@ -847,7 +832,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
                 return Effect.succeed<OpenAICredentials>({
                   access: "first-access",
                   refresh: "first-refresh",
-                  expires: FAR_FUTURE_MS(),
+                  expires: FAR_FUTURE_MS,
                 })
               }
               return Effect.fail(new ProviderAuthError({ message: "rotation failed mid-recovery" }))

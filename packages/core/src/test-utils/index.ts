@@ -38,7 +38,7 @@ export interface SequenceRecorderService {
 }
 
 export class SequenceRecorder extends Context.Service<SequenceRecorder, SequenceRecorderService>()(
-  "@gent/core/src/test-utils/index/SequenceRecorder",
+  "@gent/core/src/test-utils/SequenceRecorder",
 ) {
   static Live: Layer.Layer<SequenceRecorder> = Layer.effect(
     SequenceRecorder,

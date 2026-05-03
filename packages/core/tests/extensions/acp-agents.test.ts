@@ -19,6 +19,7 @@ import {
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
 import { makeAcpRunTool } from "../../../extensions/src/acp-agents/executor-boundary.js"
+import { runMcpToolHandler } from "../../../extensions/src/acp-agents/mcp-codemode-boundary.js"
 // ── ACP → response part mapping ──
 const makeNotification = (update: unknown) =>
   Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
@@ -266,13 +267,16 @@ describe("mapAcpUpdateToResponsePart", () => {
 })
 // ── Codemode proxy ──
 /** Parse SSE response to extract JSON-RPC result */
+const JsonUnknown = Schema.fromJsonString(Schema.Unknown)
+const decodeJsonUnknown = Schema.decodeUnknownEffect(JsonUnknown)
+const encodeJsonUnknown = Schema.encodeSync(JsonUnknown)
 const parseSseResult = (response: Response) =>
   Effect.gen(function* () {
     const text = yield* Effect.promise(() => response.text())
     for (const line of text.split("\n")) {
       if (line.startsWith("data: ")) {
-        const json = JSON.parse(line.slice(6)) as Record<string, unknown>
-        if ("result" in json) return json["result"]
+        const json = yield* decodeJsonUnknown(line.slice(6)).pipe(Effect.orDie)
+        if (typeof json === "object" && json !== null && "result" in json) return json["result"]
       }
     }
     return undefined
@@ -281,6 +285,23 @@ const mcpHeaders = {
   "Content-Type": "application/json",
   Accept: "application/json, text/event-stream",
 }
+const callMcp = (
+  serverUrl: string,
+  payload: {
+    readonly jsonrpc: "2.0"
+    readonly id: number
+    readonly method: "tools/call"
+    readonly params: {
+      readonly name: "execute"
+      readonly arguments: { readonly code: string }
+    }
+  },
+) =>
+  Bun.fetch(`${serverUrl}/mcp`, {
+    method: "POST",
+    headers: mcpHeaders,
+    body: encodeJsonUnknown(payload),
+  })
 describe("codemode proxy", () => {
   it.live("dispatches known tool to runTool", () =>
     Effect.gen(function* () {
@@ -297,7 +318,7 @@ describe("codemode proxy", () => {
       const server = yield* startCodemodeServer({
         tools: [mockTool],
         runTool: (toolName, args) =>
-          Effect.runPromise(
+          runMcpToolHandler(
             Effect.sync(() => {
               calls.push({ toolName, args })
               return { result: "ok" }
@@ -309,18 +330,14 @@ describe("codemode proxy", () => {
         (server) =>
           Effect.gen(function* () {
             const response = yield* Effect.promise(() =>
-              fetch(`${server.url}/mcp`, {
-                method: "POST",
-                headers: mcpHeaders,
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 1,
-                  method: "tools/call",
-                  params: {
-                    name: "execute",
-                    arguments: { code: 'return gent.echo({ text: "hello" })' },
-                  },
-                }),
+              callMcp(server.url, {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: {
+                  name: "execute",
+                  arguments: { code: 'return gent.echo({ text: "hello" })' },
+                },
               }),
             )
             const result = yield* parseSseResult(response)
@@ -337,25 +354,23 @@ describe("codemode proxy", () => {
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({
         tools: [],
-        runTool: () => Effect.runPromise(Effect.fail(new Error("should not be called"))),
+        runTool: () => {
+          throw new Error("should not be called")
+        },
       })
       yield* Effect.acquireUseRelease(
         Effect.succeed(server),
         (server) =>
           Effect.gen(function* () {
             const response = yield* Effect.promise(() =>
-              fetch(`${server.url}/mcp`, {
-                method: "POST",
-                headers: mcpHeaders,
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 1,
-                  method: "tools/call",
-                  params: {
-                    name: "execute",
-                    arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
-                  },
-                }),
+              callMcp(server.url, {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: {
+                  name: "execute",
+                  arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
+                },
               }),
             )
             const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
@@ -425,18 +440,14 @@ describe("codemode proxy via makeAcpRunTool", () => {
         (server) =>
           Effect.gen(function* () {
             const response = yield* Effect.promise(() =>
-              fetch(`${server.url}/mcp`, {
-                method: "POST",
-                headers: mcpHeaders,
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 1,
-                  method: "tools/call",
-                  params: {
-                    name: "execute",
-                    arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
-                  },
-                }),
+              callMcp(server.url, {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: {
+                  name: "execute",
+                  arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
+                },
               }),
             )
             const result = yield* parseSseResult(response)
@@ -455,7 +466,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
   it.live("propagates ToolRunner errors back through the SDK boundary", () =>
     Effect.gen(function* () {
       const failingToolRunner = ToolRunner.of({
-        run: () => Effect.die(new Error("tool runner exploded")),
+        run: () => Effect.die("tool runner exploded"),
       })
       const services = Context.make(
         ToolRunner,
@@ -474,18 +485,14 @@ describe("codemode proxy via makeAcpRunTool", () => {
         (server) =>
           Effect.gen(function* () {
             const response = yield* Effect.promise(() =>
-              fetch(`${server.url}/mcp`, {
-                method: "POST",
-                headers: mcpHeaders,
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 1,
-                  method: "tools/call",
-                  params: {
-                    name: "execute",
-                    arguments: { code: 'return gent.echo({ text: "fail" })' },
-                  },
-                }),
+              callMcp(server.url, {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: {
+                  name: "execute",
+                  arguments: { code: 'return gent.echo({ text: "fail" })' },
+                },
               }),
             )
             // Failure surfaces through the codemode SSE response as an error

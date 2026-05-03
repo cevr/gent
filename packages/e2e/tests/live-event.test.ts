@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { directSignalCase, transportCases, waitFor } from "./transport-harness"
+import { directSignalCase, toTestFailure, transportCases, waitFor } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectLiveEvents = <A, E>(
@@ -38,18 +38,18 @@ describe("live event contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "before-live" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const snapshot = yield* client.session
                 .getSnapshot({
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const liveEvents = yield* collectLiveEvents(
                 client.session.events({
@@ -57,7 +57,7 @@ describe("live event contracts", () => {
                   branchId: created.branchId,
                   after: snapshot.lastEventId ?? undefined,
                 }),
-              ).pipe(Effect.mapError((error) => new Error(String(error))))
+              ).pipe(Effect.mapError(toTestFailure))
 
               // Any events replayed in the initial window must respect the cursor
               const initial = yield* Ref.get(liveEvents)
@@ -70,7 +70,7 @@ describe("live event contracts", () => {
                   branchId: created.branchId,
                   content: "after-live",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const received = yield* waitFor(
                 Ref.get(liveEvents),
@@ -101,14 +101,14 @@ describe("live event contracts", () => {
           Effect.gen(function* () {
             const created = yield* client.session
               .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const snapshot = yield* client.session
               .getSnapshot({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const liveEvents = yield* collectLiveEvents(
               client.session.events({
@@ -116,7 +116,7 @@ describe("live event contracts", () => {
                 branchId: created.branchId,
                 after: snapshot.lastEventId ?? undefined,
               }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
+            ).pipe(Effect.mapError(toTestFailure))
 
             yield* client.message
               .send({
@@ -124,7 +124,7 @@ describe("live event contracts", () => {
                 branchId: created.branchId,
                 content: "after-live-chunks",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             // Wait for the stream to start, then release the chunks
             yield* controls.waitForStreamStart

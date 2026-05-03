@@ -3,11 +3,11 @@
  * Tests identity route, connection tracking, idle shutdown, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Scope } from "effect"
-import * as path from "node:path"
+import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { startWorkerSupervisor } from "@gent/sdk/supervisor"
 import { createTempDirFixture } from "./seam-fixture"
+import { toTestFailure } from "./transport-harness"
 import { fromPromise, ignoreSyncDefect, sleepMillis } from "../src/effect-test-adapters"
 import {
   killProcess,
@@ -17,9 +17,12 @@ import {
   waitUntil,
 } from "../src/server-process-fixture"
 
-const repoRoot = path.resolve(import.meta.dir, "../../..")
+const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
+  /\/$/,
+  "",
+)
 const makeTempDir = createTempDirFixture("gent-lifecycle-")
-const randomLifecyclePort = () => 19_000 + Math.floor(Math.random() * 1000)
+const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
 describe("server lifecycle", () => {
   it.live(
@@ -35,7 +38,7 @@ describe("server lifecycle", () => {
           })
 
           const baseUrl = supervisor.url.replace("/rpc", "")
-          const response = yield* fromPromise(() => fetch(`${baseUrl}/_gent/identity`))
+          const response = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(response.ok).toBe(true)
 
           const identity = yield* fromPromise(() => response.json())
@@ -64,9 +67,7 @@ describe("server lifecycle", () => {
 
           const bundle = yield* Gent.client(supervisor.url)
           yield* bundle.runtime.lifecycle.waitForReady
-          const status = yield* bundle.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const status = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
 
           expect(status.pid).toBe(supervisor.pid() as never)
           expect(status.uptime).toBeGreaterThan(0)
@@ -85,13 +86,14 @@ describe("server lifecycle", () => {
         Effect.gen(function* () {
           const dataDir = makeTempDir()
           const idleTimeoutMs = 2_000
+          const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnIdleServer({ dataDir, idleTimeoutMs, port: randomLifecyclePort() }),
+            spawnIdleServer({ dataDir, idleTimeoutMs, port }),
             ({ proc }) => killProcess(proc),
           )
 
           const baseUrl = url.replace("/rpc", "")
-          const identityResp = yield* fromPromise(() => fetch(`${baseUrl}/_gent/identity`))
+          const identityResp = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(identityResp.ok).toBe(true)
 
           const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 5_000)
@@ -107,7 +109,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const dbPath = path.join(dataDir, "data.db")
+          const dbPath = `${dataDir}/data.db`
 
           const server1 = yield* Gent.server({
             cwd: repoRoot,
@@ -116,9 +118,7 @@ describe("server lifecycle", () => {
           })
           const bundle1 = yield* Gent.client(server1)
 
-          const status1 = yield* bundle1.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const status1 = yield* bundle1.client.server.status().pipe(Effect.mapError(toTestFailure))
           const pid1 = status1.pid
 
           const server2 = yield* Gent.server({
@@ -129,11 +129,11 @@ describe("server lifecycle", () => {
           expect(server2._tag).toBe("attached")
 
           const baseUrl = server2.url.replace("/rpc", "")
-          const response = yield* Effect.tryPromise(() => fetch(`${baseUrl}/_gent/identity`)).pipe(
-            Effect.mapError((e) => new Error(String(e))),
-          )
+          const response = yield* Effect.tryPromise(() =>
+            Bun.fetch(`${baseUrl}/_gent/identity`),
+          ).pipe(Effect.mapError(toTestFailure))
           const identity = yield* Effect.tryPromise(() => response.json()).pipe(
-            Effect.mapError((e) => new Error(String(e))),
+            Effect.mapError(toTestFailure),
           )
           expect((identity as { pid: number }).pid).toBe(pid1)
         }),
@@ -148,8 +148,9 @@ describe("server lifecycle", () => {
         Effect.gen(function* () {
           const dataDir = makeTempDir()
           const idleTimeoutMs = 3_000
+          const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnIdleServer({ dataDir, idleTimeoutMs, port: randomLifecyclePort() }),
+            spawnIdleServer({ dataDir, idleTimeoutMs, port }),
             ({ proc }) => killProcess(proc),
           )
 
@@ -161,9 +162,7 @@ describe("server lifecycle", () => {
           )
           yield* bundle.runtime.lifecycle.waitForReady
 
-          const status = yield* bundle.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const status = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* sleepMillis(idleTimeoutMs * 0.6)
@@ -186,7 +185,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const port = randomLifecyclePort()
+          const port = yield* randomLifecyclePort
           const serverRef = yield* Effect.acquireRelease(
             spawnServerOnPort({ dataDir, port }).pipe(
               Effect.map((server) => ({ current: server })),
@@ -203,9 +202,7 @@ describe("server lifecycle", () => {
           const states: string[] = []
           bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
 
-          const status1 = yield* bundle.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const status1 = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
           expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
           expect(states).toContain("connected")
 
@@ -223,9 +220,7 @@ describe("server lifecycle", () => {
           )
           expect(reconnected).toBe(true)
 
-          const status2 = yield* bundle.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const status2 = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
           expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* Scope.close(clientScope, Exit.void)

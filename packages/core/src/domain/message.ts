@@ -1,13 +1,15 @@
-import { Schema, SchemaGetter as Getter } from "effect"
+import { DateTime, Schema, SchemaGetter as Getter } from "effect"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
-// v4: DateFromNumber was removed — define locally
-export const DateFromNumber = Schema.Number.pipe(
+export const dateFromMillis = (millis: number): Date =>
+  Schema.decodeUnknownSync(DateFromNumber)(millis)
+
+export const DateFromNumber = Schema.DateTimeUtcFromMillis.pipe(
   Schema.decodeTo(Schema.DateValid, {
-    decode: Getter.transform((n: number) => new Date(n)),
-    encode: Getter.transform((d: Date) => d.getTime()),
+    decode: Getter.transform(DateTime.toDateUtc),
+    encode: Getter.dateTimeUtcFromInput(),
   }),
 )
 

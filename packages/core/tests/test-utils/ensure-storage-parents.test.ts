@@ -10,7 +10,7 @@ const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
     createSession: (session) =>
       Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
     getSession: (id) => Ref.get(sessions).pipe(Effect.map((map) => map.get(id))),
-    getLastSessionByCwd: () => Effect.succeed(undefined),
+    getLastSessionByCwd: () => Effect.sync((): Session | undefined => undefined),
     listSessions: () => Ref.get(sessions).pipe(Effect.map((map) => [...map.values()])),
     updateSession: (session) =>
       Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),

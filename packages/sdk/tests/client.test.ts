@@ -10,7 +10,7 @@ import {
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import { dateFromMillis, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
 import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
 describe("sdk client helpers", () => {
@@ -50,7 +50,7 @@ describe("sdk client helpers", () => {
           input: { path: "/foo" },
         }),
       ],
-      createdAt: new Date(),
+      createdAt: dateFromMillis(0),
     })
     const projected = projectMessagesWithToolInteractions([message])[0]
     expect(projected?.toolInteractions.length).toBe(1)
@@ -74,7 +74,7 @@ describe("sdk client helpers", () => {
             input: { path: "/foo" },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(0),
       }),
       Message.Regular.make({
         id: MessageId.make("m2"),
@@ -89,7 +89,7 @@ describe("sdk client helpers", () => {
             output: { type: "json", value: "file contents" },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1),
       }),
     ]
     const projected = projectMessagesWithToolInteractions(messages)[0]

@@ -1,4 +1,4 @@
-import { Effect, Layer, Redacted, Ref } from "effect"
+import { Duration, Effect, Fiber, Layer, Redacted, Ref } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -6,6 +6,7 @@ import {
   ProviderAuthError,
   type ModelDriverContribution,
   type ProviderAuthInfo,
+  type ProviderAuthorizationResult,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
@@ -23,7 +24,7 @@ import { buildCodexTransformClient } from "./codex-transform.js"
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
 const readEnv = (name: string): string | undefined => {
-  const val = process.env[name]
+  const val = Bun.env[name]
   return val !== undefined && val !== "" ? val : undefined
 }
 
@@ -37,7 +38,7 @@ type OAuthCallback = (code?: string) => Promise<{
 
 type PendingCallbackEntry = {
   readonly cb: OAuthCallback
-  readonly timeoutId: ReturnType<typeof setTimeout>
+  readonly timeoutFiber: Fiber.Fiber<void>
 }
 
 const buildOpenAiConfig = (hints?: ProviderHints) => {
@@ -76,7 +77,7 @@ const makeApiKeyOpenAILayer = (
  * Authorization header without a "scrub-the-placeholder" coupling.
  *
  * The credential cache cell `Ref` is passed in from extension-closure
- * scope (built once in `modelDrivers()` via `Ref.makeUnsafe`), not
+ * scope (allocated once by the Effectful `modelDrivers()` setup), not
  * allocated per layer build. Without this hoist, every
  * `Provider.stream`/`Provider.generate` call would rebuild the service
  * layer and reset the cache, killing credential reuse and the rotated
@@ -170,31 +171,33 @@ export const buildOpenAIModelDriver = (
       AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus" }),
       AuthMethod.make({ type: "api", label: "Manually enter API key" }),
     ],
-    authorize: (ctx) =>
-      Effect.tryPromise({
-        try: async () => {
-          if (ctx.methodIndex !== 0) return undefined
-          const { authorization, callback: cb } = await authorizeOpenAI()
-          // Mirror oauth.ts pendingOAuth TTL (5 min). Without this an
-          // abandoned auth attempt — user starts the flow, never
-          // completes — leaves the callback closure resident until
-          // extension teardown.
-          const timeoutId = setTimeout(
-            () => {
+    authorize: (ctx): Effect.Effect<ProviderAuthorizationResult | undefined, ProviderAuthError> =>
+      Effect.gen(function* () {
+        if (ctx.methodIndex !== 0) return undefined
+        const { authorization, callback: cb } = yield* Effect.tryPromise({
+          try: () => authorizeOpenAI(),
+          catch: (e) =>
+            new ProviderAuthError({
+              message: `OpenAI OAuth authorization failed: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+              cause: e,
+            }),
+        })
+        // Mirror oauth.ts pendingOAuth TTL (5 min). Without this an
+        // abandoned auth attempt — user starts the flow, never
+        // completes — leaves the callback closure resident until
+        // extension teardown.
+        const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
+          Effect.flatMap(() =>
+            Effect.sync(() => {
               pendingCallbacks.delete(ctx.authorizationId)
-            },
-            5 * 60 * 1000,
-          )
-          pendingCallbacks.set(ctx.authorizationId, { cb, timeoutId })
-          return authorization
-        },
-        catch: (e) =>
-          new ProviderAuthError({
-            message: `OpenAI OAuth authorization failed: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-            cause: e,
-          }),
+            }),
+          ),
+          Effect.forkChild,
+        )
+        pendingCallbacks.set(ctx.authorizationId, { cb, timeoutFiber })
+        return authorization
       }),
     callback: (ctx) =>
       Effect.gen(function* () {
@@ -205,7 +208,7 @@ export const buildOpenAIModelDriver = (
             message: "OpenAI OAuth callback state is missing or expired",
           })
         }
-        clearTimeout(entry.timeoutId)
+        yield* Fiber.interrupt(entry.timeoutFiber)
         const cb = entry.cb
         const result = yield* Effect.tryPromise({
           try: () => cb(ctx.code),
@@ -228,17 +231,18 @@ export const buildOpenAIModelDriver = (
 
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
-  modelDrivers: () => {
-    // Credential cache cell hoisted to extension-closure scope so it
-    // survives across `resolveModel` calls. One extension instance →
-    // one cell that lives until the runtime tears the extension down.
-    // `Ref.makeUnsafe` is the right primitive here because
-    // `modelDrivers()` is sync (no Effect runtime).
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    // Pending OAuth callbacks keyed by authorizationId. Entries
-    // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
-    const pendingCallbacks = new Map<string, PendingCallbackEntry>()
+  modelDrivers: () =>
+    Effect.gen(function* () {
+      // Credential cache cell hoisted to extension-closure scope so it
+      // survives across `resolveModel` calls. One extension instance →
+      // one cell that lives until the runtime tears the extension down.
+      // Setup is Effectful, so the cache cell is allocated through Ref.make
+      // instead of an unsafe closure escape hatch.
+      const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      // Pending OAuth callbacks keyed by authorizationId. Entries
+      // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
+      const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
-    return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks)]
-  },
+      return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks)]
+    }),
 })

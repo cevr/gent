@@ -144,14 +144,14 @@ export const appendFollowUpQueueState = (
 
 export const clearQueueState = (_queue: LoopQueueState): LoopQueueState => emptyLoopQueueState()
 
-const restampQueuedMessage = (message: Message): Message => {
+const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
   const fields = {
     id: message.id,
     sessionId: message.sessionId,
     branchId: message.branchId,
     role: message.role,
     parts: message.parts,
-    createdAt: new Date(),
+    createdAt,
     turnDurationMs: message.turnDurationMs,
     metadata: message.metadata,
   }
@@ -160,19 +160,20 @@ const restampQueuedMessage = (message: Message): Message => {
     : Message.Regular.make(fields)
 }
 
-const restampQueuedTurnItem = (item: QueuedTurnItem): QueuedTurnItem => ({
+const restampQueuedTurnItem = (item: QueuedTurnItem, createdAt: Date): QueuedTurnItem => ({
   ...item,
-  message: restampQueuedMessage(item.message),
+  message: restampQueuedMessage(item.message, createdAt),
 })
 
 export const takeNextQueuedTurn = (
   queue: LoopQueueState,
+  createdAt: Date,
 ): { queue: LoopQueueState; nextItem?: QueuedTurnItem } => {
   const [nextSteer, ...restSteering] = queue.steering
   if (nextSteer !== undefined) {
     return {
       queue: { ...queue, steering: restSteering },
-      nextItem: restampQueuedTurnItem(nextSteer),
+      nextItem: restampQueuedTurnItem(nextSteer, createdAt),
     }
   }
 
@@ -183,7 +184,7 @@ export const takeNextQueuedTurn = (
 
   return {
     queue: { ...queue, followUp: restFollowUp },
-    nextItem: restampQueuedTurnItem(nextFollowUp),
+    nextItem: restampQueuedTurnItem(nextFollowUp, createdAt),
   }
 }
 
@@ -291,12 +292,12 @@ export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleS
 export const buildRunningState = (
   base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
-  options?: { startedAtMs?: number },
+  options: { startedAtMs: number },
 ): RunningState =>
   LoopState.Running.make({
     currentAgent: base.currentAgent,
     message: item.message,
-    startedAtMs: options?.startedAtMs ?? Date.now(),
+    startedAtMs: options.startedAtMs,
     agentOverride: item.agentOverride,
     runSpec: item.runSpec,
     interactive: item.interactive,

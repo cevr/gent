@@ -15,7 +15,7 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 // Tool execution flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R to never for it.live.
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const makeSuccess = (

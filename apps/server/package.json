@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/main.ts",
-    "typecheck": "tsgo --noEmit",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",

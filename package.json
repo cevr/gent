@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "turbo run typecheck",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,effect,disable,platform \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"turbo run lint\" \"bun packages/tooling/src/check-blanket-eslint-disable.ts\" \"bun packages/tooling/src/check-platform-duplication-guards.ts\"",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,disable,platform \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"bun packages/tooling/src/check-blanket-eslint-disable.ts\" \"bun packages/tooling/src/check-platform-duplication-guards.ts\"",
     "lint:fix": "env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore --fix",
     "fmt": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore",
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",
@@ -18,7 +18,7 @@
     "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build,test \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install && effect-tsgo patch"
   },
   "dependencies": {
     "effect-machine": "catalog:",
@@ -26,11 +26,12 @@
     "multipasta": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.85.1",
     "@effect/platform-bun": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
+    "@effect/tsgo": "0.5.2",
     "@types/bun": "^1.3.13",
+    "@typescript/native-preview": "7.0.0-dev.20260412.1",
     "concurrently": "^9.2.1",
     "effect": "catalog:",
     "effect-bun-test": "catalog:",

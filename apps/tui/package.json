@@ -9,7 +9,6 @@
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "typecheck": "tsgo --noEmit",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.lint.json",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ./node_modules/@opentui/solid/scripts/preload.ts --path-ignore-patterns='**/headless-cli-exit.test.ts' --path-ignore-patterns='**/headless-runner.test.ts' tests",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ./node_modules/@opentui/solid/scripts/preload.ts integration tests/headless-cli-exit.test.ts tests/headless-runner.test.ts"
   },

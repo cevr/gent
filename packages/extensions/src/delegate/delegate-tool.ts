@@ -162,8 +162,8 @@ export const DelegateTool = tool({
           cwd: ctx.cwd,
         })
         .pipe(
-          Effect.catchEager(() => Effect.succeed<Task | undefined>(undefined)),
-          Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)),
+          Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+          Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
         )
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
@@ -193,8 +193,8 @@ export const DelegateTool = tool({
             cwd: ctx.cwd,
           })
           .pipe(
-            Effect.catchEager(() => Effect.succeed<Task | undefined>(undefined)),
-            Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)),
+            Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+            Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
           )
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }

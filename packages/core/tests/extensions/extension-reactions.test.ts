@@ -15,7 +15,7 @@ import type {
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core/domain/agent"
 
@@ -51,7 +51,9 @@ const makeExt = (
   contributions,
 })
 
-class BoomError extends Data.TaggedError("@gent/core/tests/extension-reactions/BoomError")<{
+class BoomError extends Data.TaggedError(
+  "@gent/core/tests/extensions/extension-reactions.test/BoomError",
+)<{
   readonly reason: string
 }> {}
 
@@ -61,7 +63,9 @@ class ReactionCounter extends Context.Service<
     readonly increment: Effect.Effect<void>
     readonly get: Effect.Effect<number>
   }
->()("@gent/core/tests/extension-reactions/ReactionCounter") {}
+>()("@gent/core/tests/extensions/extension-reactions.test/ReactionCounter") {}
+
+const FIXTURE_DATE = dateFromMillis(0)
 
 describe("runtime slots", () => {
   it.live("normalizeMessageInput is a pass-through without explicit rewrites", () => {
@@ -189,7 +193,7 @@ describe("runtime slots", () => {
       branchId: BranchId.make("test-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "hello" })],
-      createdAt: new Date(),
+      createdAt: FIXTURE_DATE,
     })
     const slots = compileExtensionReactions([])
 
@@ -219,7 +223,7 @@ describe("runtime slots", () => {
       branchId: BranchId.make("test-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "hello" })],
-      createdAt: new Date(),
+      createdAt: FIXTURE_DATE,
     })
     const appendedMessage = Message.Regular.make({
       id: MessageId.make("m2"),
@@ -227,7 +231,7 @@ describe("runtime slots", () => {
       branchId: BranchId.make("test-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "extra" })],
-      createdAt: new Date(),
+      createdAt: FIXTURE_DATE,
     })
     const slots = compileExtensionReactions([
       makeExt("builtin", "builtin", {

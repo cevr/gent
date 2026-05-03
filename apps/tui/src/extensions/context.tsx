@@ -35,8 +35,7 @@ import type {
   InteractionRendererComponent,
   OverlayComponent,
 } from "./client-facets.js"
-import { loadTuiExtensions } from "./loader-boundary"
-import { loadDisabledExtensions } from "./context-boundary"
+import { loadExtensionUi } from "./context-boundary"
 import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
@@ -212,31 +211,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     void clientRuntime.dispose()
   })
 
-  onMount(async () => {
-    try {
-      const home = workspace.home
-
-      // Read disabled extensions from user + project config (shared with server)
-      const disabledSet = await loadDisabledExtensions(clientRuntime, {
-        home,
-        cwd: workspace.cwd,
-      })
-
-      const result = await loadTuiExtensions({
-        builtins: builtinClientModules,
-        userDir: `${home}/.gent/extensions`,
-        projectDir: `${workspace.cwd}/.gent/extensions`,
-        disabled: [...disabledSet],
-        runtime: clientRuntime,
-      })
-      setResolved(result)
-
-      // Fetch server-side extension commands
-    } catch (err) {
-      console.log(`[tui-ext] Extension loading failed: ${err}`)
-    } finally {
-      setLoading(false)
-    }
+  onMount(() => {
+    void loadExtensionUi(clientRuntime, {
+      builtins: builtinClientModules,
+      home: workspace.home,
+      cwd: workspace.cwd,
+    })
+      .then(setResolved)
+      .catch(() => undefined)
+      .finally(() => setLoading(false))
   })
 
   createEffect(() => {

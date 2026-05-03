@@ -1,8 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Schema } from "effect"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect"
 import {
   ExtensionLoadError,
   type GentExtension,
@@ -35,11 +32,16 @@ import { ConfigService } from "../../src/runtime/config-service"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
-    readonly read: () => Effect.Effect<string>
+    readonly read: () => Effect.Effect<string, never, never>
   }
->()("@test/ProfileToken") {}
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+>()("@gent/core/tests/server/extension-commands-rpc.test/ProfileToken") {}
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
+const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: string) => {
+  const error = Cause.squash(cause) as { readonly _tag?: string; readonly message?: string }
+  expect(error._tag).toBe("ExtensionProtocolError")
+  if (message !== undefined) expect(error.message).toBe(message)
+}
 describe("extension command RPCs", () => {
   const invoked: Array<{
     args: string
@@ -132,17 +134,17 @@ describe("extension command RPCs", () => {
       ],
     },
   })
-  it.live("listSlashCommands returns registered commands", () =>
-    Effect.gen(function* () {
-      yield* Effect.gen(function* () {
+  it.live(
+    "listSlashCommands returns registered commands",
+    () =>
+      Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
         const cmds = listSlashCommands(registry.getResolved().extensions)
         const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
         expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
-      }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>
-    }),
+      }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>,
   )
   it.live("RPC listSlashCommands + request round-trip through the transport boundary", () =>
     Effect.gen(function* () {
@@ -260,18 +262,23 @@ describe("extension command RPCs", () => {
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
             )
-            const result = yield* client.extension
-              .request({
+            const result = yield* Effect.exit(
+              client.extension.request({
                 sessionId: SessionId.make("missing-extension-request-session"),
                 extensionId: ExtensionId.make("@test/commands"),
                 capabilityId: "greet",
                 intent: "write",
                 input: "should-not-run",
                 branchId: BranchId.make("missing-extension-request-branch"),
-              })
-              .pipe(Effect.flip)
-            expect(result._tag).toBe("ExtensionProtocolError")
-            expect(result.message).toBe("Session not found for extension transport")
+              }),
+            )
+            expect(result._tag).toBe("Failure")
+            if (result._tag === "Failure") {
+              expectExtensionProtocolFailure(
+                result.cause,
+                "Session not found for extension transport",
+              )
+            }
             expect(invoked).toEqual([])
           }).pipe(Effect.timeout("4 seconds")),
         ),
@@ -292,18 +299,23 @@ describe("extension command RPCs", () => {
             const { sessionId } = yield* client.session.create({
               cwd: "/tmp/gent-extension-request-missing-branch",
             })
-            const result = yield* client.extension
-              .request({
+            const result = yield* Effect.exit(
+              client.extension.request({
                 sessionId,
                 extensionId: ExtensionId.make("@test/commands"),
                 capabilityId: "greet",
                 intent: "write",
                 input: "should-not-run",
                 branchId: BranchId.make("missing-extension-request-branch"),
-              })
-              .pipe(Effect.flip)
-            expect(result._tag).toBe("ExtensionProtocolError")
-            expect(result.message).toBe("Branch does not belong to extension transport session")
+              }),
+            )
+            expect(result._tag).toBe("Failure")
+            if (result._tag === "Failure") {
+              expectExtensionProtocolFailure(
+                result.cause,
+                "Branch does not belong to extension transport session",
+              )
+            }
             expect(invoked).toEqual([])
           }).pipe(Effect.timeout("4 seconds")),
         ),
@@ -324,18 +336,23 @@ describe("extension command RPCs", () => {
           const second = yield* client.session.create({
             cwd: "/tmp/gent-extension-request-second",
           })
-          const result = yield* client.extension
-            .request({
+          const result = yield* Effect.exit(
+            client.extension.request({
               sessionId: first.sessionId,
               extensionId: ExtensionId.make("@test/commands"),
               capabilityId: "greet",
               intent: "write",
               input: "wrong-branch",
               branchId: second.branchId,
-            })
-            .pipe(Effect.flip)
-          expect(result._tag).toBe("ExtensionProtocolError")
-          expect(result.message).toBe("Branch does not belong to extension transport session")
+            }),
+          )
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") {
+            expectExtensionProtocolFailure(
+              result.cause,
+              "Branch does not belong to extension transport session",
+            )
+          }
           expect(invoked).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
       )
@@ -405,10 +422,11 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request resolves resources from SessionProfileCache.Live", () =>
+  it.scoped("RPC request resolves resources from SessionProfileCache.Live", () =>
     Effect.gen(function* () {
-      const home = mkdtempSync(join(tmpdir(), "gent-live-profile-home-"))
-      const profileCwd = mkdtempSync(join(tmpdir(), "gent-live-profile-cwd-"))
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const profileCwd = yield* fs.makeTempDirectoryScoped()
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-service-request") },
         setup: (ctx) =>
@@ -438,54 +456,43 @@ describe("extension command RPCs", () => {
             ],
           }),
       }
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                const sessionProfileCacheLayer = SessionProfileCache.Live({
-                  home,
-                  platform: "test",
-                  extensions: [ext],
-                }).pipe(
-                  Layer.provide(
-                    Layer.mergeAll(
-                      BunServices.layer,
-                      ConfigService.Test(),
-                      SqliteStorage.MemoryWithSql(),
-                    ),
-                  ),
-                ) as Layer.Layer<SessionProfileCache>
-                const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-                const { client } = yield* Gent.test(
-                  createE2ELayer({
-                    ...e2ePreset,
-                    providerLayer,
-                    extensions: [],
-                    sessionProfileCacheLayer,
-                  }),
-                )
-                const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
-                const result = yield* client.extension.request({
-                  sessionId,
-                  extensionId: ExtensionId.make("@test/live-profile-service-request"),
-                  capabilityId: "read-live-profile-token",
-                  intent: "write",
-                  input: "token",
-                  branchId,
-                })
-                expect(result).toBe(`live:${profileCwd}`)
-              }).pipe(Effect.timeout("4 seconds")),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            rmSync(profileCwd, { recursive: true, force: true })
-            rmSync(home, { recursive: true, force: true })
-          }),
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const sessionProfileCacheLayer = SessionProfileCache.Live({
+            home,
+            platform: "test",
+            extensions: [ext],
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                BunServices.layer,
+                ConfigService.Test(),
+                SqliteStorage.MemoryWithSql(),
+              ),
+            ),
+          ) as Layer.Layer<SessionProfileCache>
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+          const result = yield* client.extension.request({
+            sessionId,
+            extensionId: ExtensionId.make("@test/live-profile-service-request"),
+            capabilityId: "read-live-profile-token",
+            intent: "write",
+            input: "token",
+            branchId,
+          })
+          expect(result).toBe(`live:${profileCwd}`)
+        }).pipe(Effect.timeout("4 seconds")),
       )
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
   it.live("RPC listStatus returns structurally tagged extension health", () =>
     Effect.gen(function* () {
@@ -695,17 +702,20 @@ describe("extension command RPCs", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
-          const result = yield* client.extension
-            .request({
+          const result = yield* Effect.exit(
+            client.extension.request({
               sessionId,
               branchId,
               extensionId,
               capabilityId: "shadowed",
               intent: "write",
               input: { value: "hi" },
-            })
-            .pipe(Effect.flip)
-          expect(result._tag).toBe("ExtensionProtocolError")
+            }),
+          )
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") {
+            expectExtensionProtocolFailure(result.cause)
+          }
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),

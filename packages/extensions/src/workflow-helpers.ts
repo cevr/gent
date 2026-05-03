@@ -15,6 +15,7 @@ export const runCommand = (cmd: string[], cwd: string): Effect.Effect<string> =>
   return runProcess(head, rest, { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
     Effect.flatMap((r) => Effect.succeed(r.exitCode === 0 ? r.stdout : "")),
     Effect.catchTag("ProcessError", () => Effect.succeed("")),
+    // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(BunServices.layer),
   )
 }

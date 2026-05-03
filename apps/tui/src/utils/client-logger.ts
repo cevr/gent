@@ -8,7 +8,7 @@
  *   shutdown paths only (after Effect runtime is torn down).
  */
 
-import { Effect } from "effect"
+import { DateTime, Effect, Option } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs"
@@ -17,7 +17,13 @@ import { getLogPaths } from "@gent/core/runtime/log-paths"
 
 export const CLIENT_LOG_PATH = getLogPaths().client
 
-const isoNow = () => new Date().toISOString()
+const isoNow = () =>
+  DateTime.make(performance.timeOrigin + performance.now()).pipe(
+    Option.match({
+      onNone: () => "unknown",
+      onSome: DateTime.formatIso,
+    }),
+  )
 
 /** Synchronous log — survives process.exit(). Use for shutdown paths only. */
 export const shutdownLog = (msg: string, data?: Record<string, unknown>) => {

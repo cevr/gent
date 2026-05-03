@@ -1,13 +1,24 @@
 import { describe, expect, test, it } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
 import { SqlClient } from "effect/unstable/sql"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
 import {
   AgentLoop,
   AgentLoopError,
@@ -31,6 +42,7 @@ import {
 } from "@gent/core/providers/provider"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
+  dateFromMillis,
   Branch,
   ImagePart,
   Message,
@@ -95,6 +107,7 @@ import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 // ============================================================================
 // Shared helpers
 // ============================================================================
+
 const makeExtRegistry = (
   tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
@@ -126,7 +139,7 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     branchId,
     role: "user",
     parts: [new TextPart({ type: "text", text })],
-    createdAt: new Date(),
+    createdAt: dateFromMillis(1_767_225_600_000),
   })
 const runAgentLoop = (
   agentLoop: AgentLoopService,
@@ -307,13 +320,14 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
     append: (event: AgentEvent) =>
       Effect.gen(function* () {
         yield* Ref.update(eventsRef, (events) => [...events, event])
-        return EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() })
+        return EventEnvelope.make({
+          id: EventId.make(0),
+          event,
+          createdAt: yield* Clock.currentTimeMillis,
+        })
       }),
     broadcast: () => Effect.void,
-    publish: (event: AgentEvent) =>
-      Effect.gen(function* () {
-        yield* Ref.update(eventsRef, (events) => [...events, event])
-      }),
+    publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
     subscribe: () => Stream.empty,
     removeSession: () => Effect.void,
   })
@@ -707,9 +721,13 @@ describe("streaming", () => {
         append: (event: AgentEvent) =>
           event._tag === "MessageReceived" && event.message.role === "assistant"
             ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.succeed(
-                EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
-              ),
+            : Effect.gen(function* () {
+                return EventEnvelope.make({
+                  id: EventId.make(0),
+                  event,
+                  createdAt: yield* Clock.currentTimeMillis,
+                })
+              }),
         deliver: () => Effect.void,
         publish: () => Effect.void,
       })
@@ -733,9 +751,13 @@ describe("streaming", () => {
         append: (event: AgentEvent) =>
           event._tag === "TurnCompleted"
             ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.succeed(
-                EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
-              ),
+            : Effect.gen(function* () {
+                return EventEnvelope.make({
+                  id: EventId.make(0),
+                  event,
+                  createdAt: yield* Clock.currentTimeMillis,
+                })
+              }),
         deliver: () => Effect.void,
         publish: () => Effect.void,
       })
@@ -1196,7 +1218,7 @@ describe("concurrency", () => {
         const sessionStorage = yield* SessionStorage
         const branchStorage = yield* BranchStorage
         const loop = yield* AgentLoop
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("serial-session"),
           name: "Serial Test",
@@ -1234,14 +1256,15 @@ describe("concurrency", () => {
 describe("continuation", () => {
   const contSessionId = SessionId.make("cont-test-session")
   const contBranchId = BranchId.make("cont-test-branch")
+  let messageSequence = 0
   const makeContMessage = (text: string) =>
     Message.Regular.make({
-      id: MessageId.make(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+      id: MessageId.make(`msg-${messageSequence++}`),
       sessionId: contSessionId,
       branchId: contBranchId,
       role: "user",
       parts: [new TextPart({ type: "text", text })],
-      createdAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
     })
   const echoTool = tool({
     id: "echo",
@@ -1523,7 +1546,7 @@ describe("interaction", () => {
       branchId: intBranchId,
       role: "user",
       parts: [new TextPart({ type: "text", text })],
-      createdAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
     })
   const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
     tool({
@@ -1608,8 +1631,8 @@ describe("interaction", () => {
   }
   it.live("tool triggers InteractionPendingError and machine parks", () =>
     Effect.gen(function* () {
-      const callCount = Ref.makeUnsafe(0)
-      const resolution = Deferred.makeUnsafe<void>()
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
       const layer = makeInteractionRecordingLayer([tool])
       yield* Effect.scoped(
@@ -1625,7 +1648,7 @@ describe("interaction", () => {
             "WaitingForInteraction",
           )
           expect(state._tag).toBe("WaitingForInteraction")
-          expect(Ref.getUnsafe(callCount)).toBe(1)
+          expect(yield* Ref.get(callCount)).toBe(1)
           const calls = yield* recorder.getCalls()
           const eventTags = calls
             .filter((c) => c.service === "EventStore" && c.method === "append")
@@ -1644,7 +1667,7 @@ describe("interaction", () => {
             requestId: InteractionRequestId.make("req-test-1"),
           })
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
-          expect(Ref.getUnsafe(callCount)).toBe(2)
+          expect(yield* Ref.get(callCount)).toBe(2)
           yield* Fiber.join(fiber)
         }).pipe(Effect.provide(layer)),
       )
@@ -1652,8 +1675,8 @@ describe("interaction", () => {
   )
   it.live("stale interaction response does not resume a different pending request", () =>
     Effect.gen(function* () {
-      const callCount = Ref.makeUnsafe(0)
-      const resolution = Deferred.makeUnsafe<void>()
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
       const layer = makeInteractionRecordingLayer([tool])
       yield* Effect.scoped(
@@ -1678,7 +1701,7 @@ describe("interaction", () => {
             branchId: intBranchId,
           })
           expect(state._tag).toBe("WaitingForInteraction")
-          expect(Ref.getUnsafe(callCount)).toBe(1)
+          expect(yield* Ref.get(callCount)).toBe(1)
           expect(yield* Deferred.isDone(resolution)).toBe(false)
 
           yield* agentLoop.respondInteraction({
@@ -1687,7 +1710,7 @@ describe("interaction", () => {
             requestId: InteractionRequestId.make("req-test-1"),
           })
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
-          expect(Ref.getUnsafe(callCount)).toBe(2)
+          expect(yield* Ref.get(callCount)).toBe(2)
           yield* Fiber.join(fiber)
         }).pipe(Effect.provide(layer)),
       )
@@ -1695,8 +1718,8 @@ describe("interaction", () => {
   )
   it.live("interrupt during WaitingForInteraction finalizes turn", () =>
     Effect.gen(function* () {
-      const callCount = Ref.makeUnsafe(0)
-      const resolution = Deferred.makeUnsafe<void>()
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
       const layer = makeLiveToolLayer(makeInteractionProviderLayer(), [tool])
       yield* Effect.scoped(
@@ -1721,7 +1744,7 @@ describe("interaction", () => {
             branchId: intBranchId,
           })
           expect(stateAfter._tag).toBe("Idle")
-          expect(Ref.getUnsafe(callCount)).toBe(1)
+          expect(yield* Ref.get(callCount)).toBe(1)
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -1769,10 +1792,10 @@ describe("interaction", () => {
   )
   it.live("GUARD: interaction resume executes tool without new LLM call", () =>
     Effect.gen(function* () {
-      const callCount = Ref.makeUnsafe(0)
-      const resolution = Deferred.makeUnsafe<void>()
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
-      const providerCallsRef = Ref.makeUnsafe(0)
+      const providerCallsRef = yield* Ref.make(0)
       let streamCallIndex = 0
       const separateCallProvider = Provider.TestStream(() =>
         Effect.gen(function* () {
@@ -2100,7 +2123,7 @@ describe("recovery", () => {
       branchId,
       role: "user",
       parts: [new TextPart({ type: "text", text: "Recover this turn" })],
-      createdAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
     })
     return {
       sessionId,
@@ -2109,13 +2132,13 @@ describe("recovery", () => {
         id: sessionId,
         name: "Loop Recovery",
         cwd: process.cwd(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
+        updatedAt: dateFromMillis(1_767_225_600_000),
       },
       branch: new Branch({
         id: branchId,
         sessionId,
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
       message,
     }
@@ -2149,7 +2172,10 @@ describe("recovery", () => {
       }),
     )
     const providerLayer = Provider.TestStream(() =>
-      Ref.update(params.providerCalls ?? Ref.makeUnsafe(0), (count) => count + 1).pipe(
+      (params.providerCalls === undefined
+        ? Effect.void
+        : Ref.update(params.providerCalls, (count) => count + 1)
+      ).pipe(
         Effect.as(
           Stream.fromIterable(
             params.providerParts ?? [
@@ -2243,261 +2269,216 @@ describe("recovery", () => {
       )
       return Array.from(envelopes, (envelope) => envelope.event)
     })
-  it.live("recovers from Running checkpoint and completes the turn", () =>
+  const makeScopedDbPath = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const dir = yield* fs.makeTempDirectoryScoped()
+    return path.join(dir, "data.db")
+  })
+  it.scopedLive("recovers from Running checkpoint and completes the turn", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-running-"))
-      const dbPath = path.join(dir, "data.db")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const { message } = createSessionState()
-            const running = buildRunningState(
-              { currentAgent: AgentName.make("cowork") },
-              { message },
-            )
-            const providerCalls = Ref.makeUnsafe(0)
-            const layer = makeRecoveryLayer({ dbPath, providerCalls })
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
-                const agentLoop = yield* AgentLoop
-                const state = yield* waitFor(
-                  agentLoop.getState({
-                    sessionId: running.message.sessionId,
-                    branchId: running.message.branchId,
-                  }),
-                  (s) => s._tag === "Idle",
-                )
-                expect(state._tag).toBe("Idle")
-                expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
-              }).pipe(Effect.provide(layer)),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      const dbPath = yield* makeScopedDbPath
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { currentAgent: AgentName.make("cowork") },
+        { message },
+        { startedAtMs: 1_767_225_600_000 },
       )
-    }),
+      const providerCalls = yield* Ref.make(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
+          const agentLoop = yield* AgentLoop
+          const state = yield* waitFor(
+            agentLoop.getState({
+              sessionId: running.message.sessionId,
+              branchId: running.message.branchId,
+            }),
+            (s) => s._tag === "Idle",
+          )
+          expect(state._tag).toBe("Idle")
+          expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
+        }).pipe(Effect.provide(layer)),
+      )
+    }).pipe(Effect.provide(BunServices.layer)),
   )
-  it.live("recovers from Idle with queued follow-up", () =>
+  it.scopedLive("recovers from Idle with queued follow-up", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-idle-queue-"))
-      const dbPath = path.join(dir, "data.db")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const { message } = createSessionState()
-            const queuedMessage = Message.Regular.make({
-              id: MessageId.make("queued-msg"),
+      const dbPath = yield* makeScopedDbPath
+      const { message } = createSessionState()
+      const queuedMessage = Message.Regular.make({
+        id: MessageId.make("queued-msg"),
+        sessionId: message.sessionId,
+        branchId: message.branchId,
+        role: "user",
+        parts: [new TextPart({ type: "text", text: "queued" })],
+        createdAt: dateFromMillis(1_767_225_600_000),
+      })
+      const idleWithQueue = LoopState.Idle.make({
+        currentAgent: AgentName.make("cowork"),
+      })
+      const idleQueue = appendFollowUpQueueState(emptyLoopQueueState(), {
+        message: queuedMessage,
+      })
+      const providerCalls = yield* Ref.make(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedCheckpoint({ state: idleWithQueue, queue: idleQueue })
+          const agentLoop = yield* AgentLoop
+          const state = yield* waitFor(
+            agentLoop.getState({
               sessionId: message.sessionId,
               branchId: message.branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "queued" })],
-              createdAt: new Date(),
-            })
-            const idleWithQueue = LoopState.Idle.make({
-              currentAgent: AgentName.make("cowork"),
-            })
-            const idleQueue = appendFollowUpQueueState(emptyLoopQueueState(), {
-              message: queuedMessage,
-            })
-            const providerCalls = Ref.makeUnsafe(0)
-            const layer = makeRecoveryLayer({ dbPath, providerCalls })
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* seedCheckpoint({ state: idleWithQueue, queue: idleQueue })
-                const agentLoop = yield* AgentLoop
-                const state = yield* waitFor(
-                  agentLoop.getState({
-                    sessionId: message.sessionId,
-                    branchId: message.branchId,
-                  }),
-                  (s) => s._tag === "Idle",
-                )
-                expect(state._tag).toBe("Idle")
-                expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
-              }).pipe(Effect.provide(layer)),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+            }),
+            (s) => s._tag === "Idle",
+          )
+          expect(state._tag).toBe("Idle")
+          expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
+        }).pipe(Effect.provide(layer)),
       )
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
-  it.live("audits incompatible checkpoint version and starts fresh", () =>
+  it.scopedLive("audits incompatible checkpoint version and starts fresh", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-stale-"))
-      const dbPath = path.join(dir, "data.db")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const { message } = createSessionState()
-            const running = buildRunningState(
-              { currentAgent: AgentName.make("cowork") },
-              { message },
-            )
-            const record = yield* buildLoopCheckpointRecord({
+      const dbPath = yield* makeScopedDbPath
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { currentAgent: AgentName.make("cowork") },
+        { message },
+        { startedAtMs: 1_767_225_600_000 },
+      )
+      const record = yield* buildLoopCheckpointRecord({
+        sessionId: running.message.sessionId,
+        branchId: running.message.branchId,
+        state: running,
+        queue: emptyLoopQueueState(),
+      })
+      const staleRecord = { ...record, version: 999 }
+      const providerCalls = yield* Ref.make(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedCheckpoint({
+            state: running,
+            queue: emptyLoopQueueState(),
+            checkpointRecord: staleRecord,
+          })
+          const agentLoop = yield* AgentLoop
+          const state = yield* agentLoop.getState({
+            sessionId: running.message.sessionId,
+            branchId: running.message.branchId,
+          })
+          expect(state._tag).toBe("Idle")
+          expect(yield* Ref.get(providerCalls)).toBe(0)
+          const cs = yield* CheckpointStorage
+          const checkpoint = yield* cs.get({
+            sessionId: running.message.sessionId,
+            branchId: running.message.branchId,
+          })
+          expect(checkpoint).toBeUndefined()
+          const events = yield* collectRecoveryAbandoned(
+            running.message.sessionId,
+            running.message.branchId,
+          )
+          expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+          if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+            expect(events[0].reason).toBe("checkpoint-version-mismatch")
+          }
+        }).pipe(Effect.provide(layer)),
+      )
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+  it.scopedLive("audits undecodable checkpoint and starts fresh", () =>
+    Effect.gen(function* () {
+      const dbPath = yield* makeScopedDbPath
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { currentAgent: AgentName.make("cowork") },
+        { message },
+        { startedAtMs: 1_767_225_600_000 },
+      )
+      const record = yield* buildLoopCheckpointRecord({
+        sessionId: running.message.sessionId,
+        branchId: running.message.branchId,
+        state: running,
+        queue: emptyLoopQueueState(),
+      })
+      const badRecord = { ...record, stateJson: '{"state":{"_tag":"Nope"}}' }
+      const providerCalls = yield* Ref.make(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedCheckpoint({
+            state: running,
+            queue: emptyLoopQueueState(),
+            checkpointRecord: badRecord,
+          })
+          const agentLoop = yield* AgentLoop
+          const state = yield* agentLoop.getState({
+            sessionId: running.message.sessionId,
+            branchId: running.message.branchId,
+          })
+          expect(state._tag).toBe("Idle")
+          expect(yield* Ref.get(providerCalls)).toBe(0)
+          const cs = yield* CheckpointStorage
+          const checkpoint = yield* cs.get({
+            sessionId: running.message.sessionId,
+            branchId: running.message.branchId,
+          })
+          expect(checkpoint).toBeUndefined()
+          const events = yield* collectRecoveryAbandoned(
+            running.message.sessionId,
+            running.message.branchId,
+          )
+          expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+          if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+            expect(events[0].reason).toBe("checkpoint-decode-failed")
+          }
+        }).pipe(Effect.provide(layer)),
+      )
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+  it.scopedLive("fails closed when checkpoint read fails", () =>
+    Effect.gen(function* () {
+      const dbPath = yield* makeScopedDbPath
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { currentAgent: AgentName.make("cowork") },
+        { message },
+        { startedAtMs: 1_767_225_600_000 },
+      )
+      const providerCalls = yield* Ref.make(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`DROP TABLE agent_loop_checkpoints`
+          const agentLoop = yield* AgentLoop
+          const exit = yield* agentLoop
+            .getState({
               sessionId: running.message.sessionId,
               branchId: running.message.branchId,
-              state: running,
-              queue: emptyLoopQueueState(),
             })
-            const staleRecord = { ...record, version: 999 }
-            const providerCalls = Ref.makeUnsafe(0)
-            const layer = makeRecoveryLayer({ dbPath, providerCalls })
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* seedCheckpoint({
-                  state: running,
-                  queue: emptyLoopQueueState(),
-                  checkpointRecord: staleRecord,
-                })
-                const agentLoop = yield* AgentLoop
-                const state = yield* agentLoop.getState({
-                  sessionId: running.message.sessionId,
-                  branchId: running.message.branchId,
-                })
-                expect(state._tag).toBe("Idle")
-                expect(yield* Ref.get(providerCalls)).toBe(0)
-                const cs = yield* CheckpointStorage
-                const checkpoint = yield* cs.get({
-                  sessionId: running.message.sessionId,
-                  branchId: running.message.branchId,
-                })
-                expect(checkpoint).toBeUndefined()
-                const events = yield* collectRecoveryAbandoned(
-                  running.message.sessionId,
-                  running.message.branchId,
-                )
-                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
-                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
-                  expect(events[0].reason).toBe("checkpoint-version-mismatch")
-                }
-              }).pipe(Effect.provide(layer)),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) {
+            expect(Cause.pretty(exit.cause)).toContain("Failed to read agent loop checkpoint")
+          }
+          expect(yield* Ref.get(providerCalls)).toBe(0)
+          const events = yield* collectRecoveryAbandoned(
+            running.message.sessionId,
+            running.message.branchId,
+          )
+          expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
+          if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
+            expect(events[0].reason).toBe("checkpoint-read-failed")
+          }
+        }).pipe(Effect.provide(layer)),
       )
-    }),
-  )
-  it.live("audits undecodable checkpoint and starts fresh", () =>
-    Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-bad-checkpoint-"))
-      const dbPath = path.join(dir, "data.db")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const { message } = createSessionState()
-            const running = buildRunningState(
-              { currentAgent: AgentName.make("cowork") },
-              { message },
-            )
-            const record = yield* buildLoopCheckpointRecord({
-              sessionId: running.message.sessionId,
-              branchId: running.message.branchId,
-              state: running,
-              queue: emptyLoopQueueState(),
-            })
-            const badRecord = { ...record, stateJson: '{"state":{"_tag":"Nope"}}' }
-            const providerCalls = Ref.makeUnsafe(0)
-            const layer = makeRecoveryLayer({ dbPath, providerCalls })
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* seedCheckpoint({
-                  state: running,
-                  queue: emptyLoopQueueState(),
-                  checkpointRecord: badRecord,
-                })
-                const agentLoop = yield* AgentLoop
-                const state = yield* agentLoop.getState({
-                  sessionId: running.message.sessionId,
-                  branchId: running.message.branchId,
-                })
-                expect(state._tag).toBe("Idle")
-                expect(yield* Ref.get(providerCalls)).toBe(0)
-                const cs = yield* CheckpointStorage
-                const checkpoint = yield* cs.get({
-                  sessionId: running.message.sessionId,
-                  branchId: running.message.branchId,
-                })
-                expect(checkpoint).toBeUndefined()
-                const events = yield* collectRecoveryAbandoned(
-                  running.message.sessionId,
-                  running.message.branchId,
-                )
-                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
-                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
-                  expect(events[0].reason).toBe("checkpoint-decode-failed")
-                }
-              }).pipe(Effect.provide(layer)),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
-      )
-    }),
-  )
-  it.live("fails closed when checkpoint read fails", () =>
-    Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-checkpoint-read-fail-"))
-      const dbPath = path.join(dir, "data.db")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const { message } = createSessionState()
-            const running = buildRunningState(
-              { currentAgent: AgentName.make("cowork") },
-              { message },
-            )
-            const providerCalls = Ref.makeUnsafe(0)
-            const layer = makeRecoveryLayer({ dbPath, providerCalls })
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
-                const sql = yield* SqlClient.SqlClient
-                yield* sql`DROP TABLE agent_loop_checkpoints`
-                const agentLoop = yield* AgentLoop
-                const exit = yield* agentLoop
-                  .getState({
-                    sessionId: running.message.sessionId,
-                    branchId: running.message.branchId,
-                  })
-                  .pipe(Effect.exit)
-                expect(Exit.isFailure(exit)).toBe(true)
-                if (Exit.isFailure(exit)) {
-                  expect(Cause.pretty(exit.cause)).toContain("Failed to read agent loop checkpoint")
-                }
-                expect(yield* Ref.get(providerCalls)).toBe(0)
-                const events = yield* collectRecoveryAbandoned(
-                  running.message.sessionId,
-                  running.message.branchId,
-                )
-                expect(events[0]?._tag).toBe("AgentLoopRecoveryAbandoned")
-                if (events[0]?._tag === "AgentLoopRecoveryAbandoned") {
-                  expect(events[0].reason).toBe("checkpoint-read-failed")
-                }
-              }).pipe(Effect.provide(layer)),
-            )
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
-      )
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 // ============================================================================
@@ -2527,7 +2508,7 @@ describe("durable suspension and queue drain regression", () => {
       branchId: suspendBranchId,
       role: "user",
       parts: [new TextPart({ type: "text", text })],
-      createdAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
     })
   // Provider script: first model stream emits the interaction-tool call,
   // second emits a final text + stop. Tracks the call index so that
@@ -2616,99 +2597,91 @@ describe("durable suspension and queue drain regression", () => {
       Layer.merge(deps, eventPublisherLayer),
     )
   }
-  it.live(
+  it.scopedLive(
     "WaitingForInteraction survives scope teardown and resumes via respondInteraction",
     () =>
       Effect.gen(function* () {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-suspend-"))
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dir = yield* fs.makeTempDirectoryScoped()
         const dbPath = path.join(dir, "data.db")
-        yield* Effect.acquireUseRelease(
-          Effect.void,
-          () =>
-            Effect.gen(function* () {
-              // Cross-scope refs: stand in for state external to the Effect scope.
-              // `callCountRef` tracks tool invocations (DB-equivalent), and
-              // `streamCallRef` lets the provider keep advancing its script when
-              // the resumed turn streams again under the second scope.
-              const callCountRef = Ref.makeUnsafe(0)
-              const streamCallRef = Ref.makeUnsafe(0)
-              const scope1Resolution = Deferred.makeUnsafe<void>()
-              // Scope 1: drive the loop until WaitingForInteraction, then exit.
-              yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const agentLoop = yield* AgentLoop
-                  const message = makeSuspendMessage("msg-suspend-1", "trigger interaction")
-                  const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
-                  yield* waitForPhase(
-                    agentLoop,
-                    { sessionId: suspendSessionId, branchId: suspendBranchId },
-                    "WaitingForInteraction",
-                  )
-                  expect(yield* Ref.get(callCountRef)).toBe(1)
-                  expect(yield* Ref.get(streamCallRef)).toBe(1)
-                  // Interrupt the runAgentLoop fiber so scope teardown can
-                  // proceed cleanly without inheriting the parked turn fiber.
-                  yield* Fiber.interrupt(fiber)
-                }).pipe(
-                  Effect.provide(
-                    makeSuspendScopeLayer({
-                      dbPath,
-                      streamCallRef,
-                      callCountRef,
-                      resolution: scope1Resolution,
-                    }),
-                  ),
-                ),
-              )
-              // The scope is gone — including the in-memory `loops` map and
-              // every Deferred the suspended turn was awaiting. Only the SQLite
-              // DB at `dbPath` survives. This mirrors a process restart.
-              // Scope 2: fresh layer (new in-memory state), same DB, same
-              // cross-scope refs. respondInteraction must:
-              //   - re-hydrate the loop from checkpoint (WaitingForInteraction),
-              //   - dispatch InteractionResponded → forkTurn(Running),
-              //   - re-execute the tool (count: 1 → 2 → resolves the tool),
-              //   - the resumed turn streams a final text and reaches Idle.
-              const scope2Resolution = Deferred.makeUnsafe<void>()
-              yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const agentLoop = yield* AgentLoop
-                  yield* agentLoop.respondInteraction({
-                    sessionId: suspendSessionId,
-                    branchId: suspendBranchId,
-                    requestId: InteractionRequestId.make("req-suspend-1"),
-                  })
-                  yield* Deferred.await(scope2Resolution).pipe(Effect.timeout("5 seconds"))
-                  expect(yield* Ref.get(callCountRef)).toBe(2)
-                  const finalState = yield* waitForPhase(
-                    agentLoop,
-                    { sessionId: suspendSessionId, branchId: suspendBranchId },
-                    "Idle",
-                  )
-                  expect(finalState._tag).toBe("Idle")
-                  // The resumed turn must have driven the provider through
-                  // its second response (text + stop), so streamCallRef
-                  // advanced to 2 — proves the current runtime runs the
-                  // full inner loop on resume, not just a result hand-back.
-                  expect(yield* Ref.get(streamCallRef)).toBe(2)
-                }).pipe(
-                  Effect.provide(
-                    makeSuspendScopeLayer({
-                      dbPath,
-                      streamCallRef,
-                      callCountRef,
-                      resolution: scope2Resolution,
-                    }),
-                  ),
-                ),
-              )
-            }),
-          () =>
-            Effect.sync(() => {
-              fs.rmSync(dir, { recursive: true, force: true })
-            }),
+        // Cross-scope refs: stand in for state external to the Effect scope.
+        // `callCountRef` tracks tool invocations (DB-equivalent), and
+        // `streamCallRef` lets the provider keep advancing its script when
+        // the resumed turn streams again under the second scope.
+        const callCountRef = yield* Ref.make(0)
+        const streamCallRef = yield* Ref.make(0)
+        const scope1Resolution = yield* Deferred.make<void>()
+        // Scope 1: drive the loop until WaitingForInteraction, then exit.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* AgentLoop
+            const message = makeSuspendMessage("msg-suspend-1", "trigger interaction")
+            const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+            yield* waitForPhase(
+              agentLoop,
+              { sessionId: suspendSessionId, branchId: suspendBranchId },
+              "WaitingForInteraction",
+            )
+            expect(yield* Ref.get(callCountRef)).toBe(1)
+            expect(yield* Ref.get(streamCallRef)).toBe(1)
+            // Interrupt the runAgentLoop fiber so scope teardown can
+            // proceed cleanly without inheriting the parked turn fiber.
+            yield* Fiber.interrupt(fiber)
+          }).pipe(
+            Effect.provide(
+              makeSuspendScopeLayer({
+                dbPath,
+                streamCallRef,
+                callCountRef,
+                resolution: scope1Resolution,
+              }),
+            ),
+          ),
         )
-      }),
+        // The scope is gone — including the in-memory `loops` map and
+        // every Deferred the suspended turn was awaiting. Only the SQLite
+        // DB at `dbPath` survives. This mirrors a process restart.
+        // Scope 2: fresh layer (new in-memory state), same DB, same
+        // cross-scope refs. respondInteraction must:
+        //   - re-hydrate the loop from checkpoint (WaitingForInteraction),
+        //   - dispatch InteractionResponded → forkTurn(Running),
+        //   - re-execute the tool (count: 1 → 2 → resolves the tool),
+        //   - the resumed turn streams a final text and reaches Idle.
+        const scope2Resolution = yield* Deferred.make<void>()
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* AgentLoop
+            yield* agentLoop.respondInteraction({
+              sessionId: suspendSessionId,
+              branchId: suspendBranchId,
+              requestId: InteractionRequestId.make("req-suspend-1"),
+            })
+            yield* Deferred.await(scope2Resolution).pipe(Effect.timeout("5 seconds"))
+            expect(yield* Ref.get(callCountRef)).toBe(2)
+            const finalState = yield* waitForPhase(
+              agentLoop,
+              { sessionId: suspendSessionId, branchId: suspendBranchId },
+              "Idle",
+            )
+            expect(finalState._tag).toBe("Idle")
+            // The resumed turn must have driven the provider through
+            // its second response (text + stop), so streamCallRef
+            // advanced to 2 — proves the current runtime runs the
+            // full inner loop on resume, not just a result hand-back.
+            expect(yield* Ref.get(streamCallRef)).toBe(2)
+          }).pipe(
+            Effect.provide(
+              makeSuspendScopeLayer({
+                dbPath,
+                streamCallRef,
+                callCountRef,
+                resolution: scope2Resolution,
+              }),
+            ),
+          ),
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
     15000,
   )
   // ── Queue drain test ──
@@ -2724,13 +2697,13 @@ describe("durable suspension and queue drain regression", () => {
         // Each call records its index into `streamOrder` and returns a
         // simple text+stop response when its gate resolves.
         const gates = [
-          Deferred.makeUnsafe<void>(),
-          Deferred.makeUnsafe<void>(),
-          Deferred.makeUnsafe<void>(),
-          Deferred.makeUnsafe<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
         ]
-        const streamOrder = Ref.makeUnsafe<readonly number[]>([])
-        const streamCallRef = Ref.makeUnsafe(0)
+        const streamOrder = yield* Ref.make<readonly number[]>([])
+        const streamCallRef = yield* Ref.make(0)
         const gatedProvider = Provider.TestStream(() =>
           Effect.gen(function* () {
             const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
@@ -2778,7 +2751,7 @@ describe("durable suspension and queue drain regression", () => {
                   branchId: drainBranchId,
                   role: "user",
                   parts: [new TextPart({ type: "text", text })],
-                  createdAt: new Date(),
+                  createdAt: dateFromMillis(1_767_225_600_000),
                 }),
                 { interactive: true },
               )
@@ -2787,13 +2760,10 @@ describe("durable suspension and queue drain regression", () => {
             // to Running before model streaming starts, so we poll on
             // streamCallRef instead.
             yield* submitOne("msg-drain-0", "first")
-            yield* Effect.gen(function* () {
-              for (let i = 0; i < 200; i++) {
-                if ((yield* Ref.get(streamCallRef)) >= 1) return
-                yield* Effect.sleep("1 millis")
-              }
-              throw new Error("timed out waiting for first model stream call")
-            })
+            for (let i = 0; i < 200; i++) {
+              if ((yield* Ref.get(streamCallRef)) >= 1) break
+              yield* Effect.sleep("1 millis")
+            }
             expect(yield* Ref.get(streamCallRef)).toBe(1)
             // Submit #1, #2, #3 while #0 is still parked. They MUST
             // enqueue (Running → Running re-enter) — they cannot start

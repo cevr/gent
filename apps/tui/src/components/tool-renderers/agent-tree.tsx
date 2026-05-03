@@ -120,14 +120,12 @@ export function AgentTree(props: AgentTreeProps) {
     return childBranchId()
   }
 
-  const [childMessages] = createResource(fetchKey, async (branchId) => {
-    try {
-      const messages = await clientCtx.runtime.run(clientCtx.client.message.list({ branchId }))
-      return extractChildContent(messages)
-    } catch {
-      return undefined
-    }
-  })
+  const [childMessages] = createResource(fetchKey, (branchId) =>
+    clientCtx.runtime
+      .run(clientCtx.client.message.list({ branchId }))
+      .then((messages) => extractChildContent(messages))
+      .catch(() => undefined),
+  )
 
   // Fallback text from toolCall.output or child preview
   const fallbackText = () => {

@@ -12,6 +12,120 @@
     "skipLibCheck": true,
     "types": ["bun"],
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "diagnosticsName": true,
+        "includeSuggestionsInTsc": true,
+        "ignoreEffectSuggestionsInTscExitCode": false,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectErrorsInTscExitCode": false,
+        "diagnosticSeverity": {
+          "anyUnknownInErrorContext": "error",
+          "asyncFunction": "error",
+          "catchAllToMapError": "error",
+          "catchUnfailableEffect": "error",
+          "classSelfMismatch": "error",
+          "cryptoRandomUUID": "error",
+          "cryptoRandomUUIDInEffect": "error",
+          "deterministicKeys": "error",
+          "duplicatePackage": "error",
+          "effectDoNotation": "error",
+          "effectFnIife": "error",
+          "effectFnImplicitAny": "error",
+          "effectFnOpportunity": "error",
+          "effectGenUsesAdapter": "error",
+          "effectInFailure": "error",
+          "effectInVoidSuccess": "error",
+          "effectMapFlatten": "off",
+          "effectMapVoid": "error",
+          "effectSucceedWithVoid": "error",
+          "extendsNativeError": "error",
+          "floatingEffect": "error",
+          "genericEffectServices": "error",
+          "globalConsole": "error",
+          "globalConsoleInEffect": "error",
+          "globalDate": "error",
+          "globalDateInEffect": "error",
+          "globalErrorInEffectCatch": "error",
+          "globalErrorInEffectFailure": "error",
+          "globalFetch": "error",
+          "globalFetchInEffect": "error",
+          "globalRandom": "error",
+          "globalRandomInEffect": "error",
+          "globalTimers": "error",
+          "globalTimersInEffect": "error",
+          "instanceOfSchema": "error",
+          "layerMergeAllWithDependencies": "error",
+          "lazyPromiseInEffectSync": "error",
+          "leakingRequirements": "error",
+          "missedPipeableOpportunity": "off",
+          "missingEffectContext": "error",
+          "missingEffectError": "error",
+          "missingEffectServiceDependency": "error",
+          "missingLayerContext": "error",
+          "missingReturnYieldStar": "error",
+          "missingStarInYieldEffectGen": "error",
+          "multipleEffectProvide": "error",
+          "nestedEffectGenYield": "error",
+          "newPromise": "error",
+          "nodeBuiltinImport": "error",
+          "nonObjectEffectServiceType": "error",
+          "outdatedApi": "error",
+          "overriddenSchemaConstructor": "error",
+          "preferSchemaOverJson": "error",
+          "processEnv": "error",
+          "processEnvInEffect": "error",
+          "redundantSchemaTagIdentifier": "error",
+          "returnEffectInGen": "error",
+          "runEffectInsideEffect": "error",
+          "schemaStructWithTag": "error",
+          "schemaSyncInEffect": "error",
+          "schemaUnionOfLiterals": "error",
+          "scopeInLayerEffect": "error",
+          "serviceNotAsClass": "error",
+          "strictBooleanExpressions": "off",
+          "strictEffectProvide": "error",
+          "tryCatchInEffectGen": "error",
+          "unknownInEffectCatch": "error",
+          "unnecessaryArrowBlock": "error",
+          "unnecessaryEffectGen": "error",
+          "unnecessaryFailYieldableError": "error",
+          "unnecessaryPipe": "off",
+          "unnecessaryPipeChain": "off"
+        },
+        "keyPatterns": [
+          {
+            "target": "service",
+            "pattern": "default",
+            "skipLeadingPath": ["packages/"]
+          },
+          {
+            "target": "error",
+            "pattern": "default",
+            "skipLeadingPath": ["packages/"]
+          }
+        ],
+        "overrides": [
+          {
+            "include": [
+              "**/tests/**/*.ts",
+              "**/tests/**/*.tsx",
+              "**/*.test.ts",
+              "**/*.test.tsx",
+              "apps/tui/integration/**/*.ts",
+              "apps/tui/integration/**/*.tsx"
+            ],
+            "options": {
+              "diagnosticSeverity": {
+                "strictEffectProvide": "off"
+              }
+            }
+          }
+        ]
+      }
+    ],
     "paths": {
       "@gent/core/debug/provider": ["./packages/core/src/debug/provider.ts"],
       "@gent/core/debug/provider.js": ["./packages/core/src/debug/provider.ts"],

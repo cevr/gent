@@ -3,12 +3,17 @@ import { describe, it, expect } from "effect-bun-test"
 import { AgentName } from "@gent/core/domain/agent"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { onMount } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness"
 import { useClient } from "../src/client"
 import type { ClientContextValue, SessionState } from "../src/client/context"
+class ClientSessionStateTestError extends Schema.TaggedErrorClass<ClientSessionStateTestError>()(
+  "ClientSessionStateTestError",
+  { message: Schema.String },
+) {}
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
@@ -28,9 +33,9 @@ const waitForState = (
       const state = read()
       if (predicate(state)) return state
       if (remaining <= 1) {
-        return yield* Effect.fail(
-          new Error(`session state did not reach expected condition; got ${JSON.stringify(state)}`),
-        )
+        return yield* new ClientSessionStateTestError({
+          message: `session state did not reach expected condition; got ${state.status}`,
+        })
       }
       return yield* Effect.promise(() => waitForState(setup, read, predicate, remaining - 1))
     }),
@@ -45,7 +50,8 @@ const waitForAgentError = (
       yield* Effect.promise(() => setup.renderOnce())
       const error = read()
       if (error !== null) return error
-      if (remaining <= 1) return yield* Effect.fail(new Error("agent error did not surface"))
+      if (remaining <= 1)
+        return yield* new ClientSessionStateTestError({ message: "agent error did not surface" })
       return yield* Effect.promise(() => waitForAgentError(setup, read, remaining - 1))
     }),
   )
@@ -82,8 +88,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -122,8 +128,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-model"),
             activeBranchId: BranchId.make("branch-model"),
             name: "M",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -170,8 +176,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-refresh"),
             activeBranchId: BranchId.make("branch-refresh"),
             name: "Stale",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -228,8 +234,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-source"),
             activeBranchId: BranchId.make("branch-source"),
             name: "Source",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -294,8 +300,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-branch-race"),
             activeBranchId: BranchId.make("branch-old"),
             name: "Old",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -360,8 +366,8 @@ describe("ClientProvider session lifecycle", () => {
             id: SessionId.make("session-prev"),
             activeBranchId: BranchId.make("branch-prev"),
             name: "P",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )

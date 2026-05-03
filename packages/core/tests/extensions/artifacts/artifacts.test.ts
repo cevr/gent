@@ -35,30 +35,35 @@ type ArtifactCapabilityRef =
   | typeof ClearRef
   | typeof ListRef
 
+type ArtifactClientError = object
+
 const withArtifactsClient = <A>(
   fn: (ctx: {
     readonly branchId: BranchId
     readonly request: (
       capability: ArtifactCapabilityRef,
       input: unknown,
-    ) => Effect.Effect<unknown, unknown>
+    ) => Effect.Effect<unknown, ArtifactClientError>
     readonly requestAtBranch: (
       branchId: BranchId,
       capability: ArtifactCapabilityRef,
       input: unknown,
-    ) => Effect.Effect<unknown, unknown>
+    ) => Effect.Effect<unknown, ArtifactClientError>
     readonly requestInSession: (
       sessionId: SessionId,
       branchId: BranchId,
       capability: ArtifactCapabilityRef,
       input: unknown,
-    ) => Effect.Effect<unknown, unknown>
-    readonly createBranch: (name: string) => Effect.Effect<BranchId, unknown>
+    ) => Effect.Effect<unknown, ArtifactClientError>
+    readonly createBranch: (name: string) => Effect.Effect<BranchId, ArtifactClientError>
     readonly createSession: () => Effect.Effect<
-      { readonly sessionId: SessionId; readonly branchId: BranchId },
-      unknown
+      {
+        readonly sessionId: SessionId
+        readonly branchId: BranchId
+      },
+      ArtifactClientError
     >
-  }) => Effect.Effect<A, unknown>,
+  }) => Effect.Effect<A, ArtifactClientError>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -83,7 +88,7 @@ const withArtifactsClient = <A>(
             capabilityId: capability.capabilityId,
             intent: capability.intent,
             input,
-          }) as Effect.Effect<unknown, unknown>,
+          }) as Effect.Effect<unknown, ArtifactClientError>,
         requestAtBranch: (branchId, capability, input) =>
           client.extension.request({
             sessionId,
@@ -92,7 +97,7 @@ const withArtifactsClient = <A>(
             capabilityId: capability.capabilityId,
             intent: capability.intent,
             input,
-          }) as Effect.Effect<unknown, unknown>,
+          }) as Effect.Effect<unknown, ArtifactClientError>,
         requestInSession: (sessionId, branchId, capability, input) =>
           client.extension.request({
             sessionId,
@@ -101,7 +106,7 @@ const withArtifactsClient = <A>(
             capabilityId: capability.capabilityId,
             intent: capability.intent,
             input,
-          }) as Effect.Effect<unknown, unknown>,
+          }) as Effect.Effect<unknown, ArtifactClientError>,
         createBranch: (name) =>
           client.branch.create({ sessionId, name }).pipe(Effect.map((result) => result.branchId)),
         createSession: () => client.session.create({ cwd: "/tmp" }),

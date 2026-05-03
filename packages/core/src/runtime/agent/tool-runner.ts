@@ -193,9 +193,9 @@ const makeExecutionToolkit = (params: {
               },
               () => {
                 const wrapped = Effect.gen(function* () {
-                  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — erased heterogeneous tool boundary; failures normalize immediately.
                   const output = yield* provideCapabilityContext(
                     params.ctx,
+                    // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                     metadata
                       .effect(
                         decodedInput,

@@ -443,6 +443,10 @@ Verification: each extension focused suite, extension integration tests,
 
 ### C11 - `refactor(extensions): reserve rpc for public transport`
 
+Status: complete. Same-extension runtime calls use direct services. Extension
+request refs remain only for public/client transport. The request guard and
+branch scoping are locked by `1b77c73f` and `52ba0e30`.
+
 Migrate same-extension and builtin cross-extension calls from
 `ctx.extension.request(ref(...))` to service tags or entity/RPC clients. Keep
 public `client.extension.request` only as a transport adapter for user-facing
@@ -454,6 +458,11 @@ Verification: task/artifact extension tests, request permission tests,
 
 ### C12 - `refactor(storage): replace broad storage facade with repositories`
 
+Status: complete. SQLite storage now composes focused repository services
+directly. The broad facade and subtag adapter layers were deleted by `25ae9b5f`
+and `612eab0f`; follow-up runtime fences are locked by `1f9ed109`,
+`fb9f8173`, and `b2d411ab`.
+
 Rewrite storage by family using direct `SqlClient` layers or focused repository
 services. Start with actor/session/message families because they block the actor
 and API cleanup. Reset schema instead of migrating old local shapes. Delete the
@@ -464,6 +473,12 @@ after the facade deletion.
 
 ### C13 - `refactor(messages): expose canonical tool interaction state`
 
+Status: complete. Domain message projection exposes canonical tool interaction
+state. TUI and SDK helper surfaces consume that projection instead of pairing
+tool calls/results independently. Duplicate provider tool ids are paired by
+transcript part position and locked by
+`packages/core/tests/domain/message-part-projection.test.ts`.
+
 Stop forcing SDK/TUI clients to pair `ToolCallPart` and `ToolResultPart`.
 Either persist a canonical tool interaction part or expose a server/domain read
 model. Delete SDK rejoin helpers after clients consume the canonical state.
@@ -473,6 +488,12 @@ tests, `bun run gate`.
 
 ### C14 - `refactor(tui): unify session projection streams`
 
+Status: complete. Session routes now own one feed from snapshot, event stream,
+and runtime watch. Review-found reconnect regressions were fixed in `d744c6ff`:
+stale snapshots stop before opening streams, the hook keeps a route-owned
+last-seen event cursor, buffered event-only state replays before the snapshot
+cursor, and interactions/pulses hydrate through the narrowed buffered path.
+
 Collapse duplicate TUI session subscriptions so the route owns one session
 projection from snapshot, event stream, and runtime watch. `ClientProvider`
 keeps transport/lifecycle/model catalog only.
@@ -481,12 +502,20 @@ Verification: TUI session feed tests, session lifecycle tests, `bun run gate`.
 
 ### C15 - `refactor(extensions): delete dead extension storage and wrappers`
 
+Status: complete. File-backed `ExtensionStorage` and authoring facade wrappers
+are gone. `defineExtension` and the typed buckets are the authoring path.
+
 Delete file-backed `ExtensionStorage`, stale tests, and authoring wrappers that
 only rename `defineExtension`. Keep one extension authoring path.
 
 Verification: extension authoring tests, `bun run gate`.
 
 ### C16 - `docs(architecture): rewrite active docs around platform-native shape`
+
+Status: complete. `ARCHITECTURE.md`, `docs/extensions.md`, and active AGENTS
+guidance describe the current platform-native contracts without migration
+chronology. `ba2f0a3d` removed remaining active-source/test migration residue
+and converted the TUI lifecycle status union to `TaggedEnumClass`.
 
 Update `ARCHITECTURE.md`, `docs/extensions.md`, AGENTS references if needed, and
 active comments/tests so the vocabulary matches the new state: Effect RPC
@@ -496,6 +525,10 @@ and no migration-shaped active names.
 Verification: `bun run gate`.
 
 ### C17 - `test(audit): add platform-duplication guards`
+
+Status: complete. `packages/tooling/src/check-platform-duplication-guards.ts`
+locks the deleted marker, actor RPC, transport DTO, duplicated AI response, and
+actor-substrate import patterns.
 
 Add narrow architecture checks that fail on the old patterns:
 
@@ -514,6 +547,96 @@ against the final diff. Record accepted/rejected findings in this file with
 receipts. The wave is not closed by green tests alone.
 
 Verification: `bun run gate`, `bun run test:e2e`.
+
+## Closure Audit
+
+### Implementation Ledger
+
+- `2477942b refactor(extensions): reserve requests for transport`
+- `5ceff5b7 refactor(storage): remove subtag layer adapter`
+- `ea70f415 refactor(extensions): delete authoring facade`
+- `3bac045e refactor(runtime): type ephemeral parent services`
+- `eb7d8cb0 test(audit): guard platform bridge regressions`
+- `52ba0e30 refactor(rpc): require extension request branch`
+- `dc3ba2ac test(tooling): cover platform guard markers`
+- `1b77c73f test(rpc): cover extension request guards`
+- `06b1d098 test(tooling): harden platform guard coverage`
+- `22cab550 refactor(runtime): preserve ephemeral build errors`
+- `066be345 refactor(rpc): require storage dependencies`
+- `9a7b5ed9 test(runtime): pin ephemeral build error channel`
+- `f9ec8126 refactor(rpc): reuse resolved extension session`
+- `5e5e6981 refactor(runtime): use effect ai tool results`
+- `691f1426 refactor(ai): advertise tools with native toolkit`
+- `61101d62 refactor(ai): name tool token map directly`
+- `cc92ee0a test(runtime): pin interaction pending tool errors`
+- `2e96bf9c refactor(runtime): normalize tool runner failures`
+- `32ac0272 fix(runtime): annotate terminal tool failures`
+- `e27f7936 refactor(storage): provide session storage directly`
+- `a75f7664 refactor(storage): provide focused repositories directly`
+- `612eab0f refactor(storage): delete focused storage adapters`
+- `1f9ed109 refactor(runtime): omit focused storage only`
+- `fb9f8173 fix(runtime): keep broad storage fenced`
+- `b2d411ab test(runtime): pin broad storage omission`
+- `e64e25ce test(storage): use focused repositories`
+- `1bb96b32 refactor(storage): split sqlite layer composition`
+- `25ae9b5f refactor(storage): delete broad sqlite facade`
+- `7ba25e69 refactor(messages): expose canonical tool interactions`
+- `59d14eae refactor(tui): unify session projection streams`
+- `d744c6ff fix(tui): replay buffered session events`
+- `ba2f0a3d refactor(docs): remove migration residue`
+- `b93f6486 refactor(tui): unify agent status tags`
+
+### Accepted Review Findings
+
+- `59d14eae` Codex review found stale snapshot continuations, skipped buffered
+  event-only replay, and message-index-only duplicate tool-id pairing. Fixed by
+  `d744c6ff`.
+- `aef23ddf` docs reviews found stale active docs around deleted actor authoring,
+  non-existent driver constructors, and migration chronology in
+  `ARCHITECTURE.md`. Fixed by `d744c6ff`.
+- `d744c6ff` counsel review found a dead fallback in
+  `message-part-projection.ts`, missing buffered replay intent commentary, and a
+  pre-existing hand-rolled TUI lifecycle union. Fixed by `ba2f0a3d`.
+- Fresh residue audit found active comments/test names describing deleted
+  migration paths rather than current contracts. Fixed by `ba2f0a3d`.
+- `ba2f0a3d` Codex and counsel reviews found unnecessary status constructor
+  export, a remaining hand-rolled TUI `AgentStatus` union, duplicate lifecycle
+  and store status enums, weak lifecycle class-identity assertions, and residual
+  cleanup wording. Fixed by `b93f6486`.
+
+### Rejected Or Deferred Findings
+
+- `ExecutorMcpBridge` remains. It is an external MCP protocol boundary for the
+  executor extension, not a compatibility shim or duplicate Gent transport.
+- `ProviderService` remains only as model/auth resolution returning
+  `LanguageModel` layers. Turn execution calls Effect AI `LanguageModel` and
+  `Response.AnyPart` directly.
+- Buffered `ProviderRetrying` / `ErrorOccurred` replay remains intentionally
+  silent. Snapshot replay owns messages, lifecycle, and metrics; buffered replay
+  only hydrates event-only UI state that the snapshot cannot carry.
+- Snapshot-driven session name / branch updates are pre-existing broader product
+  semantics. They are not introduced by the buffered replay fix and should be
+  addressed as product behavior work, not as compatibility cleanup.
+- Dedicated Solid store/accessor and buffered lifecycle replay tests are useful
+  hardening work but not closure blockers. The pure reducer now asserts
+  `AgentStatus` class identity, TUI tests passed, and reviewers found no current
+  store reactivity regression.
+
+### Verification Receipts
+
+- Focused cleanup tests:
+  `bun test --reporter=dots apps/tui/tests/agent-lifecycle.test.ts apps/tui/tests/autocomplete-effect-items.test.ts apps/tui/tests/extension-effect-setup.test.ts packages/core/tests/domain/schema-tagged-enum-class.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/anthropic-keychain-transform.test.ts packages/core/tests/server/auth-rpc.test.ts packages/core/tests/providers/ai-transcript.test.ts packages/core/tests/extensions/session-tools/read-session.test.ts packages/core/tests/extensions/session-mutations.test.ts packages/core/tests/domain/message-part-projection.test.ts --timeout 30000`
+  passed: 126 pass, 0 fail.
+- `bun run gate` passed before `ba2f0a3d`; pre-commit repeated build, tests,
+  lint+fmt, and typecheck successfully.
+- Focused status cleanup tests:
+  `bun test --reporter=dots apps/tui/tests/agent-lifecycle.test.ts apps/tui/tests/use-session-feed.test.tsx packages/core/tests/domain/schema-tagged-enum-class.test.ts --timeout 30000`
+  passed: 33 pass, 0 fail.
+- `bun run gate` passed before `b93f6486`; pre-commit repeated build, tests,
+  lint+fmt, and typecheck successfully.
+- `b93f6486` Codex and counsel reviews were clean. Both noted only optional
+  runtime/UI hardening gaps around store-accessor reactivity and buffered replay
+  lifecycle invariants.
 
 ## First Mechanical Delegation Point
 

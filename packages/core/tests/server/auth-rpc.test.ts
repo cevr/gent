@@ -10,16 +10,13 @@
  * `configService.get(cwd)` → `driverOverrides`.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { AuthMethod } from "@gent/core/domain/auth-method"
-import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
+import { AuthStore, AuthStoreError, type AuthInfo } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
 import { AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
@@ -31,10 +28,11 @@ import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"
+
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
   AuthStore.of({
-    get: () => Effect.succeed(undefined),
+    get: () => Effect.as(Effect.void, undefined as AuthInfo | undefined),
     set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
     remove: () => Effect.fail(new AuthStoreError({ message: "delete failed" })),
     list: () => Effect.succeed([]),
@@ -119,23 +117,23 @@ describe("auth.listProviders", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
           // Three distinct dirs so we can prove the handler resolves config
           // from the *session's* cwd, not the server's launch cwd. Writing
           // the override into the session cwd's project config (and NOT
           // into the launch cwd or user config) means a launch-cwd-only
           // regression would return required=true here.
-          const launch = mkdtempSync(join(tmpdir(), "gent-authrpc-launch-"))
-          const sessionCwd = mkdtempSync(join(tmpdir(), "gent-authrpc-session-"))
-          const home = mkdtempSync(join(tmpdir(), "gent-authrpc-home-"))
+          const launch = yield* fs.makeTempDirectoryScoped()
+          const sessionCwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
           // Seed the session cwd's project config with a driver override
           // for `cowork`. The id points at the acp-claude-code external
           // driver that the ACP extension registers under e2ePreset.
-          mkdirSync(join(sessionCwd, ".gent"), { recursive: true })
-          writeFileSync(
-            join(sessionCwd, ".gent", "config.json"),
-            JSON.stringify({
-              driverOverrides: { cowork: { _tag: "external", id: "acp-claude-code" } },
-            }),
+          yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(sessionCwd, ".gent", "config.json"),
+            '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}}}',
           )
           const runtimePlatformLive = RuntimePlatform.Live({
             cwd: launch,
@@ -153,35 +151,23 @@ describe("auth.listProviders", () => {
               configServiceLayer: configServiceLive,
             }),
           )
-          yield* Effect.acquireUseRelease(
-            Effect.void,
-            () =>
-              Effect.gen(function* () {
-                // Launch cwd has no override → cowork (anthropic-modeled)
-                // requires anthropic. Proves the override is NOT in user config.
-                const launchSession = yield* client.session.create({ cwd: launch })
-                const launchList = yield* client.auth.listProviders({
-                  agentName: AgentName.make("cowork"),
-                  sessionId: launchSession.sessionId,
-                })
-                expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
-                // Session cwd has the project override → anthropic is NOT
-                // required because the agent is externally routed.
-                const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
-                const overriddenList = yield* client.auth.listProviders({
-                  agentName: AgentName.make("cowork"),
-                  sessionId: overriddenSession.sessionId,
-                })
-                expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
-              }),
-            () =>
-              Effect.sync(() => {
-                rmSync(launch, { recursive: true, force: true })
-                rmSync(sessionCwd, { recursive: true, force: true })
-                rmSync(home, { recursive: true, force: true })
-              }),
-          )
-        }).pipe(Effect.timeout("4 seconds")),
+          // Launch cwd has no override -> cowork (anthropic-modeled)
+          // requires anthropic. Proves the override is NOT in user config.
+          const launchSession = yield* client.session.create({ cwd: launch })
+          const launchList = yield* client.auth.listProviders({
+            agentName: AgentName.make("cowork"),
+            sessionId: launchSession.sessionId,
+          })
+          expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
+          // Session cwd has the project override -> anthropic is NOT
+          // required because the agent is externally routed.
+          const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
+          const overriddenList = yield* client.auth.listProviders({
+            agentName: AgentName.make("cowork"),
+            sessionId: overriddenSession.sessionId,
+          })
+          expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
       ),
   )
   it.live("driver.set followed by no-sessionId listProviders honors launch-cwd override", () =>

@@ -134,18 +134,24 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     refreshGitInfo()
 
     // Watch .git/index and .git/HEAD for changes (debounced)
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    let debounceFiber: Fiber.Fiber<void, never> | null = null
     const DEBOUNCE_MS = 200
     const debouncedRefresh = () => {
-      if (debounceTimer !== null) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null
-        refreshGitInfo()
-      }, DEBOUNCE_MS)
+      if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber))
+      debounceFiber = Effect.runFork(
+        Effect.sleep(`${DEBOUNCE_MS} millis`).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              debounceFiber = null
+              refreshGitInfo()
+            }),
+          ),
+        ),
+      )
     }
 
     const fsWatchers: { close: () => void }[] = []
-    let fallbackInterval: ReturnType<typeof setInterval> | null = null
+    let fallbackFiber: Fiber.Fiber<void, never> | null = null
 
     try {
       const gitDir = `${props.cwd}/.git`
@@ -162,17 +168,23 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       fsWatchers.push(watcher)
     } catch (e) {
       // Fallback to polling if watch fails (not a git repo, etc.)
-      console.debug("[workspace] git watch failed, falling back to polling:", e)
-      fallbackInterval = setInterval(refreshGitInfo, 2000)
+      Effect.runFork(
+        Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
+          Effect.annotateLogs({ error: String(e) }),
+        ),
+      )
+      fallbackFiber = Effect.runFork(
+        Effect.forever(Effect.sleep("2 seconds").pipe(Effect.andThen(Effect.sync(refreshGitInfo)))),
+      )
     }
 
     onCleanup(() => {
       if (currentFiber !== null) {
         Effect.runFork(Fiber.interrupt(currentFiber))
       }
-      if (debounceTimer !== null) clearTimeout(debounceTimer)
+      if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber))
       for (const w of fsWatchers) w.close()
-      if (fallbackInterval !== null) clearInterval(fallbackInterval)
+      if (fallbackFiber !== null) Effect.runFork(Fiber.interrupt(fallbackFiber))
     })
   })
 

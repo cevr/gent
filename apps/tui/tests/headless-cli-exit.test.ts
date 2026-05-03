@@ -1,7 +1,9 @@
 import { afterEach } from "bun:test"
 import { it, describe, expect } from "effect-bun-test"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdtempSync, rmSync } from "node:fs"
 import * as os from "node:os"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import * as path from "node:path"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"

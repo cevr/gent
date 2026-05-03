@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { AuthStore, AuthStoreError } from "../../src/domain/auth-store.js"
+import { AuthStore, AuthStoreError, type AuthInfo } from "../../src/domain/auth-store.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId, ProviderId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
@@ -14,6 +14,8 @@ import { failingLanguageModel } from "../helpers/failing-language-model.js"
 
 const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
 const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
+const AnyJson = Schema.fromJsonString(Schema.Unknown)
+const encodeAnyJson = Schema.encodeSync(AnyJson)
 
 const remoteCatalog = {
   openai: {
@@ -53,8 +55,9 @@ const passThroughDrivers = DriverRegistry.fromResolved({
 const unusedResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 
+const missingAuthInfo: AuthInfo | undefined = undefined
 const authLayer = Layer.succeed(AuthStore, {
-  get: () => Effect.succeed(undefined),
+  get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
   list: () => Effect.succeed([]),
@@ -185,7 +188,7 @@ describe("ModelRegistry", () => {
           ]),
         )
 
-        const registry = yield* loadRegistry(tmpDir, JSON.stringify({}))
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson({}))
         const models = yield* registry.list()
 
         expect(models).toHaveLength(1)
@@ -203,11 +206,11 @@ describe("ModelRegistry", () => {
         const tmpDir = yield* fs.makeTempDirectoryScoped()
         const cachePath = path.join(tmpDir, ".gent/models.json")
 
-        const registry = yield* loadRegistry(tmpDir, JSON.stringify(remoteCatalog))
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson(remoteCatalog))
         yield* registry.refresh()
 
         const cached = yield* fs.readFileString(cachePath)
-        const decoded = Schema.decodeUnknownSync(CachedModelsJson)(cached)
+        const decoded = yield* Schema.decodeUnknownEffect(CachedModelsJson)(cached)
 
         expect(Array.isArray(decoded)).toBe(true)
         expect(decoded).toHaveLength(1)
@@ -223,7 +226,7 @@ describe("ModelRegistry", () => {
       Effect.gen(function* () {
         const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
 
-        const registry = yield* loadRegistry(tmpDir, JSON.stringify(mixedRemoteCatalog))
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson(mixedRemoteCatalog))
         yield* registry.refresh()
         const models = yield* registry.list()
 
@@ -237,24 +240,22 @@ describe("ModelRegistry", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-        const registry = yield* Effect.gen(function* () {
-          const context = yield* Layer.build(
-            makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
-              {
-                id: "typed-filter",
-                name: "Typed filter",
-                resolveModel: unusedResolution,
-                listModels: (models) =>
-                  models.map((model) =>
-                    model.provider === "openai"
-                      ? Model.make({ ...model, name: `${model.name} filtered` })
-                      : model,
-                  ),
-              },
-            ]),
-          )
-          return Context.get(context, ModelRegistry)
-        })
+        const context = yield* Layer.build(
+          makeRegistryLayerWithDrivers(tmpDir, encodeAnyJson(remoteCatalog), [
+            {
+              id: "typed-filter",
+              name: "Typed filter",
+              resolveModel: unusedResolution,
+              listModels: (models) =>
+                models.map((model) =>
+                  model.provider === "openai"
+                    ? Model.make({ ...model, name: `${model.name} filtered` })
+                    : model,
+                ),
+            },
+          ]),
+        )
+        const registry = Context.get(context, ModelRegistry)
 
         yield* registry.refresh()
         const models = yield* registry.list()
@@ -275,19 +276,17 @@ describe("ModelRegistry", () => {
           provider: ProviderId.make("openai"),
         })
         Reflect.set(malformed, "name", 42)
-        const registry = yield* Effect.gen(function* () {
-          const context = yield* Layer.build(
-            makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
-              {
-                id: "malformed-filter",
-                name: "Malformed filter",
-                resolveModel: unusedResolution,
-                listModels: () => [malformed],
-              },
-            ]),
-          )
-          return Context.get(context, ModelRegistry)
-        })
+        const context = yield* Layer.build(
+          makeRegistryLayerWithDrivers(tmpDir, encodeAnyJson(remoteCatalog), [
+            {
+              id: "malformed-filter",
+              name: "Malformed filter",
+              resolveModel: unusedResolution,
+              listModels: () => [malformed],
+            },
+          ]),
+        )
+        const registry = Context.get(context, ModelRegistry)
 
         yield* registry.refresh()
         const error = yield* Effect.flip(registry.list())
@@ -305,27 +304,25 @@ describe("ModelRegistry", () => {
       Effect.gen(function* () {
         const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
         let filterCalled = false
-        const registry = yield* Effect.gen(function* () {
-          const context = yield* Layer.build(
-            makeRegistryLayerWithDrivers(
-              tmpDir,
-              JSON.stringify(remoteCatalog),
-              [
-                {
-                  id: "auth-filter",
-                  name: "Auth filter",
-                  resolveModel: unusedResolution,
-                  listModels: (models) => {
-                    filterCalled = true
-                    return models
-                  },
+        const context = yield* Layer.build(
+          makeRegistryLayerWithDrivers(
+            tmpDir,
+            encodeAnyJson(remoteCatalog),
+            [
+              {
+                id: "auth-filter",
+                name: "Auth filter",
+                resolveModel: unusedResolution,
+                listModels: (models) => {
+                  filterCalled = true
+                  return models
                 },
-              ],
-              failingReadAuthLayer,
-            ),
-          )
-          return Context.get(context, ModelRegistry)
-        })
+              },
+            ],
+            failingReadAuthLayer,
+          ),
+        )
+        const registry = Context.get(context, ModelRegistry)
 
         yield* registry.refresh()
         const error = yield* Effect.flip(registry.list())
@@ -349,7 +346,7 @@ describe("ModelRegistry", () => {
         yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
         yield* fs.writeFileString(cachePath, '{"openai":{"models":{}}}')
 
-        const registry = yield* loadRegistry(tmpDir, JSON.stringify({}))
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson({}))
         const models = yield* registry.list()
 
         expect(models).toEqual([])
@@ -386,7 +383,7 @@ describe("ModelRegistry", () => {
         expect(cachedModels).toHaveLength(1)
         expect(cachedModels[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
 
-        yield* Deferred.succeed(response, JSON.stringify(remoteCatalog))
+        yield* Deferred.succeed(response, encodeAnyJson(remoteCatalog))
         const refreshedModels = yield* waitFor(
           registry.list(),
           (models) => models.some((model) => model.id === "openai/gpt-5.4"),

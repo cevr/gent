@@ -7,7 +7,7 @@
  * order, and the result wires into `ExtensionRegistry`.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Layer, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
@@ -159,9 +159,7 @@ describe("defineExtension", () => {
           contributions,
         }
         yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([loaded], "process"))
-          }),
+          Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid),
         )
         // Strict ordering — no sorting. Codex  review flagged that the
         // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
@@ -264,7 +262,7 @@ describe("defineExtension", () => {
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("tools factory failed: nope")
       }
@@ -285,7 +283,7 @@ describe("defineExtension", () => {
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain(
           "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
@@ -300,7 +298,7 @@ describe("defineExtension", () => {
         id: "legit",
         description: "legit",
         params: Schema.Unknown,
-        execute: () => Effect.succeed(undefined),
+        execute: () => Effect.void,
       })
       const ext = defineExtension({
         id: "metadata-spoof",
@@ -314,7 +312,7 @@ describe("defineExtension", () => {
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain(
           "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
@@ -330,7 +328,7 @@ describe("defineExtension", () => {
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("unknown contribution bucket")
         expect(rendered).toContain("actors")
@@ -344,7 +342,7 @@ describe("defineExtension", () => {
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("unknown contribution bucket")
         expect(rendered).toContain("actors")

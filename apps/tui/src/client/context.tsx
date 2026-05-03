@@ -11,7 +11,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Context } from "effect"
-import { Effect, Schema } from "effect"
+import { Effect, Random, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
@@ -633,11 +633,15 @@ export function ClientProvider(props: ClientProviderProps) {
     isLoading,
 
     createSession: (onCreated) => {
-      const requestId = crypto.randomUUID()
-      log.info("createSession", { requestId })
       dispatchSession(SessionStateEvent.CreateRequested.make({}))
       cast(
-        client.session.create({ requestId, cwd: workspace.cwd }).pipe(
+        Effect.gen(function* () {
+          const requestId = yield* Random.nextUUIDv4
+          yield* Effect.sync(() => {
+            log.info("createSession", { requestId })
+          })
+          return yield* client.session.create({ requestId, cwd: workspace.cwd })
+        }).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               // Replicate `switchSession`'s side-effect resets so `/new`
@@ -746,13 +750,15 @@ export function ClientProvider(props: ClientProviderProps) {
     createBranch: (name) => {
       const s = session()
       if (s === null) return Effect.succeed(BranchId.make(""))
-      return client.branch
-        .create({
+      return Effect.gen(function* () {
+        const requestId = yield* Random.nextUUIDv4
+        const result = yield* client.branch.create({
           sessionId: s.sessionId,
-          requestId: crypto.randomUUID(),
+          requestId,
           ...(name !== undefined ? { name } : {}),
         })
-        .pipe(Effect.map((result) => result.branchId))
+        return result.branchId
+      })
     },
 
     getBranchTree: () => {
@@ -766,15 +772,17 @@ export function ClientProvider(props: ClientProviderProps) {
     forkBranch: (messageId, name) => {
       const s = session()
       if (s === null) return Effect.succeed(BranchId.make(""))
-      return client.branch
-        .fork({
+      return Effect.gen(function* () {
+        const requestId = yield* Random.nextUUIDv4
+        const result = yield* client.branch.fork({
           sessionId: s.sessionId,
           fromBranchId: s.branchId,
           atMessageId: messageId,
-          requestId: crypto.randomUUID(),
+          requestId,
           ...(name !== undefined ? { name } : {}),
         })
-        .pipe(Effect.map((result) => BranchId.make(result.branchId)))
+        return BranchId.make(result.branchId)
+      })
     },
 
     drainQueuedMessages: () => {
@@ -798,21 +806,22 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) return
 
       cast(
-        client.branch
-          .switch({
+        Effect.gen(function* () {
+          const requestId = yield* Random.nextUUIDv4
+          return yield* client.branch.switch({
             sessionId: s.sessionId,
             fromBranchId: s.branchId,
             toBranchId: branchId,
-            requestId: crypto.randomUUID(),
+            requestId,
             ...(summarize !== undefined ? { summarize } : {}),
           })
-          .pipe(
-            Effect.tapError((err) =>
-              Effect.sync(() => {
-                setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
-              }),
-            ),
+        }).pipe(
+          Effect.tapError((err) =>
+            Effect.sync(() => {
+              setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
+            }),
           ),
+        ),
       )
     },
   }
@@ -848,24 +857,26 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (s === null) return
 
-      const requestId = crypto.randomUUID()
-      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       cast(
-        client.message
-          .send({
+        Effect.gen(function* () {
+          const requestId = yield* Random.nextUUIDv4
+          yield* Effect.sync(() => {
+            log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+          })
+          return yield* client.message.send({
             sessionId: s.sessionId,
             branchId: s.branchId,
             content,
             requestId,
           })
-          .pipe(
-            Effect.tapError((err) =>
-              Effect.sync(() => {
-                setConnectionIssue(formatConnectionIssue(err))
-              }),
-            ),
-            Effect.withSpan("TUI.sendMessage"),
+        }).pipe(
+          Effect.tapError((err) =>
+            Effect.sync(() => {
+              setConnectionIssue(formatConnectionIssue(err))
+            }),
           ),
+          Effect.withSpan("TUI.sendMessage"),
+        ),
       )
     },
     steer: (command) => {

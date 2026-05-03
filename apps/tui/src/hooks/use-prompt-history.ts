@@ -82,22 +82,24 @@ const getStore = (): PromptHistoryStore => {
 export function usePromptHistory(): PromptHistory {
   const store = getStore()
 
-  const ensureLoaded = async () => {
+  const ensureLoaded = () => {
     if (store.loaded) return
     store.loaded = true
-    try {
-      const file = Bun.file(HISTORY_PATH)
-      if (!(await file.exists())) return
-      const raw = await file.text()
-      if (raw.length === 0) return
-      const data: unknown = JSON.parse(raw)
-      if (isRecord(data) && Array.isArray(data["entries"])) {
-        const entries = data["entries"].filter((e: unknown): e is string => typeof e === "string")
-        store.setEntries(entries.slice(0, MAX_ENTRIES))
-      }
-    } catch {
-      // No file or bad JSON — start fresh
-    }
+    const file = Bun.file(HISTORY_PATH)
+    void file
+      .exists()
+      .then((exists) => (exists ? file.text() : ""))
+      .then((raw) => {
+        if (raw.length === 0) return
+        const data: unknown = JSON.parse(raw)
+        if (isRecord(data) && Array.isArray(data["entries"])) {
+          const entries = data["entries"].filter((e: unknown): e is string => typeof e === "string")
+          store.setEntries(entries.slice(0, MAX_ENTRIES))
+        }
+      })
+      .catch(() => {
+        // No file or bad JSON — start fresh
+      })
   }
 
   const persist = (items: string[]) => {
@@ -107,7 +109,7 @@ export function usePromptHistory(): PromptHistory {
       .catch(() => {})
   }
 
-  void ensureLoaded()
+  ensureLoaded()
 
   return {
     entries: () => store.entries(),

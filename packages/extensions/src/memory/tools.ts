@@ -5,7 +5,7 @@
  * Session-scoped memories are ephemeral (handled via intents, not vault).
  */
 
-import { Effect, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { MemoryVault, projectKey as projectKeyOf } from "./vault.js"
 import { memoryPath, newFrontmatter } from "./state.js"
@@ -71,7 +71,8 @@ export const MemoryRememberTool = tool({
 
     const vault = yield* MemoryVault
     const path = memoryPath(scope, title, projectKey)
-    const fm = newFrontmatter(scope, tags, "agent")
+    const now = yield* DateTime.nowAsDate
+    const fm = newFrontmatter(scope, tags, "agent", now)
     const body = `# ${title}\n\n${content}`
 
     yield* vault.ensureDirs(scope === "project" ? projectKey : undefined)

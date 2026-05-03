@@ -14,7 +14,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 const readEnv = (name: string): string | undefined => {
-  const val = process.env[name]
+  const val = Bun.env[name]
   return val !== undefined && val !== "" ? val : undefined
 }
 

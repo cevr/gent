@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import type { Exit } from "effect"
 
+/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary */
 export interface ErasedEffectHandlers<A, E> {
   readonly onFailure: (error: unknown) => Effect.Effect<A, E>
   readonly onDefect: (defect: unknown) => Effect.Effect<A, E>
@@ -21,8 +22,7 @@ export const sealErasedEffect = <A, E>(
   // Callers use this ONLY at host boundaries where the extension runtime has
   // already provided the required services.
 ): Effect.Effect<A, E> =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit erased-effect membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   Effect.suspend(effect).pipe(
     Effect.catchEager(handlers.onFailure),
     Effect.catchDefect(handlers.onDefect),
@@ -35,8 +35,7 @@ export const sealErasedEffect = <A, E>(
 export const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit erased-effect membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   Effect.exit(Effect.suspend(effect)) as Effect.Effect<Exit.Exit<A, unknown>>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
@@ -57,8 +56,7 @@ export type ErasedResourceLayer = Layer.Layer<any>
  * merge an unknown extension set.
  */
 export const eraseLayer = <I, E, R>(layer: Layer.Layer<I, E, R>): ErasedLayer =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit resource-layer membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   layer as unknown as ErasedLayer
 
 export const emptyErasedLayer: ErasedLayer =
@@ -90,8 +88,7 @@ export const mergeErasedLayers = (layers: ReadonlyArray<ErasedLayer>): ErasedLay
 export const restoreErasedLayer = <I, E = never, R = never>(
   layer: ErasedLayer,
 ): Layer.Layer<I, E, R> =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit layer-erasure membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   layer as Layer.Layer<I, E, R>
 
 /**
@@ -102,9 +99,7 @@ export const restoreErasedLayer = <I, E = never, R = never>(
  * the call site but cannot be represented inside a heterogeneous map.
  */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- call sites recover phantom types from erased stores
-export const restoreErasedValue = <A>(value: unknown): A =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  value as A
+export const restoreErasedValue = <A>(value: unknown): A => value as A
 
 /**
  * Resource-host call sites keep the old narrower return type (`Layer.Layer<any>`)
@@ -114,10 +109,8 @@ export const eraseResourceLayer = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
   layer: Layer.Layer<any, any, any>,
 ): ErasedResourceLayer =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit resource-layer membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   layer as ErasedResourceLayer
 
-export const emptyErasedResourceLayer: ErasedResourceLayer =
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  Layer.empty as ErasedResourceLayer
+export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
+/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */

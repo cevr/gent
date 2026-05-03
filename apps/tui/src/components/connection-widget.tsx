@@ -15,18 +15,16 @@ export function ConnectionWidget() {
     const health = client.extensionHealth()
     return health._tag === "degraded" ? health.degradedExtensions : []
   }
-  const failedExtensions = () => {
-    return degradedExtensions()
+  const failedExtensions = () =>
+    degradedExtensions()
       .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
       .map((extension) => extension.manifest.id)
-  }
-  const failedScheduledJobs = () => {
-    return degradedExtensions().flatMap((extension) =>
+  const failedScheduledJobs = () =>
+    degradedExtensions().flatMap((extension) =>
       extension.issues.flatMap((issue) =>
         issue._tag === "scheduled-job-failed" ? [`${extension.manifest.id}:${issue.jobId}`] : [],
       ),
     )
-  }
   const hasFailedExtensions = () => failedExtensions().length > 0
   const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>

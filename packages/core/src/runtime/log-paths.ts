@@ -9,7 +9,7 @@
  *              `<hash>-<ts>-client.log`
  */
 
-import { Config, Effect, FileSystem, Option } from "effect"
+import { Config, DateTime, Effect, FileSystem, Option } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs"
 
@@ -25,10 +25,15 @@ const hashCwd = (cwd: string): string => {
   return (h >>> 0).toString(16).padStart(8, "0")
 }
 
-const PROCESS_START_TS = new Date()
-  .toISOString()
-  .replace(/[-:T.]/g, "")
-  .slice(0, 14) // YYYYMMDDHHMMSS
+const PROCESS_START_TS = DateTime.make(performance.timeOrigin).pipe(
+  Option.match({
+    onNone: () => "unknown",
+    onSome: (date) =>
+      DateTime.formatIso(date)
+        .replace(/[-:T.]/g, "")
+        .slice(0, 14),
+  }),
+) // YYYYMMDDHHMMSS
 
 export interface LogPaths {
   readonly dir: string

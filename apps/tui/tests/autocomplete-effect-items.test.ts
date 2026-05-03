@@ -30,6 +30,10 @@ import {
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestError>()(
+  "AutocompleteTestError",
+  { message: Schema.String },
+) {}
 const ListThingsRpc = request({
   id: "list-things",
   extensionId: ExtensionId.make("@test/autocomplete"),
@@ -131,7 +135,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         // The cause should carry the typed NoActiveSessionError.
-        const causeStr = JSON.stringify(exit.cause)
+        const causeStr = String(exit.cause)
         expect(causeStr).toContain("NoActiveSessionError")
       }
       yield* Effect.promise(() => runtime.dispose())
@@ -202,14 +206,14 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         transport.client.extension as unknown as {
           request: () => Effect.Effect<unknown, unknown>
         }
-      ).request = () => Effect.fail(new Error("transport boom"))
+      ).request = () => Effect.fail(new AutocompleteTestError({ message: "transport boom" }))
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
         runtime.runPromiseExit(requestExtension(ref(ListThingsRpc), {})),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const causeStr = JSON.stringify(exit.cause)
+        const causeStr = String(exit.cause)
         expect(causeStr).toContain("ClientTransportRequestError")
         expect(causeStr).toContain("transport boom")
       }
@@ -225,7 +229,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const causeStr = JSON.stringify(exit.cause)
+        const causeStr = String(exit.cause)
         expect(causeStr).toContain("ClientTransportReplyDecodeError")
       }
       yield* Effect.promise(() => runtime.dispose())
@@ -238,6 +242,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       const resolved = yield* Effect.promise(() =>
         runtime.runPromise(
           Effect.gen(function* () {
+            yield* Effect.void
             return yield* ClientTransport
           }),
         ),

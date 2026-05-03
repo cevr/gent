@@ -218,8 +218,8 @@ const runExtensionCapability = (
     )
 
     const output = yield* sealErasedEffect(
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential extension leaf
       () =>
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         capability.effect(
           decodedInput,
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- leaf registry owns erased ctx boundary

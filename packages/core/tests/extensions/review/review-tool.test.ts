@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
@@ -11,10 +11,11 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { getToolEffect } from "@gent/core/extensions/api"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const makeCtx = (overrides: {
@@ -163,7 +164,7 @@ describe("ReviewTool", () => {
           prompts.push(params.prompt)
           if (params.prompt.includes("Synthesize these adversarial reviews")) {
             return AgentRunResult.Success.make({
-              text: JSON.stringify([
+              text: encodeJson([
                 {
                   file: "src/auth.ts",
                   severity: "high",

@@ -1,9 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Layer } from "effect"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { Effect, Exit, FileSystem, Layer, Path } from "effect"
 import { AuthStorage, type KeychainRunResult } from "@gent/core/domain/auth-storage"
 const encryptedFileLayer = (authPath: string, keyPath: string) =>
   AuthStorage.LiveEncryptedFile(authPath, keyPath).pipe(Layer.provide(BunServices.layer))
@@ -88,33 +85,26 @@ describe("AuthStorage.LiveKeychain classification", () => {
   )
 })
 describe("AuthStorage.LiveEncryptedFile", () => {
-  it.live("corrupt auth files fail closed and do not get overwritten by writes", () =>
+  const encryptedFileTest = it.scopedLive.layer(BunServices.layer)
+  encryptedFileTest("corrupt auth files fail closed and do not get overwritten by writes", () =>
     Effect.gen(function* () {
-      const dir = mkdtempSync(join(tmpdir(), "gent-auth-storage-"))
-      const authPath = join(dir, "auth.json.enc")
-      const keyPath = join(dir, "auth.key")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            yield* Effect.gen(function* () {
-              const storage = yield* AuthStorage
-              yield* storage.set("openai", "sk-original")
-              writeFileSync(authPath, "not-json")
-              const corruptContent = readFileSync(authPath, "utf8")
-              const setExit = yield* Effect.exit(storage.set("anthropic", "sk-new"))
-              expect(setExit._tag).toBe("Failure")
-              expect(readFileSync(authPath, "utf8")).toBe(corruptContent)
-              const deleteExit = yield* Effect.exit(storage.delete("openai"))
-              expect(deleteExit._tag).toBe("Failure")
-              expect(readFileSync(authPath, "utf8")).toBe(corruptContent)
-            }).pipe(Effect.provide(encryptedFileLayer(authPath, keyPath)))
-          }),
-        () =>
-          Effect.sync(() => {
-            rmSync(dir, { recursive: true, force: true })
-          }),
-      )
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const authPath = path.join(dir, "auth.json.enc")
+      const keyPath = path.join(dir, "auth.key")
+      yield* Effect.gen(function* () {
+        const storage = yield* AuthStorage
+        yield* storage.set("openai", "sk-original")
+        yield* fs.writeFileString(authPath, "not-json")
+        const corruptContent = yield* fs.readFileString(authPath)
+        const setExit = yield* Effect.exit(storage.set("anthropic", "sk-new"))
+        expect(setExit._tag).toBe("Failure")
+        expect(yield* fs.readFileString(authPath)).toBe(corruptContent)
+        const deleteExit = yield* Effect.exit(storage.delete("openai"))
+        expect(deleteExit._tag).toBe("Failure")
+        expect(yield* fs.readFileString(authPath)).toBe(corruptContent)
+      }).pipe(Effect.provide(encryptedFileLayer(authPath, keyPath)))
     }),
   )
 })

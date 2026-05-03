@@ -140,9 +140,8 @@ export const resolveReasoning = (
   return agent.reasoningEffort
 }
 
-export const getSingleText = (message: Message): string | undefined => {
-  return messageSingleText(message.parts)
-}
+export const getSingleText = (message: Message): string | undefined =>
+  messageSingleText(message.parts)
 
 export const messageText = (message: Message): string =>
   messagePartsTextLines(message.parts).join("\n")

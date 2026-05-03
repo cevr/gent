@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { onMount } from "solid-js"
-import { Deferred, Effect } from "effect"
+import { Clock, Deferred, Effect, Schema } from "effect"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
 import { Route } from "../src/router"
@@ -13,6 +14,14 @@ import { createMockClient, createMockRuntime, renderWithProviders } from "./rend
 import { renderFrame, waitForRenderedFrame } from "./helpers"
 import { AgentName } from "@gent/core/domain/agent"
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
+
+class MessageTimeoutError extends Schema.TaggedErrorClass<MessageTimeoutError>()(
+  "MessageTimeoutError",
+  {
+    message: Schema.String,
+  },
+) {}
+
 const waitForMessage = (
   setup: AppAuthRenderSetup,
   messages: readonly {
@@ -21,17 +30,20 @@ const waitForMessage = (
   content: string,
   timeoutMs = 2000,
 ): Promise<void> => {
-  const startedAt = Date.now()
-  const poll: Effect.Effect<void, Error> = Effect.gen(function* () {
-    yield* Effect.promise(() => setup.renderOnce())
-    if (messages.some((message) => message.content === content)) return
-    if (Date.now() - startedAt >= timeoutMs) {
-      return yield* Effect.fail(new Error(`timed out waiting for message: ${content}`))
-    }
-    yield* Effect.sleep("10 millis")
-    return yield* poll
-  })
-  return Effect.runPromise(poll)
+  const poll = (startedAt: number): Effect.Effect<void, MessageTimeoutError> =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => setup.renderOnce())
+      if (messages.some((message) => message.content === content)) return
+      const now = yield* Clock.currentTimeMillis
+      if (now - startedAt >= timeoutMs) {
+        return yield* new MessageTimeoutError({
+          message: `timed out waiting for message: ${content}`,
+        })
+      }
+      yield* Effect.sleep("10 millis")
+      return yield* poll(startedAt)
+    })
+  return Effect.runPromise(Clock.currentTimeMillis.pipe(Effect.flatMap(poll)))
 }
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -86,8 +98,8 @@ describe("App auth gate", () => {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
               name: "A",
-              createdAt: new Date(0),
-              updatedAt: new Date(0),
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
             },
           },
         ),
@@ -145,8 +157,8 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
         }),
       )
@@ -185,7 +197,7 @@ describe("App auth gate", () => {
                   id: BranchId.make("branch-a"),
                   sessionId: SessionId.make("session-a"),
                   name: "Main",
-                  createdAt: new Date(0),
+                  createdAt: dateFromMillis(0),
                 },
                 messageCount: 3,
                 children: [],
@@ -195,7 +207,7 @@ describe("App auth gate", () => {
                   id: BranchId.make("branch-b"),
                   sessionId: SessionId.make("session-a"),
                   name: "Side",
-                  createdAt: new Date(1),
+                  createdAt: dateFromMillis(1),
                 },
                 messageCount: 1,
                 children: [],
@@ -212,19 +224,19 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "Session A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           initialRoute: Route.branchPicker(SessionId.make("session-a"), "Session A", [
             {
               id: BranchId.make("branch-a"),
               sessionId: SessionId.make("session-a"),
-              createdAt: new Date(0),
+              createdAt: dateFromMillis(0),
             },
             {
               id: BranchId.make("branch-b"),
               sessionId: SessionId.make("session-a"),
-              createdAt: new Date(1),
+              createdAt: dateFromMillis(1),
             },
           ]),
         }),
@@ -275,8 +287,8 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -346,8 +358,8 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -402,8 +414,8 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           initialRoute: Route.session(
             SessionId.make("session-a"),
@@ -445,8 +457,8 @@ describe("App auth gate", () => {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
             name: "A",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           initialRoute: Route.session(SessionId.make("session-a"), BranchId.make("branch-a")),
         }),
@@ -524,7 +536,7 @@ describe("App auth gate", () => {
                     id: alphaBranchId,
                     sessionId: alphaSessionId,
                     name: "Main",
-                    createdAt: new Date(0),
+                    createdAt: dateFromMillis(0),
                   },
                   messageCount: 3,
                   children: [],
@@ -534,7 +546,7 @@ describe("App auth gate", () => {
                     id: betaBranchId,
                     sessionId: alphaSessionId,
                     name: "Side",
-                    createdAt: new Date(1),
+                    createdAt: dateFromMillis(1),
                   },
                   messageCount: 1,
                   children: [],
@@ -592,8 +604,8 @@ describe("App auth gate", () => {
                 id: alphaSessionId,
                 activeBranchId: alphaBranchId,
                 name: "Alpha",
-                createdAt: new Date(0),
-                updatedAt: new Date(1),
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(1),
               },
               initialRoute: Route.branchPicker(
                 alphaSessionId,
@@ -603,13 +615,13 @@ describe("App auth gate", () => {
                     id: alphaBranchId,
                     sessionId: alphaSessionId,
                     name: "Main",
-                    createdAt: new Date(0),
+                    createdAt: dateFromMillis(0),
                   },
                   {
                     id: betaBranchId,
                     sessionId: alphaSessionId,
                     name: "Side",
-                    createdAt: new Date(1),
+                    createdAt: dateFromMillis(1),
                   },
                 ],
                 initialPrompt,
@@ -778,8 +790,8 @@ describe("App auth gate", () => {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
               name: "A",
-              createdAt: new Date(0),
-              updatedAt: new Date(0),
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
             },
             initialRoute: Route.session(
               SessionId.make("session-a"),

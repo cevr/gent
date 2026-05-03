@@ -43,7 +43,7 @@ import { ConfigService, type ConfigServiceService } from "../../src/runtime/conf
 import type { StorageError } from "../../src/domain/storage-error"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
-  "@gent/core/tests/scope-brands/FakeService",
+  "@gent/core/tests/runtime/scope-brands.test/FakeService",
 ) {}
 
 type RuntimeBuildError = StorageError | Config.ConfigError
@@ -174,8 +174,8 @@ describe("scope brand type fences", () => {
     void _badOverrides
   })
 
-  test("ephemeral extension layers receive child-owned SqlClient and parent services", () => {
-    return Effect.runPromise(
+  test("ephemeral extension layers receive child-owned SqlClient and parent services", () =>
+    Effect.runPromise(
       Effect.gen(function* () {
         class ExtensionSqlProbe extends Context.Service<
           ExtensionSqlProbe,
@@ -184,7 +184,7 @@ describe("scope brand type fences", () => {
             readonly platform: RuntimePlatformShape
             readonly config: ConfigServiceService
           }
-        >()("@gent/core/tests/scope-brands/ExtensionSqlProbe") {}
+        >()("@gent/core/tests/runtime/scope-brands.test/ExtensionSqlProbe") {}
 
         const parentSql = { sentinel: "parent-sql" } as never
         const parentPlatform = RuntimePlatform.of({
@@ -225,16 +225,16 @@ describe("scope brand type fences", () => {
           extensionLayers: extensionLayer,
         })
 
-        const probe = yield* Effect.gen(function* () {
-          return yield* ExtensionSqlProbe
-        }).pipe(Effect.provide(composed.layer))
+        const probe = yield* Layer.build(composed.layer).pipe(
+          Effect.scoped,
+          Effect.map((ctx) => Context.get(ctx, ExtensionSqlProbe)),
+        )
 
         expect((probe.sql as { sentinel: string }).sentinel).toBe("child-sql")
         expect(probe.platform.platform).toBe("parent-platform")
         expect(yield* probe.config.loadInstructions("/tmp")).toBe("parent instructions")
       }),
-    )
-  })
+    ))
 
   test("runWithBuiltLayer satisfies the built layer's services and leaves only scope", () => {
     const fakeLayer = Layer.succeed(FakeService, { value: 42 })
@@ -255,12 +255,12 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("ephemeral storage override replaces focused storage sub-Tags", () => {
+  test("ephemeral storage override replaces focused storage sub-Tags", () =>
     // Construct a parent context with SessionStorage + InteractionPendingReader.
     // After the storage override family is applied, the parent's versions must
     // be stripped. Otherwise ephemeral subagents read parent durable
     // interactions while writing to a fresh in-memory store.
-    return Effect.runPromise(
+    Effect.runPromise(
       Effect.gen(function* () {
         const sentinelSession = { sentinel: "parent-session" } as never
         const sentinelPending = { sentinel: "parent-pending" } as never
@@ -277,21 +277,22 @@ describe("scope brand type fences", () => {
           overrides: { ...baseOverrides(), storage: childStorageLayer },
         })
 
-        const session = yield* Effect.gen(function* () {
-          return yield* SessionStorage
-        }).pipe(Effect.provide(composed.layer))
+        const session = yield* Layer.build(composed.layer).pipe(
+          Effect.scoped,
+          Effect.map((ctx) => Context.get(ctx, SessionStorage)),
+        )
         expect((session as unknown as { sentinel: string }).sentinel).toBe("child-session")
 
-        const pending = yield* Effect.gen(function* () {
-          return yield* InteractionPendingReader
-        }).pipe(Effect.provide(composed.layer))
+        const pending = yield* Layer.build(composed.layer).pipe(
+          Effect.scoped,
+          Effect.map((ctx) => Context.get(ctx, InteractionPendingReader)),
+        )
         expect((pending as unknown as { sentinel: string }).sentinel).toBe("child-pending")
       }),
-    )
-  })
+    ))
 
-  test("ephemeral event publisher override treats EventPublisher and BuiltinEventSink as one family", () => {
-    return Effect.runPromise(
+  test("ephemeral event publisher override treats EventPublisher and BuiltinEventSink as one family", () =>
+    Effect.runPromise(
       Effect.gen(function* () {
         const parentPublisher = EventPublisher.of({
           append: () => Effect.die("parent append should be omitted"),
@@ -336,10 +337,9 @@ describe("scope brand type fences", () => {
         expect(publisher).toBe(childPublisher)
         expect(sink.publish).toBe(childPublisher.publish)
       }),
-    )
-  })
+    ))
 
-  test("ephemeral runtime layer attaches override-layer finalizers to the build scope", () => {
+  test("ephemeral runtime layer attaches override-layer finalizers to the build scope", () =>
     // Contract: `Effect.scoped` at the runner site is load-bearing only
     // because the explicit runtime builder attaches override-layer finalizers
     // to whatever scope `Layer.buildWithScope` is invoked with.
@@ -347,7 +347,7 @@ describe("scope brand type fences", () => {
     // builder's `Layer.fresh` wrapper, override flow, or merge order
     // ever stripped finalizers, the in-memory storage / event-store /
     // approval-service handles would leak across ephemeral runs.
-    return Effect.runPromise(
+    Effect.runPromise(
       Effect.gen(function* () {
         const events: Array<string> = []
         const scopedSessionLayer = Layer.effect(
@@ -380,8 +380,7 @@ describe("scope brand type fences", () => {
         yield* Scope.close(scope, Exit.succeed(void 0))
         expect(events).toEqual(["acquired", "finalized"])
       }).pipe(Effect.timeout("2 seconds")),
-    )
-  })
+    ))
 
   test("provide(layer) leaves a missing-service requirement in `R` for unprovided consumers", () => {
     // This is the type-level guarantee the runtime builder claims: a consumer
@@ -396,7 +395,7 @@ describe("scope brand type fences", () => {
     })
 
     class OtherService extends Context.Service<OtherService, { readonly other: string }>()(
-      "@gent/core/tests/scope-brands/OtherService",
+      "@gent/core/tests/runtime/scope-brands.test/OtherService",
     ) {}
 
     // Consumer requires OtherService, which the runtime builder's layer does NOT
@@ -415,8 +414,8 @@ describe("scope brand type fences", () => {
     expect(composed.profile.cwd).toBe("/tmp")
   })
 
-  test("ephemeral runtime strips the parent memo map from forwarded context", () => {
-    return Effect.runPromise(
+  test("ephemeral runtime strips the parent memo map from forwarded context", () =>
+    Effect.runPromise(
       Effect.gen(function* () {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reaches internal Effect layer key
         const memoKey = Layer.CurrentMemoMap as unknown as Context.Key<unknown, unknown>
@@ -439,6 +438,5 @@ describe("scope brand type fences", () => {
           expect(memo.value).not.toBe(parentMemo)
         }
       }),
-    )
-  })
+    ))
 })

@@ -205,13 +205,13 @@ interface AutoWriteShape extends AutoReadShape {
 }
 
 export class AutoRead extends Context.Service<AutoRead, ReadOnly<AutoReadShape>>()(
-  "@gent/auto/AutoRead",
+  "@gent/extensions/src/auto-controller/AutoRead",
 ) {
   declare readonly [ReadOnlyBrand]: true
 }
 
 export class AutoWrite extends Context.Service<AutoWrite, AutoWriteShape>()(
-  "@gent/auto/AutoWrite",
+  "@gent/extensions/src/auto-controller/AutoWrite",
 ) {}
 
 const transitionStartAuto = (

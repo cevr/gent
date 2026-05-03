@@ -44,7 +44,7 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { AgentName } from "@gent/core/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 // ── Tool test helpers ──
 const readySnapshot: ExecutorSnapshotReply = {
@@ -142,16 +142,12 @@ const makeExecutorExtension = (overrides?: {
   return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
-  const storage = Layer.orDie(SqliteStorage.TestWithSql())
-  const extLayers = (extension.contributions.resources ?? [])
-    .filter((r) => r.scope === "process")
-    .map((r) => r.layer as Layer.Layer<any, never, any>)
-  const baseStack = Layer.mergeAll(storage, BunServices.layer)
-  const machineWithResources = extLayers.reduce<Layer.Layer<any, never, any>>(
-    (acc, resource) => Layer.provideMerge(resource, acc),
-    baseStack,
+  const resolved = resolveExtensions([extension])
+  return buildExtensionLayers(resolved).pipe(
+    Layer.provideMerge(SqliteStorage.TestWithSql().pipe(Layer.orDie)),
+    Layer.provideMerge(EventStore.Memory),
+    Layer.provideMerge(BunServices.layer),
   )
-  return Layer.mergeAll(machineWithResources, EventStore.Memory)
 }
 const executorSnapshot = Effect.gen(function* () {
   const executor = yield* ExecutorRead
@@ -526,37 +522,36 @@ describe("Executor runtime lifecycle", () => {
   // actor to Ready against user intent.
   it.live(
     "Disconnect during Connecting cancels in-flight handshake",
-    () => {
-      const sidecarGate = Deferred.makeUnsafe<void>()
-      const { extension } = makeExecutorExtension({
-        settings: { autoStart: true },
-        sidecar: {
-          // resolveEndpoint blocks until the gate opens — long enough
-          // for a Disconnect to arrive while state is Connecting.
-          resolveEndpoint: () => Deferred.await(sidecarGate).pipe(Effect.as(mockEndpoint)),
-          resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
-        },
-      })
-      return narrowR(
+    () =>
+      narrowR(
         Effect.gen(function* () {
-          const executor = yield* ExecutorWrite
-          // Wait until the runtime enters Connecting (autoStart fired).
-          yield* waitForExecutorStatus("connecting")
-          // Disconnect mid-handshake.
-          yield* executor.disconnect()
-          // Runtime should land on Idle promptly (Connecting → Idle).
-          yield* waitForExecutorStatus("idle")
-          // Now release the (cancelled) in-flight handshake. If it races
-          // back to Ready, the regression has reappeared.
-          yield* Deferred.succeed(sidecarGate, undefined)
-          yield* Effect.sleep("100 millis")
-          const final = yield* executorSnapshot
-          expect(final.status).toBe("idle")
-        })
-          .pipe(Effect.provide(makeRuntimeLayer(extension)))
-          .pipe(Effect.timeout("8 seconds")),
-      )
-    },
+          const sidecarGate = yield* Deferred.make<void>()
+          const { extension } = makeExecutorExtension({
+            settings: { autoStart: true },
+            sidecar: {
+              // resolveEndpoint blocks until the gate opens — long enough
+              // for a Disconnect to arrive while state is Connecting.
+              resolveEndpoint: () => Deferred.await(sidecarGate).pipe(Effect.as(mockEndpoint)),
+              resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
+            },
+          })
+          yield* Effect.gen(function* () {
+            const executor = yield* ExecutorWrite
+            // Wait until the runtime enters Connecting (autoStart fired).
+            yield* waitForExecutorStatus("connecting")
+            // Disconnect mid-handshake.
+            yield* executor.disconnect()
+            // Runtime should land on Idle promptly (Connecting → Idle).
+            yield* waitForExecutorStatus("idle")
+            // Now release the (cancelled) in-flight handshake. If it races
+            // back to Ready, the regression has reappeared.
+            yield* Deferred.succeed(sidecarGate, undefined)
+            yield* Effect.sleep("100 millis")
+            const final = yield* executorSnapshot
+            expect(final.status).toBe("idle")
+          }).pipe(Effect.provide(makeRuntimeLayer(extension)))
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
     10000,
   )
   // Regression lock: the executor resource composes its own dependent

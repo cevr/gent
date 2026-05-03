@@ -57,8 +57,7 @@ const makeAuthInfo = (state: PersistState): ProviderAuthInfo => ({
       return Effect.void
     }),
 })
-// TestClock starts at time 0, so all expiresAt values are absolute
-// (relative to t=0), not `Date.now() + offset`.
+// TestClock starts at time 0, so all expiresAt values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000 // expiresAt = 10 minutes from t=0
 // `TestClock.adjust` requires a `Scope` (it manages internal sleeper
 // fibers). Wrap with `Effect.scoped` so tests don't have to thread

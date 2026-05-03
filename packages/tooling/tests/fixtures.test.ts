@@ -87,9 +87,16 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: "no-scope-brand-cast.valid.ts",
   },
   {
+    rule: "gent/no-make-unsafe",
+    invalid: "no-make-unsafe.invalid.ts",
+    valid: "no-make-unsafe.valid.ts",
+    expectedCount: 3,
+  },
+  {
     rule: "gent/no-dynamic-imports",
     invalid: "no-dynamic-imports.invalid.ts",
     valid: "no-dynamic-imports.valid.ts",
+    expectedCount: 7,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",

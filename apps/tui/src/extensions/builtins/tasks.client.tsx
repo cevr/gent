@@ -68,32 +68,33 @@ export default defineClientExtension("@gent/task-tools", {
     //     request — otherwise late responses overwrite the new session;
     // (b) `liveTasks()` re-checks at render — covers the gap between
     //     state set and the next session change.
-    const runRefetch = async (captured: ActiveSession): Promise<void> => {
-      try {
-        const out = await transport.runtime.run(
-          requestExtension(ref(TaskListRequest), {}, transport, captured),
-        )
-        const current = transport.currentSession()
-        if (
-          current === undefined ||
-          current.sessionId !== captured.sessionId ||
-          current.branchId !== captured.branchId
-        ) {
-          return
-        }
-        setState({
-          sessionId: captured.sessionId,
-          branchId: captured.branchId,
-          tasks: out,
-        })
-      } catch (err) {
-        // Visible refresh failures matter — surface to console (the only
-        // log surface available pre-render). Last good state stays.
-        console.warn(
-          `[${EXT_ID}] task list refresh failed:`,
-          err instanceof Error ? err.message : String(err),
-        )
-      }
+    const runRefetch = (captured: ActiveSession): void => {
+      transport.runtime.cast(
+        Effect.gen(function* () {
+          const out = yield* requestExtension(ref(TaskListRequest), {}, transport, captured)
+          yield* Effect.sync(() => {
+            const current = transport.currentSession()
+            if (
+              current === undefined ||
+              current.sessionId !== captured.sessionId ||
+              current.branchId !== captured.branchId
+            ) {
+              return
+            }
+            setState({
+              sessionId: captured.sessionId,
+              branchId: captured.branchId,
+              tasks: out,
+            })
+          })
+        }).pipe(
+          Effect.catchEager((err) =>
+            Effect.logWarning(`${EXT_ID} task list refresh failed`).pipe(
+              Effect.annotateLogs({ error: String(err) }),
+            ),
+          ),
+        ),
+      )
     }
 
     const isTaskMutation = (tag: string): boolean =>
@@ -122,7 +123,7 @@ export default defineClientExtension("@gent/task-tools", {
           // mismatched-key state lingering until the next refetch.
           setState(undefined)
           if (session === undefined) return
-          void runRefetch(session)
+          runRefetch(session)
         })
         lifecycle.addCleanup(dispose)
       })
@@ -132,7 +133,7 @@ export default defineClientExtension("@gent/task-tools", {
       if (!isTaskMutation(envelope.event._tag)) return
       const session = transport.currentSession()
       if (session === undefined) return
-      void runRefetch(session)
+      runRefetch(session)
     })
     lifecycle.addCleanup(unsubscribeEvents)
 

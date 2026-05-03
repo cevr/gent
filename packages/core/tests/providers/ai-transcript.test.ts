@@ -11,6 +11,7 @@ import {
 } from "@gent/core/providers/ai-transcript"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
+  dateFromMillis,
   ImagePart,
   Message,
   ReasoningPart,
@@ -25,7 +26,7 @@ const baseMessage = (
 ) =>
   Message.Regular.make({
     ...message,
-    createdAt: new Date(0),
+    createdAt: dateFromMillis(0),
   })
 
 const baseInterjectionMessage = (
@@ -33,7 +34,7 @@ const baseInterjectionMessage = (
 ) =>
   Message.Interjection.make({
     ...message,
-    createdAt: new Date(0),
+    createdAt: dateFromMillis(0),
   })
 
 describe("AI transcript projection", () => {

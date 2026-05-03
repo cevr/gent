@@ -67,7 +67,7 @@ export const makeFakeFetch =
       body: string
     },
   ): FakeFetchFn =>
-  async (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
+  (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
     let url: string
     if (typeof input === "string") url = input
     else if (input instanceof URL) url = input.href
@@ -103,10 +103,12 @@ export const makeFakeFetch =
     state.captured.push(captured)
 
     const response = responder(captured)
-    return new Response(response.body, {
-      status: response.status,
-      headers: response.headers ?? { "content-type": "application/json" },
-    })
+    return Promise.resolve(
+      new Response(response.body, {
+        status: response.status,
+        headers: response.headers ?? { "content-type": "application/json" },
+      }),
+    )
   }
 
 /**
@@ -142,10 +144,11 @@ export const oneGenerate = (
     body: string
   },
   prompt: string = "hi",
-): Effect.Effect<void, unknown> =>
+): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
     Effect.asVoid,
     // @effect-diagnostics-next-line strictEffectProvide:off test entry point
     Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),
     Effect.scoped,
+    Effect.catchCause((cause) => Effect.die(cause)),
   )

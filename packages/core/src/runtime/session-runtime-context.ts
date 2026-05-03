@@ -66,7 +66,7 @@ const resolveSessionProfile = (params: {
 }): Effect.Effect<SessionProfile | undefined> =>
   params.profileCache !== undefined && params.session?.cwd !== undefined
     ? params.profileCache.resolve(params.session.cwd)
-    : Effect.succeed(undefined)
+    : Effect.sync((): SessionProfile | undefined => undefined)
 
 const resolveActiveRuntimeBindings = (params: {
   readonly profile?: SessionProfile

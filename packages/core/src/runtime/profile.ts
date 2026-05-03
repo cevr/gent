@@ -22,7 +22,7 @@
  * @module
  */
 
-import { Context, Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Context, DateTime, Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import type { GentExtension } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
 import {
@@ -235,9 +235,11 @@ export const resolveRuntimeProfile = (
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
+    const date = DateTime.formatIsoDateUtc(yield* DateTime.now)
     const coreSections = buildBasePromptSections({
       cwd: canonicalCwd,
       platform: inputs.platform,
+      date,
       ...(inputs.shell !== undefined ? { shell: inputs.shell } : {}),
       ...(inputs.osVersion !== undefined ? { osVersion: inputs.osVersion } : {}),
       isGitRepo,

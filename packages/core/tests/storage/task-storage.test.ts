@@ -1,18 +1,17 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
-import { Session, Branch } from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
+
+const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
 // Single in-memory db: TestWithSql exposes both Storage and SqlClient.
 // TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
@@ -26,7 +25,7 @@ const setup = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const taskStorage = yield* TaskStorage
-  const now = new Date()
+  const now = FIXED_NOW
   const session = new Session({
     id: SessionId.make("s1"),
     name: "Test",
@@ -44,7 +43,7 @@ const setup = Effect.gen(function* () {
 })
 
 const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof Task>[0]>) => {
-  const now = new Date()
+  const now = FIXED_NOW
   return Task.make({
     id: TaskId.make(id),
     sessionId: SessionId.make("s1"),
@@ -58,13 +57,16 @@ const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof T
 }
 
 describe("Task Storage", () => {
-  it.live("resets extension-owned tables with stale foreign keys", () => {
-    const dir = mkdtempSync(join(tmpdir(), "gent-task-storage-"))
-    const dbPath = join(dir, "gent.sqlite")
-    const db = new Database(dbPath)
-    db.run(`CREATE TABLE storage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
-    db.run(`INSERT INTO storage_meta (key, value) VALUES (?, ?)`, ["core_schema_version", "1"])
-    db.run(`
+  it.scoped("resets extension-owned tables with stale foreign keys", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.sqlite")
+      const db = new Database(dbPath)
+      db.run(`CREATE TABLE storage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+      db.run(`INSERT INTO storage_meta (key, value) VALUES (?, ?)`, ["core_schema_version", "1"])
+      db.run(`
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY,
         name TEXT,
@@ -81,7 +83,7 @@ describe("Task Storage", () => {
         FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
       )
     `)
-    db.run(`
+      db.run(`
       CREATE TABLE branches (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -95,7 +97,7 @@ describe("Task Storage", () => {
         FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
       )
     `)
-    db.run(`
+      db.run(`
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -113,84 +115,82 @@ describe("Task Storage", () => {
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       )
     `)
-    db.run(`
+      db.run(`
       CREATE TABLE task_deps (
         task_id TEXT NOT NULL,
         blocked_by_id TEXT NOT NULL,
         PRIMARY KEY (task_id, blocked_by_id)
       )
     `)
-    db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
-      "retired-session",
-      0,
-      0,
-    ])
-    db.run(`INSERT INTO branches (id, session_id, created_at) VALUES (?, ?, ?)`, [
-      "retired-branch",
-      "retired-session",
-      0,
-    ])
-    db.run(
-      `INSERT INTO tasks (id, session_id, branch_id, subject, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ["retired-task", "retired-session", "retired-branch", "stale", "pending", 0, 0],
-    )
-    db.close()
-
-    const base = SqliteStorage.LiveWithSql(dbPath).pipe(
-      Layer.provide(BunFileSystem.layer),
-      Layer.provide(BunServices.layer),
-    )
-    const layer = Layer.merge(base, Layer.provide(TaskStorage.Live, base))
-
-    return Effect.gen(function* () {
-      const { storage } = yield* setup
-      const branchStorage = yield* BranchStorage
-      const sql = yield* SqlClient.SqlClient
-
-      const taskColumns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(tasks)`)
-      const taskForeignKeys = yield* sql.unsafe<{ table: string; from: string }>(
-        `PRAGMA foreign_key_list(tasks)`,
-      )
-      expect(taskColumns.map((column) => column.name)).toEqual([
-        "id",
-        "session_id",
-        "branch_id",
-        "subject",
-        "description",
-        "status",
-        "owner",
-        "agent_type",
-        "prompt",
-        "cwd",
-        "metadata",
-        "created_at",
-        "updated_at",
+      db.run(`INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`, [
+        "retired-session",
+        0,
+        0,
       ])
-      expect(taskForeignKeys).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ table: "branches", from: "branch_id" }),
-          expect.objectContaining({ table: "branches", from: "session_id" }),
-        ]),
+      db.run(`INSERT INTO branches (id, session_id, created_at) VALUES (?, ?, ?)`, [
+        "retired-branch",
+        "retired-session",
+        0,
+      ])
+      db.run(
+        `INSERT INTO tasks (id, session_id, branch_id, subject, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ["retired-task", "retired-session", "retired-branch", "stale", "pending", 0, 0],
       )
-      expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
+      db.close()
 
-      const task = makeTask("t1", { cwd: "/tmp", metadata: { current: true } })
-      yield* storage.createTask(task)
-      const got = yield* storage.getTask(TaskId.make("t1"))
-      expect(got?.cwd).toBe("/tmp")
-      expect(got?.metadata).toEqual({ current: true })
-      yield* branchStorage.deleteBranch(BranchId.make("b1"))
-      expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
-
-      const rejected = yield* Effect.flip(
-        storage.createTask(makeTask("missing-branch", { branchId: BranchId.make("missing") })),
+      const base = SqliteStorage.LiveWithSql(dbPath).pipe(
+        Layer.provide(BunFileSystem.layer),
+        Layer.provide(BunServices.layer),
       )
-      expect(rejected._tag).toBe("TaskStorageError")
-    }).pipe(
-      Effect.provide(layer),
-      Effect.ensuring(Effect.sync(() => rmSync(dir, { recursive: true, force: true }))),
-    )
-  })
+      const layer = Layer.merge(base, Layer.provide(TaskStorage.Live, base))
+
+      yield* Effect.gen(function* () {
+        const { storage } = yield* setup
+        const branchStorage = yield* BranchStorage
+        const sql = yield* SqlClient.SqlClient
+
+        const taskColumns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(tasks)`)
+        const taskForeignKeys = yield* sql.unsafe<{ table: string; from: string }>(
+          `PRAGMA foreign_key_list(tasks)`,
+        )
+        expect(taskColumns.map((column) => column.name)).toEqual([
+          "id",
+          "session_id",
+          "branch_id",
+          "subject",
+          "description",
+          "status",
+          "owner",
+          "agent_type",
+          "prompt",
+          "cwd",
+          "metadata",
+          "created_at",
+          "updated_at",
+        ])
+        expect(taskForeignKeys).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ table: "branches", from: "branch_id" }),
+            expect.objectContaining({ table: "branches", from: "session_id" }),
+          ]),
+        )
+        expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
+
+        const task = makeTask("t1", { cwd: "/tmp", metadata: { current: true } })
+        yield* storage.createTask(task)
+        const got = yield* storage.getTask(TaskId.make("t1"))
+        expect(got?.cwd).toBe("/tmp")
+        expect(got?.metadata).toEqual({ current: true })
+        yield* branchStorage.deleteBranch(BranchId.make("b1"))
+        expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
+
+        const rejected = yield* Effect.flip(
+          storage.createTask(makeTask("missing-branch", { branchId: BranchId.make("missing") })),
+        )
+        expect(rejected._tag).toBe("TaskStorageError")
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
 
   test("createTask + getTask roundtrip", () =>
     Effect.gen(function* () {

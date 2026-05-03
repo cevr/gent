@@ -1,44 +1,26 @@
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
-import { Effect, Layer } from "effect"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
+import { createTempDirFixture } from "@gent/core/test-utils/fixtures"
+import { Clock, Config, Effect, Option } from "effect"
 import { spawn, type IPty } from "zigpty"
+import { seedAuthBoundary } from "./auth-seed-boundary"
 import { ignoreSyncDefect, sleepMillis } from "./effect-test-adapters"
 
 const CTRL_C = "\x03"
-const CLIENT_LOG_PATH = path.join(
-  os.homedir(),
-  ".gent",
-  "logs",
-  "Users-cvr-Developer-personal-gent-apps-tui",
-  "gent-client.log",
+const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
+  /\/$/,
+  "",
 )
+const tuiDir = `${repoRoot}/apps/tui`
+const makeTempDir = createTempDirFixture("gent-e2e-")
+const clientLogPath = Effect.gen(function* () {
+  const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "")
+  return `${home}/.gent/logs/Users-cvr-Developer-personal-gent-apps-tui/gent-client.log`
+})
 
 export interface TestContext {
   readonly pty: IPty
   readonly output: string
   readonly tempDir: string
   readonly cleanup: Effect.Effect<void>
-}
-
-export const seedAuth = (tempDir: string) => {
-  const authFilePath = path.join(tempDir, "auth.json.enc")
-  const authKeyPath = path.join(tempDir, "auth.key")
-
-  const layer = AuthStore.Live.pipe(
-    Layer.provide(AuthStorage.LiveEncryptedFile(authFilePath, authKeyPath)),
-    Layer.provide(BunFileSystem.layer),
-    Layer.provide(BunServices.layer),
-  )
-
-  return Effect.gen(function* () {
-    const store = yield* AuthStore
-    yield* store.set("anthropic", new AuthApi({ type: "api", key: "sk-test-anthropic" }))
-    yield* store.set("openai", new AuthApi({ type: "api", key: "sk-test-openai" }))
-  }).pipe(Effect.provide(layer))
 }
 
 const isPidAlive = (pid: number) => {
@@ -52,36 +34,25 @@ const isPidAlive = (pid: number) => {
 }
 
 const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<void> =>
-  Effect.promise(
-    () =>
-      new Promise<void>((resolve) => {
-        const deadline = Date.now() + timeoutMs
-        const tick = () => {
-          if (!isPidAlive(pid) || Date.now() >= deadline) {
-            resolve()
-            return
-          }
-          setTimeout(tick, 50)
-        }
-        tick()
-      }),
-  )
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const loop: Effect.Effect<void> = Effect.gen(function* () {
+      if (!isPidAlive(pid)) return
+      const now = yield* Clock.currentTimeMillis
+      if (now >= deadline) return
+      yield* Effect.sleep("50 millis")
+      return yield* loop
+    })
+    return yield* loop
+  })
 
 export const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
 ): TestContext => {
-  const tuiDir = path.resolve(import.meta.dir, "../../../apps/tui")
-  const mainPath = path.join(tuiDir, "src", "main.tsx")
-  const preloadPath = path.join(
-    tuiDir,
-    "node_modules",
-    "@opentui",
-    "solid",
-    "scripts",
-    "preload.ts",
-  )
+  const mainPath = `${tuiDir}/src/main.tsx`
+  const preloadPath = `${tuiDir}/node_modules/@opentui/solid/scripts/preload.ts`
 
   let output = ""
 
@@ -93,8 +64,8 @@ export const spawnWithDir = (
     env: {
       ...Bun.env,
       GENT_DATA_DIR: tempDir,
-      GENT_AUTH_FILE_PATH: path.join(tempDir, "auth.json.enc"),
-      GENT_AUTH_KEY_PATH: path.join(tempDir, "auth.key"),
+      GENT_AUTH_FILE_PATH: `${tempDir}/auth.json.enc`,
+      GENT_AUTH_KEY_PATH: `${tempDir}/auth.key`,
       ...extraEnv,
     },
   })
@@ -112,7 +83,6 @@ export const spawnWithDir = (
       yield* waitForExit(pid, 2_000)
     }
     yield* ignoreSyncDefect(() => pty.close())
-    yield* ignoreSyncDefect(() => fs.rmSync(tempDir, { recursive: true, force: true }))
   })
 
   return {
@@ -126,41 +96,42 @@ export const spawnWithDir = (
 }
 
 export const resetClientLog = (): Effect.Effect<void> =>
-  ignoreSyncDefect(() => fs.rmSync(CLIENT_LOG_PATH, { force: true }))
+  clientLogPath.pipe(
+    Effect.flatMap((path) => Effect.tryPromise(() => Bun.file(path).delete())),
+    Effect.catchCause(() => Effect.void),
+  )
 
-export const readClientLog = (): string => {
-  try {
-    return fs.readFileSync(CLIENT_LOG_PATH, "utf8")
-  } catch {
-    return ""
-  }
-}
+export const readClientLog = (): Effect.Effect<string> =>
+  clientLogPath.pipe(
+    Effect.flatMap((path) => Effect.tryPromise(() => Bun.file(path).text())),
+    Effect.catchCause(() => Effect.succeed("")),
+  )
 
 export const seedAndSpawn = (extraArgs: string[] = []) =>
   Effect.gen(function* () {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
-    yield* seedAuth(tempDir)
+    const tempDir = makeTempDir()
+    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth.json.enc`, `${tempDir}/auth.key`))
     return spawnWithDir(tempDir, extraArgs)
   })
 
-export const spawnNoAuth = (): TestContext => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
-  return spawnWithDir(tempDir)
-}
+export const spawnNoAuth = (): Effect.Effect<TestContext> =>
+  Effect.sync(() => spawnWithDir(makeTempDir()))
 
 export const seedSkillAndSpawn = () =>
   Effect.gen(function* () {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
-    yield* seedAuth(tempDir)
+    const tempDir = makeTempDir()
 
-    const fakeHome = path.join(tempDir, "home")
-    const skillDir = path.join(fakeHome, ".claude", "skills", "test-skill")
-    fs.mkdirSync(skillDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: test-skill\ndescription: A test skill for e2e\n---\n\nTest skill content.",
+    const fakeHome = `${tempDir}/home`
+    const skillDir = `${fakeHome}/.claude/skills/test-skill`
+    yield* Effect.promise(() => Bun.$`mkdir -p ${skillDir}`.quiet())
+    yield* Effect.promise(() =>
+      Bun.write(
+        `${skillDir}/SKILL.md`,
+        "---\nname: test-skill\ndescription: A test skill for e2e\n---\n\nTest skill content.",
+      ),
     )
 
+    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth.json.enc`, `${tempDir}/auth.key`))
     return spawnWithDir(tempDir, [], { HOME: fakeHome })
   })
 

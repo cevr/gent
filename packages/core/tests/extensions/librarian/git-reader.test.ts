@@ -7,10 +7,11 @@ import { $ } from "bun"
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
 // ---------------------------------------------------------------------------
-const FIXTURE_DIR = `/tmp/test-git-reader-${Date.now()}`
+const FIXTURE_DIR = "/tmp/test-git-reader-fixture"
 beforeAll(() =>
   Effect.runPromise(
     Effect.gen(function* () {
+      yield* Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())
       yield* Effect.promise(() => $`mkdir -p ${FIXTURE_DIR}`.quiet())
       yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} init`.quiet())
       yield* Effect.promise(() =>
@@ -40,13 +41,7 @@ beforeAll(() =>
     }),
   ),
 )
-afterAll(() =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      yield* Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())
-    }),
-  ),
-)
+afterAll(() => Effect.runPromise(Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())))
 // ---------------------------------------------------------------------------
 // Layer
 // ---------------------------------------------------------------------------
@@ -149,7 +144,7 @@ describe("GitReader", () => {
       Effect.gen(function* () {
         const reader = yield* GitReader
         const result = yield* reader
-          .clone("https://invalid.example.com/no-repo.git", `/tmp/test-clone-fail-${Date.now()}`)
+          .clone("https://invalid.example.com/no-repo.git", "/tmp/test-clone-fail-fixture")
           .pipe(Effect.exit)
         expect(result._tag).toBe("Failure")
       }).pipe(Effect.provide(TestLayer)),

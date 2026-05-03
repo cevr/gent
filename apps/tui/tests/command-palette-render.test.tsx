@@ -3,6 +3,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { createEffect, onMount } from "solid-js"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { CommandPalette } from "../src/components/command-palette"
 import { useCommand } from "../src/command"
 import { Route, useRouter, type RouterContextValue } from "../src/router"
@@ -67,15 +68,15 @@ describe("CommandPalette renderer", () => {
                 id: alphaSessionId,
                 activeBranchId: alphaBranchId,
                 name: "Alpha",
-                createdAt: new Date(0),
-                updatedAt: new Date(1),
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(1),
               },
               {
                 id: betaSessionId,
                 activeBranchId: betaBranchId,
                 name: "Beta",
-                createdAt: new Date(1),
-                updatedAt: new Date(2),
+                createdAt: dateFromMillis(1),
+                updatedAt: dateFromMillis(2),
               },
             ]),
         },
@@ -95,8 +96,8 @@ describe("CommandPalette renderer", () => {
               id: alphaSessionId,
               activeBranchId: alphaBranchId,
               name: "Alpha",
-              createdAt: new Date(0),
-              updatedAt: new Date(1),
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(1),
             },
             initialRoute: Route.session(alphaSessionId, alphaBranchId),
             width: 90,

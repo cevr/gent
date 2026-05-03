@@ -32,19 +32,19 @@ describe("TaggedEnumClass — basic shape", () => {
     expect(c._tag).toBe("Circle")
     expect(c.radius).toBe(5)
   })
-  test("`instanceof` works on directly-constructed variants", () => {
+  test("schema guards work on directly-constructed variants", () => {
     const c = Shape.Circle.make({ radius: 5 })
     const r = Shape.Rectangle.make({ width: 3, height: 4 })
-    expect(c instanceof Shape.Circle).toBe(true)
-    expect(r instanceof Shape.Rectangle).toBe(true)
-    expect(c instanceof Shape.Rectangle).toBe(false)
+    expect(Schema.is(Shape.Circle)(c)).toBe(true)
+    expect(Schema.is(Shape.Rectangle)(r)).toBe(true)
+    expect(Schema.is(Shape.Rectangle)(c)).toBe(false)
   })
   test("direct constructors produce stable variant instances", () => {
     const c1 = Shape.Circle.make({ radius: 5 })
     const c2 = Shape.Circle.make({ radius: 5 })
     expect(c1._tag).toBe(c2._tag)
     expect(c1.radius).toBe(c2.radius)
-    expect(c2 instanceof Shape.Circle).toBe(true)
+    expect(Schema.is(Shape.Circle)(c2)).toBe(true)
   })
 })
 describe("TaggedEnumClass — decode/encode round-trip", () => {
@@ -54,7 +54,7 @@ describe("TaggedEnumClass — decode/encode round-trip", () => {
   })
   test("decode returns class instances", () => {
     const decoded = Schema.decodeUnknownSync(Shape)({ _tag: "Circle", radius: 5 })
-    expect(decoded instanceof Shape.Circle).toBe(true)
+    expect(Schema.is(Shape.Circle)(decoded)).toBe(true)
     expect(decoded._tag).toBe("Circle")
     if (decoded._tag === "Circle") {
       expect(decoded.radius).toBe(5)
@@ -191,7 +191,7 @@ describe("TaggedEnumClass — explicit wire tags", () => {
       _tag: "text-delta",
       text: "hi",
     })
-    expect(decoded instanceof WireEvent.TextDelta).toBe(true)
+    expect(Schema.is(WireEvent.TextDelta)(decoded)).toBe(true)
   })
   test("direct-member match dispatches from wire tags", () => {
     const e = WireEvent.ToolCall.make({ name: "read", input: { path: "/x" } })
@@ -226,7 +226,7 @@ describe("TaggedEnumClass — single-variant edge case", () => {
     const o = Singleton.Only.make({ value: 42 })
     expect(o._tag).toBe("Only")
     const decoded = Schema.decodeUnknownSync(Singleton)({ _tag: "Only", value: 42 })
-    expect(decoded instanceof Singleton.Only).toBe(true)
+    expect(Schema.is(Singleton.Only)(decoded)).toBe(true)
   })
 })
 describe("TaggedEnumClass — per-enum schema id namespacing", () => {
@@ -235,10 +235,10 @@ describe("TaggedEnumClass — per-enum schema id namespacing", () => {
   test("same direct member name across enums has distinct class identity", () => {
     expect(A.Shared).not.toBe(B.Shared)
   })
-  test("instanceof does not cross enum boundaries", () => {
+  test("schema guards do not cross enum boundaries", () => {
     const a = A.Shared.make({ value: 1 })
-    expect(a instanceof A.Shared).toBe(true)
-    expect(a instanceof B.Shared).toBe(false)
+    expect(Schema.is(A.Shared)(a)).toBe(true)
+    expect(Schema.is(B.Shared)(a)).toBe(false)
   })
 })
 describe("TaggedEnumClass — AgentEvent JSON wire shape", () => {
@@ -249,7 +249,7 @@ describe("TaggedEnumClass — AgentEvent JSON wire shape", () => {
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
     const decoded = Schema.decodeUnknownSync(AgentEvent)(encoded)
-    expect(decoded instanceof AgentEvent.SessionStarted).toBe(true)
+    expect(Schema.is(AgentEvent.SessionStarted)(decoded)).toBe(true)
   })
 })
 describe("TaggedEnumClass — Effect-friendly decode", () => {
@@ -265,7 +265,7 @@ describe("TaggedEnumClass — Effect-friendly decode", () => {
         height: 4,
       })
       const result = yield* program
-      expect(result instanceof Shape.Rectangle).toBe(true)
+      expect(Schema.is(Shape.Rectangle)(result)).toBe(true)
       if (result._tag === "Rectangle") {
         expect(result.width * result.height).toBe(12)
       }

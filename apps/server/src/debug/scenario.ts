@@ -14,6 +14,7 @@ import {
   TurnCompleted,
 } from "@gent/core/domain/event.js"
 import {
+  dateFromMillis,
   Branch,
   Message,
   ReasoningPart,
@@ -76,9 +77,8 @@ const createParentTurnMessages = (
   reviewToolCallId: ToolCallId,
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
+  nowMillis: number,
 ) => {
-  const now = new Date()
-
   const assistant = Message.Regular.make({
     id: MessageId.make(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
@@ -119,7 +119,7 @@ const createParentTurnMessages = (
       }),
       makeText("Inspection pass complete. Check the live tool timeline and task widget."),
     ],
-    createdAt: new Date(now.getTime() + 1),
+    createdAt: dateFromMillis(nowMillis + 1),
   })
 
   const tool = Message.Regular.make({
@@ -188,7 +188,7 @@ const createParentTurnMessages = (
         branchCount: 1,
       }),
     ],
-    createdAt: new Date(now.getTime() + 2),
+    createdAt: dateFromMillis(nowMillis + 2),
   })
 
   return { assistant, tool }
@@ -347,6 +347,7 @@ const persistDebugTurn = (
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
+    const nowMillis = yield* Clock.currentTimeMillis
     const { assistant, tool } = createParentTurnMessages(
       params,
       iteration,
@@ -354,6 +355,7 @@ const persistDebugTurn = (
       reviewToolCallId,
       searchSessionsToolCallId,
       readSessionToolCallId,
+      nowMillis,
     )
 
     yield* messageStorage.createMessage(assistant)

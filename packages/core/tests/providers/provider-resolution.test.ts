@@ -22,7 +22,13 @@ import {
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
-import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
+import {
+  dateFromMillis,
+  ImagePart,
+  Message,
+  ReasoningPart,
+  TextPart,
+} from "@gent/core/domain/message"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -136,10 +142,8 @@ describe("Provider model resolution", () => {
     Effect.gen(function* () {
       const layer = buildProviderLayer([])
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "unknown-provider/some-model",
-          })
+        resolveModel({
+          model: "unknown-provider/some-model",
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -170,10 +174,8 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("broken-ext", [throwingProvider])])
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "broken/model",
-          })
+        resolveModel({
+          model: "broken/model",
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -209,10 +211,8 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("auth-missing-ext", [failingAuthProvider])])
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "auth-missing/model",
-          })
+        resolveModel({
+          model: "auth-missing/model",
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -247,10 +247,8 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("bedrock-shaped-ext", [bedrockShaped])])
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "bedrock/some-model",
-          })
+        resolveModel({
+          model: "bedrock/some-model",
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -280,10 +278,8 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("auth-fails-ext", [provider])], authStore)
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "auth-fails/model",
-          })
+        resolveModel({
+          model: "auth-fails/model",
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -302,9 +298,7 @@ describe("Provider model resolution", () => {
       const shadowedResolved = resolveExtensions([
         makeExt("shadowed", [makeProvider("shadowed", "Shadowed")]),
       ])
-      const overrideRegistry = yield* Effect.gen(function* () {
-        return yield* DriverRegistry
-      }).pipe(
+      const overrideRegistry = yield* Effect.service(DriverRegistry).pipe(
         Effect.provide(
           DriverRegistry.fromResolved({
             modelDrivers: shadowedResolved.modelDrivers,
@@ -313,11 +307,9 @@ describe("Provider model resolution", () => {
         ),
       )
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "shadowed/some-model",
-            driverRegistry: overrideRegistry,
-          })
+        resolveModel({
+          model: "shadowed/some-model",
+          driverRegistry: overrideRegistry,
         }).pipe(Effect.provide(capturedLayer)),
       )
       // Resolution should NOT fail with "Unknown provider" — overrideRegistry has "shadowed".
@@ -357,11 +349,9 @@ describe("Provider model resolution", () => {
         ]),
       ])
       yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* resolveModel({
-            model: "primary/foo",
-            driverId: "alt",
-          })
+        resolveModel({
+          model: "primary/foo",
+          driverId: "alt",
         }).pipe(Effect.provide(layer)),
       )
       expect(chosenDriver).toBe("alt")
@@ -407,12 +397,10 @@ describe("Provider model resolution", () => {
           ),
       }
       const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
-      const parts = yield* Effect.gen(function* () {
-        return yield* streamResolvedModel({
-          model: "tools-live/gpt-5",
-          prompt: [],
-          tools: [echoCapability],
-        })
+      const parts = yield* streamResolvedModel({
+        model: "tools-live/gpt-5",
+        prompt: [],
+        tools: [echoCapability],
       }).pipe(Effect.provide(layer))
       expect(captured?.disableToolCallResolution).toBe(true)
       const toolkit = captured?.toolkit
@@ -492,12 +480,10 @@ describe("Provider model resolution", () => {
           ),
       }
       const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
-      const parts = yield* Effect.gen(function* () {
-        return yield* streamResolvedModel<TypedTools>({
-          model: "typed-toolkit-live/gpt-5",
-          prompt: [],
-          toolkit: typedToolkit,
-        })
+      const parts = yield* streamResolvedModel<TypedTools>({
+        model: "typed-toolkit-live/gpt-5",
+        prompt: [],
+        toolkit: typedToolkit,
       }).pipe(Effect.provide(layer))
       expect(capturedToolkit).toBe(typedToolkit)
       const collected = Array.from(parts)
@@ -553,7 +539,7 @@ describe("Provider model resolution", () => {
                     mediaType: "image/jpeg",
                   }),
                 ],
-                createdAt: new Date(0),
+                createdAt: dateFromMillis(0),
               }),
               Message.Regular.make({
                 id: "assistant-reasoning",
@@ -561,7 +547,7 @@ describe("Provider model resolution", () => {
                 branchId: BranchId.make("prompt-branch"),
                 role: "assistant",
                 parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
-                createdAt: new Date(0),
+                createdAt: dateFromMillis(0),
               }),
               Message.Regular.make({
                 id: "hidden",
@@ -569,7 +555,7 @@ describe("Provider model resolution", () => {
                 branchId: BranchId.make("prompt-branch"),
                 role: "user",
                 parts: [new TextPart({ type: "text", text: "should not reach model" })],
-                createdAt: new Date(0),
+                createdAt: dateFromMillis(0),
                 metadata: { hidden: true },
               }),
             ],

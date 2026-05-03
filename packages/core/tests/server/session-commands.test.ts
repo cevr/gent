@@ -4,7 +4,7 @@ import { TestClock } from "effect/testing"
 import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
@@ -27,6 +27,9 @@ import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { SessionMutations } from "../../src/domain/session-mutations"
+
+const FIXED_NOW = dateFromMillis(1_767_225_600_000)
+const datePlusMillis = (date: Date, millis: number): Date => dateFromMillis(date.getTime() + millis)
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
@@ -279,7 +282,7 @@ const racySessionCommandsLayer = (params: {
           Effect.gen(function* () {
             if (!fired) {
               fired = true
-              const now = new Date("2026-01-01T00:00:00.000Z")
+              const now = FIXED_NOW
               yield* sessions.createSession(
                 new Session({
                   id: params.lateChild.sessionId,
@@ -400,7 +403,7 @@ describe("session command persistence", () => {
       const sessionId = SessionId.make("session-rollback")
       const branchId = BranchId.make("branch-source")
       const messageId = MessageId.make("message-source")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -443,7 +446,7 @@ describe("session command persistence", () => {
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-rename-rollback")
       const branchId = BranchId.make("branch-rename-rollback")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -469,7 +472,7 @@ describe("session command persistence", () => {
       const sessionId = SessionId.make("session-switch-rollback")
       const fromBranchId = BranchId.make("branch-switch-from")
       const toBranchId = BranchId.make("branch-switch-to")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -504,7 +507,7 @@ describe("session command persistence", () => {
       const otherSessionId = SessionId.make("session-switch-other")
       const fromBranchId = BranchId.make("branch-switch-owner-from")
       const toBranchId = BranchId.make("branch-switch-owner-foreign")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -548,7 +551,7 @@ describe("session command persistence", () => {
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-settings-rollback")
       const branchId = BranchId.make("branch-settings-rollback")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -576,7 +579,7 @@ describe("session command persistence", () => {
       const sessionId = SessionId.make("session-delete-branch")
       const activeBranchId = BranchId.make("branch-delete-active")
       const deletedBranchId = BranchId.make("branch-delete-target")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -624,7 +627,7 @@ describe("session command persistence", () => {
       const activeBranchId = BranchId.make("branch-delete-parent-active")
       const parentBranchId = BranchId.make("branch-delete-parent")
       const childBranchId = BranchId.make("branch-delete-child")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -671,7 +674,7 @@ describe("session command persistence", () => {
       const sessionId = SessionId.make("session-delete-child-session-parent")
       const activeBranchId = BranchId.make("branch-delete-child-session-active")
       const parentBranchId = BranchId.make("branch-delete-child-session-parent")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -715,7 +718,7 @@ describe("session command persistence", () => {
       const sessionId = SessionId.make("session-delete-active")
       const activeBranchId = BranchId.make("branch-active-delete")
       const currentBranchId = BranchId.make("branch-current-delete")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -754,7 +757,7 @@ describe("session command persistence", () => {
       const otherSessionId = SessionId.make("session-delete-other")
       const currentBranchId = BranchId.make("branch-delete-owner-current")
       const otherBranchId = BranchId.make("branch-delete-other-target")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -801,7 +804,7 @@ describe("session command persistence", () => {
       const branchId = BranchId.make("branch-delete-messages")
       const firstMessageId = MessageId.make("message-delete-1")
       const secondMessageId = MessageId.make("message-delete-2")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -828,7 +831,7 @@ describe("session command persistence", () => {
           branchId,
           role: "assistant",
           parts: [new TextPart({ type: "text", text: "second" })],
-          createdAt: new Date(now.getTime() + 1),
+          createdAt: datePlusMillis(now, 1),
         }),
       )
 
@@ -851,7 +854,7 @@ describe("session command persistence", () => {
       const otherBranchId = BranchId.make("branch-delete-messages-other")
       const foreignMessageId = MessageId.make("message-delete-foreign")
       const ownerMessageId = MessageId.make("message-delete-owner")
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* createActiveSessionFixture({
         sessions,
@@ -886,7 +889,7 @@ describe("session command persistence", () => {
           branchId,
           role: "assistant",
           parts: [new TextPart({ type: "text", text: "owner" })],
-          createdAt: new Date(now.getTime() + 1),
+          createdAt: datePlusMillis(now, 1),
         }),
       )
 
@@ -1108,7 +1111,7 @@ describe("session.delete", () => {
         const mutations = yield* SessionMutations
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
-        const now = new Date("2026-01-01T00:00:00.000Z")
+        const now = FIXED_NOW
         const parent = {
           sessionId: SessionId.make("mutation-delete-parent"),
           branchId: BranchId.make("mutation-delete-parent-branch"),
@@ -1147,7 +1150,7 @@ describe("session.delete", () => {
           branches,
           sessionId,
           branchId,
-          now: new Date("2026-01-01T00:00:00.000Z"),
+          now: FIXED_NOW,
         })
 
         const exit = yield* Effect.exit(commands.deleteSession(sessionId))
@@ -1610,7 +1613,7 @@ describe("requestId idempotency", () => {
         branches,
         sessionId,
         branchId,
-        now: new Date(),
+        now: FIXED_NOW,
       })
 
       const first = yield* commands.createBranch({
@@ -1642,7 +1645,7 @@ describe("requestId idempotency", () => {
         branches,
         sessionId,
         branchId,
-        now: new Date(),
+        now: FIXED_NOW,
       })
 
       const results = yield* Effect.all(
@@ -1667,7 +1670,7 @@ describe("requestId idempotency", () => {
       const sessionId = SessionId.make("session-switch-dedup")
       const fromBranchId = BranchId.make("branch-switch-dedup-from")
       const toBranchId = BranchId.make("branch-switch-dedup-to")
-      const now = new Date()
+      const now = FIXED_NOW
       yield* createActiveSessionFixture({
         sessions,
         branches,
@@ -1705,7 +1708,7 @@ describe("requestId idempotency", () => {
       const sessionId = SessionId.make("session-fork-dedup")
       const branchId = BranchId.make("branch-fork-dedup")
       const messageId = MessageId.make("message-fork-dedup")
-      const now = new Date()
+      const now = FIXED_NOW
       yield* createActiveSessionFixture({
         sessions,
         branches,

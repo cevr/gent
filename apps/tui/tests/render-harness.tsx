@@ -18,6 +18,7 @@ import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
+import { dateFromMillis } from "@gent/core/domain/message"
 import type { ClientLog } from "../src/utils/client-logger"
 
 const noop = () => {}
@@ -53,8 +54,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
             id: SessionId.make("session-test"),
             activeBranchId: BranchId.make("branch-test"),
             name: "Test Session",
-            createdAt: new Date(0),
-            updatedAt: new Date(0),
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
           },
           children: [],
         }),
@@ -168,7 +169,9 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
 
 export const createMockRuntime = (): GentRuntime => ({
   cast: (effect) => {
-    Effect.runFork(effect as Effect.Effect<unknown, unknown, never>)
+    Effect.runFork(
+      effect as Effect.Effect<unknown, never, never> as Effect.Effect<void, never, never>,
+    )
   },
   fork: Effect.runFork as never,
   run: Effect.runPromise as never,
@@ -231,11 +234,10 @@ export const renderWithProviders = (
 ): Promise<TestRenderSetup> =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const services = yield* Effect.promise(() =>
+      const services =
         options?.services === undefined
-          ? getServices()
-          : Effect.runPromise(Effect.succeed(options.services)),
-      )
+          ? yield* Effect.promise(() => getServices())
+          : options.services
       const client = options?.client ?? createMockClient()
       const runtime = options?.runtime ?? createMockRuntime()
 

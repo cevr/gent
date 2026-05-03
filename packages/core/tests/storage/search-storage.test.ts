@@ -7,10 +7,15 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
-import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
 const test = it.live.layer(SqliteStorage.TestWithSql())
+
+const FIXED_NOW_MILLIS = 1_767_225_600_000
+const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
+const datePlusMillis = (date: Date, millis: number): Date => dateFromMillis(date.getTime() + millis)
+const ONE_DAY_MILLIS = 86_400_000
 
 // Fixture helpers
 
@@ -23,7 +28,7 @@ const createFixture = (opts?: { sessionName?: string }) =>
     const branches = yield* BranchStorage
     const sessionId = SessionId.make(nextId())
     const branchId = BranchId.make(nextId())
-    const now = new Date()
+    const now = FIXED_NOW
 
     const session = yield* sessions.createSession(
       new Session({
@@ -62,7 +67,7 @@ const addMessage = (
         branchId,
         role,
         parts: [new TextPart({ type: "text", text })],
-        createdAt: createdAt ?? new Date(),
+        createdAt: createdAt ?? FIXED_NOW,
       }),
     )
   })
@@ -104,17 +109,17 @@ describe("searchMessages", () => {
   test("filters by dateAfter (recent messages only)", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
-      const oldDate = new Date(Date.now() - 86400000 * 30)
-      const recentDate = new Date()
+      const oldDate = dateFromMillis(FIXED_NOW_MILLIS - ONE_DAY_MILLIS * 30)
+      const recentDate = FIXED_NOW
 
       yield* addMessage(sessionId, branchId, "user", "old unique searchterm alpha", oldDate)
       yield* addMessage(sessionId, branchId, "user", "new unique searchterm beta", recentDate)
 
       const searchStore = yield* SearchStorage
       const results = yield* searchStore.searchMessages("searchterm", {
-        dateAfter: Date.now() - 86400000,
+        dateAfter: FIXED_NOW_MILLIS - ONE_DAY_MILLIS,
       })
-      expect(results.every((r) => r.createdAt > Date.now() - 86400000)).toBe(true)
+      expect(results.every((r) => r.createdAt > FIXED_NOW_MILLIS - ONE_DAY_MILLIS)).toBe(true)
     }))
 
   test("filters by sessionId", () =>
@@ -137,13 +142,13 @@ describe("searchMessages", () => {
   test("filters by dateBefore (older messages only)", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
-      const oldDate = new Date(Date.now() - 86400000 * 30)
-      const recentDate = new Date()
+      const oldDate = dateFromMillis(FIXED_NOW_MILLIS - ONE_DAY_MILLIS * 30)
+      const recentDate = FIXED_NOW
 
       yield* addMessage(sessionId, branchId, "user", "datebefore searchterm alpha", oldDate)
       yield* addMessage(sessionId, branchId, "user", "datebefore searchterm beta", recentDate)
 
-      const cutoff = Date.now() - 86400000
+      const cutoff = FIXED_NOW_MILLIS - ONE_DAY_MILLIS
       const searchStore = yield* SearchStorage
       const results = yield* searchStore.searchMessages("datebefore searchterm", {
         dateBefore: cutoff,
@@ -288,7 +293,7 @@ describe("getSessionDetail", () => {
           sessionId,
           parentBranchId: branchId,
           name: "fix",
-          createdAt: new Date(),
+          createdAt: FIXED_NOW,
         }),
       )
       yield* addMessage(sessionId, branchId2, "user", "fix this")
@@ -302,9 +307,9 @@ describe("getSessionDetail", () => {
   test("returns messages in chronological order", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
-      yield* addMessage(sessionId, branchId, "user", "first", new Date(1000))
-      yield* addMessage(sessionId, branchId, "assistant", "second", new Date(2000))
-      yield* addMessage(sessionId, branchId, "user", "third", new Date(3000))
+      yield* addMessage(sessionId, branchId, "user", "first", dateFromMillis(1000))
+      yield* addMessage(sessionId, branchId, "assistant", "second", dateFromMillis(2000))
+      yield* addMessage(sessionId, branchId, "user", "third", dateFromMillis(3000))
 
       const relationships = yield* RelationshipStorage
       const tree = yield* relationships.getSessionDetail(sessionId)
@@ -333,7 +338,7 @@ describe("getChildSessions", () => {
       // Create two child sessions
       const child1Id = SessionId.make(nextId())
       const child2Id = SessionId.make(nextId())
-      const now = new Date()
+      const now = FIXED_NOW
 
       yield* sessions.createSession(
         new Session({
@@ -351,8 +356,8 @@ describe("getChildSessions", () => {
           name: "child-2",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
-          createdAt: new Date(now.getTime() + 1000),
-          updatedAt: new Date(now.getTime() + 1000),
+          createdAt: datePlusMillis(now, 1000),
+          updatedAt: datePlusMillis(now, 1000),
         }),
       )
 
@@ -376,7 +381,7 @@ describe("getChildSessions", () => {
       const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
       const parent = yield* createFixture({ sessionName: "root" })
-      const now = new Date()
+      const now = FIXED_NOW
 
       // Child
       const childId = SessionId.make(nextId())
@@ -413,7 +418,7 @@ describe("getSessionAncestors", () => {
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
-      const now = new Date()
+      const now = FIXED_NOW
 
       // Root -> Parent -> Child
       const rootId = SessionId.make(nextId())
@@ -462,7 +467,7 @@ describe("getSessionAncestors", () => {
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
-      const now = new Date()
+      const now = FIXED_NOW
       // Quote-bearing id would have terminated the literal under the prior
       // hand-rolled `'${id.replace(...)}'` form. Parameter binding makes the
       // value opaque — the row simply doesn't exist, no SQL is forged.

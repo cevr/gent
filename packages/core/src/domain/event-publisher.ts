@@ -1,4 +1,4 @@
-import { Effect, Layer, Context } from "effect"
+import { Clock, Context, Effect, Layer } from "effect"
 import { EventEnvelope, EventId, type AgentEvent, type EventStoreError } from "./event.js"
 
 export interface EventPublisherService {
@@ -17,7 +17,9 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
   static Test = (): Layer.Layer<EventPublisher> =>
     Layer.succeed(EventPublisher, {
       append: (event) =>
-        Effect.succeed(EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() })),
+        Effect.map(Clock.currentTimeMillis, (createdAt) =>
+          EventEnvelope.make({ id: EventId.make(0), event, createdAt }),
+        ),
       deliver: () => Effect.void,
       publish: () => Effect.void,
     })

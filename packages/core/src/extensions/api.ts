@@ -159,7 +159,13 @@ export { Model, ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
 export { AuthMethod } from "../domain/auth-method.js"
 export { AuthOauth } from "../domain/auth-store.js"
-export { type Message, type MessagePart, MessageMetadata, type Branch } from "../domain/message.js"
+export {
+  dateFromMillis,
+  type Message,
+  type MessagePart,
+  MessageMetadata,
+  type Branch,
+} from "../domain/message.js"
 export {
   messagePartImage,
   messagePartReasoning,
@@ -356,9 +362,9 @@ const resolveField = <A>(
     // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
     // be propagated raw — loader.ts only catches defects). Codex  BLOCK 1.
     if (Effect.isEffect(result)) {
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS bucket factory crosses the explicit load membrane here; E/R are intentionally erased and re-sealed to ExtensionLoadError
       const value = yield* sealRuntimeLoadedEffect({
         extensionId: manifest.id,
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         effect: () => result,
         failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
         defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,

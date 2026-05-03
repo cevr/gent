@@ -1,11 +1,11 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, type Layer } from "effect"
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Model, ModelId, ProviderId } from "@gent/core/domain/model"
-import { Branch, Session } from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -40,7 +40,7 @@ const createSessionBranch = (modelIdLabel = "test/priced") =>
     const branches = yield* BranchStorage
     const sessionId = SessionId.make("metrics-session")
     const branchId = BranchId.make("metrics-branch")
-    const now = new Date()
+    const now = dateFromMillis(1_767_225_600_000)
     void modelIdLabel
     yield* sessions.createSession(
       new Session({

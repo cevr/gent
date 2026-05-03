@@ -167,7 +167,10 @@ const buildOwnedServer = (
       const url = `http://127.0.0.1:${port}/rpc`
       const home = resolveHome(options, stateSpec)
       const serverId = Bun.randomUUIDv7()
-      const buildFingerprint = yield* Effect.provide(resolveBuildFingerprint, BunServices.layer)
+      const buildFingerprint = yield* resolveBuildFingerprint.pipe(
+        // @effect-diagnostics-next-line strictEffectProvide:off
+        Effect.provide(BunServices.layer),
+      )
 
       // Build provider layer (undefined = let createDependencies resolve from auth deps)
       const providerLayer = resolveProviderLayer(providerSpec)
@@ -245,8 +248,8 @@ const buildOwnedServer = (
 
       // Seed debug session if requested
       if (options.debug === true) {
-        // @effect-diagnostics-next-line strictEffectProvide:off
         yield* seedDebugSession(options.cwd).pipe(
+          // @effect-diagnostics-next-line strictEffectProvide:off
           Effect.provide(coreServicesLive),
           Effect.catchEager(() => Effect.void),
         )

@@ -123,7 +123,7 @@ describe("AcpConnection.close", () => {
       if (exit._tag === "Failure") {
         // The cause should carry our typed AcpClosedError.
         const failure = exit.cause
-        const repr = JSON.stringify(failure)
+        const repr = Bun.inspect(failure)
         expect(repr).toContain("AcpClosedError")
         expect(repr).toContain("driver invalidated")
       }
@@ -152,7 +152,7 @@ describe("AcpConnection.close", () => {
       const exit = yield* program
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const repr = JSON.stringify(exit.cause)
+        const repr = Bun.inspect(exit.cause)
         expect(repr).toContain("AcpClosedError")
       }
     }),
@@ -201,7 +201,7 @@ describe("AcpConnection.close", () => {
       for (const exit of exits) {
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
-          expect(JSON.stringify(exit.cause)).toContain("AcpClosedError")
+          expect(Bun.inspect(exit.cause)).toContain("AcpClosedError")
         }
       }
     }),
@@ -252,7 +252,7 @@ describe("AcpConnection.close", () => {
       const exit = yield* program
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const repr = JSON.stringify(exit.cause)
+        const repr = Bun.inspect(exit.cause)
         expect(repr).toContain("AcpClosedError")
         expect(repr).toContain("reader error")
       }
@@ -284,7 +284,7 @@ describe("AcpConnection.close", () => {
       const exit = yield* program
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const repr = JSON.stringify(exit.cause)
+        const repr = Bun.inspect(exit.cause)
         expect(repr).toContain("AcpClosedError")
         expect(repr).toContain("stdout closed")
       }

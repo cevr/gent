@@ -225,11 +225,10 @@ interface McpConnection {
 
 const acquireConnection = (baseUrl: string) =>
   Effect.tryPromise({
-    try: async () => {
+    try: () => {
       const client = new Client({ name: "gent-executor", version: "0.0.1" }, { capabilities: {} })
       const transport = new StreamableHTTPClientTransport(new URL("/mcp", baseUrl))
-      await client.connect(transport)
-      return { client, transport } satisfies McpConnection
+      return client.connect(transport).then(() => ({ client, transport }) satisfies McpConnection)
     },
     catch: (e) =>
       new ExecutorMcpError({
@@ -239,10 +238,12 @@ const acquireConnection = (baseUrl: string) =>
   })
 
 const releaseConnection = (conn: McpConnection) =>
-  Effect.tryPromise(async () => {
-    await conn.transport.terminateSession().catch(() => {})
-    await conn.client.close().catch(() => {})
-  }).pipe(Effect.orElseSucceed(() => {}))
+  Effect.tryPromise(() =>
+    conn.transport
+      .terminateSession()
+      .catch(() => undefined)
+      .then(() => conn.client.close().catch(() => undefined)),
+  ).pipe(Effect.orElseSucceed(() => {}))
 
 const withConnection = <A>(
   baseUrl: string,
@@ -254,29 +255,28 @@ const withConnection = <A>(
 export class ExecutorMcpBridge extends Context.Service<
   ExecutorMcpBridge,
   ExecutorMcpBridgeService
->()("@gent/core/src/extensions/executor/mcp-bridge/ExecutorMcpBridge") {
+>()("@gent/extensions/src/executor/mcp-bridge/ExecutorMcpBridge") {
   static Live = Layer.succeed(
     ExecutorMcpBridge,
     ExecutorMcpBridge.of({
       inspect: (baseUrl) =>
         withConnection(baseUrl, (conn) =>
           Effect.tryPromise({
-            try: async () => {
+            try: () => {
               const tools: Array<{ name: string; description?: string }> = []
-              let cursor: string | undefined
-              do {
-                // eslint-disable-next-line no-await-in-loop -- cursor pagination is sequential
-                const response = await conn.client.listTools(cursor ? { cursor } : undefined)
-                for (const t of response.tools) {
-                  tools.push({ name: t.name, description: t.description })
-                }
-                cursor = response.nextCursor
-              } while (cursor)
-
-              return {
-                instructions: conn.client.getInstructions(),
-                tools,
-              } satisfies ExecutorMcpInspection
+              const readPage = (cursor: string | undefined): Promise<ExecutorMcpInspection> =>
+                conn.client.listTools(cursor ? { cursor } : undefined).then((response) => {
+                  for (const t of response.tools) {
+                    tools.push({ name: t.name, description: t.description })
+                  }
+                  return response.nextCursor === undefined
+                    ? ({
+                        instructions: conn.client.getInstructions(),
+                        tools,
+                      } satisfies ExecutorMcpInspection)
+                    : readPage(response.nextCursor)
+                })
+              return readPage(undefined)
             },
             catch: (e) =>
               new ExecutorMcpError({
@@ -289,13 +289,13 @@ export class ExecutorMcpBridge extends Context.Service<
       execute: (baseUrl, code) =>
         withConnection(baseUrl, (conn) =>
           Effect.tryPromise({
-            try: async () =>
-              normalizeToolResult(
-                await conn.client.callTool({
+            try: () =>
+              conn.client
+                .callTool({
                   name: "execute",
                   arguments: { code },
-                }),
-              ),
+                })
+                .then(normalizeToolResult),
             catch: (e) =>
               new ExecutorMcpError({
                 phase: "execute",
@@ -307,9 +307,9 @@ export class ExecutorMcpBridge extends Context.Service<
       resume: (baseUrl, executionId, action, content) =>
         withConnection(baseUrl, (conn) =>
           Effect.tryPromise({
-            try: async () =>
-              normalizeToolResult(
-                await conn.client.callTool({
+            try: () =>
+              conn.client
+                .callTool({
                   name: "resume",
                   arguments: {
                     executionId,
@@ -317,8 +317,8 @@ export class ExecutorMcpBridge extends Context.Service<
                     // @effect-diagnostics-next-line preferSchemaOverJson:off
                     content: content ? JSON.stringify(content) : "{}",
                   },
-                }),
-              ),
+                })
+                .then(normalizeToolResult),
             catch: (e) =>
               new ExecutorMcpError({
                 phase: "resume",

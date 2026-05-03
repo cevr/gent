@@ -41,14 +41,22 @@ import { StorageError } from "../../src/storage/sqlite-storage"
 class WriteCapableService extends Context.Service<
   WriteCapableService,
   { readonly write: () => Effect.Effect<void> }
->()("@gent/core/tests/extension-surface-locks/WriteCapableService") {}
+>()("@gent/core/tests/extensions/extension-surface-locks.test/WriteCapableService") {}
+
+type WriteCapableReadExecuteAssignable = (() => Effect.Effect<
+  string,
+  never,
+  WriteCapableService
+>) extends ReadRequestInput<unknown, string, never>["execute"]
+  ? true
+  : false
 
 interface ReadOnlyShape {
   readonly read: () => Effect.Effect<string>
 }
 
 class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnly<ReadOnlyShape>>()(
-  "@gent/core/tests/extension-surface-locks/ReadOnlyService",
+  "@gent/core/tests/extensions/extension-surface-locks.test/ReadOnlyService",
 ) {
   declare readonly [ReadOnlyBrand]: true
 }
@@ -114,22 +122,8 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("request({ intent: 'read' }) rejects write-capable Tag in R", () => {
-    const badInput = {
-      id: "bad-read",
-      extensionId: ExtensionId.make("test-ext"),
-      intent: "read" as const,
-      input: NoInput,
-      output: StringOutput,
-      execute: () =>
-        // @ts-expect-error — WriteCapableService lacks ReadOnlyBrand
-        Effect.gen(function* () {
-          const svc = yield* WriteCapableService
-          yield* svc.write()
-          return "x"
-        }),
-    } satisfies ReadRequestInput<unknown, string, never>
-
-    void badInput
+    const writeCapableIsRejected: WriteCapableReadExecuteAssignable = false
+    void writeCapableIsRejected
     expect(true).toBe(true)
   })
 

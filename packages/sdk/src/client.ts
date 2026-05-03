@@ -242,24 +242,24 @@ const connectWs = (
           message: "restart not supported — WS transport reconnects automatically",
         }),
       ),
-      waitForReady: Effect.promise<void>((signal) => {
+      waitForReady: Effect.callback<void>((resume, signal) => {
         if (currentState._tag === "connected") {
-          return Promise.resolve()
+          resume(Effect.void)
+          return
         }
-        return new Promise<void>((resolve) => {
-          const unsubscribe = lifecycle.subscribe((state) => {
-            if (state._tag !== "connected") return
-            unsubscribe()
-            resolve()
-          })
-          signal.addEventListener(
-            "abort",
-            () => {
-              unsubscribe()
-            },
-            { once: true },
-          )
+        const unsubscribe = lifecycle.subscribe((state) => {
+          if (state._tag !== "connected") return
+          unsubscribe()
+          resume(Effect.void)
         })
+        signal.addEventListener(
+          "abort",
+          () => {
+            unsubscribe()
+          },
+          { once: true },
+        )
+        return Effect.sync(unsubscribe)
       }),
     }
 

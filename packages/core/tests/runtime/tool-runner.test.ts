@@ -23,7 +23,12 @@ class ToolProfileToken extends Context.Service<
   {
     readonly read: () => Effect.Effect<string>
   }
->()("@test/ToolProfileToken") {}
+>()("@gent/core/tests/runtime/tool-runner.test/ToolProfileToken") {}
+
+class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()(
+  "@gent/core/tests/runtime/tool-runner.test/ToolRunnerTestError",
+  { message: Schema.String },
+) {}
 
 describe("ToolRunner", () => {
   it.live("runs model capability directly and returns json output", () =>
@@ -73,7 +78,7 @@ describe("ToolRunner", () => {
         id: "fail",
         description: "Fails on purpose",
         params: Schema.Struct({}),
-        execute: () => Effect.fail(new Error("boom")),
+        execute: () => Effect.fail(new ToolRunnerTestError({ message: "boom" })),
       })
       const deps = Layer.mergeAll(
         ExtensionRegistry.fromResolved(

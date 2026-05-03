@@ -2,23 +2,30 @@ import { describe, it, expect, test } from "effect-bun-test"
 import { createComponent, createRoot } from "solid-js"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import { Schema } from "effect"
 import { atom, effect, make, makeRegistryScope, state, type Registry } from "../src/atom-solid"
 import * as Result from "../src/atom-solid/result"
+class AtomSolidTestError extends Schema.TaggedErrorClass<AtomSolidTestError>()(
+  "AtomSolidTestError",
+  { message: Schema.String },
+) {}
 class Greeting extends Context.Service<
   Greeting,
   {
     readonly text: string
   }
->()("@gent/tui/tests/atom-solid/Greeting") {}
-const waitFor = (predicate: () => boolean): Effect.Effect<void, Error> => {
+>()("@gent/tui/tests/atom-solid.test/Greeting") {}
+const waitFor = (predicate: () => boolean): Effect.Effect<void, AtomSolidTestError> => {
   let attempts = 20
-  const check: Effect.Effect<void, Error> = Effect.gen(function* () {
+  const check = Effect.gen(function* () {
     if (predicate()) return
     attempts -= 1
-    if (attempts <= 0) return yield* Effect.fail(new Error("condition did not settle"))
+    if (attempts <= 0) {
+      return yield* new AtomSolidTestError({ message: "condition did not settle" })
+    }
     yield* Effect.sleep("0 millis")
     return yield* check
-  })
+  }) as Effect.Effect<void, AtomSolidTestError>
   return check
 }
 describe("atom-solid registry", () => {

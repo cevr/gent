@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
 import { ToolCallId } from "@gent/core/domain/ids.js"
 import { extractText } from "@gent/sdk"
-import { transportCases, waitFor } from "./transport-harness"
-import { ignoreSyncDefect } from "../src/effect-test-adapters"
+import { toTestFailure, transportCases, waitFor } from "./transport-harness"
+import { createTempDirFixture } from "./seam-fixture"
+
+const makeSecondaryA = createTempDirFixture("gent-secondary-A-")
+const makeSecondaryB = createTempDirFixture("gent-secondary-B-")
 
 describe("GentClient transport contract", () => {
   for (const transport of transportCases) {
@@ -17,17 +17,15 @@ describe("GentClient transport contract", () => {
           Effect.gen(function* () {
             const initialSessions = yield* client.session
               .list()
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const created = yield* client.session
               .create({
                 cwd: process.cwd(),
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
-            const sessions = yield* client.session
-              .list()
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const sessions = yield* client.session.list().pipe(Effect.mapError(toTestFailure))
             const createdSession = sessions.find((session) => session.id === created.sessionId)
 
             expect(createdSession).toBeDefined()
@@ -36,7 +34,7 @@ describe("GentClient transport contract", () => {
 
             const loaded = yield* client.session
               .get({ sessionId: created.sessionId })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
             expect(loaded?.id).toBe(created.sessionId)
             expect(loaded?.activeBranchId).toBe(created.branchId)
 
@@ -45,7 +43,7 @@ describe("GentClient transport contract", () => {
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             expect(initialSnapshot.messages).toEqual([])
             expect(initialSnapshot.branchId).toBe(created.branchId)
@@ -56,7 +54,7 @@ describe("GentClient transport contract", () => {
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             expect(initialQueue.followUp).toEqual([])
             expect(initialQueue.steering).toEqual([])
@@ -67,12 +65,12 @@ describe("GentClient transport contract", () => {
                 branchId: created.branchId,
                 content: `hello from ${transport.name}`,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const messages = yield* waitFor(
               client.message
                 .list({ branchId: created.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (items) =>
                 items.some(
                   (message) => extractText(message.parts) === `hello from ${transport.name}`,
@@ -89,7 +87,7 @@ describe("GentClient transport contract", () => {
             yield* waitFor(
               client.message
                 .list({ branchId: created.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (items) => items.some((message) => message.role === "assistant"),
             )
 
@@ -99,7 +97,7 @@ describe("GentClient transport contract", () => {
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (state) =>
                 state.messages.some(
                   (message) =>
@@ -113,7 +111,7 @@ describe("GentClient transport contract", () => {
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             expect(queueAfterSend.followUp).toEqual([])
             expect(queueAfterSend.steering).toEqual([])
@@ -131,7 +129,7 @@ describe("GentClient transport contract", () => {
           Effect.gen(function* () {
             const { sessionId, branchId } = yield* client.session
               .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             // Send with runSpec — should not error on schema validation
             yield* client.message
@@ -144,13 +142,11 @@ describe("GentClient transport contract", () => {
                   tags: ["e2e-transport-test"],
                 },
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             // Verify the message was delivered (proves overrides didn't break the flow)
             const messages = yield* waitFor(
-              client.message
-                .list({ branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+              client.message.list({ branchId }).pipe(Effect.mapError(toTestFailure)),
               (items) => items.some((m) => extractText(m.parts) === "overrides test"),
             )
 
@@ -172,20 +168,14 @@ describe("GentClient transport contract", () => {
         transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
-              const cwdA = yield* Effect.acquireRelease(
-                Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "gent-secondary-A-"))),
-                (dir) => ignoreSyncDefect(() => fs.rmSync(dir, { recursive: true, force: true })),
-              )
-              const cwdB = yield* Effect.acquireRelease(
-                Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "gent-secondary-B-"))),
-                (dir) => ignoreSyncDefect(() => fs.rmSync(dir, { recursive: true, force: true })),
-              )
+              const cwdA = makeSecondaryA()
+              const cwdB = makeSecondaryB()
               const a = yield* client.session
                 .create({ cwd: cwdA })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               const b = yield* client.session
                 .create({ cwd: cwdB })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               expect(a.sessionId).not.toBe(b.sessionId)
 
               yield* client.message
@@ -194,14 +184,14 @@ describe("GentClient transport contract", () => {
                   branchId: a.branchId,
                   content: "msg-A",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               yield* client.message
                 .send({
                   sessionId: b.sessionId,
                   branchId: b.branchId,
                   content: "msg-B",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               // Each session's snapshot must contain ONLY its own user message.
               // A regression where event-store fanout sends events to the wrong
@@ -215,20 +205,20 @@ describe("GentClient transport contract", () => {
               yield* waitFor(
                 client.session
                   .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
-                  .pipe(Effect.mapError((error) => new Error(String(error)))),
+                  .pipe(Effect.mapError(toTestFailure)),
                 (s) =>
                   s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-B"),
               )
               const snapshotA = yield* waitFor(
                 client.session
                   .getSnapshot({ sessionId: a.sessionId, branchId: a.branchId })
-                  .pipe(Effect.mapError((error) => new Error(String(error)))),
+                  .pipe(Effect.mapError(toTestFailure)),
                 (s) =>
                   s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-A"),
               )
               const snapshotB = yield* client.session
                 .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               expect(
                 snapshotA.messages.every(
                   (m) => m.role !== "user" || extractText(m.parts) !== "msg-B",
@@ -241,9 +231,7 @@ describe("GentClient transport contract", () => {
               ).toBe(true)
 
               // Sessions are listed under both cwds.
-              const sessions = yield* client.session
-                .list()
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const sessions = yield* client.session.list().pipe(Effect.mapError(toTestFailure))
               const sa = sessions.find((s) => s.id === a.sessionId)
               const sb = sessions.find((s) => s.id === b.sessionId)
               expect(sa?.cwd).toBe(cwdA)

@@ -6,6 +6,7 @@ import {
 } from "@gent/extensions/session-tools/read-session"
 import { messagePartsDisplayText } from "@gent/core/domain/message-part-projection"
 import {
+  dateFromMillis,
   TextPart,
   ToolCallPart,
   ToolResultPart,
@@ -93,7 +94,7 @@ describe("messagePartsDisplayText", () => {
 })
 
 describe("renderSessionTree", () => {
-  const now = new Date()
+  const now = dateFromMillis(0)
   const sid = SessionId.make("s1")
   const bid1 = BranchId.make("b1")
   const bid2 = BranchId.make("b2")
@@ -107,9 +108,10 @@ describe("renderSessionTree", () => {
       createdAt: now,
     })
 
+  let messageIndex = 0
   const makeMessage = (branchId: BranchId, role: "user" | "assistant", text: string) =>
     Message.Regular.make({
-      id: MessageId.make(`msg-${Math.random().toString(36).slice(2, 8)}`),
+      id: MessageId.make(`msg-${messageIndex++}`),
       sessionId: sid,
       branchId,
       role,

@@ -12,7 +12,7 @@
  */
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Layer, Ref } from "effect"
+import { Context, Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
@@ -36,7 +36,7 @@ import { ProviderAuthError } from "@gent/core/extensions/api"
 const makeCreds = (label: string): ClaudeCredentials => ({
   accessToken: `${label}-access`,
   refreshToken: `${label}-refresh`,
-  expiresAt: Date.now() + 10 * 60 * 60 * 1000,
+  expiresAt: 1_800_000_000_000,
 })
 interface CapturedRequest {
   url: string
@@ -99,10 +99,9 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
   const layer = AnthropicCredentialService.layerFromIO(io).pipe(Layer.provide(BunServices.layer))
   return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        return yield* AnthropicCredentialService
-      }).pipe(Effect.provide(layer)),
+    Layer.build(layer).pipe(
+      Effect.scoped,
+      Effect.map((ctx) => Context.get(ctx, AnthropicCredentialService)),
     ),
   )
 }
@@ -111,10 +110,9 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
 // isolated.
 const buildBetaCache = (): Promise<AnthropicBetaCacheShape> =>
   Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        return yield* AnthropicBetaCache
-      }).pipe(Effect.provide(AnthropicBetaCache.layer)),
+    Layer.build(AnthropicBetaCache.layer).pipe(
+      Effect.scoped,
+      Effect.map((ctx) => Context.get(ctx, AnthropicBetaCache)),
     ),
   )
 const validCredsIO = (label: string): AnthropicCredentialIO => ({

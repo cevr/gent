@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
+// @effect-diagnostics nodeBuiltinImport:off
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
+// @effect-diagnostics nodeBuiltinImport:off
 import { join } from "node:path"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -38,7 +40,7 @@ const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
     rpcUrl: "ws://127.0.0.1:9999",
     dbPath: "/tmp/test.db",
     buildFingerprint: "test-fp",
-    startedAt: Date.now(),
+    startedAt: 1_767_225_600_000,
     ...overrides,
   })
 
@@ -292,7 +294,7 @@ describe("Registry Process Ownership", () => {
             },
           }),
         ),
-        (server) => Effect.sync(() => server.stop(true)),
+        (server) => Effect.promise(() => server.stop(true)),
       )
       const fakeOwnerUrl = new URL(fakeOwner.url)
       const entryWithEndpoint = new ServerRegistryEntry({
@@ -408,33 +410,37 @@ describe("Cross-Process Lock", () => {
     }),
   )
 
-  test("stale lock from dead PID is cleaned up", () => {
-    // Manually create a lock with a dead PID
-    const dir = join(home, ".gent", "servers")
-    mkdirSync(dir, { recursive: true })
-    // Use the same hash logic — acquire first, then tamper
-    acquireLock(home, "/tmp/stale.db")
-    // Find the lock dir and rewrite the info with a dead PID
-    const lockDirs = readdirSync(dir).filter((f) => f.endsWith(".lock"))
-    // Release first, then manually create stale lock
-    releaseLock(home, "/tmp/stale.db")
+  it.live("stale lock from dead PID is cleaned up", () =>
+    Effect.gen(function* () {
+      // Manually create a lock with a dead PID
+      const dir = join(home, ".gent", "servers")
+      mkdirSync(dir, { recursive: true })
+      // Use the same hash logic — acquire first, then tamper
+      acquireLock(home, "/tmp/stale.db")
+      // Find the lock dir and rewrite the info with a dead PID
+      const lockDirs = readdirSync(dir).filter((f) => f.endsWith(".lock"))
+      // Release first, then manually create stale lock
+      releaseLock(home, "/tmp/stale.db")
 
-    // Now manually create a stale lock
-    const hash = lockDirs[0] ?? "fallback.lock"
-    const lockDir = join(dir, hash)
-    mkdirSync(lockDir, { recursive: true })
-    writeFileSync(
-      join(lockDir, "info.json"),
-      JSON.stringify({
-        pid: 99999999,
-        hostname: hostname(),
-        createdAt: Date.now(),
-      }),
-    )
+      // Now manually create a stale lock
+      const hash = lockDirs[0] ?? "fallback.lock"
+      const lockDir = join(dir, hash)
+      mkdirSync(lockDir, { recursive: true })
+      const createdAt = yield* Clock.currentTimeMillis
+      writeFileSync(
+        join(lockDir, "info.json"),
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          pid: 99999999,
+          hostname: hostname(),
+          createdAt,
+        }),
+      )
 
-    // Should succeed because the existing lock has a dead PID
-    expect(acquireLock(home, "/tmp/stale.db")).toBe(true)
-  })
+      // Should succeed because the existing lock has a dead PID
+      expect(acquireLock(home, "/tmp/stale.db")).toBe(true)
+    }),
+  )
 })
 
 describe("signalIfIdentityOwned", () => {

@@ -21,10 +21,10 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 // ── Resource shape + helpers ──
 
 class TestServiceA extends Context.Service<TestServiceA, { readonly value: string }>()(
-  "@test/ResourceHostTest/A",
+  "@gent/core/tests/extensions/resource-host.test/TestServiceA",
 ) {}
 class TestServiceB extends Context.Service<TestServiceB, { readonly value: string }>()(
-  "@test/ResourceHostTest/B",
+  "@gent/core/tests/extensions/resource-host.test/TestServiceB",
 ) {}
 
 const layerA = Layer.succeed(TestServiceA, { value: "A" })
@@ -141,11 +141,7 @@ describe("buildResourceLayer lifecycle", () => {
             stop: append("stop-2"),
           }),
         ])
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([ext], "process"))
-          }),
-        )
+        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
         // After teardown: starts in declaration order, stops in reverse.
         expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
       }),
@@ -172,11 +168,7 @@ describe("buildResourceLayer lifecycle", () => {
             stop: append("stop-should-not-run"),
           }),
         ])
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([ext], "process"))
-          }),
-        )
+        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
         // Good start ran, good stop ran on teardown; failed Resource's stop
         // never registered, so it never appears in the log.
         expect(log).toEqual(["start-good-1", "stop-good-1"])
@@ -195,11 +187,7 @@ describe("buildResourceLayer lifecycle", () => {
             stop: append("stop-only"),
           }),
         ])
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([ext], "process"))
-          }),
-        )
+        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
         expect(log).toEqual(["stop-only"])
       }),
     ))
@@ -222,11 +210,7 @@ describe("buildResourceLayer lifecycle", () => {
             stop: Effect.die(new Error("stop boom")),
           }),
         ])
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([ext], "process"))
-          }),
-        )
+        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
         // stop-2 (the failing one) is reverse-first; stop-1 still ran.
         expect(log).toEqual(["stop-1"])
       }),

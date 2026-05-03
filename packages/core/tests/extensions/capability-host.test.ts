@@ -5,7 +5,7 @@
  * dispatch is the RPC registry only; human actions stay on local surfaces.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   type CapabilityCoreContext,
@@ -60,6 +60,18 @@ const shadowTool = (params?: { readonly id?: string }): ToolToken =>
     description: "Tool shadow",
     params: Schema.Struct({ value: Schema.String }),
     execute: (input) => Effect.succeed({ value: input.value }),
+  })
+
+const expectRpcFailure = (
+  effect: Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>,
+) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(effect)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return yield* Effect.die("expected rpc failure")
+    const reason = exit.cause.reasons.find(Cause.isFailReason)
+    if (reason === undefined) return yield* Effect.die("expected failed cause")
+    return reason.error
   })
 
 describe("extension capability registries", () => {
@@ -117,10 +129,12 @@ describe("extension capability registries", () => {
         contributions: { commands: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, RpcId.make(String(cap.id)), { value: "hi" }, ctx, { intent: "write" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, RpcId.make(String(cap.id)), { value: "hi" }, ctx, {
+          intent: "write",
+        }),
+      )
+      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
   )
 
@@ -158,10 +172,12 @@ describe("extension capability registries", () => {
           contributions: { commands: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "write" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
+          intent: "write",
+        }),
+      )
+      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
   )
 
@@ -183,10 +199,12 @@ describe("extension capability registries", () => {
           contributions: { commands: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
+          intent: "read",
+        }),
+      )
+      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
   )
 
@@ -208,10 +226,12 @@ describe("extension capability registries", () => {
           contributions: { tools: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
+          intent: "read",
+        }),
+      )
+      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
   )
 
@@ -233,10 +253,12 @@ describe("extension capability registries", () => {
           contributions: { tools: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, builtin.id, { value: "hi" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
+          intent: "read",
+        }),
+      )
+      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
   )
 
@@ -283,11 +305,11 @@ describe("extension capability registries", () => {
       })
       expect(readResult).toBe("project-read")
 
-      const writeResult = yield* resolved.rpcRegistry
-        .run(extensionId, readCap.id, null, ctx, { intent: "write" })
-        .pipe(Effect.flip)
-      expect(writeResult).toBeInstanceOf(CapabilityError)
-      if (!(writeResult instanceof CapabilityError)) return
+      const writeResult = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, readCap.id, null, ctx, { intent: "write" }),
+      )
+      expect(Schema.is(CapabilityError)(writeResult)).toBe(true)
+      if (!Schema.is(CapabilityError)(writeResult)) return
       expect(writeResult.reason).toContain("intent mismatch")
     }),
   )
@@ -296,11 +318,11 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      if (!(result instanceof CapabilityError)) return
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" }),
+      )
+      expect(Schema.is(CapabilityError)(result)).toBe(true)
+      if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/input decode failed/)
     }),
   )
@@ -316,11 +338,11 @@ describe("extension capability registries", () => {
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      if (!(result instanceof CapabilityError)) return
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" }),
+      )
+      expect(Schema.is(CapabilityError)(result)).toBe(true)
+      if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/output validation failed/)
     }),
   )
@@ -336,11 +358,11 @@ describe("extension capability registries", () => {
         execute: () => Effect.die("boom"),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry
-        .run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityError)
-      if (!(result instanceof CapabilityError)) return
+      const result = yield* expectRpcFailure(
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" }),
+      )
+      expect(Schema.is(CapabilityError)(result)).toBe(true)
+      if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/handler defect/)
     }),
   )

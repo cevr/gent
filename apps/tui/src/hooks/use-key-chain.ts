@@ -1,4 +1,5 @@
-const DEFAULT_CHAIN_WINDOW_MS = 500
+const DEFAULT_CHAIN_WINDOW_MS = 1_000
+const currentMillis = () => performance.timeOrigin + performance.now()
 
 export interface KeyChainOptions {
   windowMs?: number
@@ -15,7 +16,7 @@ export function useKeyChain(options?: KeyChainOptions): KeyChain {
 
   return {
     trigger(id, actions) {
-      const now = Date.now()
+      const now = currentMillis()
       const isSecond = armed?.id === id && now - armed.at < windowMs
       if (isSecond) {
         armed = null

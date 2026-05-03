@@ -83,7 +83,7 @@ export interface TaskServiceApi {
 }
 
 export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
-  "@gent/core/src/extensions/task-tools-service/TaskService",
+  "@gent/extensions/src/task-tools-service/TaskService",
 ) {
   /** No-op TaskService returned when @gent/task-tools is disabled (TaskStorage absent) */
   private static readonly Noop: TaskServiceFallbackApi = {

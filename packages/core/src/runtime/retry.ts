@@ -48,8 +48,8 @@ const retryableMessageSnippets = [
 
 const hasRetryableStatus = (cause: unknown) => {
   if (cause === null || typeof cause !== "object" || !("status" in cause)) return false
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-  const status = (cause as { status: number }).status
+  const status = cause.status
+  if (typeof status !== "number") return false
   return status === 429 || status === 529 || (status >= 500 && status < 600)
 }
 
@@ -71,7 +71,7 @@ export const isRetryable = (error: unknown): boolean => {
 
 // Extract retry-after from error/headers
 
-export const getRetryAfter = (error: unknown): number | undefined => {
+export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined => {
   if (error === null || typeof error !== "object") return undefined
 
   // Check if cause is an AiError with retryAfter
@@ -91,9 +91,9 @@ export const getRetryAfter = (error: unknown): number | undefined => {
         const seconds = parseInt(retryAfter, 10)
         if (!isNaN(seconds)) return seconds * 1000
         // Try parsing as date
-        const date = new Date(retryAfter)
-        if (!isNaN(date.getTime())) {
-          return Math.max(0, date.getTime() - Date.now())
+        const dateMs = Date.parse(retryAfter)
+        if (!isNaN(dateMs)) {
+          return Math.max(0, dateMs - nowMs)
         }
       }
     }
@@ -109,10 +109,11 @@ export const getRetryAfter = (error: unknown): number | undefined => {
 const getRetryDelay = (
   attempt: number,
   error: unknown,
+  nowMs: number,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
 ): number => {
   // Check retry-after header first
-  const retryAfter = getRetryAfter(error)
+  const retryAfter = getRetryAfter(error, nowMs)
   if (retryAfter !== undefined) {
     return Math.min(retryAfter, config["maxDelay"])
   }
@@ -162,7 +163,8 @@ export const withRetry = <A, R, R2 = never>(
       if (!Schema.is(ProviderError)(meta.input)) {
         return Cause.done(meta.attempt)
       }
-      const delayMs = getRetryDelay(meta.attempt - 1, meta.input, config)
+      const nowMs = performance.timeOrigin + performance.now()
+      const delayMs = getRetryDelay(meta.attempt - 1, meta.input, nowMs, config)
       const notify =
         options?.onRetry !== undefined
           ? options.onRetry({

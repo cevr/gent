@@ -1,5 +1,6 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { dateFromMillis } from "@gent/core/domain/message"
+import { Clock, Effect } from "effect"
 import {
   isRetryable,
   getRetryAfter,
@@ -7,21 +8,25 @@ import {
   withRetry,
 } from "../../src/runtime/retry"
 import { ProviderError } from "@gent/core/providers/provider"
+
 describe("getRetryAfter", () => {
   test("parses retry-after seconds from Headers", () => {
     const headers = new Headers({ "retry-after": "5" })
     const error = { cause: { headers } }
     expect(getRetryAfter(error)).toBe(5000)
   })
-  test("parses retry-after date from Headers", () => {
-    const future = new Date(Date.now() + 10000)
-    const headers = new Headers({ "retry-after": future.toUTCString() })
-    const error = { cause: { headers } }
-    const result = getRetryAfter(error)
-    expect(result).toBeDefined()
-    // Should be roughly 10 seconds from now (within tolerance)
-    expect(Math.abs(result! - 10000)).toBeLessThan(2000)
-  })
+  it.live("parses retry-after date from Headers", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const future = dateFromMillis(now + 10_000)
+      const headers = new Headers({ "retry-after": future.toUTCString() })
+      const error = { cause: { headers } }
+      const result = getRetryAfter(error, now)
+      expect(result).toBeDefined()
+      // Should be roughly 10 seconds from now (within tolerance)
+      expect(Math.abs(result! - 10000)).toBeLessThan(2000)
+    }),
+  )
   test("returns undefined for empty retry-after header", () => {
     const headers = new Headers()
     const error = { cause: { headers } }

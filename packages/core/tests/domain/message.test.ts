@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { Message, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
+import { dateFromMillis, Message, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
 
 describe("copyMessageToBranch", () => {
   test("preserves interjection variant when copying to a new branch", () => {
@@ -10,7 +10,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("source-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "steer now" })],
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
     })
 
     const copied = copyMessageToBranch(message, {
@@ -31,7 +31,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("src-branch"),
       role: "assistant",
       parts: [new TextPart({ type: "text", text: "hello" })],
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
     })
 
     const copied = copyMessageToBranch(message, {
@@ -54,7 +54,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("src-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "x" })],
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
     })
 
     const copied = copyMessageToBranch(message, {
@@ -73,7 +73,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("src-branch"),
       role: "assistant",
       parts: [new TextPart({ type: "text", text: "x" })],
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
       turnDurationMs: 1234,
       metadata: { customType: "demo", extensionId: ExtensionId.make("ext-x") },
     })
@@ -95,7 +95,7 @@ describe("copyMessageToBranch", () => {
       branchId: BranchId.make("src-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "x" })],
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
     })
 
     const copied = copyMessageToBranch(message, {

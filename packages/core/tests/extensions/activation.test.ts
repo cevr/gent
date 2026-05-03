@@ -1,10 +1,7 @@
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import * as Fs from "node:fs"
-import * as NodePath from "node:path"
-import * as Os from "node:os"
 import type {
   ExtensionLoadError,
   GentExtension,
@@ -43,7 +40,7 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
   contributions,
 })
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 describe("extension activation isolation", () => {
@@ -180,7 +177,7 @@ describe("extension activation isolation", () => {
       id,
       description: description ?? "",
       params: Schema.Unknown,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     }) as never
 
   const rawNativeToolLeaf = (id: string): never =>
@@ -201,7 +198,7 @@ describe("extension activation isolation", () => {
       description: "legit",
       params: Schema.Unknown,
       prompt: metadata.prompt,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
     return AiTool.dynamic(id, {
       description: "native with copied Gent metadata but no private brand",
@@ -216,7 +213,7 @@ describe("extension activation isolation", () => {
       public: true,
       input: Schema.Unknown,
       output: Schema.Unknown,
-      effect: () => Effect.succeed(undefined),
+      effect: () => Effect.void,
     }) as never
 
   it.live("validation catches same-scope tool/tool name collision", () =>
@@ -329,7 +326,7 @@ describe("extension activation isolation", () => {
               id: "shared_cap",
               description: "healthy",
               params: Schema.Unknown,
-              execute: () => Effect.succeed(undefined),
+              execute: () => Effect.void,
             }),
           ],
         }),
@@ -358,7 +355,7 @@ describe("extension activation isolation", () => {
               description: "healthy",
               params: Schema.Unknown,
               prompt,
-              execute: () => Effect.succeed(undefined),
+              execute: () => Effect.void,
             }),
           ],
         }),
@@ -389,10 +386,11 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("reconciler owns startup and scheduler degradation in one result", () =>
+  it.scopedLive("reconciler owns startup and scheduler degradation in one result", () =>
     narrowR(
       Effect.gen(function* () {
-        const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-reconcile-"))
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
 
         const result = yield* reconcileLoadedExtensions({
           extensions: [

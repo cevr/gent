@@ -85,7 +85,9 @@ const discoverDir = (
 const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, ExtensionLoadError> =>
   Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
-      try: () => import(filePath),
+      try: () =>
+        // gent/no-dynamic-imports: allow extension modules are discovered from user/project files at runtime
+        import(filePath),
       catch: (err) =>
         new ExtensionLoadError({
           extensionId: ExtensionId.make("unknown"),

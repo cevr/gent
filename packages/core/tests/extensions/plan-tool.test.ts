@@ -12,7 +12,7 @@ import { getToolEffect } from "@gent/core/extensions/api"
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)

@@ -3,7 +3,7 @@
  * tool calls and message history for TUI development/testing.
  */
 
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import {
   Branch,
   Message,
@@ -12,6 +12,7 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  dateFromMillis,
 } from "../domain/message.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -37,14 +38,14 @@ const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown
     output: { type: "json", value },
   })
 
-const nowPlus = (offsetMs: number) => new Date(Date.now() + offsetMs)
-
 export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
   const messages = yield* MessageStorage
   const sessionId = SessionId.make(Bun.randomUUIDv7())
   const branchId = BranchId.make(Bun.randomUUIDv7())
+  const now = yield* Clock.currentTimeMillis
+  const nowPlus = (offsetMs: number) => dateFromMillis(now + offsetMs)
 
   const session = new Session({
     id: sessionId,

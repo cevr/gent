@@ -1,7 +1,7 @@
 import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { LinkOpener } from "../services/link-opener"
 import { useTheme } from "../theme/index"
@@ -43,16 +43,28 @@ export function Auth(props: AuthProps) {
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   let routeVersion = 0
   let loadVersion = 0
-  let successTimer: ReturnType<typeof setTimeout> | undefined
+  let successTimer: Fiber.Fiber<void, never> | undefined
 
   const flashSuccess = (msg: string) => {
-    if (successTimer !== undefined) clearTimeout(successTimer)
+    if (successTimer !== undefined) clientCtx.runtime.cast(Fiber.interrupt(successTimer))
     setSuccessMessage(msg)
-    successTimer = setTimeout(() => setSuccessMessage(null), 2000)
+    successTimer = clientCtx.runtime.fork(
+      Effect.sleep("2 seconds").pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            setSuccessMessage(null)
+            successTimer = undefined
+          }),
+        ),
+      ),
+    )
   }
   const invalidateRouteVersion = () => {
     routeVersion += 1
-    if (successTimer !== undefined) clearTimeout(successTimer)
+    if (successTimer !== undefined) {
+      clientCtx.runtime.cast(Fiber.interrupt(successTimer))
+      successTimer = undefined
+    }
     setSuccessMessage(null)
     return routeVersion
   }

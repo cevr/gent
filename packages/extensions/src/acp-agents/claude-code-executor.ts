@@ -25,7 +25,7 @@
  *
  * @module
  */
-import { Effect, Stream } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   TurnError,
@@ -505,7 +505,7 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       )
       return stream
     }).pipe(
-      Effect.mapError((e) => (e instanceof TurnError ? e : new TurnError({ message: String(e) }))),
+      Effect.mapError((e) => (Schema.is(TurnError)(e) ? e : new TurnError({ message: String(e) }))),
     )
     return Stream.unwrap(runTurn)
   },

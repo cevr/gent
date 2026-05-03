@@ -71,12 +71,12 @@ export function buildBasePromptSections(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
+  date: string
   shell?: string
   osVersion?: string
   customInstructions?: string
 }): ReadonlyArray<PromptSection> {
-  const { cwd, platform, isGitRepo, shell, osVersion, customInstructions } = options
-  const date = new Date().toISOString().split("T")[0]
+  const { cwd, platform, isGitRepo, date, shell, osVersion, customInstructions } = options
   const platformDisplay = osVersion !== undefined ? `${platform} (${osVersion})` : platform
 
   const sections: PromptSection[] = [
@@ -112,6 +112,7 @@ export function buildSystemPrompt(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
+  date: string
   shell?: string
   osVersion?: string
   customInstructions?: string

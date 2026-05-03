@@ -155,9 +155,9 @@ class Pushable<T> implements AsyncIterable<T> {
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
           return Promise.resolve({ value: undefined as never, done: true })
         }
-        return new Promise<IteratorResult<T>>((resolve) => {
-          this.resolvers.push(resolve)
-        })
+        const { promise, resolve } = Promise.withResolvers<IteratorResult<T>>()
+        this.resolvers.push(resolve)
+        return promise
       },
     }
   }
@@ -209,18 +209,15 @@ function makeLiveService(): ClaudeSdkServiceShape {
           ...(mcpServers !== undefined ? { mcpServers } : {}),
         }
 
-        let q: Query
-        try {
-          q = sdkQuery({ prompt: input, options })
-        } catch (err) {
-          return yield* Effect.fail(
+        const q = yield* Effect.try({
+          try: () => sdkQuery({ prompt: input, options }),
+          catch: (err) =>
             new ClaudeSdkError({
               kind: "init",
               message: `Failed to start Claude SDK query: ${err instanceof Error ? err.message : String(err)}`,
               cause: err,
             }),
-          )
-        }
+        })
 
         // Await initializationResult — surfaces auth / missing executable
         // failures before the first prompt is pushed.
@@ -236,12 +233,12 @@ function makeLiveService(): ClaudeSdkServiceShape {
 
         let closed = false
         const close = Effect.tryPromise({
-          try: async () => {
-            if (closed) return
+          try: (_signal) => {
+            if (closed) return Promise.resolve(undefined)
             closed = true
             input.end()
             teardownController.abort()
-            await q.close()
+            return Promise.resolve(q.close()).then(() => undefined)
           },
           catch: () => undefined,
         }).pipe(Effect.ignore)
@@ -269,7 +266,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
             // Drain the shared Query iterator until we see a `result` —
             // that marks the end of this prompt's response.
             return Stream.fromAsyncIterable(takeUntilResult(q), (err) =>
-              err instanceof ClaudeSdkError
+              Schema.is(ClaudeSdkError)(err)
                 ? err
                 : new ClaudeSdkError({
                     kind: "stream",
@@ -292,9 +289,24 @@ function makeLiveService(): ClaudeSdkServiceShape {
  * across prompts, so we cannot drain it to completion — only up to the
  * next result.
  */
-async function* takeUntilResult(q: Query): AsyncIterable<SDKMessage> {
-  for await (const msg of q) {
-    yield msg
-    if (msg.type === "result") return
+function takeUntilResult(q: Query): AsyncIterable<SDKMessage> {
+  const iterator = q[Symbol.asyncIterator]()
+  let done = false
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
+      return {
+        next: () => {
+          if (done) return Promise.resolve({ value: undefined, done: true })
+          return iterator.next().then((result) => {
+            if (result.done === true) {
+              done = true
+              return result
+            }
+            if (result.value.type === "result") done = true
+            return result
+          })
+        },
+      }
+    },
   }
 }

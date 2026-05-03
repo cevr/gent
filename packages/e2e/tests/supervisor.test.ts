@@ -8,7 +8,6 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import { sleepMillis, waitDeferred } from "../src/effect-test-adapters"
-import * as path from "node:path"
 import { extractText } from "@gent/sdk"
 import { type WorkerLifecycleState, WorkerSupervisorInternal } from "@gent/sdk/supervisor"
 import {
@@ -18,9 +17,13 @@ import {
   waitFor,
   waitForRpcReady,
 } from "./seam-fixture"
+import { TestFailure } from "./transport-harness"
 
-const repoRoot = path.resolve(import.meta.dir, "../../..")
-const tuiDir = path.join(repoRoot, "apps", "tui")
+const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
+  /\/$/,
+  "",
+)
+const tuiDir = `${repoRoot}/apps/tui`
 const makeTempDir = createTempDirFixture("gent-worker-")
 
 const waitForRunning = (
@@ -30,35 +33,32 @@ const waitForRunning = (
   },
   expectedRestartCount: number,
   timeoutMs = 15_000,
-): Effect.Effect<void, Error> =>
+): Effect.Effect<void, TestFailure> =>
   Effect.gen(function* () {
-    const done = yield* Deferred.make<void, Error>()
-    yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const timeout = setTimeout(() => {
-          const state = worker.getState()
-          Effect.runFork(
-            Deferred.fail(
-              done,
-              new Error(
-                `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
-              ),
-            ),
-          )
-        }, timeoutMs)
-        const unsubscribe = worker.subscribe((state) => {
-          if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
-          Effect.runFork(Deferred.succeed(done, undefined))
-        })
-        return { timeout, unsubscribe }
-      }),
-      () => Deferred.await(done),
-      ({ timeout, unsubscribe }) =>
+    const done = Effect.callback<void, TestFailure>((resume) => {
+      const current = worker.getState()
+      if (current._tag === "running" && current.restartCount === expectedRestartCount) {
+        resume(Effect.void)
+        return
+      }
+      const unsubscribe = worker.subscribe((state) => {
+        if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
+        resume(Effect.void)
+      })
+      return Effect.sync(unsubscribe)
+    })
+    const timeout = sleepMillis(timeoutMs).pipe(
+      Effect.andThen(
         Effect.sync(() => {
-          clearTimeout(timeout)
-          unsubscribe()
+          const state = worker.getState()
+          return new TestFailure({
+            message: `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
+          })
         }),
+      ),
+      Effect.flatMap(Effect.fail),
     )
+    yield* Effect.race(done, timeout)
   })
 
 describe("worker supervisor", () => {
@@ -109,23 +109,21 @@ describe("worker supervisor", () => {
     )
   }, 20_000)
 
-  test("compiled binary launch resolves bun runtime and on-disk server entry", () => {
-    return Effect.runPromise(
+  test("compiled binary launch resolves bun runtime and on-disk server entry", () =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const launch = yield* Effect.promise(() =>
+        const launch = yield* Effect.tryPromise(() =>
           WorkerSupervisorInternal.resolveWorkerLaunch({
             sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",
             execPath: "/repo/apps/tui/bin/gent",
-            sourceExists: (candidate) =>
-              Effect.runPromise(Effect.succeed(candidate === "/repo/apps/server/src/main.ts")),
+            sourceExists: (candidate) => candidate === "/repo/apps/server/src/main.ts",
             which: () => "/usr/local/bin/bun",
           }),
         )
         expect(launch.runtimePath).toBe("/usr/local/bin/bun")
         expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
       }),
-    )
-  })
+    ))
 
   test("restarts the worker on the same transport url", () => {
     const dataDir = makeTempDir()
@@ -239,7 +237,11 @@ describe("worker supervisor", () => {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(new Error("watchRuntime did not resume after worker restart")),
+                  Effect.fail(
+                    new TestFailure({
+                      message: "watchRuntime did not resume after worker restart",
+                    }),
+                  ),
                 onSome: Effect.succeed,
               }),
             ),
@@ -336,7 +338,11 @@ describe("worker supervisor", () => {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(new Error("first turn did not enter running before restart setup")),
+                  Effect.fail(
+                    new TestFailure({
+                      message: "first turn did not enter running before restart setup",
+                    }),
+                  ),
                 onSome: Effect.succeed,
               }),
             ),
@@ -479,7 +485,11 @@ describe("worker supervisor", () => {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(new Error("worker did not deliver a live-only event after restart")),
+                  Effect.fail(
+                    new TestFailure({
+                      message: "worker did not deliver a live-only event after restart",
+                    }),
+                  ),
                 onSome: Effect.succeed,
               }),
             ),

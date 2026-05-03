@@ -33,7 +33,7 @@ export interface SkillsService {
 // the type fence flagging a write capability.
 
 export class Skills extends Context.Service<Skills, ReadOnly<SkillsService>>()(
-  "@gent/core/src/extensions/skills/skills",
+  "@gent/extensions/src/skills/skills",
 ) {
   // Brand on the Tag identifier — see `@gent/core/domain/read-only`.
   declare readonly [ReadOnlyBrand]: true

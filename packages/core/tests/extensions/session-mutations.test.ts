@@ -7,7 +7,14 @@ import {
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
 import { InvalidStateError, NotFoundError } from "../../src/domain/business-errors"
-import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
+import {
+  dateFromMillis,
+  Message,
+  Session,
+  Branch,
+  TextPart,
+  copyMessageToBranch,
+} from "@gent/core/domain/message"
 import type { BranchStorageService } from "@gent/core/storage/branch-storage"
 import type { MessageStorageService } from "@gent/core/storage/message-storage"
 import type { RelationshipStorageService } from "@gent/core/storage/relationship-storage"
@@ -140,7 +147,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
           sessionId,
           parentBranchId,
           name,
-          createdAt: new Date(),
+          createdAt: FIXTURE_DATE,
         })
         testStorage.branches.set(branch.id, branch)
         yield* publish({ _tag: "BranchCreated" })
@@ -158,7 +165,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
             parentBranchId: fromBranchId,
             parentMessageId: atMessageId,
             name,
-            createdAt: new Date(),
+            createdAt: FIXTURE_DATE,
           })
           testStorage.branches.set(branch.id, branch)
           for (const message of messages.slice(0, targetIndex + 1)) {
@@ -198,13 +205,13 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
             parentSessionId,
             parentBranchId,
             activeBranchId: branchId,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: FIXTURE_DATE,
+            updatedAt: FIXTURE_DATE,
           })
           testStorage.sessions.set(sessionId, session)
           testStorage.branches.set(
             branchId,
-            new Branch({ id: branchId, sessionId, createdAt: new Date() }),
+            new Branch({ id: branchId, sessionId, createdAt: FIXTURE_DATE }),
           )
           yield* publish({ _tag: "SessionStarted" })
           return { sessionId, branchId }
@@ -248,7 +255,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
     } as MakeExtensionHostContextDeps["platform"],
     approvalService: {
       present: die("ApprovalService"),
-      pendingRequestId: () => Effect.succeed(undefined),
+      pendingRequestId: () => Effect.void,
       storeResolution: die("ApprovalService"),
       respond: die("ApprovalService"),
       rehydrate: die("ApprovalService"),
@@ -281,6 +288,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
 }
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
+const FIXTURE_DATE = dateFromMillis(0)
 const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutations"] => {
   const fail = () => Effect.fail(new EventStoreError({ message: "publish failed" }))
   return {
@@ -301,14 +309,14 @@ const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
     name: "test",
     cwd: "/tmp",
     activeBranchId: BRANCH_ID,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    createdAt: FIXTURE_DATE,
+    updatedAt: FIXTURE_DATE,
   })
   testStorage.sessions.set(SESSION_ID, session)
   const branch = new Branch({
     id: BRANCH_ID,
     sessionId: SESSION_ID,
-    createdAt: new Date(),
+    createdAt: FIXTURE_DATE,
   })
   testStorage.branches.set(BRANCH_ID, branch)
   return { session, branch }
@@ -322,7 +330,7 @@ const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: 
       branchId: BRANCH_ID,
       role: i % 2 === 0 ? "user" : "assistant",
       parts: [new TextPart({ type: "text", text: `message ${i}` })],
-      createdAt: new Date(Date.now() + i * 1000),
+      createdAt: dateFromMillis(i * 1000),
     })
     msgs.push(msg)
   }
@@ -409,7 +417,7 @@ describe("session mutation primitives", () => {
       const newBranch = new Branch({
         id: BranchId.make("branch-2"),
         sessionId: SESSION_ID,
-        createdAt: new Date(),
+        createdAt: FIXTURE_DATE,
       })
       testStorage.branches.set(newBranch.id, newBranch)
       yield* ctx.session.switchBranch({ toBranchId: newBranch.id })

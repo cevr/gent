@@ -288,10 +288,10 @@ export const RepoTool = tool({
         yield* ensureCached(fs, cachePath, params.spec)
 
         const result = yield* Effect.tryPromise({
-          try: async () => {
-            const output = await $`rg --files-with-matches ${params.query} ${cachePath}`.text()
-            return output.trim().split("\n").filter(Boolean)
-          },
+          try: () =>
+            $`rg --files-with-matches ${params.query} ${cachePath}`
+              .text()
+              .then((output) => output.trim().split("\n").filter(Boolean)),
           catch: () => [] as string[],
         })
         return { path: cachePath, matches: result }

@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Context,
   DateTime,
   Deferred,
@@ -339,13 +340,16 @@ const makeRecoveryDecision = (params: {
             .pipe(Effect.catchEager(() => Effect.void))
 
     if (state._tag === "Idle") {
-      const { queue: remainingQueue, nextItem } = takeNextQueuedTurn(queue)
+      const queuedCreatedAt = yield* DateTime.nowAsDate
+      const { queue: remainingQueue, nextItem } = takeNextQueuedTurn(queue, queuedCreatedAt)
       if (nextItem !== undefined) {
         yield* publishRecovery({ phase: "Idle", action: "resume-queued-turn" })
+        const startedAtMs = yield* Clock.currentTimeMillis
         return Option.some({
           state: buildRunningState(
             { currentAgent: state.currentAgent ?? params.currentAgent },
             nextItem,
+            { startedAtMs },
           ),
           queue: remainingQueue,
         })
@@ -509,7 +513,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const getPricing: PricingLookup = (modelId) =>
           modelRegistryForRun.get(modelId).pipe(
             Effect.map((m) => m?.pricing),
-            Effect.catchEager(() => Effect.succeed(undefined)),
+            Effect.catchEager(() =>
+              Effect.sync(
+                (): { readonly input: number; readonly output: number } | undefined => undefined,
+              ),
+            ),
           )
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
@@ -748,9 +756,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
 
             const takeNextQueuedTurnSerialized = queueMutationSemaphore.withPermits(1)(
-              SubscriptionRef.modify(loopRef, (s) => {
-                const { queue, nextItem } = takeNextQueuedTurn(s.queue)
-                return [{ nextItem }, { ...s, queue }]
+              Effect.gen(function* () {
+                const queuedCreatedAt = yield* DateTime.nowAsDate
+                return yield* SubscriptionRef.modify(loopRef, (s) => {
+                  const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
+                  return [{ nextItem }, { ...s, queue }]
+                })
               }),
             )
 
@@ -1099,9 +1110,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     const { nextItem } = yield* takeNextQueuedTurnSerialized
                     yield* Ref.set(interruptedRef, false)
                     if (nextItem !== undefined) {
+                      const startedAtMs = yield* Clock.currentTimeMillis
                       const nextRunning = buildRunningState(
                         { currentAgent: startState.currentAgent },
                         nextItem,
+                        { startedAtMs },
                       )
                       yield* saveCheckpoint(nextRunning)
                       yield* forkTurn(nextRunning)
@@ -1120,9 +1133,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                         const current = yield* currentLoopState
                         yield* Ref.set(interruptedRef, false)
                         if (nextItem !== undefined) {
+                          const startedAtMs = yield* Clock.currentTimeMillis
                           const nextRunning = buildRunningState(
                             { currentAgent: current.currentAgent },
                             nextItem,
+                            { startedAtMs },
                           )
                           yield* saveCheckpoint(nextRunning)
                           yield* forkTurn(nextRunning)
@@ -1205,7 +1220,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                         // Interrupt that latched after the prior turn ended from
                         // aborting this fresh turn.
                         yield* Ref.set(interruptedRef, false)
-                        const next = buildRunningState(state, event.item)
+                        const startedAtMs = yield* Clock.currentTimeMillis
+                        const next = buildRunningState(state, event.item, { startedAtMs })
                         yield* saveCheckpoint(next)
                         yield* forkTurn(next)
                         return
@@ -1655,7 +1671,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 return
               }
 
-              const reservedRunningState = buildRunningState(loopState, item)
+              const startedAtMs = yield* Clock.currentTimeMillis
+              const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
               yield* SubscriptionRef.update(loop.loopRef, (s) => ({
                 ...s,
                 startingState: reservedRunningState,
@@ -1952,7 +1969,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 yield* loop.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
                 return
               }
-              const reservedRunningState = buildRunningState(loopState, item)
+              const startedAtMs = yield* Clock.currentTimeMillis
+              const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
               yield* SubscriptionRef.update(loop.loopRef, (s) => ({
                 ...s,
                 startingState: reservedRunningState,

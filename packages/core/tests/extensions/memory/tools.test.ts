@@ -7,27 +7,28 @@
  * section never finds them. These tests lock the auto-derive contract.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import * as Fs from "node:fs"
-import * as Path from "node:path"
 import { MemoryRememberTool, MemoryForgetTool } from "@gent/extensions/memory/tools"
-import { Test as MemoryVaultTest, projectKey as projectKeyOf } from "@gent/extensions/memory/vault"
+import {
+  type MemoryVault,
+  Test as MemoryVaultTest,
+  projectKey as projectKeyOf,
+} from "@gent/extensions/memory/vault"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 import { getToolEffect } from "@gent/core/extensions/api"
 
-const memoryToolTest = it.scopedLive.layer(BunFileSystem.layer)
+const memoryToolTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
 
 // Tool execution intentionally keeps dependency requirements behind Gent metadata at the public tool boundary.
 // These tests provide MemoryVaultTest(tmpDir) at every call site before narrowing to never.
 const runMemoryTool = <A, E>(
-  effect: Effect.Effect<A, E, unknown>,
+  effect: Effect.Effect<A, E, MemoryVault>,
   tmpDir: string,
-): Effect.Effect<A, E, never> =>
-  effect.pipe(Effect.provide(MemoryVaultTest(tmpDir))) as Effect.Effect<A, E, never>
+): Effect.Effect<A, E, never> => effect.pipe(Effect.provide(MemoryVaultTest(tmpDir)))
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const makeCtx = (cwd: string, home: string): ToolContext =>
@@ -86,9 +87,11 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
         ),
         tmpDir,
       )
-      const expectedPath = Path.join(tmpDir, "project", expectedKey, "auto-key.md")
-      expect(Fs.existsSync(expectedPath)).toBe(true)
-      const content = Fs.readFileSync(expectedPath, "utf-8")
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const expectedPath = path.join(tmpDir, "project", expectedKey, "auto-key.md")
+      expect(yield* fs.exists(expectedPath)).toBe(true)
+      const content = yield* fs.readFileString(expectedPath)
       expect(content).toContain("Auto Key")
       expect(content).toContain("should land in project dir")
     }),
@@ -108,8 +111,10 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
         ),
         tmpDir,
       )
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
       expect(
-        Fs.existsSync(Path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md")),
+        yield* fs.exists(path.join(tmpDir, "project", "explicit-1234ab", "explicit-key.md")),
       ).toBe(true)
     }),
   )
@@ -127,7 +132,9 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
         ),
         tmpDir,
       )
-      expect(Fs.existsSync(Path.join(tmpDir, "global", "global-note.md"))).toBe(true)
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      expect(yield* fs.exists(path.join(tmpDir, "global", "global-note.md"))).toBe(true)
     }),
   )
 })
@@ -138,14 +145,16 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
       const cwd = "/yet/another/repo"
       const key = projectKeyOf(cwd)
       // Pre-create file under derived key
-      const dir = Path.join(tmpDir, "project", key)
-      Fs.mkdirSync(dir, { recursive: true })
-      const file = Path.join(dir, "to-remove.md")
-      Fs.writeFileSync(
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = path.join(tmpDir, "project", key)
+      yield* fs.makeDirectory(dir, { recursive: true })
+      const file = path.join(dir, "to-remove.md")
+      yield* fs.writeFileString(
         file,
         "---\nscope: project\ntags: []\ncreated: 2026\nupdated: 2026\nsource: agent\n---\n\n# To Remove\n\nbye.",
       )
-      expect(Fs.existsSync(file)).toBe(true)
+      expect(yield* fs.exists(file)).toBe(true)
       yield* runMemoryTool(
         getToolEffect(MemoryForgetTool)(
           { title: "To Remove", scope: "project" },
@@ -153,7 +162,7 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
         ),
         tmpDir,
       )
-      expect(Fs.existsSync(file)).toBe(false)
+      expect(yield* fs.exists(file)).toBe(false)
     }),
   )
 })

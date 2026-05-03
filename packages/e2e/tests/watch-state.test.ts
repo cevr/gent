@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
-import { directSignalCase, transportCases, waitFor } from "./transport-harness"
+import { directSignalCase, toTestFailure, transportCases, waitFor } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectSnapshots = <A, E>(
@@ -39,14 +39,14 @@ describe("runtime watch contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const runtime = yield* collectSnapshots(
                 client.session.watchRuntime({
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 }),
-              ).pipe(Effect.mapError((error) => new Error(String(error))))
+              ).pipe(Effect.mapError(toTestFailure))
 
               const initial = yield* waitFor(
                 Ref.get(runtime),
@@ -63,7 +63,7 @@ describe("runtime watch contracts", () => {
                   branchId: created.branchId,
                   content: `watch-runtime ${transport.name}`,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const updated = yield* waitFor(
                 Ref.get(runtime),
@@ -79,7 +79,7 @@ describe("runtime watch contracts", () => {
                     sessionId: created.sessionId,
                     branchId: created.branchId,
                   })
-                  .pipe(Effect.mapError((error) => new Error(String(error)))),
+                  .pipe(Effect.mapError(toTestFailure)),
                 (snapshot) =>
                   snapshot.messages.some(
                     (message) =>
@@ -117,14 +117,14 @@ describe("runtime watch contracts", () => {
           Effect.gen(function* () {
             const created = yield* client.session
               .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const runtime = yield* collectSnapshots(
               client.session.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
+            ).pipe(Effect.mapError(toTestFailure))
 
             yield* client.message
               .send({
@@ -132,7 +132,7 @@ describe("runtime watch contracts", () => {
                 branchId: created.branchId,
                 content: "first turn",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             // Stream is now paused mid-flight on the chunk gate
             yield* controls.waitForStreamStart
@@ -149,7 +149,7 @@ describe("runtime watch contracts", () => {
                 branchId: created.branchId,
                 content: "queued follow-up",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const updated = yield* waitFor(
               Ref.get(runtime),

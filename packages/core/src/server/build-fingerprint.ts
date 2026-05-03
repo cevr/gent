@@ -5,6 +5,7 @@
 
 import { Config, Effect, FileSystem, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
+import { dateFromMillis } from "../domain/message.js"
 import { runProcess } from "../utils/run-process.js"
 
 /** True when process.execPath is a compiled gent binary, not a generic runtime like bun. */
@@ -29,7 +30,7 @@ export const computeLocalFingerprint: Effect.Effect<
   if (isCompiledBinary()) {
     const info = yield* fs.stat(process.execPath).pipe(Effect.option)
     if (info._tag === "Some") {
-      const mtime = Option.getOrElse(info.value.mtime, () => new Date(0))
+      const mtime = Option.getOrElse(info.value.mtime, () => dateFromMillis(0))
       return `bin-${mtime.getTime().toString(36)}`
     }
   }

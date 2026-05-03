@@ -25,7 +25,7 @@ import { AuthStore } from "../domain/auth-store.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
-import { ExtensionId, SessionId } from "../domain/ids.js"
+import { ExtensionId, type InteractionRequestId, SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
@@ -139,9 +139,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             // Test override layers are heterogeneous; the harness erases R/E
             // at this boundary. Production paths flow through
             // `collectProcessLayers`.
+            /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values */
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>
+            /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
             const layerOverride = defineResource({
               scope: "process",
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
@@ -346,7 +347,7 @@ export const trackingApprovalService = () =>
     const presentCalled = yield* Ref.make(false)
     const layer = Layer.succeed(ApprovalService, {
       present: () => Ref.set(presentCalled, true).pipe(Effect.as({ approved: true })),
-      pendingRequestId: () => Effect.succeed(undefined),
+      pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
       storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,

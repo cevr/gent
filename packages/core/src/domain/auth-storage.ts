@@ -423,18 +423,20 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
 
         const encrypt = (key: CryptoKey, data: AuthData): Effect.Effect<string, AuthStorageError> =>
           Effect.tryPromise({
-            try: async () => {
+            try: () => {
               const iv = crypto.getRandomValues(new Uint8Array(12))
               // @effect-diagnostics-next-line preferSchemaOverJson:off
               const payload = textEncoder.encode(JSON.stringify(data))
-              const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, payload)
-              const file: EncryptedAuthFile = {
-                v: 1,
-                iv: toBase64(iv),
-                data: toBase64(new Uint8Array(encrypted)),
-              }
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              return JSON.stringify(file)
+              return crypto.subtle
+                .encrypt({ name: "AES-GCM", iv }, key, payload)
+                .then((encrypted) => {
+                  const file: EncryptedAuthFile = {
+                    v: 1,
+                    iv: toBase64(iv),
+                    data: toBase64(new Uint8Array(encrypted)),
+                  }
+                  return JSON.stringify(file)
+                })
             },
             catch: (e) =>
               new AuthStorageError({
@@ -457,16 +459,12 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
             ),
             Effect.flatMap((file) =>
               Effect.tryPromise({
-                try: async () => {
+                try: () => {
                   const iv = new Uint8Array(fromBase64(file.iv))
                   const cipher = fromBase64(file.data)
-                  const decrypted = await crypto.subtle.decrypt(
-                    { name: "AES-GCM", iv },
-                    key,
-                    cipher,
-                  )
-                  const decoded = textDecoder.decode(new Uint8Array(decrypted))
-                  return decoded
+                  return crypto.subtle
+                    .decrypt({ name: "AES-GCM", iv }, key, cipher)
+                    .then((decrypted) => textDecoder.decode(new Uint8Array(decrypted)))
                 },
                 catch: (e) =>
                   new AuthStorageError({

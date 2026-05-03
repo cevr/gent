@@ -9,7 +9,7 @@ import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { Task, getToolEffect } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
-import { Session, Branch } from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch } from "@gent/core/domain/message"
 import { BranchId, SessionId, TaskId, ToolCallId } from "@gent/core/domain/ids"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
@@ -22,10 +22,11 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import type { AgentRunner } from "@gent/core/domain/agent"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+const FIXTURE_DATE = dateFromMillis(0)
 
 const mockRunnerSuccess: AgentRunner = {
   run: (params) =>
@@ -73,7 +74,7 @@ const layer = createToolTestLayer({
 const setup = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
-  const now = new Date()
+  const now = FIXTURE_DATE
   yield* sessionStorage.createSession(
     new Session({
       id: SessionId.make("s1"),
@@ -347,7 +348,7 @@ describe("TaskStorage metadata boundary", () => {
         const taskStorage = yield* TaskStorage
         const badMetadata: Record<string, unknown> = {}
         badMetadata["self"] = badMetadata
-        const now = new Date()
+        const now = FIXTURE_DATE
         const result = yield* taskStorage
           .createTask(
             Task.make({

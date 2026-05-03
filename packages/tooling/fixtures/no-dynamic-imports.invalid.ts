@@ -4,6 +4,8 @@
 //   - template-literal `import(`./${name}`)`
 //   - conditional `require(...)` (still a require call regardless of guard)
 //   - `module.require(...)`
+//   - `const req = createRequire(...)`
+//   - `req(...)`
 //   - `createRequire(import.meta.url)("...")`
 
 export const loadStaticPath = async () => {

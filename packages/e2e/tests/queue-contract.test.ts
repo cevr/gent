@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
-import { directSignalCase, waitFor } from "./transport-harness"
+import { directSignalCase, toTestFailure, waitFor } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const flattenRestoreText = (snapshot: {
@@ -43,14 +43,14 @@ describe("queue seam contract", () => {
               .create({
                 cwd: process.cwd(),
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const runtime = yield* collectRuntime(
               client.session.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
+            ).pipe(Effect.mapError(toTestFailure))
 
             yield* client.message
               .send({
@@ -58,7 +58,7 @@ describe("queue seam contract", () => {
                 branchId: created.branchId,
                 content: "first turn",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             // Wait for the stream to start so the runtime is genuinely non-idle
             yield* controls.waitForStreamStart
@@ -75,7 +75,7 @@ describe("queue seam contract", () => {
                 branchId: created.branchId,
                 content: "queued a",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             yield* client.message
               .send({
@@ -83,7 +83,7 @@ describe("queue seam contract", () => {
                 branchId: created.branchId,
                 content: "queued b",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const queued = yield* waitFor(
               client.queue
@@ -91,7 +91,7 @@ describe("queue seam contract", () => {
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (snapshot) => flattenRestoreText(snapshot) === "queued a\nqueued b",
               10_000,
             )
@@ -104,7 +104,7 @@ describe("queue seam contract", () => {
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             expect(flattenRestoreText(drained)).toBe("queued a\nqueued b")
 
@@ -114,7 +114,7 @@ describe("queue seam contract", () => {
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
               10_000,
             )
@@ -140,14 +140,14 @@ describe("queue seam contract", () => {
               .create({
                 cwd: process.cwd(),
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const runtime = yield* collectRuntime(
               client.session.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
+            ).pipe(Effect.mapError(toTestFailure))
 
             yield* client.message
               .send({
@@ -155,7 +155,7 @@ describe("queue seam contract", () => {
                 branchId: created.branchId,
                 content: "first turn",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             yield* controls.waitForStreamStart
 
@@ -171,7 +171,7 @@ describe("queue seam contract", () => {
                 branchId: created.branchId,
                 content: "queued follow-up",
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             yield* client.steer
               .command({
@@ -182,7 +182,7 @@ describe("queue seam contract", () => {
                   message: "urgent steer",
                 },
               })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+              .pipe(Effect.mapError(toTestFailure))
 
             const queued = yield* waitFor(
               client.queue
@@ -190,7 +190,7 @@ describe("queue seam contract", () => {
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (snapshot) =>
                 snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
                 snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
@@ -211,7 +211,7 @@ describe("queue seam contract", () => {
             const messages = yield* waitFor(
               client.message
                 .list({ branchId: created.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (items) => {
                 const userTexts = items
                   .filter((message) => message.role === "user")
@@ -238,7 +238,7 @@ describe("queue seam contract", () => {
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
+                .pipe(Effect.mapError(toTestFailure)),
               (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
               10_000,
             )

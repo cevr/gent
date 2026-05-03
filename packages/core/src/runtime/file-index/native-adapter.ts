@@ -6,28 +6,11 @@ import {
   type IndexedFile,
 } from "../../domain/file-index.js"
 import { RuntimePlatform } from "../runtime-platform.js"
+import { FileFinder as NativeFileFinder, type FileItem } from "@ff-labs/fff-bun"
 
-// ---------------------------------------------------------------------------
-// Dynamic import — fails gracefully when @ff-labs/fff-bun is not installed.
-// We use import() type annotations because the module may not exist at all;
-// a static `import type` would fail module resolution.
-// ---------------------------------------------------------------------------
+type FileFinder = NativeFileFinder
 
-// eslint-disable-next-line typescript-eslint/consistent-type-imports -- optional native module may be absent at install time
-type FileFinder = import("@ff-labs/fff-bun").FileFinder
-// eslint-disable-next-line typescript-eslint/consistent-type-imports -- optional native module may be absent at install time
-type FffModule = typeof import("@ff-labs/fff-bun")
-
-let _mod: FffModule | undefined
-
-export const loadNativeModule: Effect.Effect<FffModule, FileIndexError> = Effect.tryPromise({
-  try: async () => {
-    if (_mod !== undefined) return _mod
-    _mod = await import("@ff-labs/fff-bun")
-    return _mod
-  },
-  catch: () => new FileIndexError({ message: "native file finder unavailable", cwd: "" }),
-})
+export const isNativeFileIndexAvailable = (): boolean => NativeFileFinder.isAvailable()
 
 // ---------------------------------------------------------------------------
 // Per-cwd finder cache
@@ -67,16 +50,7 @@ const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boole
 // Convert FFF FileItem to IndexedFile
 // ---------------------------------------------------------------------------
 
-const toIndexedFile = (
-  path: Path.Path,
-  basePath: string,
-  item: {
-    relativePath: string
-    fileName: string
-    size: number
-    modified: number
-  },
-): IndexedFile => ({
+const toIndexedFile = (path: Path.Path, basePath: string, item: FileItem): IndexedFile => ({
   path: path.join(basePath, item.relativePath),
   relativePath: item.relativePath,
   fileName: item.fileName,
@@ -90,17 +64,14 @@ const toIndexedFile = (
 
 const makeNativeService = (
   finders: Map<string, FinderEntry>,
-  mod: FffModule,
   dbDir: string,
   path: Path.Path,
 ): FileIndexService => {
-  const FF = mod.FileFinder
-
   const getOrCreate = (cwd: string): FinderEntry | undefined => {
     const existing = finders.get(cwd)
     if (existing !== undefined) return existing
 
-    const result = FF.create({
+    const result = NativeFileFinder.create({
       basePath: cwd,
       frecencyDbPath: path.join(dbDir, "frecency.mdb"),
       historyDbPath: path.join(dbDir, "history.mdb"),
@@ -203,13 +174,12 @@ const makeNativeService = (
 
 /** Create a native service + finalizer from a loaded module. */
 export const makeNativeServiceFromModule = (
-  mod: FffModule,
   dbDir: string,
   path: Path.Path,
 ): { service: FileIndexService; finalize: Effect.Effect<void> } => {
   const finders = new Map<string, FinderEntry>()
   return {
-    service: makeNativeService(finders, mod, dbDir, path),
+    service: makeNativeService(finders, dbDir, path),
     finalize: Effect.sync(() => {
       for (const [, entry] of finders) {
         try {
@@ -233,9 +203,7 @@ export const NativeFileIndexLive: Layer.Layer<
   FileSystem.FileSystem | Path.Path | RuntimePlatform
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const mod = yield* loadNativeModule
-
-    if (!mod.FileFinder.isAvailable()) {
+    if (!isNativeFileIndexAvailable()) {
       return yield* new FileIndexError({ message: "native binary not available", cwd: "" })
     }
 
@@ -244,7 +212,7 @@ export const NativeFileIndexLive: Layer.Layer<
     const { home } = yield* RuntimePlatform
     const dbDir = yield* ensureDbDir(home, path, fs)
 
-    const { service, finalize } = makeNativeServiceFromModule(mod, dbDir, path)
+    const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
     yield* Effect.addFinalizer(() => finalize)
 
     return Layer.succeed(FileIndex, service)

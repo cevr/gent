@@ -11,7 +11,6 @@ import {
 } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { Effect } from "effect"
 import { useClient } from "../client/index"
 import type { DomainSession } from "../client"
 import { useCommand } from "../command/index"
@@ -27,8 +26,6 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router/index"
 import { useTheme } from "../theme/index"
-import { formatError } from "../utils/format-error"
-import { useRuntime } from "../hooks/use-runtime"
 
 const fuzzyMatch = (text: string, query: string): boolean => {
   const lower = text.toLowerCase()
@@ -87,7 +84,6 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const client = useClient()
-  const { cast } = useRuntime()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())
@@ -146,17 +142,7 @@ export function CommandPalette() {
   })
 
   const sessionsLevel = (): PaletteLevel => {
-    const [sessions] = createResource(
-      () =>
-        new Promise<readonly DomainSession[]>((resolve, reject) => {
-          cast(
-            client.listSessions().pipe(
-              Effect.tap((result) => Effect.sync(() => resolve(result))),
-              Effect.catchEager((error) => Effect.sync(() => reject(formatError(error)))),
-            ),
-          )
-        }),
-    )
+    const [sessions] = createResource(() => client.runtime.run(client.listSessions()))
 
     const newSessionItem: PaletteItem = {
       id: "session.new",

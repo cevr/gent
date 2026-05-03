@@ -101,7 +101,7 @@ export interface AutoJournalService {
 }
 
 export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService>()(
-  "@gent/core/src/extensions/auto-journal/AutoJournal",
+  "@gent/extensions/src/auto-journal/AutoJournal",
 ) {
   static Noop: Layer.Layer<AutoJournal> = Layer.succeed(AutoJournal, {
     start: () => Effect.succeed("") as Effect.Effect<string>,

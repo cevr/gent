@@ -136,8 +136,8 @@ describe("TaskExtension via RPC", () => {
             extensions: [ext],
           })
 
-          const result = yield* client.extension
-            .request({
+          const result = yield* Effect.exit(
+            client.extension.request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
@@ -145,10 +145,12 @@ describe("TaskExtension via RPC", () => {
               intent: TaskCreateRef.intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
-            })
-            .pipe(Effect.flip)
+            }),
+          )
           // ExtensionProtocolError is the transport boundary's tagged error
-          expect(result._tag).toBe("ExtensionProtocolError")
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure")
+            expect(String(result.cause)).toContain("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -167,17 +169,19 @@ describe("TaskExtension via RPC", () => {
             extensions: [ext],
           })
 
-          const result = yield* client.extension
-            .request({
+          const result = yield* Effect.exit(
+            client.extension.request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
               capabilityId: "not-a-real-capability",
               intent: "write",
               input: {},
-            })
-            .pipe(Effect.flip)
-          expect(result._tag).toBe("ExtensionProtocolError")
+            }),
+          )
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure")
+            expect(String(result.cause)).toContain("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -196,18 +200,20 @@ describe("TaskExtension via RPC", () => {
             extensions: [ext],
           })
 
-          const result = yield* client.extension
-            .request({
+          const result = yield* Effect.exit(
+            client.extension.request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
               capabilityId: TaskCreateRef.capabilityId,
               intent: "read",
               input: { subject: "Inspect repo" },
-            })
-            .pipe(Effect.flip)
+            }),
+          )
 
-          expect(result._tag).toBe("ExtensionProtocolError")
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure")
+            expect(String(result.cause)).toContain("ExtensionProtocolError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

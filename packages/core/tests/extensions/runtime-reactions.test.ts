@@ -37,7 +37,9 @@ const ext = (
   contributions,
 })
 
-class BoomError extends Data.TaggedError("@gent/core/tests/runtime-reactions/BoomError")<{
+class BoomError extends Data.TaggedError(
+  "@gent/core/tests/extensions/runtime-reactions.test/BoomError",
+)<{
   readonly reason: string
 }> {}
 

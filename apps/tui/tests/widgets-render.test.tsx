@@ -10,6 +10,7 @@ import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
 import { useClient, type GentRuntime } from "../src/client"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),
@@ -19,8 +20,8 @@ const testSession: Session = {
   activeBranchId: BranchId.make("branch-test"),
   parentSessionId: undefined,
   parentBranchId: undefined,
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
 }
 const nextSession: Session = {
   id: SessionId.make("session-next"),
@@ -30,8 +31,8 @@ const nextSession: Session = {
   activeBranchId: BranchId.make("branch-next"),
   parentSessionId: undefined,
   parentBranchId: undefined,
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
 }
 const HealthControlsProbe = (props: {
   expose: (controls: {
@@ -73,7 +74,9 @@ const createMutableRuntime = (initialState: ConnectionState) => {
   const listeners = new Set<(state: ConnectionState) => void>()
   const runtime: GentRuntime = {
     cast: (effect) => {
-      Effect.runFork(effect as Effect.Effect<unknown, unknown, never>)
+      Effect.runFork(
+        effect as Effect.Effect<unknown, never, never> as Effect.Effect<void, never, never>,
+      )
     },
     fork: Effect.runFork as never,
     run: Effect.runPromise as never,
@@ -110,7 +113,7 @@ describe("TUI renderer surfaces", () => {
           content: "Stop and switch agent",
           reasoning: "",
           images: [],
-          createdAt: Date.now(),
+          createdAt: 0,
           toolCalls: undefined,
         } satisfies Message,
         {
@@ -120,7 +123,7 @@ describe("TUI renderer surfaces", () => {
           content: "Switching now",
           reasoning: "Considering current task state",
           images: [],
-          createdAt: Date.now(),
+          createdAt: 0,
           toolCalls: undefined,
         } satisfies Message,
       ]
@@ -148,7 +151,7 @@ describe("TUI renderer surfaces", () => {
           _tag: "steering",
           id: MessageId.make("m1"),
           content: "switch to deepwork",
-          createdAt: Date.now(),
+          createdAt: 0,
         },
       ]
       const queuedMessages: QueueEntryInfo[] = [
@@ -156,7 +159,7 @@ describe("TUI renderer surfaces", () => {
           _tag: "follow-up",
           id: MessageId.make("m2"),
           content: "line one\nline two\nline three",
-          createdAt: Date.now(),
+          createdAt: 0,
         },
       ]
       const setup = yield* Effect.promise(() =>

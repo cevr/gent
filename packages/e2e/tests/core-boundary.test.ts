@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { transportCases } from "./transport-harness"
+import { toTestFailure, transportCases } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
@@ -42,15 +42,13 @@ describe("session RPC boundary", () => {
 
               yield* client.session
                 .delete({ sessionId: created.sessionId })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               yield* waitDeferred(events.closed).pipe(Effect.timeout("15 seconds"))
 
-              const sessions = yield* client.session
-                .list()
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+              const sessions = yield* client.session.list().pipe(Effect.mapError(toTestFailure))
               const deleted = yield* client.session
                 .get({ sessionId: created.sessionId })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
               expect(deleted).toBeNull()

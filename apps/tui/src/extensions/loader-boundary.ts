@@ -11,7 +11,7 @@
  * world and the Effect runtime.
  */
 
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import type {
   AnyExtensionClientModule,
   ClientContribution,
@@ -36,13 +36,21 @@ const getClientModuleError = (value: unknown): string | undefined => {
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
   getClientModuleError(value) === undefined
 
+class TuiExtensionImportError extends Schema.TaggedErrorClass<TuiExtensionImportError>()(
+  "TuiExtensionImportError",
+  {
+    message: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
+
 /**
  * Run an extension's Effect-typed setup against the per-provider runtime.
  * The runtime carries every TUI service the setup may yield (FileSystem,
  * Path, ClientTransport, ClientWorkspace, ClientShell, ClientComposer);
  * `runtime.runPromise` enforces dependency satisfaction dynamically.
  */
-const invokeSetup = async (
+const invokeSetup = (
   ext: AnyExtensionClientModule,
   runtime: ClientRuntime,
 ): Promise<ReadonlyArray<ClientContribution>> => runtime.runPromise(ext.setup)
@@ -62,25 +70,33 @@ interface ImportedExtension {
 }
 
 /** Import module and validate shape — does NOT call setup() */
-const importExtension = async (
+const importExtension = (
   entry: DiscoveredTuiExtension,
-): Promise<ImportedExtension | undefined> => {
-  try {
-    const mod = await import(entry.filePath)
+): Effect.Effect<ImportedExtension | undefined> =>
+  Effect.gen(function* () {
+    const mod = yield* Effect.tryPromise({
+      // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+      try: () => import(entry.filePath),
+      catch: (cause) =>
+        new TuiExtensionImportError({
+          message: `Failed to load ${entry.filePath}`,
+          cause,
+        }),
+    })
     const candidate = mod.default ?? mod
 
     const error = getClientModuleError(candidate)
     if (error !== undefined || !isExtensionClientModule(candidate)) {
-      console.log(`[tui-ext] Skipping ${entry.filePath}: ${error ?? "invalid module shape"}`)
+      yield* Effect.log(`[tui-ext] Skipping ${entry.filePath}: ${error ?? "invalid module shape"}`)
       return undefined
     }
 
     return { module: candidate, scope: entry.scope, filePath: entry.filePath }
-  } catch (err) {
-    console.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`)
-    return undefined
-  }
-}
+  }).pipe(
+    Effect.catch((err: TuiExtensionImportError) =>
+      Effect.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`).pipe(Effect.as(undefined)),
+    ),
+  )
 
 /**
  * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
@@ -93,7 +109,7 @@ const importExtension = async (
  * NOT take `fs`/`path` parameters. Any runtime that satisfies
  * `FileSystem | Path | <other services>` works.
  */
-export const loadTuiExtensions = async (opts: {
+export const loadTuiExtensions = (opts: {
   readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
   readonly userDir: string
   readonly projectDir: string
@@ -102,50 +118,63 @@ export const loadTuiExtensions = async (opts: {
    *  setup may yield, plus `FileSystem | Path` for discovery. The TUI
    *  shell builds this with the full client-services Layer. */
   readonly runtime: ClientRuntime
-}): Promise<ResolvedTuiExtensions> => {
-  const disabledSet = new Set(opts.disabled ?? [])
+}): Promise<ResolvedTuiExtensions> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const disabledSet = new Set(opts.disabled ?? [])
 
-  // Discovery runs through the runtime so `FileSystem`/`Path` come from the
-  // same Layer that powers Effect-typed extension setups. This is the only
-  // place outside `invokeSetup` that crosses the runtime boundary.
-  const discovered = await discoverExtensionsWithRuntime(opts.runtime, {
-    userDir: opts.userDir,
-    projectDir: opts.projectDir,
-  })
+      // Discovery runs through the runtime so `FileSystem`/`Path` come from the
+      // same Layer that powers Effect-typed extension setups. This is the only
+      // place outside `invokeSetup` that crosses the runtime boundary.
+      const discovered = yield* Effect.promise(() =>
+        discoverExtensionsWithRuntime(opts.runtime, {
+          userDir: opts.userDir,
+          projectDir: opts.projectDir,
+        }),
+      )
 
-  // Import user/project modules, then filter by disabled before calling setup()
-  const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))
-  const enabled = imported
-    .filter((r): r is ImportedExtension => r !== undefined)
-    .filter((r) => !disabledSet.has(r.module.id))
+      // Import user/project modules, then filter by disabled before calling setup()
+      const imported = yield* Effect.all(discovered.map((entry) => importExtension(entry)))
+      const enabled = imported
+        .filter((r): r is ImportedExtension => r !== undefined)
+        .filter((r) => !disabledSet.has(r.module.id))
 
-  // Builtins: pre-imported, just filter disabled and call setup()
-  const builtinLoaded: LoadedTuiExtension[] = await Promise.all(
-    (opts.builtins ?? [])
-      .filter((ext) => !disabledSet.has(ext.id))
-      .map(async (ext) => ({
-        id: ext.id,
-        scope: "builtin" as const,
-        filePath: `builtin:${ext.id}`,
-        contributions: await invokeSetup(ext, opts.runtime),
-      })),
+      // Builtins: pre-imported, just filter disabled and call setup()
+      const builtinLoaded: LoadedTuiExtension[] = yield* Effect.all(
+        (opts.builtins ?? [])
+          .filter((ext) => !disabledSet.has(ext.id))
+          .map((ext) =>
+            Effect.promise(() =>
+              invokeSetup(ext, opts.runtime).then((contributions) => ({
+                id: ext.id,
+                scope: "builtin" as const,
+                filePath: `builtin:${ext.id}`,
+                contributions,
+              })),
+            ),
+          ),
+      )
+
+      const externalLoaded: LoadedTuiExtension[] = yield* Effect.all(
+        enabled.map((ext) =>
+          Effect.promise(() =>
+            invokeSetup(ext.module, opts.runtime).then((contributions) => ({
+              id: ext.module.id,
+              scope: ext.scope,
+              filePath: ext.filePath,
+              contributions,
+            })),
+          ),
+        ),
+      )
+
+      const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
+
+      if (resolved.autocompleteItems.length > 0) {
+        const prefixes = resolved.autocompleteItems.map((c) => c.prefix).join(", ")
+        yield* Effect.log(`[tui-ext] autocomplete contributions: ${prefixes}`)
+      }
+
+      return resolved
+    }),
   )
-
-  const externalLoaded: LoadedTuiExtension[] = await Promise.all(
-    enabled.map(async (ext) => ({
-      id: ext.module.id,
-      scope: ext.scope,
-      filePath: ext.filePath,
-      contributions: await invokeSetup(ext.module, opts.runtime),
-    })),
-  )
-
-  const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
-
-  if (resolved.autocompleteItems.length > 0) {
-    const prefixes = resolved.autocompleteItems.map((c) => c.prefix).join(", ")
-    console.log(`[tui-ext] autocomplete contributions: ${prefixes}`)
-  }
-
-  return resolved
-}

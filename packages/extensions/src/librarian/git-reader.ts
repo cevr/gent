@@ -1,5 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
 import { $ } from "bun"
+import * as esGit from "es-git"
 
 // ---------------------------------------------------------------------------
 // Error
@@ -99,7 +100,7 @@ export interface GitReaderService {
 }
 
 export class GitReader extends Context.Service<GitReader, GitReaderService>()(
-  "@gent/core/src/extensions/librarian/git-reader/GitReader",
+  "@gent/extensions/src/librarian/git-reader/GitReader",
 ) {
   // ---------------------------------------------------------------------------
   // Live — es-git NAPI backend
@@ -109,8 +110,6 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
     Layer.effect(
       GitReader,
       Effect.gen(function* () {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports, typescript-eslint/consistent-type-imports -- es-git is a NAPI CJS backend loaded inside the live layer
-        const esGit: typeof import("es-git") = require("es-git")
         const fs = yield* FileSystem.FileSystem
         const cred = (url: string) => resolveCredential(fs, home, url)
 
@@ -139,15 +138,17 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
               const remote = repo.getRemote("origin")
               const credential = yield* cred(remote.url())
               yield* Effect.tryPromise({
-                try: async () => {
-                  await remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
-                    fetch: { credential },
-                  })
-                  const headOid = repo.revparseSingle("origin/HEAD")
-                  const headCommit = repo.getCommit(headOid)
-                  repo.setHeadDetached(headCommit)
-                  repo.checkoutHead({ force: true })
-                },
+                try: () =>
+                  remote
+                    .fetch(["refs/heads/*:refs/remotes/origin/*"], {
+                      fetch: { credential },
+                    })
+                    .then(() => {
+                      const headOid = repo.revparseSingle("origin/HEAD")
+                      const headCommit = repo.getCommit(headOid)
+                      repo.setHeadDetached(headCommit)
+                      repo.checkoutHead({ force: true })
+                    }),
                 catch: (e) =>
                   new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
               })
@@ -155,50 +156,50 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
 
           listFiles: (repoPath, ref) =>
             Effect.tryPromise({
-              try: async () => {
-                const repo = await esGit.openRepository(repoPath)
-                const oid = repo.revparseSingle(ref ?? "HEAD")
-                const commit = repo.getCommit(oid)
-                const files: string[] = []
-                const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
-                  for (const entry of tree.iter()) {
-                    const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
-                    if (entry.type() === "Blob") {
-                      files.push(fullPath)
-                    } else if (entry.type() === "Tree") {
-                      const subtree = repo.findTree(entry.id())
-                      if (subtree !== null) walk(subtree, fullPath)
+              try: () =>
+                esGit.openRepository(repoPath).then((repo) => {
+                  const oid = repo.revparseSingle(ref ?? "HEAD")
+                  const commit = repo.getCommit(oid)
+                  const files: string[] = []
+                  const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
+                    for (const entry of tree.iter()) {
+                      const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
+                      if (entry.type() === "Blob") {
+                        files.push(fullPath)
+                      } else if (entry.type() === "Tree") {
+                        const subtree = repo.findTree(entry.id())
+                        if (subtree !== null) walk(subtree, fullPath)
+                      }
                     }
                   }
-                }
-                walk(commit.tree(), "")
-                return files
-              },
+                  walk(commit.tree(), "")
+                  return files
+                }),
               catch: (e) =>
                 new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
             }),
 
           readFile: (repoPath, filePath, ref) =>
             Effect.tryPromise({
-              try: async () => {
-                const repo = await esGit.openRepository(repoPath)
-                const oid = repo.revparseSingle(ref ?? "HEAD")
-                const commit = repo.getCommit(oid)
-                const tree = commit.tree()
-                const entry = tree.getPath(filePath)
-                if (entry === null || entry === undefined) {
-                  throw new Error(`File not found: ${filePath}`)
-                }
-                const blob = entry.toObject(repo).peelToBlob()
-                if (blob === null || blob === undefined) {
-                  throw new Error(`Not a blob: ${filePath}`)
-                }
-                return {
-                  content: new Uint8Array(blob.content()),
-                  size: Number(blob.size()),
-                  isBinary: blob.isBinary(),
-                }
-              },
+              try: () =>
+                esGit.openRepository(repoPath).then((repo) => {
+                  const oid = repo.revparseSingle(ref ?? "HEAD")
+                  const commit = repo.getCommit(oid)
+                  const tree = commit.tree()
+                  const entry = tree.getPath(filePath)
+                  if (entry === null || entry === undefined) {
+                    throw new Error(`File not found: ${filePath}`)
+                  }
+                  const blob = entry.toObject(repo).peelToBlob()
+                  if (blob === null || blob === undefined) {
+                    throw new Error(`Not a blob: ${filePath}`)
+                  }
+                  return {
+                    content: new Uint8Array(blob.content()),
+                    size: Number(blob.size()),
+                    isBinary: blob.isBinary(),
+                  }
+                }),
               catch: (e) =>
                 new GitReaderError({ message: String(e), operation: "readFile", cause: e }),
             }),

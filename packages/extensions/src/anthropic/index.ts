@@ -32,7 +32,7 @@ import { buildKeychainTransformClient } from "./keychain-transform.js"
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
 const readEnv = (name: string): string | undefined => {
-  const val = process.env[name]
+  const val = Bun.env[name]
   return val !== undefined && val !== "" ? val : undefined
 }
 
@@ -91,8 +91,8 @@ const makeApiKeyAnthropicLayer = (
  * come from layers that the unwrapped Effect can `yield*`.
  *
  * The cache cell `Ref`s for both services are passed in from
- * extension-closure scope (built once in `modelDrivers()` via
- * `Ref.makeUnsafe`), not allocated per layer build. Without this hoist,
+ * extension-closure scope (allocated once by the Effectful
+ * `modelDrivers()` setup), not per layer build. Without this hoist,
  * every `Provider.stream`/`Provider.generate` call rebuilds the service
  * layer and resets the cache, killing cross-request beta learning and
  * credential reuse.
@@ -227,6 +227,7 @@ export const buildAnthropicModelDriver = (
             }),
           ),
         ),
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(BunServices.layer),
       ),
   },
@@ -234,22 +235,23 @@ export const buildAnthropicModelDriver = (
 
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
-  modelDrivers: () => {
-    const env: AnthropicKeychainEnv = {
-      betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
-      cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
-      userAgent: readEnv("ANTHROPIC_USER_AGENT"),
-    }
-    initAnthropicKeychainEnv(env)
+  modelDrivers: () =>
+    Effect.gen(function* () {
+      const env: AnthropicKeychainEnv = {
+        betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
+        cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
+        userAgent: readEnv("ANTHROPIC_USER_AGENT"),
+      }
+      initAnthropicKeychainEnv(env)
 
-    // Cache cells are hoisted to extension-closure scope so they
-    // survive across `resolveModel` calls. Lifetime: one extension
-    // instance → one cell that lives until the runtime tears the
-    // extension down. `Ref.makeUnsafe` is the right primitive here
-    // because `modelDrivers()` is sync (no Effect runtime).
-    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+      // Cache cells are hoisted to extension-closure scope so they
+      // survive across `resolveModel` calls. Lifetime: one extension
+      // instance → one cell that lives until the runtime tears the
+      // extension down. Setup is Effectful, so cache cells are allocated
+      // through Ref.make instead of an unsafe closure escape hatch.
+      const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-    return [buildAnthropicModelDriver(credentialCellRef, betaCellRef)]
-  },
+      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef)]
+    }),
 })

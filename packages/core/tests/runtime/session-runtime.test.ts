@@ -1,10 +1,10 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import { Branch, Session } from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
 import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
@@ -55,7 +55,7 @@ import {
 } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import type { AgentLoopCheckpointRecord } from "../../src/runtime/agent/agent-loop.checkpoint"
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
   const cowork = AgentDefinition.make({
@@ -265,7 +265,7 @@ const createSessionBranch = Effect.gen(function* () {
   const branchStorage = yield* BranchStorage
   const sessionId = SessionId.make("runtime-session")
   const branchId = BranchId.make("runtime-branch")
-  const now = new Date()
+  const now = dateFromMillis(1_767_225_600_000)
   yield* sessionStorage.createSession(
     new Session({
       id: sessionId,
@@ -282,7 +282,7 @@ const createCwdSessionBranch = Effect.gen(function* () {
   const branchStorage = yield* BranchStorage
   const sessionId = SessionId.make("runtime-session-with-cwd")
   const branchId = BranchId.make("runtime-branch-with-cwd")
-  const now = new Date()
+  const now = dateFromMillis(1_767_225_600_000)
   yield* sessionStorage.createSession(
     new Session({
       id: sessionId,
@@ -302,7 +302,7 @@ const createSessionBranchWithIds = (input: {
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
-    const now = new Date()
+    const now = dateFromMillis(1_767_225_600_000)
     yield* sessionStorage.createSession(
       new Session({
         id: input.sessionId,
@@ -651,9 +651,13 @@ describe("SessionRuntime", () => {
         append: (event: AgentEvent) =>
           event._tag === "ToolCallSucceeded"
             ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.succeed(
-                EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
-              ),
+            : Effect.gen(function* () {
+                return EventEnvelope.make({
+                  id: EventId.make(0),
+                  event,
+                  createdAt: yield* Clock.currentTimeMillis,
+                })
+              }),
         deliver: () => Effect.void,
         publish: () => Effect.void,
       })
@@ -1064,8 +1068,8 @@ describe("SessionRuntime", () => {
   )
   it.live("dispatch RespondInteraction resumes a waiting interaction through the live loop", () =>
     Effect.gen(function* () {
-      const callCount = Ref.makeUnsafe(0)
-      const resolution = Deferred.makeUnsafe<void>()
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
       const toolDef = makeInteractionTool(callCount, resolution)
       const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
       yield* narrowR(

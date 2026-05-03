@@ -12,7 +12,7 @@
  * `runAnyEffect(services, effect)` trampoline.
  */
 
-import { Context, Effect } from "effect"
+import { Context, Effect, Random } from "effect"
 import { ToolCallId, makeToolContext, type ToolContext } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../internal/builtin.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
@@ -36,9 +36,13 @@ export const makeAcpRunTool = (params: {
   const toolRunner = Context.get(ambient, ToolRunner)
   const runOnRuntime = Effect.runPromiseWith(params.services)
 
-  return (toolName, args) => {
-    const toolCallId = ToolCallId.make(crypto.randomUUID())
-    const toolCtx: ToolContext = makeToolContext(params.hostCtx, toolCallId)
-    return runOnRuntime(toolRunner.run({ toolCallId, toolName, input: args }, toolCtx))
-  }
+  return (toolName, args) =>
+    runOnRuntime(
+      Effect.gen(function* () {
+        const uuid = yield* Random.nextUUIDv4
+        const toolCallId = ToolCallId.make(uuid)
+        const toolCtx: ToolContext = makeToolContext(params.hostCtx, toolCallId)
+        return yield* toolRunner.run({ toolCallId, toolName, input: args }, toolCtx)
+      }),
+    )
 }

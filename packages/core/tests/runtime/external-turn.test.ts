@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
@@ -15,7 +15,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider, finishPart } from "@gent/core/providers/provider"
-import { ImagePart, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, ImagePart, Message, TextPart } from "@gent/core/domain/message"
 import {
   messagePartsText,
   messagePartsToolCallParts,
@@ -46,7 +46,7 @@ const makeMessage = (text: string) =>
     branchId,
     role: "user",
     parts: [new TextPart({ type: "text", text })],
-    createdAt: new Date(),
+    createdAt: dateFromMillis(1_767_225_600_000),
   })
 const makeMessageWithParts = (parts: Message["parts"]) =>
   Message.Regular.make({
@@ -55,7 +55,7 @@ const makeMessageWithParts = (parts: Message["parts"]) =>
     branchId,
     role: "user",
     parts,
-    createdAt: new Date(),
+    createdAt: dateFromMillis(1_767_225_600_000),
   })
 const runAgentLoop = (
   agentLoop: AgentLoopService,
@@ -174,13 +174,14 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
     append: (event: AgentEvent) =>
       Effect.gen(function* () {
         yield* Ref.update(eventsRef, (events) => [...events, event])
-        return EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() })
+        return EventEnvelope.make({
+          id: EventId.make(0),
+          event,
+          createdAt: yield* Clock.currentTimeMillis,
+        })
       }),
     broadcast: () => Effect.void,
-    publish: (event: AgentEvent) =>
-      Effect.gen(function* () {
-        yield* Ref.update(eventsRef, (events) => [...events, event])
-      }),
+    publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
     subscribe: () => Stream.empty,
     removeSession: () => Effect.void,
   })

@@ -10,7 +10,7 @@ import { testSetupCtx } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/extensions/api"
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)

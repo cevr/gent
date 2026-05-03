@@ -1,6 +1,10 @@
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { FileIndex, FileIndexError, type FileIndexService } from "../../domain/file-index.js"
-import { loadNativeModule, makeNativeServiceFromModule, ensureDbDir } from "./native-adapter.js"
+import {
+  isNativeFileIndexAvailable,
+  makeNativeServiceFromModule,
+  ensureDbDir,
+} from "./native-adapter.js"
 import { FallbackFileIndexLive, makeFallbackService } from "./fallback-adapter.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 
@@ -44,16 +48,14 @@ export const FileIndexLive: Layer.Layer<
     const fs = yield* FileSystem.FileSystem
     const fallback = makeFallbackService(fs, path)
 
-    // Try loading native module
-    const mod = yield* loadNativeModule.pipe(Effect.option)
-    if (mod._tag === "None" || !mod.value.FileFinder.isAvailable()) {
+    if (!isNativeFileIndexAvailable()) {
       return Layer.succeed(FileIndex, fallback)
     }
 
     const { home } = yield* RuntimePlatform
     const dbDir = yield* ensureDbDir(home, path, fs)
 
-    const { service, finalize } = makeNativeServiceFromModule(mod.value, dbDir, path)
+    const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
 
     yield* Effect.addFinalizer(() => finalize)
 

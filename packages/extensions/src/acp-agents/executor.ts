@@ -9,7 +9,7 @@
  *
  * @module
  */
-import { Deferred, Effect, Stream } from "effect"
+import { Deferred, Effect, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   TurnError,
@@ -271,7 +271,7 @@ export const makeAcpTurnExecutor = (
         .getOrCreate(key, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(
           Effect.mapError((e) =>
-            e instanceof AcpClosedError
+            Schema.is(AcpClosedError)(e)
               ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
               : new TurnError({ message: e.message }),
           ),
@@ -285,7 +285,7 @@ export const makeAcpTurnExecutor = (
         ctx.abortSignal.addEventListener(
           "abort",
           () => {
-            Effect.runFork(session.conn.cancel(session.acpSessionId))
+            Effect.runForkWith(services)(session.conn.cancel(session.acpSessionId))
           },
           { once: true },
         )
@@ -316,9 +316,11 @@ export const makeAcpTurnExecutor = (
           Effect.catchEager((e) =>
             Deferred.fail(
               promptDone,
-              e instanceof AcpClosedError
+              Schema.is(AcpClosedError)(e)
                 ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
-                : new TurnError({ message: e instanceof AcpError ? e.message : String(e) }),
+                : new TurnError({
+                    message: Schema.is(AcpError)(e) ? e.message : String(e),
+                  }),
             ),
           ),
           Effect.forkScoped,
@@ -332,7 +334,7 @@ export const makeAcpTurnExecutor = (
         Stream.filter((part): part is TurnStreamPart => part !== undefined),
         Stream.interruptWhen(Deferred.await(promptDone)),
         Stream.mapError((e) =>
-          e instanceof AcpError
+          Schema.is(AcpError)(e)
             ? new TurnError({ message: e.message })
             : new TurnError({ message: String(e) }),
         ),
@@ -347,7 +349,7 @@ export const makeAcpTurnExecutor = (
 
       return Stream.concat(updateStream, finishedStream)
     }).pipe(
-      Effect.mapError((e) => (e instanceof TurnError ? e : new TurnError({ message: String(e) }))),
+      Effect.mapError((e) => (Schema.is(TurnError)(e) ? e : new TurnError({ message: String(e) }))),
     )
 
     return Stream.unwrap(runTurn)

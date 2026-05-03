@@ -191,8 +191,8 @@ export const buildEphemeralRuntime = <Provides>(
 
   return {
     profile,
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — builder recovers Provides at this boundary
     layer: restoreErasedLayer<Provides | EphemeralOverrideProvides, EphemeralOverrideError>(
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       Layer.fresh(merged),
     ),
   }

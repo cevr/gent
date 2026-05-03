@@ -60,6 +60,10 @@ const buildRuntime = (
           },
         } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
         runtime: {
+          cast: <A, E>(effect: Effect.Effect<A, E, never>): void => {
+            Effect.runFork(effect)
+          },
+          fork: Effect.runFork,
           run: <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect),
         } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
         currentSession: () => activeSession.value,
@@ -442,7 +446,7 @@ describe("transport-only extension widgets", () => {
               return AgentEvent.TaskDeleted.make(base)
           }
         })()
-        return { id: EventId.make(index + 1), event, createdAt: Date.now() }
+        return { id: EventId.make(index + 1), event, createdAt: 0 }
       }
       const tags = [
         "TaskCreated",

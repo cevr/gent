@@ -71,7 +71,7 @@ interface FakeProviderShape {
   readonly text: () => string
 }
 class FakeProvider extends Context.Service<FakeProvider, ReadOnly<FakeProviderShape>>()(
-  "@gent/test/runtime-profile/FakeProvider",
+  "@gent/core/tests/runtime/runtime-profile.test/FakeProvider",
 ) {
   declare readonly [ReadOnlyBrand]: true
 }
@@ -146,9 +146,10 @@ describe("resolveRuntimeProfile", () => {
 
         const layer = buildExtensionLayers(profile.resolved)
 
-        const registryService = yield* Effect.gen(function* () {
-          return yield* ExtensionRegistry
-        }).pipe(Effect.provide(layer))
+        const registryService = yield* Layer.build(layer).pipe(
+          Effect.scoped,
+          Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
+        )
 
         const sections = yield* registryService.listPromptSections()
         const ids = sections.map((s) => s.id)
@@ -167,9 +168,10 @@ describe("resolveRuntimeProfile", () => {
           extensions: [dynamicExtension],
         })
         const layer = buildExtensionLayers(profile.resolved)
-        const registryService = yield* Effect.gen(function* () {
-          return yield* ExtensionRegistry
-        }).pipe(Effect.provide(layer))
+        const registryService = yield* Layer.build(layer).pipe(
+          Effect.scoped,
+          Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
+        )
 
         const result = yield* registryService.extensionReactions
           .resolveTurnProjection({

@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
@@ -114,7 +114,7 @@ const makeRequest = (
       intent: "read",
       input: Schema.Unknown,
       output: Schema.Unknown,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
   }
   return request({
@@ -123,7 +123,7 @@ const makeRequest = (
     intent: "write",
     input: Schema.Unknown,
     output: Schema.Unknown,
-    execute: () => Effect.succeed(undefined),
+    execute: () => Effect.void,
   })
 }
 const runCtx: RunContext = {
@@ -315,10 +315,8 @@ describe("ExtensionRegistry", () => {
     failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
   ) => {
     const resolved = resolveExtensions(extensions, failedExtensions)
-    return ManagedRuntime.make(ExtensionRegistry.fromResolved(resolved)).runPromise(
-      Effect.gen(function* () {
-        return yield* ExtensionRegistry
-      }),
+    return Effect.service(ExtensionRegistry).pipe(
+      Effect.provide(ExtensionRegistry.fromResolved(resolved)),
     )
   }
   const buildDriverRegistry = (
@@ -326,57 +324,53 @@ describe("ExtensionRegistry", () => {
     failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
   ) => {
     const resolved = resolveExtensions(extensions, failedExtensions)
-    return ManagedRuntime.make(
-      DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      }),
-    ).runPromise(
-      Effect.gen(function* () {
-        return yield* DriverRegistry
-      }),
+    return Effect.service(DriverRegistry).pipe(
+      Effect.provide(
+        DriverRegistry.fromResolved({
+          modelDrivers: resolved.modelDrivers,
+          externalDrivers: resolved.externalDrivers,
+        }),
+      ),
     )
   }
   it.live("registered model capability is findable by name", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { tools: [makeTool("read")] }),
+      ])
       const tool = yield* registry.getModelCapability("read")
       expect(String(tool === undefined ? undefined : getToolId(tool))).toBe("read")
     }),
   )
   it.live("unregistered model capability name returns undefined", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() => buildRegistry([]))
+      const registry = yield* buildRegistry([])
       const tool = yield* registry.getModelCapability("nonexistent")
       expect(tool).toBeUndefined()
     }),
   )
   it.live("lists all registered tools across extensions", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
+      ])
       const tools = yield* registry.listModelCapabilities()
       expect(tools.length).toBe(2)
     }),
   )
   it.live("extension diagnostics expose both active and failed activation state", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildRegistry(
-          [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
-          [
-            {
-              manifest: { id: ExtensionId.make("broken") },
-              scope: "builtin",
-              sourcePath: "builtin",
-              phase: "startup",
-              error: "startup boom",
-            },
-          ],
-        ),
+      const registry = yield* buildRegistry(
+        [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
+        [
+          {
+            manifest: { id: ExtensionId.make("broken") },
+            scope: "builtin",
+            sourcePath: "builtin",
+            phase: "startup",
+            error: "startup boom",
+          },
+        ],
       )
       const tools = yield* registry.listModelCapabilities()
       const failed = yield* registry.listFailedExtensions()
@@ -411,9 +405,9 @@ describe("ExtensionRegistry", () => {
   )
   it.live("registered agent is findable by name", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { agents: [makeAgent("explore")] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { agents: [makeAgent("explore")] }),
+      ])
       const agent = yield* registry.getAgent(AgentName.make("explore"))
       expect(agent?.name).toBe(AgentName.make("explore"))
     }),
@@ -429,9 +423,9 @@ describe("ExtensionRegistry", () => {
         name: "deepwork" as never,
         model: "openai/gpt-5.4" as never,
       })
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { agents: [cowork, explore, deepwork] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { agents: [cowork, explore, deepwork] }),
+      ])
       const agents = yield* registry.listAgents()
       expect(agents.length).toBe(3)
       expect(agents.map((a) => a.name)).toContain(AgentName.make("cowork"))
@@ -447,9 +441,9 @@ describe("ExtensionRegistry", () => {
         name: "explore" as never,
         allowedTools: ["read"],
       })
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { tools: [readTool, bashTool], agents: [agent] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { tools: [readTool, bashTool], agents: [agent] }),
+      ])
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
       expect(tools.length).toBe(1)
       expect(String(tools[0] === undefined ? undefined : getToolId(tools[0]))).toBe("read")
@@ -464,11 +458,9 @@ describe("ExtensionRegistry", () => {
         name: "explore" as never,
         allowedTools: ["read", "bash"],
       })
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([
-          makeExt("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
-        ]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
+      ])
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
       const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
@@ -484,9 +476,9 @@ describe("ExtensionRegistry", () => {
         name: "cowork" as never,
         deniedTools: ["write"],
       })
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] }),
+      ])
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
       const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
@@ -501,9 +493,9 @@ describe("ExtensionRegistry", () => {
         name: "cowork" as never,
         deniedTools: ["secret"],
       })
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([makeExt("core", "builtin", { tools: [readTool, secretTool] })]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("core", "builtin", { tools: [readTool, secretTool] }),
+      ])
       // Try to force-include via projection
       const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [
         { toolPolicy: { include: ["secret"] } },
@@ -513,31 +505,27 @@ describe("ExtensionRegistry", () => {
   )
   it.live("registered model driver is findable by ID", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildDriverRegistry([
-          makeExt("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
-        ]),
-      )
+      const registry = yield* buildDriverRegistry([
+        makeExt("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
+      ])
       const provider = yield* registry.getModel("anthropic")
       expect(provider?.id).toBe("anthropic")
     }),
   )
   it.live("unregistered model driver ID returns undefined", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() => buildDriverRegistry([]))
+      const registry = yield* buildDriverRegistry([])
       const provider = yield* registry.getModel("nonexistent")
       expect(provider).toBeUndefined()
     }),
   )
   it.live("lists all registered model drivers", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildDriverRegistry([
-          makeExt("a", "builtin", {
-            modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
-          }),
-        ]),
-      )
+      const registry = yield* buildDriverRegistry([
+        makeExt("a", "builtin", {
+          modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
+        }),
+      ])
       const providers = yield* registry.listModels()
       expect(providers.length).toBe(2)
     }),
@@ -548,15 +536,11 @@ describe("ExtensionRegistry", () => {
         ExtensionRegistry.Test(),
         DriverRegistry.fromResolved({ modelDrivers: new Map(), externalDrivers: new Map() }),
       )
-      const registries = yield* Effect.promise(() =>
-        ManagedRuntime.make(layer).runPromise(
-          Effect.gen(function* () {
-            const ext = yield* ExtensionRegistry
-            const driver = yield* DriverRegistry
-            return { ext, driver }
-          }),
-        ),
-      )
+      const registries = yield* Effect.gen(function* () {
+        const ext = yield* ExtensionRegistry
+        const driver = yield* DriverRegistry
+        return { ext, driver }
+      }).pipe(Effect.provide(layer))
       const tools = yield* registries.ext.listModelCapabilities()
       expect(tools.length).toBe(0)
       const agents = yield* registries.ext.listAgents()
@@ -567,13 +551,11 @@ describe("ExtensionRegistry", () => {
   )
   it.live("static prompt sections are returned as-is", () =>
     Effect.gen(function* () {
-      const registry = yield* Effect.promise(() =>
-        buildRegistry([
-          makeExt("@gent/test", "builtin", {
-            promptSections: [{ id: "test", content: "Hello", priority: 50 }],
-          }),
-        ]),
-      )
+      const registry = yield* buildRegistry([
+        makeExt("@gent/test", "builtin", {
+          promptSections: [{ id: "test", content: "Hello", priority: 50 }],
+        }),
+      ])
       const sections = yield* registry.listPromptSections()
       expect(sections.length).toBe(1)
       expect(sections[0]?.id).toBe("test")
@@ -613,7 +595,7 @@ describe("resolveExtensions — slash command discovery", () => {
       },
       input: Schema.Unknown,
       output: Schema.Unknown,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/request", "builtin", { rpc: [cap] })])
     const command = listSlashCommands(resolved.extensions).find((c) => c.name === "inspect")
@@ -644,7 +626,7 @@ describe("resolveExtensions — slash command discovery", () => {
       id: "echo",
       description: "Echo input back as output.",
       params: Schema.String,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { tools: [cap] })])
     expect(resolved.modelCapabilities.has("echo")).toBe(true)
@@ -670,7 +652,7 @@ describe("resolveExtensions — slash command discovery", () => {
       id: "run",
       description: "project run override",
       params: Schema.Unknown,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
     const project = makeExt("@test/shadow", "project", { tools: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
@@ -686,7 +668,7 @@ describe("resolveExtensions — slash command discovery", () => {
       promptSnippet: "Snippet here.",
       promptGuidelines: ["use carefully", "log result"],
       interactive: true,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { tools: [cap] })])
     const resolvedTool = resolved.modelCapabilities.get("rich")

@@ -92,7 +92,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       const isAskUser = meta?.["type"] === "ask-user"
       return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
     },
-    pendingRequestId: () => Effect.succeed(undefined),
+    pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
     storeResolution: () => Effect.void,
     respond: () => Effect.void,
     rehydrate: () => Effect.void,
@@ -105,7 +105,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         const decision = queue.shift() ?? { approved: true }
         return Effect.succeed(decision)
       },
-      pendingRequestId: () => Effect.succeed(undefined),
+      pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
       storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,

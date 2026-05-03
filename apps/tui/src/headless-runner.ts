@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Random, Schedule, Stream } from "effect"
 import type { AgentName, RunSpec } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
@@ -66,7 +66,7 @@ export const runHeadless = (
         Effect.forkScoped,
       )
 
-      const sendRequestId = crypto.randomUUID()
+      const sendRequestId = yield* Random.nextUUIDv4
       yield* Effect.suspend(() =>
         client.message.send({
           sessionId,

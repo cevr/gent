@@ -46,9 +46,9 @@ export function EditToolRenderer(props: ToolRendererProps) {
   const collapsedDiffLines = createMemo((): DiffLine[] => {
     const data = editData()
     if (data === null) return []
-    const lines: DiffLine[] = data.diff.split("\n").map((text) => {
-      return { _tag: "line", text, kind: diffLineKind(text) }
-    })
+    const lines: DiffLine[] = data.diff
+      .split("\n")
+      .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
     if (lines.length <= 6) return lines
     const { items } = windowItems<DiffLine>(lines, headTailExcerpts(3, 3), (count) => ({
       _tag: "elision",

@@ -235,9 +235,7 @@ const findResultForToolCall = (
   callMessageIndex: number,
   callPartIndex: number,
   pairings: ReadonlyMap<string, ToolResultState>,
-): ToolResultState | undefined => {
-  return pairings.get(`${callMessageIndex}:${callPartIndex}`)
-}
+): ToolResultState | undefined => pairings.get(`${callMessageIndex}:${callPartIndex}`)
 
 const messagePartsToolInteractions = (
   parts: ReadonlyArray<MessagePart>,

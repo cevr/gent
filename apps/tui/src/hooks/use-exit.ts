@@ -2,7 +2,8 @@ import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
 
-const ESC_DOUBLE_TAP_MS = 500
+const ESC_DOUBLE_TAP_MS = 1_000
+const currentMillis = () => performance.timeOrigin + performance.now()
 
 /**
  * Double-ESC quit logic. Returns a function that should be called on ESC press.
@@ -25,7 +26,7 @@ export function useExit() {
 
   /** Call on ESC press. Returns true if exiting, false if first tap. */
   const handleEsc = (): boolean => {
-    const now = Date.now()
+    const now = currentMillis()
     if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
       exit()
       return true

@@ -84,7 +84,7 @@ export interface AnthropicBetaCacheShape {
 export class AnthropicBetaCache extends Context.Service<
   AnthropicBetaCache,
   AnthropicBetaCacheShape
->()("@gent/extensions/anthropic/BetaCache") {
+>()("@gent/extensions/src/anthropic/beta-cache/AnthropicBetaCache") {
   static layer: Layer.Layer<AnthropicBetaCache> = Layer.effect(
     AnthropicBetaCache,
     Effect.gen(function* () {

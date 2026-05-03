@@ -16,6 +16,7 @@ describe("buildSystemPrompt", () => {
     cwd: "/home/user/project",
     platform: "linux",
     isGitRepo: true,
+    date: "2026-01-01",
   }
 
   test("includes identity with harness mention", () => {
@@ -92,6 +93,7 @@ describe("buildBasePromptSections", () => {
     cwd: "/test",
     platform: "darwin",
     isGitRepo: false,
+    date: "2026-01-01",
   }
 
   test("produces identity, character, tools, and environment sections", () => {
@@ -163,7 +165,7 @@ describe("buildTurnPrompt", () => {
       id,
       description: overrides.description ?? id,
       params: Schema.Struct({}),
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
       ...(overrides.promptSnippet !== undefined ? { promptSnippet: overrides.promptSnippet } : {}),
       ...(overrides.promptGuidelines !== undefined
         ? { promptGuidelines: overrides.promptGuidelines }

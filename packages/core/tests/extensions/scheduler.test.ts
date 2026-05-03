@@ -1,9 +1,6 @@
 import { BunFileSystem } from "@effect/platform-bun"
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Path } from "effect"
-import * as Fs from "node:fs"
-import * as NodePath from "node:path"
-import * as Os from "node:os"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   reconcileScheduledJobs,
@@ -32,9 +29,11 @@ const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedEx
 })
 
 describe("scheduled jobs", () => {
-  it.live("reconciles desired jobs and removes stale managed jobs", () =>
+  it.scopedLive("reconciles desired jobs and removes stale managed jobs", () =>
     Effect.gen(function* () {
-      const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-scheduler-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
       const installs: Array<{ entryPath: string; schedule: string; name: string }> = []
       const removes: string[] = []
 
@@ -77,16 +76,16 @@ describe("scheduled jobs", () => {
 
       const installed = installs[0]!
       expect(installed.name).toContain("memory")
-      const wrapper = Fs.readFileSync(installed.entryPath, "utf-8")
+      const wrapper = yield* fs.readFileString(installed.entryPath)
       expect(wrapper).toContain("/usr/local/bin/gent")
       expect(wrapper).toContain("--headless")
       expect(wrapper).toContain("memory:reflect")
       expect(wrapper).toContain('cwd: "/repo"')
 
-      const statePath = NodePath.join(home, ".gent", "scheduler", "managed-jobs.json")
-      const state = JSON.parse(Fs.readFileSync(statePath, "utf-8")) as {
-        readonly jobs: Record<string, string>
-      }
+      const statePath = path.join(home, ".gent", "scheduler", "managed-jobs.json")
+      const state = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(Schema.Struct({ jobs: Schema.Record(Schema.String, Schema.String) })),
+      )(yield* fs.readFileString(statePath))
       expect(Object.keys(state.jobs)).toEqual([installed.name])
       expect(state.jobs[installed.name]).toBe(installed.entryPath)
 
@@ -100,17 +99,19 @@ describe("scheduled jobs", () => {
 
       expect(clearedFailures).toEqual([])
       expect(removes).toEqual([installed.name])
-      expect(Fs.existsSync(installed.entryPath)).toBe(false)
+      expect(yield* fs.exists(installed.entryPath)).toBe(false)
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("scheduler install failure is isolated instead of crashing reconciliation", () =>
+  it.scopedLive("scheduler install failure is isolated instead of crashing reconciliation", () =>
     Effect.gen(function* () {
-      const home = Fs.mkdtempSync(NodePath.join(Os.tmpdir(), "gent-scheduler-failure-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
       const runtime = {
         install: (_entryPath: string, _schedule: string, name: string) => {
           if (name.includes("meditate")) {
-            return Effect.fail(new Error("cron install boom"))
+            return Effect.die(new Error("cron install boom"))
           }
           return Effect.void
         },
@@ -149,10 +150,10 @@ describe("scheduled jobs", () => {
       expect(failures[0]!.jobId).toBe("meditate")
       expect(failures[0]!.error).toContain("cron install boom")
 
-      const statePath = NodePath.join(home, ".gent", "scheduler", "managed-jobs.json")
-      const state = JSON.parse(Fs.readFileSync(statePath, "utf-8")) as {
-        readonly jobs: Record<string, string>
-      }
+      const statePath = path.join(home, ".gent", "scheduler", "managed-jobs.json")
+      const state = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(Schema.Struct({ jobs: Schema.Record(Schema.String, Schema.String) })),
+      )(yield* fs.readFileString(statePath))
       expect(Object.keys(state.jobs)).toHaveLength(1)
     }).pipe(Effect.provide(fsLayer)),
   )

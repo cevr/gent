@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect"
 // dependency channels from Gent metadata. Tests run
 // with no real services beyond ctx, so we narrow R to never at the
 // call site for it.live compatibility.
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
@@ -44,14 +44,16 @@ interface RequestCall {
   input: ArtifactSaveInput
 }
 
+const FIXTURE_MS = 1_700_000_000_000
+
 const fakeArtifact = (sourceTool: string): Artifact => ({
   id: ArtifactId.make("fake-id"),
   label: "test",
   sourceTool,
   content: "test content",
   status: "active",
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  createdAt: FIXTURE_MS,
+  updatedAt: FIXTURE_MS,
 })
 
 const createArtifactSpy = () => {
@@ -278,8 +280,7 @@ describe("ReviewTool artifact persistence", () => {
           expect(saves[0]!.input.label).toContain("Review:")
           expect(saves[0]!.input.metadata).toBeDefined()
         }),
-        Effect.provide(runtimePlatformLayer),
-        Effect.provide(spy.layer),
+        Effect.provide(Layer.merge(runtimePlatformLayer, spy.layer)),
       ),
     )
   })

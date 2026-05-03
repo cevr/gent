@@ -1,8 +1,7 @@
-import { Duration, Effect, Option, Schema } from "effect"
+import { Clock, Duration, Effect, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import * as os from "node:os"
-import * as fsPromises from "node:fs/promises"
 import { ProviderAuthError, runProcess } from "@gent/core/extensions/api"
 
 // ── Claude Code Keychain Reader ──
@@ -68,19 +67,31 @@ const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, Provid
   )
 
 const readCredentialsFile = (): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const file = Bun.file(CREDENTIALS_FILE)
-      const exists = await file.exists()
-      if (!exists) throw new Error(`Credentials file not found: ${CREDENTIALS_FILE}`)
-      return file.text()
-    },
-    catch: (e) =>
-      new ProviderAuthError({
-        message: `Failed to read Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
-      }),
-  }).pipe(Effect.flatMap(decodeCredentials))
+  Effect.gen(function* () {
+    const file = Bun.file(CREDENTIALS_FILE)
+    const exists = yield* Effect.tryPromise({
+      try: () => file.exists(),
+      catch: (e) =>
+        new ProviderAuthError({
+          message: `Failed to read Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
+          cause: e,
+        }),
+    })
+    if (!exists) {
+      return yield* new ProviderAuthError({
+        message: `Failed to read Claude credentials file: Credentials file not found: ${CREDENTIALS_FILE}`,
+      })
+    }
+    const raw = yield* Effect.tryPromise({
+      try: () => file.text(),
+      catch: (e) =>
+        new ProviderAuthError({
+          message: `Failed to read Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
+          cause: e,
+        }),
+    })
+    return yield* decodeCredentials(raw)
+  })
 
 class ClaudeKeychainNotFoundError extends Schema.TaggedErrorClass<ClaudeKeychainNotFoundError>()(
   "ClaudeKeychainNotFoundError",
@@ -113,27 +124,21 @@ const spawnSecurity = (
       }),
     )
     if (result.exitCode === 0) return result.stdout.trim()
-    if (result.exitCode === 44) return yield* Effect.fail(new ClaudeKeychainNotFoundError())
+    if (result.exitCode === 44) return yield* new ClaudeKeychainNotFoundError()
     if (result.exitCode === 36) {
-      return yield* Effect.fail(
-        new ProviderAuthError({
-          message:
-            "macOS Keychain is locked. Unlock it or run: security unlock-keychain ~/Library/Keychains/login.keychain-db",
-        }),
-      )
+      return yield* new ProviderAuthError({
+        message:
+          "macOS Keychain is locked. Unlock it or run: security unlock-keychain ~/Library/Keychains/login.keychain-db",
+      })
     }
     if (result.exitCode === 128) {
-      return yield* Effect.fail(
-        new ProviderAuthError({
-          message: "Keychain access was denied. Grant access when prompted by macOS.",
-        }),
-      )
+      return yield* new ProviderAuthError({
+        message: "Keychain access was denied. Grant access when prompted by macOS.",
+      })
     }
-    return yield* Effect.fail(
-      new ProviderAuthError({
-        message: `Failed to read Claude Code credentials from Keychain: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
-      }),
-    )
+    return yield* new ProviderAuthError({
+      message: `Failed to read Claude Code credentials from Keychain: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
+    })
   })
 
 const readFromKeychain = (
@@ -226,7 +231,7 @@ export const listClaudeCodeKeychainServices = (): Effect.Effect<
     if (process.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
     const result = yield* runProcess("security", ["dump-keychain"], {
       timeout: Duration.millis(5000),
-    }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+    }).pipe(Effect.catchEager(() => Effect.sync(() => undefined)))
     if (result === undefined || result.exitCode !== 0)
       return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
     const services: string[] = []
@@ -283,7 +288,7 @@ export const listClaudeAccounts = (): Effect.Effect<
     const accounts: ClaudeAccount[] = []
     for (const source of sources) {
       const credentials = yield* readClaudeCodeCredentials(source).pipe(
-        Effect.catchEager(() => Effect.succeed(undefined)),
+        Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
       )
       if (credentials === undefined) continue
       const label = (yield* getKeychainAccountName(source)) ?? source
@@ -311,7 +316,7 @@ const getKeychainAccountName = (
       const match = /"acct"<blob>="([^"]*)"/.exec(result.stdout)
       return match?.[1]
     }),
-    Effect.catchEager(() => Effect.succeed(undefined)),
+    Effect.catchEager(() => Effect.sync((): string | undefined => undefined)),
   )
 
 const writeKeychainEntry = (
@@ -386,25 +391,47 @@ export const writeBackCredentials = (
 ): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     if (process.platform !== "darwin") {
-      yield* Effect.tryPromise({
-        try: async () => {
-          const file = Bun.file(CREDENTIALS_FILE)
-          const exists = await file.exists()
-          const raw = exists ? await file.text() : JSON.stringify({ claudeAiOauth: {} })
-          const updated = updateCredentialBlob(raw, creds)
-          if (updated === undefined) return
-          await Bun.write(CREDENTIALS_FILE, updated)
-          // Counsel  deep — chmod 0600 after write so the credentials
-          // file isn't world-readable on first creation. Matches the
-          // opencode reference's keychain.ts:297 behavior.
-          await fsPromises.chmod(CREDENTIALS_FILE, 0o600)
-        },
+      const file = Bun.file(CREDENTIALS_FILE)
+      const exists = yield* Effect.tryPromise({
+        try: () => file.exists(),
         catch: (e) =>
           new ProviderAuthError({
             message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
             cause: e,
           }),
       })
+      const raw = exists
+        ? yield* Effect.tryPromise({
+            try: () => file.text(),
+            catch: (e) =>
+              new ProviderAuthError({
+                message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
+                cause: e,
+              }),
+          })
+        : '{"claudeAiOauth":{}}'
+      const updated = updateCredentialBlob(raw, creds)
+      if (updated === undefined) return
+      yield* Effect.tryPromise({
+        try: () => Bun.write(CREDENTIALS_FILE, updated),
+        catch: (e) =>
+          new ProviderAuthError({
+            message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
+            cause: e,
+          }),
+      })
+      // Counsel  deep — chmod 0600 after write so the credentials
+      // file isn't world-readable on first creation. Matches the
+      // opencode reference's keychain.ts:297 behavior.
+      yield* runProcess("chmod", ["600", CREDENTIALS_FILE], { stdout: "ignore" }).pipe(
+        Effect.mapError(
+          (e) =>
+            new ProviderAuthError({
+              message: `Failed to write Claude credentials file: ${e.message}`,
+              cause: e,
+            }),
+        ),
+      )
       return
     }
 
@@ -455,7 +482,7 @@ const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 export const parseOAuthResponse = (
   raw: string,
   fallbackRefreshToken: string,
-  now: number = Date.now(),
+  now: number = 0,
 ): ClaudeCredentials | undefined => {
   const decoded = decodeOAuthTokenResponse(raw)
   if (Option.isNone(decoded)) return undefined
@@ -494,26 +521,23 @@ const refreshViaOAuth = (
     const response = yield* http.execute(request)
     if (response.status >= 400) {
       const errText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
-      return yield* Effect.fail(
-        new ProviderAuthError({
-          message: `Direct OAuth refresh failed: ${response.status} ${errText}`,
-        }),
-      )
+      return yield* new ProviderAuthError({
+        message: `Direct OAuth refresh failed: ${response.status} ${errText}`,
+      })
     }
     const body = yield* response.text
-    const creds = parseOAuthResponse(body, refreshToken)
+    const now = yield* Clock.currentTimeMillis
+    const creds = parseOAuthResponse(body, refreshToken, now)
     if (creds === undefined) {
-      return yield* Effect.fail(
-        new ProviderAuthError({
-          message: "OAuth refresh response missing access_token",
-        }),
-      )
+      return yield* new ProviderAuthError({
+        message: "OAuth refresh response missing access_token",
+      })
     }
     return creds
   }).pipe(
     Effect.timeout("15 seconds"),
     Effect.catchEager((e) =>
-      e instanceof ProviderAuthError
+      Schema.is(ProviderAuthError)(e)
         ? Effect.fail(e)
         : Effect.fail(
             new ProviderAuthError({
@@ -522,6 +546,7 @@ const refreshViaOAuth = (
             }),
           ),
     ),
+    // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(FetchHttpClient.layer),
   )
 
@@ -530,7 +555,7 @@ const spawnClaudeCli = (): Effect.Effect<
   ProviderAuthError,
   ChildProcessSpawner.ChildProcessSpawner
 > => {
-  const env = { ...process.env, TERM: "dumb" }
+  const env = { ...Bun.env, TERM: "dumb" }
   return runProcess("claude", ["-p", ".", "--model", "haiku"], {
     env,
     timeout: Duration.millis(60_000),
@@ -575,11 +600,11 @@ export const refreshClaudeCodeCredentials = (
 ): Effect.Effect<ClaudeCredentials, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const current = yield* readClaudeCodeCredentials(source).pipe(
-      Effect.catchEager(() => Effect.succeed(undefined)),
+      Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
     )
     if (current?.refreshToken !== undefined && current.refreshToken !== "") {
       const refreshed = yield* refreshViaOAuth(current.refreshToken).pipe(
-        Effect.catchEager(() => Effect.succeed(undefined)),
+        Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
       )
       if (refreshed !== undefined) {
         // Best-effort write-back so subsequent processes pick up the
@@ -604,11 +629,9 @@ export const refreshClaudeCodeCredentials = (
     // the picker can prompt the user to refresh that account
     // explicitly.
     if (!shouldFallBackToCli(source)) {
-      return yield* Effect.fail(
-        new ProviderAuthError({
-          message: `Direct OAuth refresh failed for ${source}; CLI fallback would target the active account, not this one. Refresh the account in Claude Code directly.`,
-        }),
-      )
+      return yield* new ProviderAuthError({
+        message: `Direct OAuth refresh failed for ${source}; CLI fallback would target the active account, not this one. Refresh the account in Claude Code directly.`,
+      })
     }
     yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
     return yield* readClaudeCodeCredentials(source)
@@ -704,7 +727,7 @@ export const getUserAgent = (): string =>
  */
 export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
   version: getCliVersion(),
-  entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
+  entrypoint: Bun.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
 })
 
 /**

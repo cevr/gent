@@ -24,9 +24,11 @@
  *   throw — must return Effect with typed error channel
  * - no-r-equals-never-comment: flag inline R-channel annotation comments
  *   at provider/SDK edges; require SdkBoundary<E> brand instead
- * - no-dynamic-imports: bans dynamic `import(...)` and `require(...)` outside
- *   a small allow-list of architecturally-justified files (extension plugin
- *   discovery, optional native module fallbacks). Compiled-binary safety.
+ * - no-dynamic-imports: bans dynamic `import(...)`, `require(...)`, and
+ *   createRequire bridges unless the exact expression opts in with an
+ *   architectural allow comment. Compiled-binary safety.
+ * - no-make-unsafe: bans `.makeUnsafe(...)` constructors; model validation
+ *   and allocation through Effectful/Option-returning APIs instead.
  * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
  *   type literals; require `TaggedEnumClass` / `Schema.TaggedStruct` /
  *   `Schema.TaggedErrorClass` instead.
@@ -109,6 +111,18 @@ const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => 
   const v = n[field]
   if (!Array.isArray(v)) return undefined
   return v.filter(isAstNode)
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null
+
+const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined => {
+  const loc = node.loc
+  if (!isRecord(loc)) return undefined
+  const point = loc[edge]
+  if (!isRecord(point)) return undefined
+  const line = point.line
+  return typeof line === "number" ? line : undefined
 }
 
 const isTestFilename = (filename: string): boolean =>
@@ -292,19 +306,26 @@ type DynamicLoadKind = "require" | "moduleRequire" | "createRequire"
 
 const DYNAMIC_LOAD_MESSAGES: Readonly<Record<DynamicLoadKind, string>> = {
   require:
-    "`require(...)` is forbidden — use a top-level static `import` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If your use case is a documented architectural exception, add the file to the allow-list in `lint/no-direct-env.ts` with a justification comment.",
+    "`require(...)` is forbidden — use a top-level static `import` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
   moduleRequire:
-    "`module.require(...)` is forbidden — use a top-level static `import` statement. Same rationale as bare `require`: it bypasses static analysis. Add the file to the allow-list in `lint/no-direct-env.ts` with a justification if this is an architectural exception.",
+    "`module.require(...)` is forbidden — use a top-level static `import` statement. Same rationale as bare `require`: it bypasses static analysis. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
   createRequire:
-    "`createRequire(...)` followed by a require call is forbidden — use a top-level static `import` statement. The createRequire bridge from `node:module` is the canonical way to smuggle CommonJS into ESM and is exactly what this rule is meant to catch. Add the file to the allow-list in `lint/no-direct-env.ts` with a justification if this is an architectural exception.",
+    "`createRequire(...)` / createRequire aliases are forbidden — use a top-level static `import` statement. The createRequire bridge from `node:module` is the canonical way to smuggle CommonJS into ESM and is exactly what this rule is meant to catch. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
 }
 
 /** Return the dynamic-load kind for a CallExpression's callee, or undefined. */
-const classifyDynamicLoadCall = (callee: AstNode | undefined): DynamicLoadKind | undefined => {
+const classifyDynamicLoadCall = (
+  callee: AstNode | undefined,
+  createRequireAliases: ReadonlySet<string>,
+): DynamicLoadKind | undefined => {
   if (callee === undefined) return undefined
   // Bare `require(...)`
   if (callee.type === "Identifier" && getStringField(callee, "name") === "require") {
     return "require"
+  }
+  if (callee.type === "Identifier") {
+    const name = getStringField(callee, "name")
+    if (name !== undefined && createRequireAliases.has(name)) return "createRequire"
   }
   // `module.require(...)`
   if (callee.type === "MemberExpression") {
@@ -328,6 +349,18 @@ const classifyDynamicLoadCall = (callee: AstNode | undefined): DynamicLoadKind |
     }
   }
   return undefined
+}
+
+const createRequireAliasName = (node: AstNode): string | undefined => {
+  if (node.type !== "VariableDeclarator") return undefined
+  const id = getNodeField(node, "id")
+  const init = getNodeField(node, "init")
+  if (id?.type !== "Identifier" || init?.type !== "CallExpression") return undefined
+  const callee = getNodeField(init, "callee")
+  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "createRequire") {
+    return undefined
+  }
+  return getStringField(id, "name")
 }
 
 const plugin: Plugin = {
@@ -829,6 +862,35 @@ const plugin: Plugin = {
     },
 
     /**
+     * Bans `.makeUnsafe(...)` constructors.
+     *
+     * Why: unsafe constructors erase exactly the validation boundary Effect
+     * and Schema are supposed to make visible. If construction can fail, use
+     * an Effectful or Option-returning constructor and thread the failure /
+     * absence through the caller. If the value is impossible to fail by
+     * construction, encode that as a small safe helper in the owning module
+     * rather than scattering unsafe calls at use sites.
+     */
+    "no-make-unsafe": {
+      create(context) {
+        return {
+          CallExpression(node) {
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "MemberExpression") return
+            const prop = getNodeField(callee, "property")
+            if (prop?.type !== "Identifier") return
+            if (getStringField(prop, "name") !== "makeUnsafe") return
+            context.report({
+              message:
+                "Do not call `.makeUnsafe(...)`. Use the safe Effectful/Option-returning constructor and thread construction through Effect instead of bypassing validation.",
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
      * Bans dynamic `import("...")` expressions and `require(...)` calls
      * across the codebase.
      *
@@ -838,52 +900,72 @@ const plugin: Plugin = {
      * module to be reachable through static imports — dynamic `import(...)`
      * results in load failures at runtime in the binary.
      *
-     * Allowed: a small allow-list of files where dynamic loading is the
-     * documented architectural choice (extension plugin discovery via
-     * filesystem scan, optional native-module fallback).
+     * Allowed: expression-level opt-in only. Put
+     * `// gent/no-dynamic-imports: allow <reason>` immediately above the exact
+     * dynamic load. This keeps the unusual boundary visible at the call site
+     * and prevents whole-file exceptions from hiding new dynamic loads.
      *
      * Valid:   import { foo } from "./foo.js"
      * Invalid: const foo = await import("./foo.js")
      * Invalid: const fs = require("node:fs")
      *
-     * Allow-list entries each carry a justification comment in
-     * {@link DYNAMIC_IMPORT_ALLOWED}; new entries require a comment naming
-     * the architectural reason.
+     * The allow comment must include a non-empty reason.
      */
     "no-dynamic-imports": {
       create(context) {
-        const filename = context.filename
+        const createRequireAliases = new Set<string>()
 
-        // Allow lint plugin file itself (rule definition references the API in messages)
-        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
+        const getComments = (): ReadonlyArray<AstNode> => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
+          const ctx = context as unknown as {
+            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
+          }
+          const getAll = ctx.sourceCode?.getAllComments
+          if (typeof getAll !== "function") return []
+          return getAll.call(ctx.sourceCode).filter(isAstNode)
+        }
 
-        const DYNAMIC_IMPORT_ALLOWED = [
-          // Extension plugin loaders: walk the filesystem and dynamically
-          // import user/project extensions discovered at runtime. The set of
-          // extensions is unknown at build time by design.
-          "apps/tui/src/extensions/loader-boundary.ts",
-          "packages/core/src/runtime/extensions/loader.ts",
-          // Optional native git binding: gracefully degrades when the native
-          // module isn't installed. Static import would harden the dependency.
-          "packages/extensions/src/librarian/git-reader.ts",
-          // Optional native filesystem indexer: same fallback rationale as above.
-          "packages/core/src/runtime/file-index/native-adapter.ts",
-        ]
-        if (DYNAMIC_IMPORT_ALLOWED.some((f) => filename.endsWith(f))) return {}
+        const hasAllowComment = (node: AstNode): boolean => {
+          const startLine = getLocLine(node, "start")
+          if (startLine === undefined) return false
+          return getComments().some((comment) => {
+            const endLine = getLocLine(comment, "end")
+            if (endLine === undefined || endLine !== startLine - 1) return false
+            const value = getStringField(comment, "value")
+            return value !== undefined && /\bgent\/no-dynamic-imports:\s*allow\s+\S/.test(value)
+          })
+        }
+
+        const reportUnlessAllowed = (node: AstNode, message: string): void => {
+          if (hasAllowComment(node)) return
+          context.report({ message, node })
+        }
 
         return {
-          ImportExpression(node) {
-            context.report({
-              message: `Dynamic \`import(...)\` is forbidden — use a top-level static import. Dynamic imports defeat static analysis and break the compiled-binary build (Bun.build cannot resolve runtime-determined module paths). If your use case is a documented architectural exception, add the file to the allow-list in \`lint/no-direct-env.ts\` with a justification comment.`,
-              node,
+          Program(node) {
+            walkAst(node, (child) => {
+              const alias = createRequireAliasName(child)
+              if (alias !== undefined) createRequireAliases.add(alias)
             })
+          },
+          VariableDeclarator(node) {
+            if (!isAstNode(node)) return
+            const alias = createRequireAliasName(node)
+            if (alias === undefined) return
+            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES.createRequire)
+          },
+          ImportExpression(node) {
+            reportUnlessAllowed(
+              node,
+              `Dynamic \`import(...)\` is forbidden — use a top-level static import. Dynamic imports defeat static analysis and break the compiled-binary build (Bun.build cannot resolve runtime-determined module paths). If this exact site is a documented architectural exception, add \`// gent/no-dynamic-imports: allow <reason>\` immediately above it.`,
+            )
           },
           CallExpression(node) {
             const callee: unknown = node.callee
             if (!isAstNode(callee)) return
-            const kind = classifyDynamicLoadCall(callee)
+            const kind = classifyDynamicLoadCall(callee, createRequireAliases)
             if (kind === undefined) return
-            context.report({ message: DYNAMIC_LOAD_MESSAGES[kind], node })
+            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES[kind])
           },
         }
       },

@@ -21,7 +21,7 @@ const requireReadyBaseUrl = (phase: "execute" | "resume") =>
     const executor = yield* Effect.serviceOption(ExecutorRead)
     const snapshot =
       executor._tag === "Some"
-        ? yield* executor.value.snapshot().pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+        ? yield* executor.value.snapshot().pipe(Effect.catchEager(() => Effect.void))
         : undefined
     if (
       snapshot === undefined ||

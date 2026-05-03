@@ -39,13 +39,14 @@ export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthEr
     if (!freshEnoughForUse(creds, now)) {
       creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
       if (!freshEnoughForUse(creds, now)) {
-        return yield* Effect.fail(
-          new ProviderAuthError({
-            message:
-              "Refreshed Claude Code credentials are still near expiry — try again in a moment.",
-          }),
-        )
+        return yield* new ProviderAuthError({
+          message:
+            "Refreshed Claude Code credentials are still near expiry — try again in a moment.",
+        })
       }
     }
     return creds.accessToken
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off
+    Effect.provide(BunServices.layer),
+  )

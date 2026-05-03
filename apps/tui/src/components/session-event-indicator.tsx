@@ -10,6 +10,8 @@ export interface SessionEventIndicatorProps {
 
 const LINE_CHAR = "\u2500"
 
+const currentMillis = () => performance.timeOrigin + performance.now()
+
 export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -18,7 +20,7 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const line = () => {
     tick()
     const width = Math.max(0, dimensions().width)
-    const label = getSessionEventLabel(props.event)
+    const label = getSessionEventLabel(props.event, currentMillis())
     const prefix = `- ${label} `
     if (width <= 0) return ""
     if (prefix.length >= width) {
@@ -30,7 +32,7 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const plain = () => {
     tick()
     const width = Math.max(0, dimensions().width)
-    return truncate(getSessionEventLabel(props.event), width)
+    return truncate(getSessionEventLabel(props.event, currentMillis()), width)
   }
 
   const isLineEvent = () =>

@@ -23,8 +23,8 @@ import {
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { isRecord, runProcess } from "@gent/core/extensions/api"
-import { createRequire } from "node:module"
 import { createServer } from "node:net"
+import { fileURLToPath } from "node:url"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,
@@ -106,7 +106,7 @@ export interface ExecutorSidecarService {
 }
 
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
-  "@gent/core/src/extensions/executor/sidecar/ExecutorSidecar",
+  "@gent/extensions/src/executor/sidecar/ExecutorSidecar",
 ) {
   static Live = (home: string) =>
     Layer.effect(
@@ -114,33 +114,42 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
-        const require_ = createRequire(import.meta.url)
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
         // ── Settings ──
 
-        // @effect-diagnostics preferSchemaOverJson:off — parsing external settings files
+        const parseSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
+        const decodeSettings = (input: unknown) =>
+          Schema.decodeUnknownEffect(ExecutorSettings)(input).pipe(
+            Effect.mapError(
+              () =>
+                new ExecutorSidecarError({
+                  code: "STARTUP_TIMEOUT",
+                  message: "Invalid settings JSON",
+                }),
+            ),
+          )
+
         const readSettingsFile = (filePath: string) =>
           fs.readFileString(filePath).pipe(
             Effect.flatMap((raw) =>
-              Effect.try({
-                try: () => {
-                  const json: unknown = JSON.parse(raw)
-                  if (!isRecord(json)) return Schema.decodeUnknownSync(ExecutorSettings)({})
-                  const section = json["gentExecutor"]
-                  return section && typeof section === "object"
-                    ? Schema.decodeUnknownSync(ExecutorSettings)(section)
-                    : Schema.decodeUnknownSync(ExecutorSettings)({})
-                },
-                catch: () =>
-                  new ExecutorSidecarError({
-                    code: "STARTUP_TIMEOUT",
-                    message: "Invalid settings JSON",
-                  }),
-              }),
+              parseSettingsJson(raw).pipe(
+                Effect.mapError(
+                  () =>
+                    new ExecutorSidecarError({
+                      code: "STARTUP_TIMEOUT",
+                      message: "Invalid settings JSON",
+                    }),
+                ),
+              ),
             ),
-            Effect.orElseSucceed(() => Schema.decodeUnknownSync(ExecutorSettings)({})),
+            Effect.flatMap((json) => {
+              if (!isRecord(json)) return decodeSettings({})
+              const section = json["gentExecutor"]
+              return decodeSettings(section && typeof section === "object" ? section : {})
+            }),
+            Effect.orElseSucceed(() => ({})),
           )
 
         const loadSettings = (cwd: string) =>
@@ -287,9 +296,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           const fromPath = yield* Effect.sync(() => Bun.which("executor"))
           if (fromPath) return fromPath
 
-          // Fallback: require.resolve → bootstrap if needed
+          // Fallback: package resolution → bootstrap if needed
           const pkgPath = yield* Effect.try({
-            try: () => require_.resolve("executor/package.json"),
+            try: () => fileURLToPath(import.meta.resolve("executor/package.json")),
             catch: (e) =>
               new ExecutorSidecarError({
                 code: "PACKAGE_RESOLUTION_FAILED",
@@ -391,7 +400,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                 Effect.orElseSucceed(() => undefined),
               )
               if (result) return result
-              yield* Effect.promise(() => new Promise<void>((r) => setTimeout(r, 100)))
+              yield* Effect.sleep(Duration.millis(100))
             }
             return yield* new ExecutorSidecarError({
               code: "STARTUP_TIMEOUT",
@@ -415,9 +424,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           Effect.gen(function* () {
             if (!(yield* isPidAlive(pid))) return
             yield* Effect.sync(() => process.kill(pid, "SIGTERM"))
-            yield* Effect.promise(
-              () => new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS)),
-            )
+            yield* Effect.sleep(Duration.millis(SHUTDOWN_TIMEOUT_MS))
             if (yield* isPidAlive(pid)) {
               yield* Effect.sync(() => process.kill(pid, "SIGKILL"))
             }

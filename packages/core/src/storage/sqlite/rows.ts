@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
-import { Message, Branch, MessagePart, MessageMetadata, Session } from "../../domain/message.js"
+import {
+  Message,
+  Branch,
+  MessagePart,
+  MessageMetadata,
+  Session,
+  dateFromMillis,
+} from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent } from "../../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
@@ -87,8 +94,8 @@ export const sessionFromRow = (row: SessionRow) =>
     activeBranchId: row.active_branch_id ?? undefined,
     parentSessionId: row.parent_session_id ?? undefined,
     parentBranchId: row.parent_branch_id ?? undefined,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    createdAt: dateFromMillis(row.created_at),
+    updatedAt: dateFromMillis(row.updated_at),
   })
 
 export const branchFromRow = (row: BranchRow) =>
@@ -99,7 +106,7 @@ export const branchFromRow = (row: BranchRow) =>
     parentMessageId: row.parent_message_id ?? undefined,
     name: row.name ?? undefined,
     summary: row.summary ?? undefined,
-    createdAt: new Date(row.created_at),
+    createdAt: dateFromMillis(row.created_at),
   })
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
@@ -112,7 +119,7 @@ export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<st
         branchId: row.branch_id,
         role: row.role,
         parts,
-        createdAt: new Date(row.created_at),
+        createdAt: dateFromMillis(row.created_at),
         turnDurationMs: row.turn_duration_ms ?? undefined,
         metadata:
           row.metadata === null

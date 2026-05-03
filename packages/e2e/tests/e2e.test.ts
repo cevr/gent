@@ -25,6 +25,7 @@ const ESC = "\x1b"
 const CTRL_C = "\x03"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
+const ESC_KEY_DECODE_MS = 650
 
 let testContext: TestContext | null = null
 
@@ -82,7 +83,7 @@ describe("E2E: Basics", () => {
         const ctx = currentContext()
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write(ESC)
-        yield* shortPause(200)
+        yield* shortPause(ESC_KEY_DECODE_MS)
         ctx.pty.write(ESC)
         const code = yield* raceWithNullTimeout(ctx.pty.exited, 10_000)
         expect(code).toBe(0)
@@ -96,7 +97,7 @@ describe("E2E: Auth", () => {
     "missing auth opens auth panel and method picker",
     () =>
       Effect.gen(function* () {
-        testContext = spawnNoAuth()
+        testContext = yield* spawnNoAuth()
         const ctx = currentContext()
         yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
         yield* ptyWaitFor(ctx.pty, "Claude Code", { timeout: 10_000 })
@@ -110,7 +111,7 @@ describe("E2E: Auth", () => {
     "auth panel: arrows select manual key entry",
     () =>
       Effect.gen(function* () {
-        testContext = spawnNoAuth()
+        testContext = yield* spawnNoAuth()
         const ctx = currentContext()
         yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
         yield* shortPause(750)
@@ -211,10 +212,10 @@ describe("E2E: Session", () => {
         ctx.pty.write(ENTER)
         yield* shortPause(3_000)
         ctx.pty.write(ESC)
-        yield* shortPause(200)
+        yield* shortPause(ESC_KEY_DECODE_MS)
         ctx.pty.write(ESC)
         const code = yield* raceWithNullTimeout(ctx.pty.exited, 8_000)
-        const log = readClientLog()
+        const log = yield* readClientLog()
         expect(code).toBe(0)
         expect(log).not.toContain("shutdown.watchdog-fired")
       }),

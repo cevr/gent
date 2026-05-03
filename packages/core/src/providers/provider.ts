@@ -40,8 +40,8 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
 
 // ── Model Resolver ──
 
-const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) => {
-  return Effect.fn("Provider.resolveModel")(function* (
+const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) =>
+  Effect.fn("Provider.resolveModel")(function* (
     modelId: string,
     hints?: ProviderHints,
     /**
@@ -142,7 +142,6 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
 
     return resolved
   })
-}
 
 const providerAiError = (method: string, message: string) =>
   AiError.make({
@@ -320,8 +319,8 @@ const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
       const attempts = new Map<string, number>()
 
       const resolve = (request: ModelRequest) =>
-        Effect.suspend(() => {
-          return Effect.succeed(
+        Effect.suspend(() =>
+          Effect.succeed(
             _testModel(
               request,
               (modelOptions) =>
@@ -344,8 +343,8 @@ const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
                 }).pipe(Stream.unwrap),
               () => Effect.succeed("debug scenario"),
             ),
-          )
-        })
+          ),
+        )
 
       return { resolve }
     }),

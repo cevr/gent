@@ -6,6 +6,7 @@
  */
 
 import type { ScrollBoxRenderable } from "@opentui/core"
+import { Effect, Fiber } from "effect"
 import { createEffect, onCleanup, type Accessor } from "solid-js"
 
 interface ScrollSyncOptions {
@@ -45,18 +46,19 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
 
   createEffect(() => {
     const id = selectedId()
-    let cancelled = false
+    const syncWithRetry = (remaining: number): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const synced = yield* Effect.sync(() => syncScroll(id))
+        if (synced || remaining <= 0) return
+        yield* Effect.sleep(`${retryDelay} millis`)
+        yield* syncWithRetry(remaining - 1)
+      })
 
-    const syncWithRetry = (remaining: number) => {
-      if (cancelled || syncScroll(id)) return
-      if (remaining > 0) {
-        setTimeout(() => syncWithRetry(remaining - 1), retryDelay)
-      }
-    }
-
-    setTimeout(() => syncWithRetry(retries), 10)
+    const fiber = Effect.runFork(
+      Effect.sleep("10 millis").pipe(Effect.andThen(syncWithRetry(retries))),
+    )
     onCleanup(() => {
-      cancelled = true
+      Effect.runFork(Fiber.interrupt(fiber))
     })
   })
 }

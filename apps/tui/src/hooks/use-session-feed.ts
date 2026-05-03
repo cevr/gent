@@ -8,7 +8,7 @@
 
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Effect, Fiber, Stream } from "effect"
+import { Clock, Effect, Fiber, Random, Stream } from "effect"
 import type { ActiveInteraction, AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { projectMessage } from "@gent/core/domain/message.js"
@@ -156,27 +156,31 @@ const upsertReceivedMessage = (
   )
 }
 
-const createAssistantMessage = (content: string): Message => ({
+const createAssistantMessage = (content: string, id: string, createdAt: number): Message => ({
   _tag: "regular-message",
-  id: crypto.randomUUID(),
+  id,
   role: "assistant",
   content,
   reasoning: "",
   images: [],
-  createdAt: Date.now(),
+  createdAt,
   toolCalls: undefined,
 })
 
-const createInterruptionEvent = (seq: number): SessionEvent => ({
+const createInterruptionEvent = (createdAt: number, seq: number): SessionEvent => ({
   _tag: "interruption",
-  createdAt: Date.now(),
+  createdAt,
   seq,
 })
 
-const createTurnEndedEvent = (durationSeconds: number, seq: number): SessionEvent => ({
+const createTurnEndedEvent = (
+  durationSeconds: number,
+  createdAt: number,
+  seq: number,
+): SessionEvent => ({
   _tag: "turn-ended",
   durationSeconds,
-  createdAt: Date.now(),
+  createdAt,
   seq,
 })
 
@@ -184,20 +188,21 @@ const createRetryingEvent = (
   attempt: number,
   maxAttempts: number,
   delayMs: number,
+  createdAt: number,
   seq: number,
 ): SessionEvent => ({
   _tag: "retrying",
   attempt,
   maxAttempts,
   delayMs,
-  createdAt: Date.now(),
+  createdAt,
   seq,
 })
 
-const createErrorEvent = (error: string, seq: number): SessionEvent => ({
+const createErrorEvent = (error: string, createdAt: number, seq: number): SessionEvent => ({
   _tag: "error",
   error,
-  createdAt: Date.now(),
+  createdAt,
   seq,
 })
 
@@ -209,7 +214,12 @@ const appendSessionEvent = (setStore: SetStoreFunction<SessionFeedStore>, event:
   )
 }
 
-const ensureAssistantMessage = (setStore: SetStoreFunction<SessionFeedStore>, content: string) => {
+const ensureAssistantMessage = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  content: string,
+  id: string,
+  createdAt: number,
+) => {
   setStore(
     produce((draft) => {
       const last = draft.messages[draft.messages.length - 1]
@@ -227,7 +237,7 @@ const ensureAssistantMessage = (setStore: SetStoreFunction<SessionFeedStore>, co
         return
       }
 
-      const msg = createAssistantMessage(content)
+      const msg = createAssistantMessage(content, id, createdAt)
       msg.segments = content.length > 0 ? [{ _tag: "text", content }] : []
       draft.messages.push(msg)
     }),
@@ -429,10 +439,10 @@ export function useSessionFeed(
                 client.log.info("feed.stream.open", { key, after })
                 const eventsFiber = yield* eventStream.pipe(
                   Stream.runForEach((envelope) =>
-                    Effect.sync(() => {
+                    Effect.gen(function* () {
                       if (currentKey !== key) return
                       client.setConnectionIssue(null)
-                      processEnvelope(envelope, branch, key, snapshot.lastEventId)
+                      yield* processEnvelope(envelope, branch, key, snapshot.lastEventId)
                     }),
                   ),
                   Effect.forkScoped,
@@ -489,18 +499,19 @@ export function useSessionFeed(
     branch: BranchId,
     key: string,
     snapshotLastEventId: number | null,
-  ) => {
-    // Drop events if identity changed
-    if (currentKey !== key) return
-    lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
-    if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
-      client.applyBufferedSessionEvent(envelope)
-      processBufferedEvent(envelope.event, branch, key)
-      return
-    }
-    client.applySessionEvent(envelope)
-    processEvent(envelope.event, branch, key)
-  }
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      // Drop events if identity changed
+      if (currentKey !== key) return
+      lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
+      if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
+        client.applyBufferedSessionEvent(envelope)
+        processBufferedEvent(envelope.event, branch, key)
+        return
+      }
+      client.applySessionEvent(envelope)
+      yield* processEvent(envelope.event, branch, key)
+    })
 
   const processBufferedEvent = (event: AgentEvent, branch: BranchId, key: string) => {
     if (currentKey !== key) return
@@ -522,96 +533,120 @@ export function useSessionFeed(
     if (interaction !== undefined) callbacks.onInteraction(interaction)
   }
 
-  const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {
-    if (currentKey !== key) return
-    client.log.debug("feed.event", { key, tag: event._tag })
+  const processEvent = (event: AgentEvent, branch: BranchId, key: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      if (currentKey !== key) return
+      client.log.debug("feed.event", { key, tag: event._tag })
 
-    if (event._tag === "InteractionResolved") {
-      callbacks.onInteractionDismissed(event.requestId)
-      return
-    }
-
-    const interaction = toActiveInteraction(event)
-    if (interaction !== undefined) {
-      callbacks.onInteraction(interaction)
-      return
-    }
-
-    if (isToolResultEvent(event)) {
-      handleToolCallResult(setStore, setActiveTool, event)
-      return
-    }
-
-    switch (event._tag) {
-      case "MessageReceived":
-        if (event.message.role === "user") {
-          upsertReceivedMessage(setStore, projectMessage(event.message, []))
-        }
-        break
-
-      case "BranchSwitched":
-        if (event.toBranchId !== branch) {
-          setStore({ messages: [], events: [] })
-          callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
-        }
-        break
-
-      case "StreamStarted":
-        setTurnCount((n) => n + 1)
-        setActiveTool(undefined)
-        ensureAssistantMessage(setStore, "")
-        break
-
-      case "StreamChunk":
-        ensureAssistantMessage(setStore, event.chunk)
-        break
-
-      case "TurnCompleted": {
-        const durationSeconds = Math.round(event.durationMs / 1000)
-        if (event.interrupted === true) {
-          appendSessionEvent(setStore, createInterruptionEvent(eventSeq++))
-        } else if (durationSeconds > 0) {
-          appendSessionEvent(setStore, createTurnEndedEvent(durationSeconds, eventSeq++))
-        }
-        break
+      if (event._tag === "InteractionResolved") {
+        callbacks.onInteractionDismissed(event.requestId)
+        return
       }
 
-      case "ToolCallStarted": {
-        const inputSummary = formatToolInput(event.toolName, event.input)
-        setActiveTool(
-          inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
-        )
-        const toolCall = {
-          id: event.toolCallId,
-          toolName: event.toolName,
-          status: "running" as const,
-          input: event.input,
-          summary: undefined,
-          output: undefined,
-        }
-        updateLatestToolCall(setStore, (message) => {
-          if (message.toolCalls === undefined) message.toolCalls = []
-          message.toolCalls.push(toolCall)
-          // Also push to segments for interleaved rendering
-          if (message.segments === undefined) message.segments = []
-          message.segments.push({ _tag: "tool-call", toolCall })
-        })
-        break
+      const interaction = toActiveInteraction(event)
+      if (interaction !== undefined) {
+        callbacks.onInteraction(interaction)
+        return
       }
 
-      case "ProviderRetrying":
-        appendSessionEvent(
-          setStore,
-          createRetryingEvent(event.attempt, event.maxAttempts, event.delayMs, eventSeq++),
-        )
-        break
+      if (isToolResultEvent(event)) {
+        handleToolCallResult(setStore, setActiveTool, event)
+        return
+      }
 
-      case "ErrorOccurred":
-        client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
-        appendSessionEvent(setStore, createErrorEvent(event.error, eventSeq++))
-        break
-    }
-  }
+      switch (event._tag) {
+        case "MessageReceived":
+          if (event.message.role === "user") {
+            upsertReceivedMessage(setStore, projectMessage(event.message, []))
+          }
+          break
+
+        case "BranchSwitched":
+          if (event.toBranchId !== branch) {
+            setStore({ messages: [], events: [] })
+            callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
+          }
+          break
+
+        case "StreamStarted":
+          setTurnCount((n) => n + 1)
+          setActiveTool(undefined)
+          ensureAssistantMessage(
+            setStore,
+            "",
+            yield* Random.nextUUIDv4,
+            yield* Clock.currentTimeMillis,
+          )
+          break
+
+        case "StreamChunk":
+          ensureAssistantMessage(
+            setStore,
+            event.chunk,
+            yield* Random.nextUUIDv4,
+            yield* Clock.currentTimeMillis,
+          )
+          break
+
+        case "TurnCompleted": {
+          const durationSeconds = Math.round(event.durationMs / 1000)
+          const createdAt = yield* Clock.currentTimeMillis
+          if (event.interrupted === true) {
+            appendSessionEvent(setStore, createInterruptionEvent(createdAt, eventSeq++))
+          } else if (durationSeconds > 0) {
+            appendSessionEvent(
+              setStore,
+              createTurnEndedEvent(durationSeconds, createdAt, eventSeq++),
+            )
+          }
+          break
+        }
+
+        case "ToolCallStarted": {
+          const inputSummary = formatToolInput(event.toolName, event.input)
+          setActiveTool(
+            inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
+          )
+          const toolCall = {
+            id: event.toolCallId,
+            toolName: event.toolName,
+            status: "running" as const,
+            input: event.input,
+            summary: undefined,
+            output: undefined,
+          }
+          updateLatestToolCall(setStore, (message) => {
+            if (message.toolCalls === undefined) message.toolCalls = []
+            message.toolCalls.push(toolCall)
+            // Also push to segments for interleaved rendering
+            if (message.segments === undefined) message.segments = []
+            message.segments.push({ _tag: "tool-call", toolCall })
+          })
+          break
+        }
+
+        case "ProviderRetrying":
+          appendSessionEvent(
+            setStore,
+            createRetryingEvent(
+              event.attempt,
+              event.maxAttempts,
+              event.delayMs,
+              yield* Clock.currentTimeMillis,
+              eventSeq++,
+            ),
+          )
+          break
+
+        case "ErrorOccurred":
+          client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
+          appendSessionEvent(
+            setStore,
+            createErrorEvent(event.error, yield* Clock.currentTimeMillis, eventSeq++),
+          )
+          break
+      }
+    })
 
   return {
     items,

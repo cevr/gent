@@ -49,9 +49,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     () => [props.state.type, props.state.filter] as const,
-    async ([_prefix, filter]): Promise<AutocompleteItem[]> => {
+    ([_prefix, filter]): Promise<AutocompleteItem[]> => {
       setSelectedIndex(0)
-      const results = await Promise.all(
+      return Promise.all(
         contributions().map((c) =>
           runAutocompleteItems(c, filter, extensionUI.clientRuntime).catch((err) => {
             log.error("autocomplete.contribution.failed", {
@@ -61,19 +61,20 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
             return [] as AutocompleteItem[]
           }),
         ),
-      )
-      // Dedupe by id, first-win (scope-ordered from resolve)
-      const seen = new Set<string>()
-      const deduped: AutocompleteItem[] = []
-      for (const batch of results) {
-        for (const item of batch) {
-          if (!seen.has(item.id)) {
-            seen.add(item.id)
-            deduped.push(item)
+      ).then((results) => {
+        // Dedupe by id, first-win (scope-ordered from resolve)
+        const seen = new Set<string>()
+        const deduped: AutocompleteItem[] = []
+        for (const batch of results) {
+          for (const item of batch) {
+            if (!seen.has(item.id)) {
+              seen.add(item.id)
+              deduped.push(item)
+            }
           }
         }
-      }
-      return deduped
+        return deduped
+      })
     },
   )
 

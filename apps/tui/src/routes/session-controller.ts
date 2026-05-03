@@ -7,7 +7,7 @@ import {
   onCleanup,
   useContext,
 } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Fiber, Random, Schedule } from "effect"
 import { autocompleteContribution } from "../extensions/client-facets.js"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
@@ -131,8 +131,10 @@ const THINKING_WORDS = [
   "ruminating",
 ]
 
-const pickRandom = <T>(arr: readonly T[]): T => {
-  const item = arr[Math.floor(Math.random() * arr.length)]
+const currentMillis = () => performance.timeOrigin + performance.now()
+
+const pickRandom = <T>(arr: readonly T[], random: number): T => {
+  const item = arr[Math.floor(random * arr.length)]
   if (item === undefined) throw new Error("pickRandom: empty array")
   return item
 }
@@ -216,7 +218,7 @@ export function createSessionController(props: {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [elapsed, setElapsed] = createSignal(0)
-  let activityStartTime = Date.now()
+  let activityStartTime = currentMillis()
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
@@ -350,27 +352,41 @@ export function createSessionController(props: {
 
   createEffect(() => {
     const nextActivity = activity()
-    activityStartTime = Date.now()
+    activityStartTime = currentMillis()
     setElapsed(0)
 
     if (nextActivity.phase === "idle") return
 
-    const interval = setInterval(() => {
-      setElapsed(Date.now() - activityStartTime)
-    }, 1000)
-    onCleanup(() => clearInterval(interval))
+    const fiber = client.runtime.fork(
+      Effect.sync(() => {
+        setElapsed(currentMillis() - activityStartTime)
+      }).pipe(Effect.repeat(Schedule.spaced("1 second"))),
+    )
+    onCleanup(() => {
+      client.runtime.cast(Fiber.interrupt(fiber))
+    })
   })
 
   // Pick a random spinner + thinking word each time activity starts
-  let activeSpinner = pickRandom(SPINNERS)
+  let activeSpinner = SPINNERS[0] ?? { frames: ["·"], multiplier: 1 }
   let activeWord = "thinking"
   createEffect(
     on(
       () => activity().phase,
       (phase) => {
         if (phase !== "idle") {
-          activeSpinner = pickRandom(SPINNERS)
-          activeWord = pickRandom(THINKING_WORDS)
+          client.runtime.cast(
+            Effect.gen(function* () {
+              const spinnerRandom = yield* Random.next
+              const wordRandom = yield* Random.next
+              const spinner = pickRandom(SPINNERS, spinnerRandom)
+              const word = pickRandom(THINKING_WORDS, wordRandom)
+              yield* Effect.sync(() => {
+                activeSpinner = spinner
+                activeWord = word
+              })
+            }),
+          )
         }
       },
     ),

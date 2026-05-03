@@ -17,7 +17,7 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
-import { Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
@@ -28,15 +28,16 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 
 const sessionId = SessionId.make("perm-rules-e2e-session")
 const branchId = BranchId.make("perm-rules-e2e-branch")
+const FIXTURE_DATE = dateFromMillis(0)
 
 const makeMessage = (text: string) =>
   Message.Regular.make({
-    id: MessageId.make(`msg-perm-${Date.now()}`),
+    id: MessageId.make(`msg-perm-${text.replaceAll(" ", "-").toLowerCase()}`),
     sessionId,
     branchId,
     role: "user",
     parts: [new TextPart({ type: "text", text })],
-    createdAt: new Date(),
+    createdAt: FIXTURE_DATE,
   })
 
 // ── Tool definitions ────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -78,9 +78,10 @@ describe("scope precedence", () => {
         ext("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string>
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string, never>
       return narrowR(
         getToolEffect(resolvedTool)({}, {} as never).pipe(
+          Effect.orDie,
           Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))),
         ),
       )
@@ -188,9 +189,10 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string>
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string, never>
       return narrowR(
         getToolEffect(resolvedTool)({}, {} as never).pipe(
+          Effect.orDie,
           Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))),
         ),
       )

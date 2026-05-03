@@ -130,8 +130,8 @@ const runReaction = <Input>(
   reaction: RegisteredReaction<Input>,
 ) =>
   Effect.gen(function* () {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous ExtensionReaction
     const exit = yield* exitErasedEffect(() =>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       provideHostContext(ctx, reaction.slot.handler(input, ctx)),
     )
     if (exit._tag === "Success") return
@@ -193,9 +193,9 @@ const collectTurnProjection = (
 const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot, ctx: ProjectionTurnContext) =>
   sealErasedEffect(
     () =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous turn-projection slot
       provideProjectionContext(
         ctx,
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         slot.handler(ctx).pipe(
           Effect.map((projection) => ({
             promptSections: projection.promptSections ?? [],
@@ -354,8 +354,8 @@ export const compileExtensionReactions = (
         let current = input.messages
         for (const slot of contextMessagesSlots) {
           current = yield* sealErasedEffect(
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous context-messages slot
             () =>
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
               provideHostContext(ctx.host, slot.handler({ ...input, messages: current }, ctx.host)),
             {
               onFailure: (error) =>
@@ -384,11 +384,11 @@ export const compileExtensionReactions = (
       Effect.gen(function* () {
         let current = input.basePrompt
         for (const slot of systemPromptSlots) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous system-prompt slot
           current = yield* sealErasedEffect(
             () =>
               provideHostContext(
                 ctx.host,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 slot.handler({ ...input, basePrompt: current }, ctx.host),
               ),
             {

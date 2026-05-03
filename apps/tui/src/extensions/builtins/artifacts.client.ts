@@ -47,30 +47,33 @@ export default defineClientExtension(EXT_ID, {
       return s.items
     }
 
-    const runRefetch = async (captured: ActiveSession): Promise<void> => {
-      try {
-        const reply = await transport.runtime.run(
-          requestExtension(ref(ArtifactRpc.List), {}, transport, captured),
-        )
-        const current = transport.currentSession()
-        if (
-          current === undefined ||
-          current.sessionId !== captured.sessionId ||
-          current.branchId !== captured.branchId
-        ) {
-          return
-        }
-        setState({
-          sessionId: captured.sessionId,
-          branchId: captured.branchId,
-          items: reply,
-        })
-      } catch (err) {
-        console.warn(
-          `[${EXT_ID}] artifact list refresh failed:`,
-          err instanceof Error ? err.message : String(err),
-        )
-      }
+    const runRefetch = (captured: ActiveSession): void => {
+      transport.runtime.cast(
+        Effect.gen(function* () {
+          const reply = yield* requestExtension(ref(ArtifactRpc.List), {}, transport, captured)
+          yield* Effect.sync(() => {
+            const current = transport.currentSession()
+            if (
+              current === undefined ||
+              current.sessionId !== captured.sessionId ||
+              current.branchId !== captured.branchId
+            ) {
+              return
+            }
+            setState({
+              sessionId: captured.sessionId,
+              branchId: captured.branchId,
+              items: reply,
+            })
+          })
+        }).pipe(
+          Effect.catchEager((err) =>
+            Effect.logWarning(`${EXT_ID} artifact list refresh failed`).pipe(
+              Effect.annotateLogs({ error: String(err) }),
+            ),
+          ),
+        ),
+      )
     }
 
     yield* Effect.sync(() => {
@@ -85,7 +88,7 @@ export default defineClientExtension(EXT_ID, {
           // mismatched-key state.
           setState(undefined)
           if (session === undefined) return
-          void runRefetch(session)
+          runRefetch(session)
         })
         lifecycle.addCleanup(dispose)
       })
@@ -95,7 +98,7 @@ export default defineClientExtension(EXT_ID, {
       if (p.extensionId !== EXT_ID) return
       const session = transport.currentSession()
       if (session === undefined) return
-      void runRefetch(session)
+      runRefetch(session)
     })
     lifecycle.addCleanup(unsubscribePulse)
 

@@ -90,7 +90,7 @@ const realIO: AnthropicCredentialIO = {
 export class AnthropicCredentialService extends Context.Service<
   AnthropicCredentialService,
   AnthropicCredentialServiceShape
->()("@gent/extensions/anthropic/CredentialService") {
+>()("@gent/extensions/src/anthropic/credential-service/AnthropicCredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
    * (when present) durably writes refreshed credentials back to AuthStore.
@@ -218,12 +218,10 @@ export class AnthropicCredentialService extends Context.Service<
 
             if (refreshed === null || !freshEnoughForUse(refreshed, now)) {
               yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
-              return yield* Effect.fail(
-                new ProviderAuthError({
-                  message:
-                    "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
-                }),
-              )
+              return yield* new ProviderAuthError({
+                message:
+                  "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
+              })
             }
 
             yield* persistRefreshed(refreshed)

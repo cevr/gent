@@ -1,15 +1,20 @@
 import { createRoot, createSignal, onCleanup } from "solid-js"
 import type { Accessor } from "solid-js"
+import { Effect, Fiber, Schedule } from "effect"
 
 let disposeTicker: (() => void) | undefined
 
 const ticker = createRoot((dispose) => {
   disposeTicker = dispose
   const [tick, setTick] = createSignal(0)
-  const interval = setInterval(() => {
-    setTick((current) => current + 1)
-  }, 60)
-  onCleanup(() => clearInterval(interval))
+  const fiber = Effect.runFork(
+    Effect.sync(() => {
+      setTick((current) => current + 1)
+    }).pipe(Effect.repeat(Schedule.spaced("60 millis"))),
+  )
+  onCleanup(() => {
+    Effect.runFork(Fiber.interrupt(fiber))
+  })
   return tick
 })
 

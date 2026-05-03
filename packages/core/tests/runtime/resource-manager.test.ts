@@ -56,12 +56,7 @@ describe("ResourceManager", () => {
             )
             yield* Deferred.await(readStarted)
             const writeFiber = yield* Effect.forkChild(
-              manager.withNeeds(
-                [ToolNeeds.write("fs")],
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(writeStarted, undefined)
-                }),
-              ),
+              manager.withNeeds([ToolNeeds.write("fs")], Deferred.succeed(writeStarted, undefined)),
             )
             const started = yield* Deferred.await(writeStarted).pipe(
               Effect.as(true),

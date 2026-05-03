@@ -1,10 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Stream } from "effect"
+import { Cause, Effect, Schema, Stream } from "effect"
 import { EventEnvelope, TurnCompleted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
 import { createMockClient } from "./render-harness"
+class HeadlessRunnerTestError extends Schema.TaggedErrorClass<HeadlessRunnerTestError>()(
+  "HeadlessRunnerTestError",
+  { message: Schema.String },
+) {}
 describe("runHeadless", () => {
   it.live("stops after TurnCompleted even if the event stream stays open", () =>
     Effect.gen(function* () {
@@ -18,7 +22,7 @@ describe("runHeadless", () => {
           branchId,
           durationMs: 42,
         }),
-        createdAt: Date.now(),
+        createdAt: 0,
       })
       const client = createMockClient({
         session: {
@@ -53,7 +57,7 @@ describe("runHeadless", () => {
             branchId,
             durationMs: 1,
           }),
-          createdAt: Date.now(),
+          createdAt: 0,
         })
         const client = createMockClient({
           session: {
@@ -66,7 +70,11 @@ describe("runHeadless", () => {
               // Fail the first two attempts with a transport-shape error so the
               // retry policy fires; succeed on the third.
               if (sendAttempts < 3) {
-                return Effect.fail(new Error("RpcClientError: transient socket close"))
+                return Effect.fail(
+                  new HeadlessRunnerTestError({
+                    message: "RpcClientError: transient socket close",
+                  }),
+                )
               }
               return Effect.void
             },

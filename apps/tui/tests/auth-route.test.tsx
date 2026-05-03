@@ -177,7 +177,7 @@ describe("Auth route", () => {
             if (provider === "anthropic") {
               return Deferred.await(oldKeySave)
             }
-            return Effect.succeed(undefined)
+            return Effect.void
           },
         },
       })

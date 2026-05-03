@@ -1,4 +1,4 @@
-import { Console, Effect, Option } from "effect"
+import { Console, Effect, Option, Random } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
@@ -54,9 +54,10 @@ const createAndLoadSession = (input: {
   cwd: string
 }): Effect.Effect<DomainSession, GentRpcError> =>
   Effect.gen(function* () {
+    const requestId = yield* Random.nextUUIDv4
     const result = yield* input.client.session.create({
       cwd: input.cwd,
-      requestId: crypto.randomUUID(),
+      requestId,
     })
     const session = yield* input.client.session.get({ sessionId: result.sessionId })
     if (session === null) {

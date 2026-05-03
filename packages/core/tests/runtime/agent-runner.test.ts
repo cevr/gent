@@ -16,7 +16,14 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
+import {
+  dateFromMillis,
+  Session,
+  Branch,
+  Message,
+  ReasoningPart,
+  TextPart,
+} from "@gent/core/domain/message"
 import {
   resolveAgentModel,
   AgentRunnerService,
@@ -52,7 +59,6 @@ import {
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { rmSync } from "node:fs"
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
   responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
@@ -265,7 +271,7 @@ describe("RunSpec", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-runspec"),
@@ -334,7 +340,7 @@ describe("AgentRunner", () => {
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const recorder = yield* SequenceRecorder
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session"),
           name: "Parent",
@@ -371,7 +377,7 @@ describe("AgentRunner", () => {
           )
         })
         expect(spawnRecord).toBeDefined()
-        const spawnEvent = Schema.decodeUnknownSync(AgentEvent)(spawnRecord?.args)
+        const spawnEvent = yield* Schema.decodeUnknownEffect(AgentEvent)(spawnRecord?.args)
         expect(spawnEvent._tag).toBe("AgentRunSpawned")
         if (spawnEvent._tag === "AgentRunSpawned") {
           const child = yield* sessions.getSession(spawnEvent.childSessionId)
@@ -421,7 +427,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-spawn-rollback"),
           name: "Parent",
@@ -474,7 +480,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-noretr"),
           name: "Parent",
@@ -522,7 +528,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-timeout"),
           name: "Parent",
@@ -574,7 +580,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-ephemeral"),
           name: "Parent",
@@ -642,7 +648,7 @@ describe("AgentRunner", () => {
         const branches = yield* BranchStorage
         const events = yield* EventStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-mirror"),
           name: "Parent",
@@ -699,7 +705,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("parent-session-durable"),
           name: "Parent",
@@ -740,7 +746,7 @@ describe("AgentRunner", () => {
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const messages = yield* MessageStorage
-          const now = new Date()
+          const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
@@ -771,7 +777,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-reasoning"),
@@ -810,7 +816,7 @@ describe("AgentRunner", () => {
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const messages = yield* MessageStorage
-          const now = new Date()
+          const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
@@ -844,7 +850,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-mixed"),
@@ -883,7 +889,7 @@ describe("AgentRunner", () => {
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const messages = yield* MessageStorage
-          const now = new Date()
+          const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
@@ -917,7 +923,7 @@ describe("AgentRunner", () => {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-save"),
@@ -955,7 +961,7 @@ describe("AgentRunner", () => {
         expect(content).toContain("## Response")
         expect(content).toContain("visible answer")
         // Cleanup
-        rmSync(result.savedPath!, { force: true })
+        yield* Effect.promise(() => Bun.file(result.savedPath!).delete())
       }
     }),
   )
@@ -966,10 +972,7 @@ describe("AgentRunner", () => {
 describe("session depth guard", () => {
   const run = <A, E>(
     effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
-  ) =>
-    Effect.runPromise(
-      effect.pipe(Effect.timeout("4 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
-    )
+  ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(SqliteStorage.TestWithSql()))
   const makeSession = (id: string, parentSessionId?: string) =>
     new Session({
       id: SessionId.make(id),
@@ -977,14 +980,14 @@ describe("session depth guard", () => {
       parentSessionId: parentSessionId !== undefined ? SessionId.make(parentSessionId) : undefined,
       parentBranchId:
         parentSessionId !== undefined ? BranchId.make(`branch-${parentSessionId}`) : undefined,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
+      updatedAt: dateFromMillis(1_767_225_600_000),
     })
   const makeBranch = (sessionId: string) =>
     new Branch({
       id: BranchId.make(`branch-${sessionId}`),
       sessionId: SessionId.make(sessionId),
-      createdAt: new Date(),
+      createdAt: dateFromMillis(1_767_225_600_000),
     })
   const buildSessionChain = (depth: number) =>
     Effect.gen(function* () {
@@ -998,120 +1001,88 @@ describe("session depth guard", () => {
       }
     })
   it.live("root session has depth 0", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const sessions = yield* SessionStorage
-            const branches = yield* BranchStorage
-            const relationshipStorage = yield* RelationshipStorage
-            yield* sessions.createSession(makeSession("root"))
-            yield* branches.createBranch(makeBranch("root"))
-            expect(yield* getSessionDepth(SessionId.make("root"), relationshipStorage)).toBe(0)
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const relationshipStorage = yield* RelationshipStorage
+        yield* sessions.createSession(makeSession("root"))
+        yield* branches.createBranch(makeBranch("root"))
+        expect(yield* getSessionDepth(SessionId.make("root"), relationshipStorage)).toBe(0)
+      }),
+    ),
   )
   it.live("child of root has depth 1", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const sessions = yield* SessionStorage
-            const branches = yield* BranchStorage
-            const relationshipStorage = yield* RelationshipStorage
-            yield* sessions.createSession(makeSession("root"))
-            yield* branches.createBranch(makeBranch("root"))
-            yield* sessions.createSession(makeSession("child", "root"))
-            yield* branches.createBranch(makeBranch("child"))
-            expect(yield* getSessionDepth(SessionId.make("child"), relationshipStorage)).toBe(1)
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const relationshipStorage = yield* RelationshipStorage
+        yield* sessions.createSession(makeSession("root"))
+        yield* branches.createBranch(makeBranch("root"))
+        yield* sessions.createSession(makeSession("child", "root"))
+        yield* branches.createBranch(makeBranch("child"))
+        expect(yield* getSessionDepth(SessionId.make("child"), relationshipStorage)).toBe(1)
+      }),
+    ),
   )
   it.live("grandchild has depth 2", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const sessions = yield* SessionStorage
-            const branches = yield* BranchStorage
-            const relationshipStorage = yield* RelationshipStorage
-            yield* sessions.createSession(makeSession("root"))
-            yield* branches.createBranch(makeBranch("root"))
-            yield* sessions.createSession(makeSession("child", "root"))
-            yield* branches.createBranch(makeBranch("child"))
-            yield* sessions.createSession(makeSession("grandchild", "child"))
-            yield* branches.createBranch(makeBranch("grandchild"))
-            expect(yield* getSessionDepth(SessionId.make("grandchild"), relationshipStorage)).toBe(
-              2,
-            )
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const relationshipStorage = yield* RelationshipStorage
+        yield* sessions.createSession(makeSession("root"))
+        yield* branches.createBranch(makeBranch("root"))
+        yield* sessions.createSession(makeSession("child", "root"))
+        yield* branches.createBranch(makeBranch("child"))
+        yield* sessions.createSession(makeSession("grandchild", "child"))
+        yield* branches.createBranch(makeBranch("grandchild"))
+        expect(yield* getSessionDepth(SessionId.make("grandchild"), relationshipStorage)).toBe(2)
+      }),
+    ),
   )
   it.live("chain at max depth reports correct depth", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
-            const deepest = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-            expect(yield* getSessionDepth(deepest, relationshipStorage)).toBe(
-              DEFAULT_MAX_AGENT_RUN_DEPTH,
-            )
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const relationshipStorage = yield* RelationshipStorage
+        yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
+        const deepest = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
+        expect(yield* getSessionDepth(deepest, relationshipStorage)).toBe(
+          DEFAULT_MAX_AGENT_RUN_DEPTH,
+        )
+      }),
+    ),
   )
   it.live("parent at max depth blocks child spawn", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
-            const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-            const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
-            expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const relationshipStorage = yield* RelationshipStorage
+        yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
+        const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
+        const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
+        expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+      }),
+    ),
   )
   it.live("parent below max depth allows child spawn", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
-            const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
-            const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
-            expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const relationshipStorage = yield* RelationshipStorage
+        yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+        const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
+        const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
+        expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+      }),
+    ),
   )
   it.live("nonexistent session returns depth 0", () =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        run(
-          Effect.gen(function* () {
-            const relationshipStorage = yield* RelationshipStorage
-            expect(yield* getSessionDepth(SessionId.make("nonexistent"), relationshipStorage)).toBe(
-              0,
-            )
-          }),
-        ),
-      )
-    }),
+    run(
+      Effect.gen(function* () {
+        const relationshipStorage = yield* RelationshipStorage
+        expect(yield* getSessionDepth(SessionId.make("nonexistent"), relationshipStorage)).toBe(0)
+      }),
+    ),
   )
 })
 describe("ephemeral service propagation", () => {
@@ -1135,7 +1106,7 @@ describe("ephemeral service propagation", () => {
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
-      const now = new Date()
+      const now = dateFromMillis(1_767_225_600_000)
       yield* sessions.createSession(
         new Session({ id, name: "Parent", createdAt: now, updatedAt: now }),
       )

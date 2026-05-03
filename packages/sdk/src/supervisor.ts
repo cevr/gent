@@ -1,4 +1,7 @@
-import { Cause, Clock, Effect, Exit, Schema, type Scope } from "effect"
+// @effect-diagnostics asyncFunction:off — worker supervisor process launch helpers are Promise entry boundaries
+// @effect-diagnostics newPromise:off — net/server and stream readiness adapters bridge callback APIs
+// @effect-diagnostics globalTimers:off — startup readiness timeout protects the external worker boundary
+import { Cause, Clock, DateTime, Effect, Exit, Schema, type Scope } from "effect"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
@@ -71,7 +74,7 @@ const STARTUP_RETRY_DELAY_MS = 500
 const resolveWorkerLaunch = async (options?: {
   readonly sourceEntryPath?: string
   readonly execPath?: string
-  readonly sourceExists?: (path: string) => Promise<boolean>
+  readonly sourceExists?: (path: string) => boolean | Promise<boolean>
   readonly which?: (cmd: string) => string | null
 }) => {
   const sourceEntryPath = options?.sourceEntryPath ?? SERVER_ENTRY_PATH
@@ -304,39 +307,62 @@ const launchWorkerUntilReady = <Proc extends { readonly pid: number }>(
 import { appendFileSync } from "node:fs"
 import { getLogPaths } from "@gent/core/runtime/log-paths"
 
-const shutdownLog = (msg: string, data?: Record<string, unknown>) => {
-  const entry = { ts: new Date().toISOString(), level: "info", source: "supervisor", msg, ...data }
-  try {
-    appendFileSync(getLogPaths().client, JSON.stringify(entry) + "\n")
-  } catch {}
-}
+const ShutdownLogJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+)
+
+const shutdownLog = (msg: string, data?: Record<string, unknown>): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const ts = (yield* DateTime.nowAsDate).toISOString()
+    yield* Effect.sync(() => {
+      const entry = { ts, level: "info", source: "supervisor", msg, ...data }
+      try {
+        appendFileSync(getLogPaths().client, ShutdownLogJson(entry) + "\n")
+      } catch {}
+    })
+  })
 
 const stopSubprocess = (proc: Bun.Subprocess): Effect.Effect<void> =>
-  Effect.promise(async () => {
-    shutdownLog("stop.start", { pid: proc.pid, exitCode: proc.exitCode })
+  Effect.gen(function* () {
+    yield* shutdownLog("stop.start", { pid: proc.pid, exitCode: proc.exitCode })
     if (proc.exitCode !== null) return
-    try {
-      process.kill(proc.pid, "SIGTERM")
-      shutdownLog("stop.sigterm", { pid: proc.pid })
-    } catch {
-      shutdownLog("stop.sigterm-failed", { pid: proc.pid })
+    const sentTerm = yield* Effect.sync(() => {
+      try {
+        process.kill(proc.pid, "SIGTERM")
+        return true
+      } catch {
+        return false
+      }
+    })
+    if (sentTerm) {
+      yield* shutdownLog("stop.sigterm", { pid: proc.pid })
+    } else {
+      yield* shutdownLog("stop.sigterm-failed", { pid: proc.pid })
       return
     }
-    const exited = proc.exited.then(() => undefined)
-    const timedOut = Bun.sleep(SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const)
-    const result = await Promise.race([exited, timedOut])
+    const exited = Effect.promise(() => proc.exited).pipe(Effect.as("exited" as const))
+    const timedOut = Effect.sleep(`${SHUTDOWN_TIMEOUT_MS} millis`).pipe(
+      Effect.as("timeout" as const),
+    )
+    const result = yield* Effect.raceFirst(exited, timedOut)
     if (result === "timeout") {
-      shutdownLog("stop.timeout", { pid: proc.pid })
-      try {
-        process.kill(proc.pid, "SIGKILL")
-        shutdownLog("stop.sigkill", { pid: proc.pid })
-      } catch {
+      yield* shutdownLog("stop.timeout", { pid: proc.pid })
+      const sentKill = yield* Effect.sync(() => {
+        try {
+          process.kill(proc.pid, "SIGKILL")
+          return true
+        } catch {
+          return false
+        }
+      })
+      if (!sentKill) {
         return
       }
-      await proc.exited
-      shutdownLog("stop.killed", { pid: proc.pid })
+      yield* shutdownLog("stop.sigkill", { pid: proc.pid })
+      yield* Effect.promise(() => proc.exited)
+      yield* shutdownLog("stop.killed", { pid: proc.pid })
     } else {
-      shutdownLog("stop.exited-gracefully", { pid: proc.pid })
+      yield* shutdownLog("stop.exited-gracefully", { pid: proc.pid })
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -479,13 +505,12 @@ export const startWorkerSupervisor = (
           },
           isCurrent: (proc) => current?.pid === proc.pid,
           isStopped: () => stopped,
-          logRetry: (input) => {
+          logRetry: (input) =>
             shutdownLog("launch.retry", {
               attempt: input.attempt,
               pid: input.pid,
               error: input.error,
-            })
-          },
+            }),
         })
         if (readyWorker === undefined) return
 
@@ -617,7 +642,7 @@ export const startWorkerSupervisor = (
       )
 
       const stop = Effect.gen(function* () {
-        shutdownLog("supervisor.stop.enter")
+        yield* shutdownLog("supervisor.stop.enter")
         if (stopped) return
         stopped = true
         disarmProcessExit()
@@ -625,7 +650,7 @@ export const startWorkerSupervisor = (
         current = undefined
         if (proc !== undefined) yield* stopSubprocess(proc)
         emit({ _tag: "stopped", port: assignedPort, restartCount })
-        shutdownLog("supervisor.stop.done")
+        yield* shutdownLog("supervisor.stop.done")
       }).pipe(Effect.catchEager(() => Effect.void))
 
       return {

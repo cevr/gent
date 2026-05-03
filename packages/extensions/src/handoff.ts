@@ -27,7 +27,7 @@ interface HandoffCooldownService {
 }
 
 export class HandoffCooldown extends Context.Service<HandoffCooldown, HandoffCooldownService>()(
-  "@gent/handoff/Cooldown",
+  "@gent/extensions/src/handoff/HandoffCooldown",
 ) {
   static Live: Layer.Layer<HandoffCooldown> = Layer.effect(
     HandoffCooldown,

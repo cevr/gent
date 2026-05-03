@@ -137,7 +137,7 @@ const realIO: OpenAICredentialIO = {
 export class OpenAICredentialService extends Context.Service<
   OpenAICredentialService,
   OpenAICredentialServiceShape
->()("@gent/extensions/openai/CredentialService") {
+>()("@gent/extensions/src/openai/credential-service/OpenAICredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
    * (when present) durably writes refreshed credentials back to AuthStore.
@@ -262,12 +262,10 @@ export class OpenAICredentialService extends Context.Service<
           const refreshToken = cell.creds?.refresh ?? authInfo.refresh
           if (refreshToken === undefined || refreshToken.length === 0) {
             yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                message:
-                  "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
-              }),
-            )
+            return yield* new ProviderAuthError({
+              message:
+                "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
+            })
           }
 
           // Refresh failure does NOT clear the cell. The rotated refresh

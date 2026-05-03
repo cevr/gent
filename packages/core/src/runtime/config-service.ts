@@ -313,78 +313,82 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
     }),
   )
 
-  static Test = (initialConfig: UserConfig = new UserConfig({})): Layer.Layer<ConfigService> => {
-    const userConfigRef = Ref.makeUnsafe(initialConfig)
-    const projectConfigRef = Ref.makeUnsafe(new UserConfig({}))
+  static Test = (initialConfig: UserConfig = new UserConfig({})): Layer.Layer<ConfigService> =>
+    Layer.effect(
+      ConfigService,
+      Effect.gen(function* () {
+        const userConfigRef = yield* Ref.make(initialConfig)
+        const projectConfigRef = yield* Ref.make(new UserConfig({}))
 
-    return Layer.succeed(ConfigService, {
-      // Test impl: `cwd` is ignored — no filesystem to read. Tests that
-      // need per-cwd behavior should drive it through `Live` with a
-      // tmpdir cwd, since `Test` is for hermetic units.
-      get: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigsImpl(user, project)
-        }),
-      set: (partial) =>
-        Ref.update(
-          userConfigRef,
-          (current) =>
-            new UserConfig({
-              permissions: partial.permissions ?? current.permissions,
-              disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
-              driverOverrides: partial.driverOverrides ?? current.driverOverrides,
+        return {
+          // Test impl: `cwd` is ignored — no filesystem to read. Tests that
+          // need per-cwd behavior should drive it through `Live` with a
+          // tmpdir cwd, since `Test` is for hermetic units.
+          get: () =>
+            Effect.gen(function* () {
+              const user = yield* Ref.get(userConfigRef)
+              const project = yield* Ref.get(projectConfigRef)
+              return mergeConfigsImpl(user, project)
             }),
-        ),
-      getPermissionRules: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return [...(project.permissions ?? []), ...(user.permissions ?? [])]
-        }),
-      addPermissionRule: (rule) =>
-        Ref.update(userConfigRef, (current) => {
-          const permissions = [...(current.permissions ?? []), rule]
-          return new UserConfig({
-            permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides: current.driverOverrides,
-          })
-        }).pipe(Effect.asVoid),
-      removePermissionRule: (tool, pattern) =>
-        Ref.update(userConfigRef, (current) => {
-          const permissions = (current.permissions ?? []).filter(
-            (r) => !(r.tool === tool && r.pattern === pattern),
-          )
-          return new UserConfig({
-            permissions: permissions.length > 0 ? permissions : undefined,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides: current.driverOverrides,
-          })
-        }).pipe(Effect.asVoid),
-      setDriverOverride: (agent, driver) =>
-        Ref.update(userConfigRef, (current) => {
-          const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
-          return new UserConfig({
-            permissions: current.permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides,
-          })
-        }).pipe(Effect.asVoid),
-      clearDriverOverride: (agent) =>
-        Ref.update(userConfigRef, (current) => {
-          const existing = current.driverOverrides ?? {}
-          if (!(agent in existing)) return current
-          const next = { ...existing }
-          delete next[agent]
-          return new UserConfig({
-            permissions: current.permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides: Object.keys(next).length > 0 ? next : undefined,
-          })
-        }).pipe(Effect.asVoid),
-      loadInstructions: () => Effect.succeed(""),
-    })
-  }
+          set: (partial) =>
+            Ref.update(
+              userConfigRef,
+              (current) =>
+                new UserConfig({
+                  permissions: partial.permissions ?? current.permissions,
+                  disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
+                  driverOverrides: partial.driverOverrides ?? current.driverOverrides,
+                }),
+            ),
+          getPermissionRules: () =>
+            Effect.gen(function* () {
+              const user = yield* Ref.get(userConfigRef)
+              const project = yield* Ref.get(projectConfigRef)
+              return [...(project.permissions ?? []), ...(user.permissions ?? [])]
+            }),
+          addPermissionRule: (rule) =>
+            Ref.update(userConfigRef, (current) => {
+              const permissions = [...(current.permissions ?? []), rule]
+              return new UserConfig({
+                permissions,
+                disabledExtensions: current.disabledExtensions,
+                driverOverrides: current.driverOverrides,
+              })
+            }).pipe(Effect.asVoid),
+          removePermissionRule: (tool, pattern) =>
+            Ref.update(userConfigRef, (current) => {
+              const permissions = (current.permissions ?? []).filter(
+                (r) => !(r.tool === tool && r.pattern === pattern),
+              )
+              return new UserConfig({
+                permissions: permissions.length > 0 ? permissions : undefined,
+                disabledExtensions: current.disabledExtensions,
+                driverOverrides: current.driverOverrides,
+              })
+            }).pipe(Effect.asVoid),
+          setDriverOverride: (agent, driver) =>
+            Ref.update(userConfigRef, (current) => {
+              const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
+              return new UserConfig({
+                permissions: current.permissions,
+                disabledExtensions: current.disabledExtensions,
+                driverOverrides,
+              })
+            }).pipe(Effect.asVoid),
+          clearDriverOverride: (agent) =>
+            Ref.update(userConfigRef, (current) => {
+              const existing = current.driverOverrides ?? {}
+              if (!(agent in existing)) return current
+              const next = { ...existing }
+              delete next[agent]
+              return new UserConfig({
+                permissions: current.permissions,
+                disabledExtensions: current.disabledExtensions,
+                driverOverrides: Object.keys(next).length > 0 ? next : undefined,
+              })
+            }).pipe(Effect.asVoid),
+          loadInstructions: () => Effect.succeed(""),
+        }
+      }),
+    )
 }

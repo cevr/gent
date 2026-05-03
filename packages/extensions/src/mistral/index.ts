@@ -14,7 +14,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
 
 const readEnv = (name: string): string | undefined => {
-  const val = process.env[name]
+  const val = Bun.env[name]
   return val !== undefined && val !== "" ? val : undefined
 }
 

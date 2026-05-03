@@ -6,14 +6,17 @@
  */
 
 import type { Context } from "effect"
-import { Config, Effect, FileSystem, Layer, Option, Tracer, Exit, Cause } from "effect"
+import { Config, DateTime, Effect, FileSystem, Layer, Option, Tracer, Exit, Cause } from "effect"
 
 import { resolveLogPaths, ensureLogDir, getLogPaths } from "./log-paths.js"
 
-const timestamp = () => {
-  const d = new Date()
-  return `[${d.toTimeString().slice(0, 8)}.${String(d.getMilliseconds()).padStart(3, "0")}]`
-}
+const timestamp = () =>
+  DateTime.make(performance.timeOrigin + performance.now()).pipe(
+    Option.match({
+      onNone: () => "[unknown]",
+      onSome: (date) => `[${DateTime.formatIso(date).slice(11, 23)}]`,
+    }),
+  )
 
 export const clearTraceLog = () => {
   void Bun.write(getLogPaths().trace, "")
@@ -41,12 +44,11 @@ const formatTraceFields = (fields: Iterable<readonly [string, unknown]>): string
 }
 
 function randomHex(length: number): string {
-  const chars = "abcdef0123456789"
   let result = ""
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
+  while (result.length < length) {
+    result += Bun.randomUUIDv7().replaceAll("-", "")
   }
-  return result
+  return result.slice(0, length)
 }
 
 class GentSpan implements Tracer.Span {

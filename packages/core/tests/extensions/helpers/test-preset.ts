@@ -10,8 +10,10 @@ import { Test as MemoryVaultTest } from "@gent/extensions/memory/vault.js"
 import type { E2ELayerConfig } from "@gent/core/test-utils/e2e-layer"
 import type { ToolTestLayerConfig } from "@gent/core/test-utils/extension-harness"
 
+let memoryVaultLayerIndex = 0
+
 const memoryVaultTestLayer = () =>
-  MemoryVaultTest(`${tmpdir()}/gent-e2e-${Date.now()}`) as Layer.Layer<never>
+  MemoryVaultTest(`${tmpdir()}/gent-e2e-${memoryVaultLayerIndex++}`) as Layer.Layer<never>
 
 export const e2ePreset = {
   agents: AllBuiltinAgents,

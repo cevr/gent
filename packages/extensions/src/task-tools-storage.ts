@@ -14,6 +14,7 @@ import {
   SessionId,
   Task,
   TaskStatus,
+  dateFromMillis,
   withReadOnly,
   type BranchId,
   type ReadOnly,
@@ -100,8 +101,8 @@ const taskFromRow = (row: TaskRow) =>
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,
     metadata: decodeTaskMetadata(row.metadata),
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    createdAt: dateFromMillis(row.created_at),
+    updatedAt: dateFromMillis(row.updated_at),
   })
 
 const tableColumns = Effect.fn("TaskStorage.tableColumns")(function* (
@@ -225,7 +226,7 @@ export interface TaskStorageService extends TaskStorageReadOnlyService {
 export class TaskStorageReadOnly extends Context.Service<
   TaskStorageReadOnly,
   ReadOnly<TaskStorageReadOnlyService>
->()("@gent/core/src/extensions/task-tools-storage/TaskStorageReadOnly") {
+>()("@gent/extensions/src/task-tools-storage/TaskStorageReadOnly") {
   // Brand on the Tag identifier — see `domain/read-only.ts`.
   declare readonly [ReadOnlyBrand]: true
 }
@@ -390,7 +391,7 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
   })
 
 export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService>()(
-  "@gent/core/src/extensions/task-tools-storage/TaskStorage",
+  "@gent/extensions/src/task-tools-storage/TaskStorage",
 ) {
   /**
    * Runs its own DDL — only requires SqlClient, not host Storage.

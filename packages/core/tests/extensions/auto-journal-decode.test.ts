@@ -10,57 +10,49 @@
  * reach `autoProtocol.onInit` replay and crash the extension.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
-import { BunFileSystem, BunPath } from "@effect/platform-bun"
-import * as os from "node:os"
-import * as path from "node:path"
-import * as fs from "node:fs/promises"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { BunFileSystem } from "@effect/platform-bun"
 import { AutoJournal } from "@gent/extensions/auto-journal"
-const mkTempCwd = Effect.acquireRelease(
-  Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "gent-auto-journal-decode-"))),
-  (cwd) => Effect.promise(() => fs.rm(cwd, { recursive: true, force: true })),
-)
+const autoJournalLayer = Layer.merge(BunFileSystem.layer, Path.layer)
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
 describe("AutoJournal row decoding", () => {
-  it.live("skips malformed JSONL lines and returns only well-typed rows", () =>
+  it.scopedLive("skips malformed JSONL lines and returns only well-typed rows", () =>
     Effect.gen(function* () {
-      const cwd = yield* mkTempCwd
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const cwd = yield* fs.makeTempDirectoryScoped()
       const journalLayer = AutoJournal.Live({ cwd })
+      const live = journalLayer.pipe(Layer.provide(autoJournalLayer))
       const autoDir = path.join(cwd, ".gent", "auto")
-      yield* Effect.promise(() => fs.mkdir(autoDir, { recursive: true }))
+      yield* fs.makeDirectory(autoDir, { recursive: true })
       // Start a journal. Writes a valid ConfigRow + active pointer.
       const journalPath = yield* Effect.gen(function* () {
         const svc = yield* AutoJournal
         return yield* svc.start({ goal: "decode-test", maxIterations: 3 })
-      })
-        .pipe(Effect.provide(journalLayer))
-        .pipe(Effect.provide(BunFileSystem.layer))
-        .pipe(Effect.provide(BunPath.layer))
+      }).pipe(Effect.provide(live))
       // Append a mix of rows: one valid checkpoint, one bogus-JSON line,
       // one JSON-valid-but-wrong-shape line, one valid review.
-      yield* Effect.promise(() =>
-        fs.appendFile(
-          journalPath,
-          [
-            JSON.stringify({
-              type: "checkpoint",
-              iteration: 1,
-              status: "continue",
-              summary: "step 1",
-            }),
-            "not-json-at-all",
-            JSON.stringify({ type: "checkpoint", iteration: 2, status: "bogus-status-enum" }),
-            JSON.stringify({ type: "review", iteration: 2 }),
-            "",
-          ].join("\n") + "\n",
-        ),
+      yield* fs.writeFileString(
+        journalPath,
+        [
+          encodeJson({
+            type: "checkpoint",
+            iteration: 1,
+            status: "continue",
+            summary: "step 1",
+          }),
+          "not-json-at-all",
+          encodeJson({ type: "checkpoint", iteration: 2, status: "bogus-status-enum" }),
+          encodeJson({ type: "review", iteration: 2 }),
+          "",
+        ].join("\n") + "\n",
+        { flag: "a" },
       )
       const result = yield* Effect.gen(function* () {
         const svc = yield* AutoJournal
         return yield* svc.readActive()
-      })
-        .pipe(Effect.provide(journalLayer))
-        .pipe(Effect.provide(BunFileSystem.layer))
-        .pipe(Effect.provide(BunPath.layer))
+      }).pipe(Effect.provide(live))
       expect(result).toBeDefined()
       if (result === undefined) return
       // Good rows: ConfigRow (start) + checkpoint iter 1 + review iter 2 = 3.
@@ -69,6 +61,6 @@ describe("AutoJournal row decoding", () => {
       expect(result.rows[0]?.type).toBe("config")
       expect(result.rows[1]?.type).toBe("checkpoint")
       expect(result.rows[2]?.type).toBe("review")
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(autoJournalLayer)),
   )
 })

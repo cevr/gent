@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { Effect, Layer, Path } from "effect"
+import { Cause, Effect, Layer, Path } from "effect"
 import type { GentExtension } from "../../src/domain/extension.js"
 import { setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "@gent/core/domain/ids"
@@ -34,7 +34,7 @@ describe("setupExtension", () => {
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const rendered = JSON.stringify(exit.cause)
+        const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("Extension setup failed: boom")
       }

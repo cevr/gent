@@ -1,12 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Cause, Context, Effect, Layer, Option, Stream } from "effect"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { Session } from "@gent/core/domain/message"
+import { dateFromMillis, Session } from "@gent/core/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -26,100 +23,98 @@ import {
 import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
 import type { ExternalDriverContribution } from "@gent/core/domain/driver"
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
   modelDrivers: new Map(),
   externalDrivers: new Map(),
 })
 describe("resolveSessionEnvironment", () => {
-  it.live("uses the stored session cwd to resolve profile-scoped permission and host context", () =>
-    Effect.gen(function* () {
-      const launch = mkdtempSync(join(tmpdir(), "gent-session-runtime-context-launch-"))
-      const secondary = mkdtempSync(join(tmpdir(), "gent-session-runtime-context-secondary-"))
-      const home = mkdtempSync(join(tmpdir(), "gent-session-runtime-context-home-"))
-      const writeProjectConfig = (
-        cwd: string,
-        permissions: ReadonlyArray<Record<string, string>>,
-      ) => {
-        mkdirSync(join(cwd, ".gent"), { recursive: true })
-        writeFileSync(join(cwd, ".gent", "config.json"), JSON.stringify({ permissions }))
-      }
-      writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
-      writeProjectConfig(secondary, [{ tool: "bash", action: "allow" }])
-      const runtimePlatformLive = RuntimePlatform.Live({
-        cwd: launch,
-        home,
-        platform: "darwin",
-      })
-      const configServiceLive = ConfigService.Live.pipe(
-        Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
-      )
-      const sessionProfileCacheLive = SessionProfileCache.Live({
-        home,
-        platform: "darwin",
-        extensions: [],
-      }).pipe(
-        Layer.provide(
-          Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
-        ),
-      )
-      const testLayer = Layer.mergeAll(
-        BunServices.layer,
-        SqliteStorage.MemoryWithSql(),
-        emptyRegistryLayer,
-        emptyDriverRegistryLayer,
-        runtimePlatformLive,
-        sessionProfileCacheLive,
-      )
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
+  it.scopedLive(
+    "uses the stored session cwd to resolve profile-scoped permission and host context",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const secondary = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const writeProjectConfig = (
+          cwd: string,
+          permissions: ReadonlyArray<Record<string, string>>,
+        ) =>
           Effect.gen(function* () {
-            yield* Effect.gen(function* () {
-              const sessionStorage = yield* SessionStorage
-              const extensionRegistry = yield* ExtensionRegistry
-              const platform = yield* RuntimePlatform
-              const profileCache = yield* SessionProfileCache
-              const now = new Date()
-              yield* sessionStorage.createSession(
-                new Session({
-                  id: SessionId.make("session-runtime-context-profile"),
-                  cwd: secondary,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              )
-              const resolved = yield* resolveSessionEnvironment({
-                sessionId: SessionId.make("session-runtime-context-profile"),
-                branchId: BranchId.make("branch-runtime-context-profile"),
-                sessionStorage,
-                profileCache,
-                hostDeps: yield* makeAmbientExtensionHostContextDeps({
-                  extensionRegistry,
-                  overrides: { platform },
-                }),
-                defaults: {
-                  driverRegistry: yield* DriverRegistry,
-                  permission: AllowAllPermission,
-                  baseSections: [],
-                },
-              })
-              expect(resolved._tag).toBe("SessionFound")
-              expect(resolved.environment.cwd).toBe(secondary)
-              expect(resolved.environment.hostCtx.cwd).toBe(secondary)
-              expect(
-                yield* resolved.environment.permission.check("bash", { command: "ls -la" }),
-              ).toBe("allowed")
-            }).pipe(Effect.provide(testLayer), Effect.scoped)
-          }),
-        () =>
-          Effect.sync(() => {
-            rmSync(launch, { recursive: true, force: true })
-            rmSync(secondary, { recursive: true, force: true })
-            rmSync(home, { recursive: true, force: true })
-          }),
-      )
-    }),
+            const configDir = path.join(cwd, ".gent")
+            yield* fs.makeDirectory(configDir, { recursive: true })
+            yield* fs.writeFileString(
+              path.join(configDir, "config.json"),
+              encodeJson({ permissions }),
+            )
+          })
+        yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
+        yield* writeProjectConfig(secondary, [{ tool: "bash", action: "allow" }])
+        const runtimePlatformLive = RuntimePlatform.Live({
+          cwd: launch,
+          home,
+          platform: "darwin",
+        })
+        const configServiceLive = ConfigService.Live.pipe(
+          Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+        )
+        const sessionProfileCacheLive = SessionProfileCache.Live({
+          home,
+          platform: "darwin",
+          extensions: [],
+        }).pipe(
+          Layer.provide(
+            Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
+          ),
+        )
+        const testLayer = Layer.mergeAll(
+          BunServices.layer,
+          SqliteStorage.MemoryWithSql(),
+          emptyRegistryLayer,
+          emptyDriverRegistryLayer,
+          runtimePlatformLive,
+          sessionProfileCacheLive,
+        )
+        yield* Effect.gen(function* () {
+          const sessionStorage = yield* SessionStorage
+          const extensionRegistry = yield* ExtensionRegistry
+          const platform = yield* RuntimePlatform
+          const profileCache = yield* SessionProfileCache
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessionStorage.createSession(
+            new Session({
+              id: SessionId.make("session-runtime-context-profile"),
+              cwd: secondary,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          )
+          const resolved = yield* resolveSessionEnvironment({
+            sessionId: SessionId.make("session-runtime-context-profile"),
+            branchId: BranchId.make("branch-runtime-context-profile"),
+            sessionStorage,
+            profileCache,
+            hostDeps: yield* makeAmbientExtensionHostContextDeps({
+              extensionRegistry,
+              overrides: { platform },
+            }),
+            defaults: {
+              driverRegistry: yield* DriverRegistry,
+              permission: AllowAllPermission,
+              baseSections: [],
+            },
+          })
+          expect(resolved._tag).toBe("SessionFound")
+          expect(resolved.environment.cwd).toBe(secondary)
+          expect(resolved.environment.hostCtx.cwd).toBe(secondary)
+          expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
+            "allowed",
+          )
+        }).pipe(Effect.provide(testLayer), Effect.scoped)
+      }).pipe(Effect.provide(BunServices.layer)),
   )
   it.live("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {
@@ -140,18 +135,14 @@ describe("resolveSessionEnvironment", () => {
             }),
           ]),
       }
+      const driverRegistryContext = yield* Layer.build(
+        DriverRegistry.fromResolved({
+          modelDrivers: new Map(),
+          externalDrivers: new Map(),
+        }),
+      ).pipe(Effect.scoped)
       const defaults: SessionEnvironmentDefaults = {
-        driverRegistry: Context.get(
-          Effect.runSync(
-            Layer.build(
-              DriverRegistry.fromResolved({
-                modelDrivers: new Map(),
-                externalDrivers: new Map(),
-              }),
-            ).pipe(Effect.scoped),
-          ),
-          DriverRegistry,
-        ),
+        driverRegistry: Context.get(driverRegistryContext, DriverRegistry),
         permission: defaultPermission,
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
@@ -248,8 +239,8 @@ describe("resolveSessionEnvironment", () => {
           const error = Cause.findErrorOption(strict.cause)
           expect(Option.isSome(error)).toBe(true)
           if (Option.isSome(error)) {
-            expect(error.value).toBeInstanceOf(StorageError)
-            expect(error.value instanceof StorageError ? error.value.message : undefined).toBe(
+            expect(Schema.is(StorageError)(error.value)).toBe(true)
+            expect(Schema.is(StorageError)(error.value) ? error.value.message : undefined).toBe(
               "lookup failed",
             )
           }
@@ -298,7 +289,7 @@ describe("resolveSessionEnvironment", () => {
           Effect.map((ctx) => Context.get(ctx, DriverRegistry)),
           Effect.scoped,
         )
-        const now = new Date()
+        const now = dateFromMillis(1_767_225_600_000)
         yield* sessionStorage.createSession(
           new Session({
             id: SessionId.make("session-runtime-context-driver"),

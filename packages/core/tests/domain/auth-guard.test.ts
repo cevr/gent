@@ -140,13 +140,14 @@ describe("AuthGuard", () => {
   })
 
   it.live("listProviders uses get even when listInfo fails", () => {
+    const missingAuthInfo: AuthInfo | undefined = undefined
     const layer = AuthGuardLive.pipe(
       Layer.provide(
         Layer.succeed(AuthStore, {
           get: (provider: string) =>
             provider === "anthropic"
               ? Effect.succeed(new AuthApi({ type: "api", key: "sk-test" }))
-              : Effect.succeed(undefined),
+              : Effect.succeed(missingAuthInfo),
           set: () => Effect.void,
           remove: () => Effect.void,
           list: () => Effect.fail(new AuthStoreError({ message: "list failed" })),

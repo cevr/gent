@@ -4,7 +4,9 @@
  */
 import { afterAll, beforeAll } from "bun:test"
 import { describe, it, expect } from "effect-bun-test"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"

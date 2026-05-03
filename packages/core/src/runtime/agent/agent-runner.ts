@@ -1180,7 +1180,9 @@ export const SubprocessRunner = (
                     : params.runSpec
                 const runSpecJson =
                   subprocessRunSpec !== undefined
-                    ? Schema.encodeSync(Schema.fromJsonString(RunSpecSchema))(subprocessRunSpec)
+                    ? yield* Schema.encodeEffect(Schema.fromJsonString(RunSpecSchema))(
+                        subprocessRunSpec,
+                      )
                     : undefined
                 const args = [
                   binary,

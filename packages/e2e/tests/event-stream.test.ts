@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
-import { transportCases, waitFor } from "./transport-harness"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import type { GentClientBundle } from "@gent/sdk"
+import { toTestFailure, transportCases, waitFor } from "./transport-harness"
 import { waitDeferred } from "../src/effect-test-adapters"
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural helpers only need the methods they call
-type AnyEventsClient = any
+type EventsClient = GentClientBundle["client"]
 
 const startCollecting = (
-  client: AnyEventsClient,
-  input: { sessionId: string; branchId?: string; after?: number },
+  client: EventsClient,
+  input: { sessionId: SessionId; branchId?: BranchId; after?: number },
 ) =>
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
@@ -29,20 +30,16 @@ const startCollecting = (
     return { events, fiber }
   })
 
-const waitForAssistantTurn = (client: AnyEventsClient, branchId: string) =>
+const waitForAssistantTurn = (client: EventsClient, branchId: BranchId) =>
   waitFor(
-    client.message
-      .list({ branchId })
-      .pipe(Effect.mapError((error: unknown) => new Error(String(error)))),
+    client.message.list({ branchId }).pipe(Effect.mapError(toTestFailure)),
     (messages: ReadonlyArray<{ role: string }>) =>
       messages.some((message) => message.role === "assistant"),
   )
 
-const waitForUserMessage = (client: AnyEventsClient, branchId: string) =>
+const waitForUserMessage = (client: EventsClient, branchId: BranchId) =>
   waitFor(
-    client.message
-      .list({ branchId })
-      .pipe(Effect.mapError((error: unknown) => new Error(String(error)))),
+    client.message.list({ branchId }).pipe(Effect.mapError(toTestFailure)),
     (messages: ReadonlyArray<{ role: string }>) =>
       messages.some((message) => message.role === "user"),
   )
@@ -75,7 +72,7 @@ describe("event stream contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               yield* client.message
                 .send({
@@ -83,7 +80,7 @@ describe("event stream contracts", () => {
                   branchId: created.branchId,
                   content: "ad",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               yield* waitForAssistantTurn(client, created.branchId)
 
@@ -115,7 +112,7 @@ describe("event stream contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const live = yield* startCollecting(client, {
                 sessionId: created.sessionId,
@@ -123,7 +120,7 @@ describe("event stream contracts", () => {
 
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-ready-branch" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               const ready = yield* waitForTaggedEvent(live.events, "BranchCreated")
               const readyId = ready[ready.length - 1]?.id
 
@@ -133,7 +130,7 @@ describe("event stream contracts", () => {
                   branchId: created.branchId,
                   content: "be",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const firstTurn = yield* waitForTaggedEvent(live.events, "TurnCompleted", readyId)
               const firstTurnMaxId = firstTurn[firstTurn.length - 1]?.id
@@ -144,7 +141,7 @@ describe("event stream contracts", () => {
               // Use a session event outside the turn loop to prove the stream stays alive.
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-live-branch" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const combined = yield* waitFor(
                 Ref.get(live.events),
@@ -178,13 +175,13 @@ describe("event stream contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               const sibling = yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-sibling-branch" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               const snapshot = yield* client.session
                 .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const live = yield* startCollecting(client, {
                 sessionId: created.sessionId,
@@ -198,7 +195,7 @@ describe("event stream contracts", () => {
                   branchId: sibling.branchId,
                   content: "sibling-only",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               yield* waitForUserMessage(client, sibling.branchId)
 
@@ -224,7 +221,7 @@ describe("event stream contracts", () => {
             Effect.gen(function* () {
               const created = yield* client.session
                 .create({ cwd: process.cwd() })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const firstLive = yield* startCollecting(client, {
                 sessionId: created.sessionId,
@@ -232,7 +229,7 @@ describe("event stream contracts", () => {
 
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-after-ready" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
               const ready = yield* waitForTaggedEvent(firstLive.events, "BranchCreated")
               const readyId = ready[ready.length - 1]?.id
 
@@ -242,7 +239,7 @@ describe("event stream contracts", () => {
                   branchId: created.branchId,
                   content: "dg",
                 })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const firstTurn = yield* waitForTaggedEvent(
                 firstLive.events,
@@ -267,7 +264,7 @@ describe("event stream contracts", () => {
 
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-after-branch" })
-                .pipe(Effect.mapError((error) => new Error(String(error))))
+                .pipe(Effect.mapError(toTestFailure))
 
               const liveOnly = yield* waitFor(Ref.get(afterEvents.events), (current) =>
                 current.some((envelope) => envelope.event._tag === "BranchCreated"),

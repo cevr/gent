@@ -13,8 +13,11 @@
  * module (counsel  finding).
  */
 
+import { Effect } from "effect"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
-import type { ClientRuntime } from "./client-facets.js"
+import type { AnyExtensionClientModule, ClientRuntime } from "./client-facets.js"
+import { loadTuiExtensions } from "./loader-boundary"
+import type { ResolvedTuiExtensions } from "./resolve"
 
 /**
  * Resolve the disabled-extensions set for the current workspace by reading
@@ -29,3 +32,26 @@ export const loadDisabledExtensions = (
   clientRuntime: ClientRuntime,
   params: { home: string; cwd: string },
 ): Promise<ReadonlySet<string>> => clientRuntime.runPromise(readDisabledExtensions(params))
+
+export const loadExtensionUi = (
+  clientRuntime: ClientRuntime,
+  params: {
+    readonly builtins: ReadonlyArray<AnyExtensionClientModule>
+    readonly home: string
+    readonly cwd: string
+  },
+): Promise<ResolvedTuiExtensions> =>
+  clientRuntime.runPromise(
+    Effect.gen(function* () {
+      const disabledSet = yield* readDisabledExtensions({ home: params.home, cwd: params.cwd })
+      return yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: params.builtins,
+          userDir: `${params.home}/.gent/extensions`,
+          projectDir: `${params.cwd}/.gent/extensions`,
+          disabled: [...disabledSet],
+          runtime: clientRuntime,
+        }),
+      )
+    }),
+  )

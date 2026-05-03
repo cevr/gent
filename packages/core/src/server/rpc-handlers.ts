@@ -52,11 +52,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
     const serverIdentity = yield* ServerIdentity
 
-    const loadSession = (sessionId: string) => {
-      return sessionStorage
+    const loadSession = (sessionId: string) =>
+      sessionStorage
         .getSession(SessionId.make(sessionId))
         .pipe(Effect.orElseSucceed(() => undefined))
-    }
 
     const resolveProfileServices = (cwd: string | undefined) =>
       Effect.gen(function* () {

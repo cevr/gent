@@ -27,7 +27,9 @@ export type SessionEvent =
       seq: number
     }
 
-export const getSessionEventLabel = (event: SessionEvent, now = Date.now()): string => {
+const currentMillis = () => performance.timeOrigin + performance.now()
+
+export const getSessionEventLabel = (event: SessionEvent, now = currentMillis()): string => {
   switch (event._tag) {
     case "turn-ended":
       return `Worked for ${formatThinkTime(event.durationSeconds)}`

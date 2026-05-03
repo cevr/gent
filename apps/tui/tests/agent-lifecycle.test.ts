@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Schema } from "effect"
 import {
   AgentSwitched,
   ErrorOccurred,
@@ -7,7 +8,7 @@ import {
   StreamStarted,
   TurnCompleted,
 } from "@gent/core/domain/event"
-import { Message } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
 import { AgentStatus } from "../src/client/agent-state"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -20,7 +21,7 @@ const makeMessage = (role: "user" | "assistant") =>
     branchId: BranchId.make("b1"),
     role,
     parts: [],
-    createdAt: new Date(0),
+    createdAt: dateFromMillis(0),
   })
 
 describe("reduceAgentLifecycle", () => {
@@ -33,7 +34,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(event)).toEqual({
       status: { _tag: "streaming" },
     })
-    expect(reduceAgentLifecycle(event).status instanceof AgentStatus.Streaming).toBe(true)
+    expect(Schema.is(AgentStatus.Streaming)(reduceAgentLifecycle(event).status)).toBe(true)
   })
 
   test("keeps streaming until TurnCompleted", () => {
@@ -55,7 +56,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(turnCompleted)).toEqual({
       status: { _tag: "idle" },
     })
-    expect(reduceAgentLifecycle(turnCompleted).status instanceof AgentStatus.Idle).toBe(true)
+    expect(Schema.is(AgentStatus.Idle)(reduceAgentLifecycle(turnCompleted).status)).toBe(true)
   })
 
   test("uses user messages to enter streaming immediately", () => {
@@ -66,7 +67,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(userMessage)).toEqual({
       status: { _tag: "streaming" },
     })
-    expect(reduceAgentLifecycle(userMessage).status instanceof AgentStatus.Streaming).toBe(true)
+    expect(Schema.is(AgentStatus.Streaming)(reduceAgentLifecycle(userMessage).status)).toBe(true)
   })
 
   test("surfaces agent switches and errors", () => {
@@ -88,6 +89,6 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(errored)).toEqual({
       status: { _tag: "error", error: "boom" },
     })
-    expect(reduceAgentLifecycle(errored).status instanceof AgentStatus.Error).toBe(true)
+    expect(Schema.is(AgentStatus.Error)(reduceAgentLifecycle(errored).status)).toBe(true)
   })
 })

@@ -2,8 +2,12 @@ import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "../../src/server/event-publisher"
+
+const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
+
 // Real AgentEvent variants used as stand-ins for synthetic test fixtures.
 // Tests assert on `event._tag` strings; mapping each placeholder to a distinct
 // real tag keeps the test logic stable while passing schema validation
@@ -63,7 +67,7 @@ describe("EventPublisher", () => {
           Effect.sync(() => {
             persisted.push(event._tag)
             nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: Date.now() } as EventEnvelope
+            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS } as EventEnvelope
           }),
         broadcast: (envelope: EventEnvelope) =>
           Effect.sync(() => {
@@ -91,7 +95,11 @@ describe("EventPublisher", () => {
       const releaseBroadcast = yield* Deferred.make<void>()
       const customEventStore = Layer.succeed(EventStore, {
         append: (event) =>
-          Effect.succeed({ id: EventId.make(1), event, createdAt: Date.now() } as EventEnvelope),
+          Effect.succeed({
+            id: EventId.make(1),
+            event,
+            createdAt: FIXED_NOW_MILLIS,
+          } as EventEnvelope),
         broadcast: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(broadcastStarted, void 0)
@@ -123,7 +131,7 @@ describe("EventPublisher", () => {
       const envelope = {
         id: EventId.make(1),
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
-        createdAt: Date.now(),
+        createdAt: FIXED_NOW_MILLIS,
       } as EventEnvelope
       const customEventStore = Layer.succeed(EventStore, {
         append: (event) => Effect.succeed({ ...envelope, event }),
@@ -157,7 +165,7 @@ describe("EventPublisher", () => {
       const envelope = {
         id: EventId.make(1),
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
-        createdAt: Date.now(),
+        createdAt: FIXED_NOW_MILLIS,
       } as EventEnvelope
       const customEventStore = Layer.succeed(EventStore, {
         append: (event) => Effect.succeed({ ...envelope, event }),
@@ -191,7 +199,7 @@ describe("EventPublisher server layer", () => {
           Effect.sync(() => {
             persisted.push(event._tag)
             nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: Date.now() } as EventEnvelope
+            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS } as EventEnvelope
           }),
         broadcast: (envelope: EventEnvelope) =>
           Effect.sync(() => {

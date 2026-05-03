@@ -1,9 +1,16 @@
 import { renderFrame, type renderWithProviders } from "./render-harness"
-import { Effect } from "effect"
+import { Clock, Effect, Schema } from "effect"
 
 export { renderFrame }
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
+
+class RenderFrameTimeoutError extends Schema.TaggedErrorClass<RenderFrameTimeoutError>()(
+  "RenderFrameTimeoutError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * Frame polling for unit render tests.
@@ -17,22 +24,23 @@ export const waitForRenderedFrame = (
   label = "condition",
   timeoutMs = 2_000,
 ): Promise<string> => {
-  const startedAt = Date.now()
   let lastFrame = ""
 
-  const loop: Effect.Effect<string, Error> = Effect.gen(function* () {
-    yield* Effect.promise(() => setup.renderOnce())
-    if (Date.now() - startedAt >= timeoutMs) {
-      return yield* Effect.fail(
-        new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`),
-      )
-    }
-    const frame = renderFrame(setup)
-    lastFrame = frame
-    if (predicate(frame)) return frame
-    yield* Effect.sleep("10 millis")
-    return yield* loop
-  })
+  const loop = (startedAt: number): Effect.Effect<string, RenderFrameTimeoutError> =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => setup.renderOnce())
+      const now = yield* Clock.currentTimeMillis
+      if (now - startedAt >= timeoutMs) {
+        return yield* new RenderFrameTimeoutError({
+          message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
+        })
+      }
+      const frame = renderFrame(setup)
+      lastFrame = frame
+      if (predicate(frame)) return frame
+      yield* Effect.sleep("10 millis")
+      return yield* loop(startedAt)
+    })
 
-  return Effect.runPromise(loop)
+  return Effect.runPromise(Clock.currentTimeMillis.pipe(Effect.flatMap(loop)))
 }

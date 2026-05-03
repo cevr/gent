@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import {
+  dateFromMillis,
   Message,
   TextPart,
   ToolCallPart,
@@ -22,7 +23,7 @@ describe("Token Estimation", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "Hello world" })], // 11 chars
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
 
@@ -45,7 +46,7 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(800) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-6")
@@ -61,7 +62,7 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-6")
@@ -77,7 +78,7 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     const percent = estimateContextPercent(messages, "openai/gpt-5.4")
@@ -92,7 +93,7 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(4_000) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
       Message.Regular.make({
         id: "m2",
@@ -108,7 +109,7 @@ describe("estimateContextPercent", () => {
             input: { key: "v".repeat(2_000) },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
       Message.Regular.make({
         id: "m3",
@@ -123,7 +124,7 @@ describe("estimateContextPercent", () => {
             output: { type: "json", value: { result: "z".repeat(2_000) } },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
 
@@ -161,7 +162,7 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     expect(estimateTokens(messages)).toBe(25) // 100/4
@@ -182,7 +183,7 @@ describe("estimateTokens", () => {
             input: { key: "value" },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     const tokens = estimateTokens(messages)
@@ -205,7 +206,7 @@ describe("estimateTokens", () => {
             output: { type: "json", value: { data: "hello" } },
           }),
         ],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     const tokens = estimateTokens(messages)
@@ -220,7 +221,7 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new ImagePart({ type: "image", image: "data:image/png;base64,abc" })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     expect(estimateTokens(messages)).toBe(250) // 1000/4
@@ -234,7 +235,7 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "user",
         parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
       Message.Regular.make({
         id: "m2",
@@ -242,7 +243,7 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "assistant",
         parts: [new TextPart({ type: "text", text: "y".repeat(200) })],
-        createdAt: new Date(),
+        createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
     expect(estimateTokens(messages)).toBe(75) // (100+200)/4

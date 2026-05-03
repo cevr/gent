@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { ProviderId } from "@gent/core/domain/model"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
@@ -59,8 +60,8 @@ describe("resolveStartupAuthState", () => {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
           cwd: "/tmp",
           reasoningLevel: undefined,
           parentSessionId: undefined,
@@ -123,8 +124,8 @@ describe("resolveStartupAuthState", () => {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
           cwd: "/tmp",
           reasoningLevel: undefined,
           parentSessionId: undefined,
@@ -187,8 +188,8 @@ describe("resolveStartupAuthState", () => {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
           cwd: "/tmp",
           reasoningLevel: undefined,
           parentSessionId: undefined,
@@ -226,8 +227,8 @@ describe("resolveStartupAuthState", () => {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
           cwd: "/tmp",
           reasoningLevel: undefined,
           parentSessionId: undefined,
@@ -237,12 +238,12 @@ describe("resolveStartupAuthState", () => {
           {
             id: BranchId.make("branch-a"),
             sessionId: SessionId.make("session-a"),
-            createdAt: new Date(0),
+            createdAt: dateFromMillis(0),
           },
           {
             id: BranchId.make("branch-b"),
             sessionId: SessionId.make("session-a"),
-            createdAt: new Date(1),
+            createdAt: dateFromMillis(1),
           },
         ],
       }

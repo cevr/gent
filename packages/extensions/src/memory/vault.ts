@@ -6,12 +6,12 @@
  * rebuilt inline on every write/remove (idempotent).
  */
 
-import { Effect, Layer, Schema, Context } from "effect"
+import { DateTime, Effect, Layer, Schema, Context } from "effect"
 import * as Fs from "node:fs"
 import * as Path from "node:path"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
-import { type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
+import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -61,6 +61,7 @@ const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
 
 export const parseFrontmatter = (
   content: string,
+  fallbackIsoDate: string,
 ): { frontmatter: MemoryFrontmatter; body: string } | undefined => {
   const match = content.match(FRONTMATTER_RE)
   if (match === null) return undefined
@@ -96,8 +97,8 @@ export const parseFrontmatter = (
       tags: Array.isArray(fm["tags"])
         ? fm["tags"].filter((t): t is string => typeof t === "string")
         : [],
-      created: typeof fm["created"] === "string" ? fm["created"] : new Date().toISOString(),
-      updated: typeof fm["updated"] === "string" ? fm["updated"] : new Date().toISOString(),
+      created: typeof fm["created"] === "string" ? fm["created"] : fallbackIsoDate,
+      updated: typeof fm["updated"] === "string" ? fm["updated"] : fallbackIsoDate,
       source,
     },
     body,
@@ -160,7 +161,7 @@ export const projectDisplayName = (key: string): string => {
  * The Live/Test layers for `MemoryVault` provide BOTH this Tag and the
  * write-capable `MemoryVault` Tag from the same underlying service value.
  */
-export interface MemoryVaultReadOnly {
+export interface MemoryVaultReadOnlyShape {
   readonly vaultPath: string
   readonly list: (
     scope?: MemoryScope,
@@ -174,7 +175,7 @@ export interface MemoryVaultReadOnly {
   ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
 }
 
-export interface MemoryVault extends MemoryVaultReadOnly {
+export interface MemoryVaultShape extends MemoryVaultReadOnlyShape {
   readonly write: (
     relativePath: string,
     frontmatter: MemoryFrontmatter,
@@ -185,16 +186,21 @@ export interface MemoryVault extends MemoryVaultReadOnly {
   readonly rebuildIndex: (scope?: MemoryScope, project?: string) => Effect.Effect<void>
 }
 
-export const MemoryVault = Context.Service<MemoryVault>("@gent/memory/vault")
+export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultShape>()(
+  "@gent/extensions/src/memory/vault/MemoryVault",
+) {}
 
 /**
  * Read-only branded Tag onto the MemoryVault substrate. Projections
  * and read-intent request capabilities yield this instead of
  * `MemoryVault`. Provided alongside `MemoryVault` by `Live`/`Test`.
  */
-export const MemoryVaultReadOnly = Context.Service<ReadOnly<MemoryVaultReadOnly>>(
-  "@gent/memory/vault/MemoryVaultReadOnly",
-)
+export class MemoryVaultReadOnly extends Context.Service<
+  MemoryVaultReadOnly,
+  ReadOnly<MemoryVaultReadOnlyShape>
+>()("@gent/extensions/src/memory/vault/MemoryVaultReadOnly") {
+  declare readonly [ReadOnlyBrand]: true
+}
 export type MemoryVaultReadOnlyTag = typeof MemoryVaultReadOnly
 
 // ── Implementation ──
@@ -216,60 +222,63 @@ const buildScopeIndex = (entries: ReadonlyArray<MemoryEntry>): string => {
   return entries.map((e) => `- **${e.title}** — ${e.summary}`).join("\n") + "\n"
 }
 
-export const makeMemoryVault = (vaultPath: string): MemoryVault => {
+export const makeMemoryVault = (vaultPath: string): MemoryVaultShape => {
   const abs = (rel: string) => Path.join(vaultPath, rel)
 
-  const list: MemoryVault["list"] = (scope, project) =>
-    Effect.sync(() => {
-      const entries: MemoryEntry[] = []
+  const list: MemoryVaultShape["list"] = (scope, project) =>
+    Effect.gen(function* () {
+      const fallbackIsoDate = (yield* DateTime.nowAsDate).toISOString()
+      return yield* Effect.sync(() => {
+        const entries: MemoryEntry[] = []
 
-      const scan = (dir: string, pathPrefix: string) => {
-        const files = listMdFiles(Path.join(vaultPath, dir))
-        for (const file of files) {
-          const relPath = `${pathPrefix}/${file}`
-          const fullPath = abs(relPath)
-          try {
-            const content = Fs.readFileSync(fullPath, "utf-8")
-            const parsed = parseFrontmatter(content)
-            if (parsed === undefined) continue
-            entries.push({
-              path: relPath,
-              title: extractTitle(parsed.body),
-              summary: extractSummary(parsed.body),
-              frontmatter: parsed.frontmatter,
-            })
-          } catch {
-            // Skip unreadable files
+        const scan = (dir: string, pathPrefix: string) => {
+          const files = listMdFiles(Path.join(vaultPath, dir))
+          for (const file of files) {
+            const relPath = `${pathPrefix}/${file}`
+            const fullPath = abs(relPath)
+            try {
+              const content = Fs.readFileSync(fullPath, "utf-8")
+              const parsed = parseFrontmatter(content, fallbackIsoDate)
+              if (parsed === undefined) continue
+              entries.push({
+                path: relPath,
+                title: extractTitle(parsed.body),
+                summary: extractSummary(parsed.body),
+                frontmatter: parsed.frontmatter,
+              })
+            } catch {
+              // Skip unreadable files
+            }
           }
         }
-      }
 
-      if (scope === undefined || scope === "global") {
-        scan("global", "global")
-      }
-      if (scope === undefined || scope === "project") {
-        if (project !== undefined) {
-          scan(`project/${project}`, `project/${project}`)
-        } else {
-          // Scan all projects
-          const projectDir = Path.join(vaultPath, "project")
-          if (Fs.existsSync(projectDir)) {
-            for (const d of Fs.readdirSync(projectDir, { withFileTypes: true })) {
-              if (d.isDirectory()) {
-                scan(`project/${d.name}`, `project/${d.name}`)
+        if (scope === undefined || scope === "global") {
+          scan("global", "global")
+        }
+        if (scope === undefined || scope === "project") {
+          if (project !== undefined) {
+            scan(`project/${project}`, `project/${project}`)
+          } else {
+            // Scan all projects
+            const projectDir = Path.join(vaultPath, "project")
+            if (Fs.existsSync(projectDir)) {
+              for (const d of Fs.readdirSync(projectDir, { withFileTypes: true })) {
+                if (d.isDirectory()) {
+                  scan(`project/${d.name}`, `project/${d.name}`)
+                }
               }
             }
           }
         }
-      }
 
-      return entries
+        return entries
+      })
     })
 
-  const read: MemoryVault["read"] = (relativePath) =>
+  const read: MemoryVaultShape["read"] = (relativePath) =>
     Effect.sync(() => Fs.readFileSync(abs(relativePath), "utf-8"))
 
-  const write: MemoryVault["write"] = (relativePath, frontmatter, body) =>
+  const write: MemoryVaultShape["write"] = (relativePath, frontmatter, body) =>
     Effect.sync(() => {
       const fullPath = abs(relativePath)
       const dir = Path.dirname(fullPath)
@@ -284,13 +293,13 @@ export const makeMemoryVault = (vaultPath: string): MemoryVault => {
       Effect.andThen(rebuildIndexForPath(relativePath)),
     )
 
-  const remove: MemoryVault["remove"] = (relativePath) =>
+  const remove: MemoryVaultShape["remove"] = (relativePath) =>
     Effect.sync(() => {
       const fullPath = abs(relativePath)
       if (Fs.existsSync(fullPath)) Fs.unlinkSync(fullPath)
     }).pipe(Effect.andThen(rebuildIndexForPath(relativePath)))
 
-  const search: MemoryVault["search"] = (query, scope, project) =>
+  const search: MemoryVaultShape["search"] = (query, scope, project) =>
     Effect.flatMap(list(scope, project), (entries) =>
       Effect.sync(() => {
         const lowerQuery = query.toLowerCase()
@@ -310,7 +319,7 @@ export const makeMemoryVault = (vaultPath: string): MemoryVault => {
       }),
     )
 
-  const ensureDirs: MemoryVault["ensureDirs"] = (project) =>
+  const ensureDirs: MemoryVaultShape["ensureDirs"] = (project) =>
     Effect.sync(() => {
       Fs.mkdirSync(Path.join(vaultPath, "global"), { recursive: true })
       Fs.mkdirSync(Path.join(vaultPath, "project"), { recursive: true })
@@ -383,7 +392,7 @@ export const makeMemoryVault = (vaultPath: string): MemoryVault => {
       }),
     )
 
-  const rebuildIndex: MemoryVault["rebuildIndex"] = (scope, project) =>
+  const rebuildIndex: MemoryVaultShape["rebuildIndex"] = (scope, project) =>
     Effect.flatMap(list(scope, project), (scopedEntries) =>
       Effect.flatMap(list(), (allEntries) =>
         Effect.sync(() => {
@@ -433,7 +442,7 @@ const DEFAULT_VAULT_PATH = Path.join(homedir(), ".gent", "memory")
  * projections and read-intent capabilities can yield without picking
  * up the write methods.
  */
-const layerFor = (vault: MemoryVault) =>
+const layerFor = (vault: MemoryVaultShape) =>
   Layer.effectContext(
     Effect.succeed(
       Context.empty().pipe(
@@ -445,7 +454,7 @@ const layerFor = (vault: MemoryVault) =>
             list: vault.list,
             read: vault.read,
             search: vault.search,
-          } satisfies MemoryVaultReadOnly),
+          } satisfies MemoryVaultReadOnlyShape),
         ),
       ),
     ),

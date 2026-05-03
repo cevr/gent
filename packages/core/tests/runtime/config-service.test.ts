@@ -3,15 +3,14 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {
@@ -287,41 +286,34 @@ describe("ConfigService", () => {
   })
 
   describe("per-session project config resolution", () => {
-    // Shared scratch dirs: server launch cwd + two distinct project cwds,
-    // each with a different `.gent/config.json`. The Live ConfigService
-    // is built against the launch cwd, but every `get(otherCwd)` call
-    // should resolve project overrides from THAT cwd, not the launch one.
-    const launch = mkdtempSync(join(tmpdir(), "gent-config-launch-"))
-    const projectA = mkdtempSync(join(tmpdir(), "gent-config-projectA-"))
-    const projectB = mkdtempSync(join(tmpdir(), "gent-config-projectB-"))
-    const home = mkdtempSync(join(tmpdir(), "gent-config-home-"))
+    const makeLive = Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const projectA = yield* fs.makeTempDirectoryScoped()
+      const projectB = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
 
-    const writeProjectConfig = (cwd: string, agent: string, driverId: string): void => {
-      mkdirSync(join(cwd, ".gent"), { recursive: true })
-      writeFileSync(
-        join(cwd, ".gent", "config.json"),
-        JSON.stringify({
-          driverOverrides: { [agent]: { _tag: "external", id: driverId } },
-        }),
+      const writeProjectConfig = (cwd: string, agent: string, driverId: string) =>
+        Effect.gen(function* () {
+          const configDir = path.join(cwd, ".gent")
+          const configText = encodeJson({
+            driverOverrides: { [agent]: { _tag: "external", id: driverId } },
+          })
+          yield* fs.makeDirectory(configDir, { recursive: true })
+          yield* fs.writeFileString(path.join(configDir, "config.json"), configText)
+        })
+
+      yield* writeProjectConfig(launch, "cowork", "acp-launch-driver")
+      yield* writeProjectConfig(projectA, "cowork", "acp-projectA-driver")
+      yield* writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
+
+      const live = ConfigService.Live.pipe(
+        Layer.provide(RuntimePlatform.Live({ cwd: launch, home, platform: "darwin" })),
+        Layer.provide(BunServices.layer),
       )
-    }
-
-    writeProjectConfig(launch, "cowork", "acp-launch-driver")
-    writeProjectConfig(projectA, "cowork", "acp-projectA-driver")
-    writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
-
-    // Cleanup after the suite. mkdtempSync paths are tmpdir() children
-    // so this is safe even on test interruption.
-    const cleanup = () => {
-      for (const dir of [launch, projectA, projectB, home]) {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    }
-
-    const live = ConfigService.Live.pipe(
-      Layer.provide(RuntimePlatform.Live({ cwd: launch, home, platform: "darwin" })),
-      Layer.provide(BunServices.layer),
-    )
+      return { live, projectA, projectB }
+    })
 
     const expectExternalOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
       const override = cfg.driverOverrides?.[AgentName.make(agent)]
@@ -330,41 +322,52 @@ describe("ConfigService", () => {
       expect(override.id).toBe(expectedId)
     }
 
-    it.live("launch-cwd reads the launch-cwd project config", () =>
+    it.scopedLive("launch-cwd reads the launch-cwd project config", () =>
       Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        const result = yield* cfg.get()
-        expectExternalOverride(result, "cowork", "acp-launch-driver")
-      }).pipe(Effect.provide(live)),
+        const { live } = yield* makeLive
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const result = yield* cfg.get()
+          expectExternalOverride(result, "cowork", "acp-launch-driver")
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
     )
 
-    it.live("a project cwd resolves its own .gent/config.json, not the launch cwd's", () =>
+    it.scopedLive("a project cwd resolves its own .gent/config.json, not the launch cwd's", () =>
       Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        const result = yield* cfg.get(projectA)
-        expectExternalOverride(result, "cowork", "acp-projectA-driver")
-      }).pipe(Effect.provide(live)),
+        const { live, projectA } = yield* makeLive
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const result = yield* cfg.get(projectA)
+          expectExternalOverride(result, "cowork", "acp-projectA-driver")
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
     )
 
-    it.live("two project cwds resolve independently — no cross-contamination", () =>
+    it.scopedLive("two project cwds resolve independently — no cross-contamination", () =>
       Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        const a = yield* cfg.get(projectA)
-        const b = yield* cfg.get(projectB)
-        expectExternalOverride(a, "cowork", "acp-projectA-driver")
-        expectExternalOverride(b, "cowork", "acp-projectB-driver")
-      }).pipe(Effect.provide(live)),
+        const { live, projectA, projectB } = yield* makeLive
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const a = yield* cfg.get(projectA)
+          const b = yield* cfg.get(projectB)
+          expectExternalOverride(a, "cowork", "acp-projectA-driver")
+          expectExternalOverride(b, "cowork", "acp-projectB-driver")
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
     )
 
-    it.live("an unknown cwd falls back to user-only config", () =>
+    it.scopedLive("an unknown cwd falls back to user-only config", () =>
       Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        const empty = mkdtempSync(join(tmpdir(), "gent-config-empty-"))
-        const result = yield* cfg.get(empty)
-        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
-        rmSync(empty, { recursive: true, force: true })
-        cleanup()
-      }).pipe(Effect.provide(live)),
+        const fs = yield* FileSystem.FileSystem
+        const { live } = yield* makeLive
+        const empty = yield* fs.makeTempDirectoryScoped()
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const result = yield* cfg.get(empty)
+          expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
     )
   })
 })

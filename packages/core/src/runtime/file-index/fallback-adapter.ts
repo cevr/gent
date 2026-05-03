@@ -69,13 +69,11 @@ const scanAllFiles = (cwd: string, fs: FileSystem.FileSystem, pathService: Path.
     const ignorePatterns = yield* loadGitignore(cwd, fs, pathService)
 
     // Collect glob results first (async iterator), then stat each file via Effect
-    const relativePaths: string[] = []
-    yield* Effect.tryPromise({
-      try: async () => {
-        for await (const rp of FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })) {
-          if (!isGitignored(rp, ignorePatterns)) relativePaths.push(rp)
-        }
-      },
+    const relativePaths = yield* Effect.tryPromise({
+      try: () =>
+        Array.fromAsync(FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })).then((paths) =>
+          paths.filter((rp) => !isGitignored(rp, ignorePatterns)),
+        ),
       catch: () => new FileIndexError({ message: "glob scan failed", cwd }),
     })
 

@@ -47,7 +47,7 @@ const makeEnvelope = (id: number, event: AgentEvent): EventEnvelope =>
   EventEnvelope.make({
     id: EventId.make(id),
     event,
-    createdAt: Date.now(),
+    createdAt: 0,
   })
 
 const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
@@ -118,7 +118,8 @@ describe("useSessionFeed", () => {
           waitForTransportReady: () => Effect.void,
           applySessionSnapshot: () => {},
           applySessionEvent: (envelope) => {
-            if (envelope.id === liveEvent.id) Effect.runFork(Deferred.succeed(liveSeen, undefined))
+            if (envelope.id === liveEvent.id)
+              client.runtime.cast(Deferred.succeed(liveSeen, undefined))
           },
           applyBufferedSessionEvent: (envelope) => {
             bufferedTags.push(envelope.event._tag)
@@ -132,7 +133,7 @@ describe("useSessionFeed", () => {
           client.runtime.cast,
           {
             onInteraction: (interaction) => {
-              Effect.runFork(Deferred.succeed(interactionSeen, interaction))
+              client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
             },
             onInteractionDismissed: () => {},
             onBranchSwitch: (nextSessionId, nextBranchId) => {

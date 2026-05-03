@@ -180,9 +180,9 @@ describe("withFallback composite", () => {
       const fallbackIndex = yield* FileIndex
 
       // Simulate: native fails → fallback succeeds
-      const files = yield* Effect.gen(function* () {
-        return yield* new FileIndexError({ message: "native boom", cwd: tmpDir })
-      }).pipe(Effect.catchTag("FileIndexError", () => fallbackIndex.listFiles({ cwd: tmpDir })))
+      const files = yield* Effect.fail(
+        new FileIndexError({ message: "native boom", cwd: tmpDir }),
+      ).pipe(Effect.catchTag("FileIndexError", () => fallbackIndex.listFiles({ cwd: tmpDir })))
 
       expect(files.length).toBe(1)
       expect(files[0]!.fileName).toBe("hello.txt")

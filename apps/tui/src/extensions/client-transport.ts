@@ -132,16 +132,17 @@ const requestExtensionAt = <Input, Output>(
           cause,
         }),
     })
-    return yield* Effect.try({
-      try: () => Schema.decodeUnknownSync(ref.output)(reply),
-      catch: (cause) =>
-        new ClientTransportReplyDecodeError({
-          extensionId: ref.extensionId,
-          tag: ref.capabilityId,
-          message: `reply decode failed: ${String(cause)}`,
-          cause,
-        }),
-    })
+    return yield* Schema.decodeUnknownEffect(ref.output)(reply).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ClientTransportReplyDecodeError({
+            extensionId: ref.extensionId,
+            tag: ref.capabilityId,
+            message: `reply decode failed: ${String(cause)}`,
+            cause,
+          }),
+      ),
+    )
   })
 
 export function requestExtension<Input, Output>(

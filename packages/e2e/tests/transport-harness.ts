@@ -1,7 +1,4 @@
-import { Effect, type Config, type Layer } from "effect"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
+import { Effect, Schema, type Config, type Layer } from "effect"
 import {
   baseLocalLayer as _baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
@@ -12,9 +9,16 @@ import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
-import { createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
-import { ignoreSyncDefect } from "../src/effect-test-adapters"
+import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
+
+export class TestFailure extends Schema.TaggedErrorClass<TestFailure>()(
+  "@gent/e2e/tests/TestFailure",
+  { message: Schema.String },
+) {}
+
+export const toTestFailure = (error: unknown) =>
+  new TestFailure({ message: error instanceof Error ? error.message : String(error) })
 
 const defaultConfig: InProcessLayerConfig = {
   agents: AllBuiltinAgents,
@@ -35,7 +39,11 @@ export const baseLocalLayerWithProvider = (
     HarnessLayerError
   >
 
-const repoRoot = path.resolve(import.meta.dir, "../../..")
+const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
+  /\/$/,
+  "",
+)
+const makeWorkerHttpDir = createTempDirFixture("gent-worker-http-")
 
 export interface TransportCase {
   readonly name: string
@@ -83,20 +91,19 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const root = yield* Effect.acquireRelease(
-            Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "gent-worker-http-"))),
-            (dir) => ignoreSyncDefect(() => fs.rmSync(dir, { recursive: true, force: true })),
-          )
+          const root = makeWorkerHttpDir()
           return yield* startWorkerWithClient({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode }),
           }).pipe(
-            Effect.mapError((e) => new Error(e.message)),
+            Effect.mapError(toTestFailure),
             Effect.flatMap(assertion),
             Effect.timeoutOrElse({
               duration: WORKER_TIMEOUT,
               orElse: () =>
-                Effect.fail(new Error("worker-http assertion timed out (scope cleanup)")),
+                Effect.fail(
+                  new TestFailure({ message: "worker-http assertion timed out (scope cleanup)" }),
+                ),
             }),
           )
         }),

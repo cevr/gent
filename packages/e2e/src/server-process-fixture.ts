@@ -1,37 +1,50 @@
-import { Effect } from "effect"
-import * as path from "node:path"
+import { Clock, Effect, Schema } from "effect"
 
-const repoRoot = path.resolve(import.meta.dir, "../../..")
-const serverEntry = path.resolve(repoRoot, "apps/server/src/main.ts")
+const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
+  /\/$/,
+  "",
+)
+const serverEntry = `${repoRoot}/apps/server/src/main.ts`
 
-const readReadyUrl = (proc: Bun.Subprocess): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("server did not become ready")), 10_000)
+class ServerProcessFixtureError extends Schema.TaggedErrorClass<ServerProcessFixtureError>()(
+  "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",
+  { message: Schema.String },
+) {}
+
+const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcessFixtureError> => {
+  const ready = Effect.callback<string, ServerProcessFixtureError>((resume) => {
     const chunks: string[] = []
     const decoder = new TextDecoder()
     const stdout = proc.stdout
     if (stdout === undefined || typeof stdout === "number") {
-      reject(new Error("server stdout was not piped"))
+      resume(Effect.fail(new ServerProcessFixtureError({ message: "server stdout was not piped" })))
       return
     }
     const reader = stdout.getReader()
     const pump = (): void => {
       reader.read().then(({ value, done }) => {
         if (done) {
-          reject(new Error("stdout closed before ready"))
+          resume(
+            Effect.fail(new ServerProcessFixtureError({ message: "stdout closed before ready" })),
+          )
           return
         }
         chunks.push(decoder.decode(value))
         const match = chunks.join("").match(/GENT_WORKER_READY (.+)/)
         if (match) {
-          clearTimeout(timeout)
           reader.releaseLock()
           const readyUrl = match[1]
           if (readyUrl === undefined) {
-            reject(new Error("server ready line did not include a url"))
+            resume(
+              Effect.fail(
+                new ServerProcessFixtureError({
+                  message: "server ready line did not include a url",
+                }),
+              ),
+            )
             return
           }
-          resolve(readyUrl.trim())
+          resume(Effect.succeed(readyUrl.trim()))
         } else {
           pump()
         }
@@ -39,12 +52,19 @@ const readReadyUrl = (proc: Bun.Subprocess): Promise<string> =>
     }
     pump()
   })
+  const timeout = Effect.sleep("10 seconds").pipe(
+    Effect.andThen(
+      Effect.fail(new ServerProcessFixtureError({ message: "server did not become ready" })),
+    ),
+  )
+  return Effect.race(ready, timeout)
+}
 
 export const spawnIdleServer = (opts: {
   dataDir: string
   idleTimeoutMs: number
   port: number
-}): Effect.Effect<{ url: string; proc: Bun.Subprocess }> =>
+}): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
   Effect.gen(function* () {
     const proc = Bun.spawn(["bun", serverEntry], {
       cwd: repoRoot,
@@ -60,14 +80,14 @@ export const spawnIdleServer = (opts: {
       stdout: "pipe",
       stderr: "pipe",
     })
-    const url = yield* Effect.promise(() => readReadyUrl(proc))
+    const url = yield* readReadyUrl(proc)
     return { url: `${url}/rpc`, proc }
   })
 
 export const spawnServerOnPort = (opts: {
   dataDir: string
   port: number
-}): Effect.Effect<{ url: string; proc: Bun.Subprocess }> =>
+}): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
   Effect.gen(function* () {
     const proc = Bun.spawn(["bun", serverEntry], {
       cwd: repoRoot,
@@ -82,51 +102,47 @@ export const spawnServerOnPort = (opts: {
       stdout: "pipe",
       stderr: "pipe",
     })
-    const url = yield* Effect.promise(() => readReadyUrl(proc))
+    const url = yield* readReadyUrl(proc)
     return { url: `${url}/rpc`, proc }
   })
 
 export const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<number> =>
-  Effect.promise(
-    () =>
-      new Promise((resolve) => {
-        const timeout = setTimeout(() => resolve(-1), timeoutMs)
-        const check = setInterval(() => {
-          try {
-            process.kill(pid, 0)
-          } catch {
-            clearInterval(check)
-            clearTimeout(timeout)
-            resolve(0)
-          }
-        }, 200)
-      }),
-  )
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const loop: Effect.Effect<number> = Effect.gen(function* () {
+      const alive = yield* Effect.sync(() => {
+        try {
+          process.kill(pid, 0)
+          return true
+        } catch {
+          return false
+        }
+      })
+      if (!alive) return 0
+      const now = yield* Clock.currentTimeMillis
+      if (now >= deadline) return -1
+      yield* Effect.sleep("200 millis")
+      return yield* loop
+    })
+    return yield* loop
+  })
 
 export const waitUntil = (
   predicate: () => boolean,
   timeoutMs: number,
   intervalMs = 100,
 ): Effect.Effect<boolean> =>
-  Effect.promise(
-    () =>
-      new Promise((resolve) => {
-        if (predicate()) {
-          resolve(true)
-          return
-        }
-        const deadline = Date.now() + timeoutMs
-        const check = setInterval(() => {
-          if (predicate()) {
-            clearInterval(check)
-            resolve(true)
-          } else if (Date.now() >= deadline) {
-            clearInterval(check)
-            resolve(false)
-          }
-        }, intervalMs)
-      }),
-  )
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const loop: Effect.Effect<boolean> = Effect.gen(function* () {
+      if (predicate()) return true
+      const now = yield* Clock.currentTimeMillis
+      if (now >= deadline) return false
+      yield* Effect.sleep(`${intervalMs} millis`)
+      return yield* loop
+    })
+    return yield* loop
+  })
 
 export const killProcess = (proc: Bun.Subprocess, signal?: NodeJS.Signals): Effect.Effect<void> =>
   Effect.sync(() => {

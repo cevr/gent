@@ -4,7 +4,7 @@ import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "@gent/core/domain/ids"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
-import type { AuthApi } from "@gent/core/domain/auth-store"
+import type { AuthApi, AuthInfo } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
@@ -85,10 +85,11 @@ const testDriverRegistry = DriverRegistry.fromResolved({
   modelDrivers: testResolved.modelDrivers,
   externalDrivers: testResolved.externalDrivers,
 })
+const missingAuthInfo: AuthInfo | undefined = undefined
 const failingAuthStoreLayer = Layer.succeed(
   AuthStore,
   AuthStore.of({
-    get: () => Effect.succeed(undefined),
+    get: () => Effect.succeed(missingAuthInfo),
     set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
     remove: () => Effect.void,
     list: () => Effect.succeed([]),

@@ -31,10 +31,11 @@ export const newFrontmatter = (
   scope: MemoryScope,
   tags: ReadonlyArray<string>,
   source: MemorySource,
+  now: Date,
 ) => ({
   scope,
   tags,
-  created: new Date().toISOString(),
-  updated: new Date().toISOString(),
+  created: now.toISOString(),
+  updated: now.toISOString(),
   source,
 })

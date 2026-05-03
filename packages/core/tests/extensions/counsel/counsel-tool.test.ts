@@ -8,7 +8,7 @@ import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { getToolEffect } from "@gent/core/extensions/api"
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
 const makeCtx = (overrides: {
@@ -18,7 +18,7 @@ const makeCtx = (overrides: {
 }) =>
   testToolContext({
     agent: {
-      get: () => Effect.succeed(undefined),
+      get: () => Effect.void.pipe(Effect.as(undefined)),
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
       resolveDualModelPair: () =>

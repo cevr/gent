@@ -1,3 +1,8 @@
+// @effect-diagnostics asyncFunction:off — OAuth browser/server callbacks are Promise entry boundaries
+// @effect-diagnostics globalFetch:off — OAuth token exchange runs at the browser callback boundary
+// @effect-diagnostics newPromise:off — OAuth callback bridge exposes a Promise to the extension auth API
+// @effect-diagnostics globalTimers:off — OAuth callback timeout is owned by this browser boundary
+// @effect-diagnostics globalDate:off — OAuth expiry timestamps are computed outside an Effect runtime
 import { Buffer } from "node:buffer"
 import { Option, Schema } from "effect"
 

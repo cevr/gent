@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { toSlug, memoryPath, newFrontmatter } from "@gent/extensions/memory/state"
 
 describe("toSlug", () => {
@@ -32,7 +33,7 @@ describe("memoryPath", () => {
 
 describe("newFrontmatter", () => {
   test("creates frontmatter with timestamps", () => {
-    const fm = newFrontmatter("global", ["test"], "agent")
+    const fm = newFrontmatter("global", ["test"], "agent", dateFromMillis(1_767_225_600_000))
     expect(fm.scope).toBe("global")
     expect(fm.tags).toEqual(["test"])
     expect(fm.source).toBe("agent")

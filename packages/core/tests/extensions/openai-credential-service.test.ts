@@ -68,8 +68,7 @@ const makeAuthInfo = (
       return Effect.void
     }),
 })
-// TestClock starts at time 0 — `expires` values are absolute (relative
-// to t=0), not `Date.now() + offset`.
+// TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
 const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, OpenAICredentialService>) =>
   Effect.runPromise(
@@ -626,7 +625,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
           // No additional refresh — build 2 read straight from cell.
           expect(refreshCount).toBe(1)
         }),
-      ).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<void, unknown, never>
+      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
   it.live("two layer builds sharing the same cellRef share the cache", () =>
@@ -672,7 +671,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
           )
           expect(refreshCount).toBe(1)
         }),
-      ).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<void, unknown, never>
+      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
 })

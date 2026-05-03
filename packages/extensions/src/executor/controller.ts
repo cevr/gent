@@ -34,17 +34,17 @@ interface ExecutorRuntimeShape extends ExecutorWriteShape {
 }
 
 export class ExecutorRead extends Context.Service<ExecutorRead, ReadOnly<ExecutorReadShape>>()(
-  "@gent/executor/ExecutorRead",
+  "@gent/extensions/src/executor/controller/ExecutorRead",
 ) {
   declare readonly [ReadOnlyBrand]: true
 }
 
 export class ExecutorWrite extends Context.Service<ExecutorWrite, ExecutorWriteShape>()(
-  "@gent/executor/ExecutorWrite",
+  "@gent/extensions/src/executor/controller/ExecutorWrite",
 ) {}
 
 export class ExecutorRuntime extends Context.Service<ExecutorRuntime, ExecutorRuntimeShape>()(
-  "@gent/executor/Runtime",
+  "@gent/extensions/src/executor/controller/ExecutorRuntime",
 ) {}
 
 export const ExecutorControllerLive = (
@@ -168,8 +168,12 @@ export const ExecutorControllerLive = (
       const bootstrap = Effect.gen(function* () {
         const settingsRaw = yield* sidecar
           .resolveSettings(cwd)
-          .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
-        const settings = settingsRaw as ResolvedExecutorSettings | undefined
+          .pipe(
+            Effect.catchEager(() =>
+              Effect.sync((): ResolvedExecutorSettings | undefined => undefined),
+            ),
+          )
+        const settings = settingsRaw
         if (settings?.autoStart !== true) return
         yield* runtime.connect(cwd)
       }).pipe(

@@ -1,6 +1,12 @@
 import { describe, test, expect } from "bun:test"
 import { extractText, extractImages, Message, type Message as DomainMessage } from "@gent/sdk"
-import { type MessagePart, ToolCallPart, ToolResultPart, TextPart } from "@gent/core/domain/message"
+import {
+  dateFromMillis,
+  type MessagePart,
+  ToolCallPart,
+  ToolResultPart,
+  TextPart,
+} from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
@@ -91,7 +97,7 @@ describe("projectMessagesWithToolInteractions", () => {
       branchId: BranchId.make("b1"),
       role,
       parts,
-      createdAt: new Date(),
+      createdAt: dateFromMillis(0),
       turnDurationMs: undefined,
     })
 

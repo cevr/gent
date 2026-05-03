@@ -5,12 +5,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { AuthApi, AuthInfo, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
-import { Effect, Layer, Logger, Schema } from "effect"
+import { Clock, Effect, Layer, Logger, Schema } from "effect"
 
 describe("AuthStore", () => {
   const AuthInfoJson = Schema.fromJsonString(AuthInfo)
   const encodeAuthInfo = Schema.encodeSync(AuthInfoJson)
   const apiJson = (key: string) => encodeAuthInfo(new AuthApi({ type: "api", key }))
+  const missingSecret: string | undefined = undefined
 
   const storeLayer = (initial: Record<string, string> = {}) =>
     Layer.provide(AuthStore.Live, AuthStorage.Test(initial))
@@ -141,7 +142,7 @@ describe("AuthStore", () => {
           type: "oauth",
           access: "token",
           refresh: "refresh",
-          expires: Date.now() + 1000,
+          expires: (yield* Clock.currentTimeMillis) + 1000,
         }),
       )
       const result = yield* auth.get("anthropic")
@@ -173,7 +174,7 @@ describe("AuthStore", () => {
 
   it.live("remove surfaces storage failures", () => {
     const failingStorage = Layer.succeed(AuthStorage, {
-      get: () => Effect.succeed(undefined),
+      get: () => Effect.succeed(missingSecret),
       set: () => Effect.void,
       delete: () => Effect.fail(new AuthStorageError({ message: "delete failed" })),
       list: () => Effect.succeed([]),
@@ -206,7 +207,7 @@ describe("AuthStore", () => {
 
   it.live("list and listInfo surface storage list failures", () => {
     const failingStorage = Layer.succeed(AuthStorage, {
-      get: () => Effect.succeed(undefined),
+      get: () => Effect.succeed(missingSecret),
       set: () => Effect.void,
       delete: () => Effect.void,
       list: () => Effect.fail(new AuthStorageError({ message: "list failed" })),

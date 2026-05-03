@@ -242,8 +242,10 @@ export const makeAcpConnection = (
 
         // Auto-approve permissions (bare mode agents shouldn't ask, but just in case)
         if (method === "session/request_permission") {
-          try {
-            const req = Schema.decodeUnknownSync(S.RequestPermissionRequest)(params)
+          const req = yield* Schema.decodeUnknownEffect(S.RequestPermissionRequest)(params).pipe(
+            Effect.catchEager(() => Effect.sync(() => undefined)),
+          )
+          if (req !== undefined) {
             const allowOption = req.options.find((o) => o.kind === "allow_once")
             yield* write(
               encodeResponse(reqId, {
@@ -252,7 +254,7 @@ export const makeAcpConnection = (
                   : { outcome: "cancelled" },
               }),
             )
-          } catch {
+          } else {
             yield* write(encodeErrorResponse(reqId, -32602, "Invalid permission request"))
           }
         } else {
@@ -283,13 +285,18 @@ export const makeAcpConnection = (
         // Notification from agent (no id, has method)
         if ("method" in parsed && !("id" in parsed)) {
           if (parsed["method"] === "session/update") {
-            try {
-              const notification = Schema.decodeUnknownSync(S.SessionNotification)(parsed["params"])
+            const notification = yield* Schema.decodeUnknownEffect(S.SessionNotification)(
+              parsed["params"],
+            ).pipe(
+              Effect.catchEager((decodeErr) =>
+                Effect.logWarning("acp: failed to decode session/update").pipe(
+                  Effect.annotateLogs({ error: String(decodeErr) }),
+                  Effect.as(undefined),
+                ),
+              ),
+            )
+            if (notification !== undefined) {
               yield* PubSub.publish(updatesPubSub, notification)
-            } catch (decodeErr) {
-              yield* Effect.logWarning("acp: failed to decode session/update").pipe(
-                Effect.annotateLogs({ error: String(decodeErr) }),
-              )
             }
           }
           return
@@ -352,7 +359,7 @@ export const makeAcpConnection = (
           ]
         })
         if (!registered) {
-          return yield* Effect.fail(new AcpClosedError({ reason: "connection closed" }))
+          return yield* new AcpClosedError({ reason: "connection closed" })
         }
         yield* write(encodeRequest(id, method, params))
         return yield* Deferred.await(deferred)

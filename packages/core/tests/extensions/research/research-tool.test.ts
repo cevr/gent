@@ -1,6 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { beforeAll } from "bun:test"
-import { Effect, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { ResearchTool } from "@gent/extensions/research/research-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -8,19 +7,20 @@ import { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { BunFileSystem } from "@effect/platform-bun"
-import { mkdirSync } from "node:fs"
 import { GitReader } from "@gent/extensions/librarian/git-reader"
 import { getToolEffect } from "@gent/core/extensions/api"
 
-const TEST_HOME = "/tmp/test-research-" + Date.now()
+const TEST_HOME = "/tmp/test-research-fixture"
 
 /** Pre-create cache dirs so ensureRepo skips cloning */
-beforeAll(() => {
+const ensureRepoFixtures = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
   for (const repo of ["effect-ts/effect", "zio/zio"]) {
-    mkdirSync(`${TEST_HOME}/.cache/repo/${repo}`, { recursive: true })
+    yield* fs.makeDirectory(path.join(TEST_HOME, ".cache", "repo", repo), { recursive: true })
   }
 })
 
@@ -32,7 +32,7 @@ const makeCtx = (overrides: {
   testToolContext({
     home: TEST_HOME,
     agent: {
-      get: () => Effect.succeed(undefined),
+      get: () => Effect.void.pipe(Effect.as(undefined)),
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
       resolveDualModelPair: () =>
@@ -44,6 +44,8 @@ const makeCtx = (overrides: {
   })
 
 const platformLayer = Layer.mergeAll(BunFileSystem.layer, Path.layer, GitReader.Test)
+const withRepoFixtures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  ensureRepoFixtures.pipe(Effect.andThen(effect))
 
 describe("ResearchTool", () => {
   it.live("single repo returns direct response", () => {
@@ -60,9 +62,11 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ResearchTool)(
-        { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
-        ctx,
+      withRepoFixtures(
+        getToolEffect(ResearchTool)(
+          { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
+          ctx,
+        ),
       ).pipe(
         Effect.map((result) => {
           expect(result.response).toContain("Effect uses fibers")
@@ -104,12 +108,14 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ResearchTool)(
-        {
-          question: "Compare concurrency models",
-          repos: ["effect-ts/effect", "zio/zio"],
-        },
-        ctx,
+      withRepoFixtures(
+        getToolEffect(ResearchTool)(
+          {
+            question: "Compare concurrency models",
+            repos: ["effect-ts/effect", "zio/zio"],
+          },
+          ctx,
+        ),
       ).pipe(
         Effect.map((result) => {
           expect(result.response).toContain("Comparative analysis")
@@ -139,13 +145,15 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ResearchTool)(
-        {
-          question: "How does the scheduler work?",
-          repos: ["effect-ts/effect"],
-          focus: "src/internal/scheduler",
-        },
-        ctx,
+      withRepoFixtures(
+        getToolEffect(ResearchTool)(
+          {
+            question: "How does the scheduler work?",
+            repos: ["effect-ts/effect"],
+            focus: "src/internal/scheduler",
+          },
+          ctx,
+        ),
       ).pipe(
         Effect.map(() => {
           expect(capturedPrompt).toContain("src/internal/scheduler")
@@ -158,9 +166,11 @@ describe("ResearchTool", () => {
 
   it.live("rejects empty repos", () =>
     narrowR(
-      getToolEffect(ResearchTool)(
-        { question: "test", repos: [] },
-        makeCtx({ agentRun: () => Effect.die("unreachable") }),
+      withRepoFixtures(
+        getToolEffect(ResearchTool)(
+          { question: "test", repos: [] },
+          makeCtx({ agentRun: () => Effect.die("unreachable") }),
+        ),
       ).pipe(
         Effect.map((result) => {
           expect(result.error).toBe("At least one repository spec required")
@@ -172,9 +182,11 @@ describe("ResearchTool", () => {
 
   it.live("rejects too many repos", () =>
     narrowR(
-      getToolEffect(ResearchTool)(
-        { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
-        makeCtx({ agentRun: () => Effect.die("unreachable") }),
+      withRepoFixtures(
+        getToolEffect(ResearchTool)(
+          { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
+          makeCtx({ agentRun: () => Effect.die("unreachable") }),
+        ),
       ).pipe(
         Effect.map((result) => {
           expect(result.error).toBe("Too many repos (max 5)")

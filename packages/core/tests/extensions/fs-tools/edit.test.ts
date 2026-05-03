@@ -1,11 +1,8 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
+import { Effect, FileSystem, Layer, Path } from "effect"
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { BunServices } from "@effect/platform-bun"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
 import {
   detectRedaction,
   unescapeStr,
@@ -107,137 +104,98 @@ const editLayer = Layer.mergeAll(
   BunServices.layer,
   Layer.provide(FileLockService.layer, BunServices.layer),
 )
+const editTest = it.scopedLive.layer(editLayer)
 const stubCtx = testToolContext()
 describe("EditTool execution", () => {
-  it.live("applies edit to a real file and reads back the result", () =>
+  editTest("applies edit to a real file and reads back the result", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
-      fs.writeFileSync(filePath, "hello world\ngoodbye world\n")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const result = yield* narrowR(
-              getToolEffect(EditTool)(
-                { path: filePath, oldString: "hello world", newString: "hi there" },
-                stubCtx,
-              ).pipe(Effect.provide(editLayer)),
-            )
-            expect(result.replacements).toBe(1)
-            expect(result.path).toBe(filePath)
-            const content = fs.readFileSync(filePath, "utf8")
-            expect(content).toBe("hi there\ngoodbye world\n")
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      yield* fs.writeFileString(filePath, "hello world\ngoodbye world\n")
+      const result = yield* narrowR(
+        getToolEffect(EditTool)(
+          { path: filePath, oldString: "hello world", newString: "hi there" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
+      expect(result.replacements).toBe(1)
+      expect(result.path).toBe(filePath)
+      const content = yield* fs.readFileString(filePath)
+      expect(content).toBe("hi there\ngoodbye world\n")
     }),
   )
-  it.live("replaceAll replaces every occurrence", () =>
+  editTest("replaceAll replaces every occurrence", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
-      fs.writeFileSync(filePath, "foo bar foo baz foo\n")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const result = yield* narrowR(
-              getToolEffect(EditTool)(
-                { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
-                stubCtx,
-              ).pipe(Effect.provide(editLayer)),
-            )
-            expect(result.replacements).toBe(3)
-            const content = fs.readFileSync(filePath, "utf8")
-            expect(content).toBe("qux bar qux baz qux\n")
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      yield* fs.writeFileString(filePath, "foo bar foo baz foo\n")
+      const result = yield* narrowR(
+        getToolEffect(EditTool)(
+          { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
+      expect(result.replacements).toBe(3)
+      const content = yield* fs.readFileString(filePath)
+      expect(content).toBe("qux bar qux baz qux\n")
     }),
   )
-  it.live("fails when oldString not found", () =>
+  editTest("fails when oldString not found", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
-      fs.writeFileSync(filePath, "hello world\n")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const exit = yield* narrowR(
-              Effect.exit(
-                getToolEffect(EditTool)(
-                  { path: filePath, oldString: "not here", newString: "replaced" },
-                  stubCtx,
-                ).pipe(Effect.provide(editLayer)),
-              ),
-            )
-            expect(exit._tag).toBe("Failure")
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      yield* fs.writeFileString(filePath, "hello world\n")
+      const exit = yield* narrowR(
+        Effect.exit(
+          getToolEffect(EditTool)(
+            { path: filePath, oldString: "not here", newString: "replaced" },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
       )
+      expect(exit._tag).toBe("Failure")
     }),
   )
-  it.live("fails on ambiguous match without replaceAll", () =>
+  editTest("fails on ambiguous match without replaceAll", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
-      fs.writeFileSync(filePath, "foo bar foo\n")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const exit = yield* narrowR(
-              Effect.exit(
-                getToolEffect(EditTool)(
-                  { path: filePath, oldString: "foo", newString: "baz" },
-                  stubCtx,
-                ).pipe(Effect.provide(editLayer)),
-              ),
-            )
-            expect(exit._tag).toBe("Failure")
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      yield* fs.writeFileString(filePath, "foo bar foo\n")
+      const exit = yield* narrowR(
+        Effect.exit(
+          getToolEffect(EditTool)(
+            { path: filePath, oldString: "foo", newString: "baz" },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
       )
+      expect(exit._tag).toBe("Failure")
     }),
   )
-  it.live("fuzzy match handles literal backslash-n in oldString", () =>
+  editTest("fuzzy match handles literal backslash-n in oldString", () =>
     Effect.gen(function* () {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
-      fs.writeFileSync(filePath, "line1\nline2\n")
-      yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Effect.gen(function* () {
-            const result = yield* narrowR(
-              getToolEffect(EditTool)(
-                { path: filePath, oldString: "line1\\nline2", newString: "merged" },
-                stubCtx,
-              ).pipe(Effect.provide(editLayer)),
-            )
-            expect(result.replacements).toBe(1)
-            const content = fs.readFileSync(filePath, "utf8")
-            expect(content).toBe("merged\n")
-          }),
-        () =>
-          Effect.sync(() => {
-            fs.rmSync(dir, { recursive: true, force: true })
-          }),
+      yield* fs.writeFileString(filePath, "line1\nline2\n")
+      const result = yield* narrowR(
+        getToolEffect(EditTool)(
+          { path: filePath, oldString: "line1\\nline2", newString: "merged" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
+      expect(result.replacements).toBe(1)
+      const content = yield* fs.readFileString(filePath)
+      expect(content).toBe("merged\n")
     }),
   )
 })

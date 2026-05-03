@@ -7,9 +7,11 @@
  */
 import { afterAll, beforeAll } from "bun:test"
 import { it, describe, expect, test } from "effect-bun-test"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path"
-import { Cause, Effect, Layer, ManagedRuntime } from "effect"
+import { Cause, Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import {
@@ -20,8 +22,13 @@ import {
 } from "../src/extensions/client-services"
 import { makeClientTransportLayer } from "../src/extensions/client-transport"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+class ExtensionIntegrationTestError extends Schema.TaggedErrorClass<ExtensionIntegrationTestError>()(
+  "ExtensionIntegrationTestError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
+) {}
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { builtinClientModules } from "../src/extensions/builtins/index"
+import { createMockRuntime } from "./render-harness"
 const throwOnAccess = (label: string): never => {
   throw new Error(`unexpected transport call in pure load test: ${label}`)
 }
@@ -291,7 +298,6 @@ export default defineClientExtension("@test/a", {
         join(collisionDir, "b.client.ts"),
         `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 export default defineClientExtension("@test/b", {
   setup: Effect.succeed([rendererContribution(["my_tool"], () => "b")]),
@@ -304,7 +310,7 @@ export default defineClientExtension("@test/b", {
             userDir: collisionDir,
             projectDir: join(TEST_DIR, "no-project"),
           }),
-        catch: (error) => error,
+        catch: (cause) => new ExtensionIntegrationTestError({ message: String(cause), cause }),
       }).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -360,9 +366,9 @@ export default defineClientExtension("@test/b", {
                 listSlashCommands: () => Effect.succeed([]),
               },
             } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
-            runtime: {
-              run: () => Effect.runPromise(Effect.fail(new Error("no transport in test"))),
-            } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
+            runtime: createMockRuntime() as Parameters<
+              typeof makeClientTransportLayer
+            >[0]["runtime"],
             currentSession: () => ({
               sessionId: SessionId.make("test-session-id"),
               branchId: BranchId.make("test-branch-id"),

@@ -380,7 +380,12 @@ const sessions = Command.make(
 
       yield* Console.log("Sessions:")
       for (const s of allSessions) {
-        const date = DateTime.formatIso(DateTime.makeUnsafe(s.updatedAt))
+        const date = DateTime.make(s.updatedAt).pipe(
+          Option.match({
+            onNone: () => "unknown",
+            onSome: DateTime.formatIso,
+          }),
+        )
         yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
       }
     }),

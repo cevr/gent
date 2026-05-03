@@ -34,6 +34,14 @@ const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const REVIEW_TOOL = "review"
 const DEFAULT_MAX_ITERATIONS = 10
 
+class AutoCheckpointDecodeError extends Schema.TaggedErrorClass<AutoCheckpointDecodeError>()(
+  "AutoCheckpointDecodeError",
+  {
+    message: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
+
 const CheckpointOutput = Schema.Struct({
   status: Schema.optional(Schema.Literals(["continue", "complete", "abandon"])),
   summary: Schema.optional(Schema.String),
@@ -107,17 +115,24 @@ const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolRe
           nextIdea?: string
         }
       | undefined
-    try {
-      parsed = parseCheckpointResult(input.result)
-    } catch (decodeError) {
-      yield* Effect.logWarning("auto.checkpoint.decode-failed").pipe(
-        Effect.annotateLogs({
-          error: String(decodeError),
-          resultType: typeof input.result,
+    parsed = yield* Effect.try({
+      try: () => parseCheckpointResult(input.result),
+      catch: (decodeError) =>
+        new AutoCheckpointDecodeError({
+          message: String(decodeError),
+          cause: decodeError,
         }),
-      )
-      parsed = undefined
-    }
+    }).pipe(
+      Effect.catchEager((decodeError) =>
+        Effect.logWarning("auto.checkpoint.decode-failed").pipe(
+          Effect.annotateLogs({
+            error: decodeError.message,
+            resultType: typeof input.result,
+          }),
+          Effect.as(undefined),
+        ),
+      ),
+    )
     yield* auto.value.autoSignal({
       status: parsed?.status ?? "continue",
       summary: parsed?.summary ?? "Checkpoint",

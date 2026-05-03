@@ -22,7 +22,7 @@ import {
 // @effect-diagnostics nodeBuiltinImport:off — registry resolves stable per-build paths
 import { join, resolve } from "node:path"
 
-import { Effect, Schema } from "effect"
+import { Clock, Effect, Schema } from "effect"
 
 // Re-export fingerprint from core (single source of truth)
 export {
@@ -150,7 +150,7 @@ interface LockInfo {
 }
 
 /** Acquire a cross-process lock via mkdir. Returns true on success. */
-export const acquireLock = (home: string, dbPath: string): boolean => {
+export const acquireLock = (home: string, dbPath: string, createdAt: number = 0): boolean => {
   const lockDir = join(ensureRegistryDir(home), `${registryHash(dbPath)}.lock`)
   const infoPath = join(lockDir, "info.json")
 
@@ -206,7 +206,7 @@ export const acquireLock = (home: string, dbPath: string): boolean => {
   const info: LockInfo = {
     pid: process.pid,
     hostname: hostname(),
-    createdAt: Date.now(),
+    createdAt,
   }
   try {
     writeFileSync(infoPath, JSON.stringify(info))
@@ -296,7 +296,12 @@ export const withLock = <A, E, R>(
 ): Effect.Effect<A, E | LockAcquireError, R> =>
   Effect.acquireUseRelease(
     Effect.suspend(() =>
-      acquireLock(home, dbPath) ? Effect.void : Effect.fail(new LockAcquireError({ dbPath })),
+      Effect.gen(function* () {
+        const createdAt = yield* Clock.currentTimeMillis
+        if (!acquireLock(home, dbPath, createdAt)) {
+          return yield* new LockAcquireError({ dbPath })
+        }
+      }),
     ),
     () => body,
     () => Effect.sync(() => releaseLock(home, dbPath)),

@@ -20,6 +20,7 @@ import {
 } from "@gent/core/domain/message-part-projection"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
+  dateFromMillis,
   ImagePart,
   Message,
   ReasoningPart,
@@ -42,7 +43,7 @@ describe("message part projection", () => {
       branchId: BranchId.make("branch-projection"),
       role,
       parts,
-      createdAt: new Date(0),
+      createdAt: dateFromMillis(0),
       metadata: undefined,
       turnDurationMs: undefined,
     })

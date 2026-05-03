@@ -10,7 +10,7 @@
  * `FileFinderUnavailableError` and the popup adapter normalizes to `[]`.
  *
  * Scan readiness: each finder kicks off `waitForScan` once on creation,
- * stored as a settled `Promise<ScanResult>`. The native call is wrapped so
+ * stored as an Effect. The native call is wrapped so
  * a throwing call resolves to a typed failure object instead of leaving
  * the promise unresolved (counsel  finding 4). The search effect
  * awaits via `Effect.promise` + a typed error map; Effect interruption
@@ -58,10 +58,9 @@ type ScanOutcome = { ok: true } | { ok: false; reason: string }
 
 interface FinderEntry {
   readonly finder: FileFinder
-  /** Settles when the initial scan completes. Always resolves (never
-   *  rejects) so callers don't need to wrap in try/catch — failure modes
-   *  are encoded in the resolved value. */
-  readonly scanReady: Promise<ScanOutcome>
+  /** Completes when the initial scan completes. Always succeeds; failure
+   *  modes are encoded in the returned value. */
+  readonly scanReady: Effect.Effect<ScanOutcome>
 }
 
 const finders = new Map<string, FinderEntry>()
@@ -96,22 +95,22 @@ const ensureFinder = (
 
     const finder = result.value
 
-    // Kick off the native scan as a settled Promise. Wrapping the
-    // throwable native call in try/catch guarantees the Promise always
-    // resolves (with a typed outcome), so search calls awaiting
-    // `scanReady` can never hang on a throw.
-    const scanReady: Promise<ScanOutcome> = new Promise((resolve) => {
-      // setTimeout(0) so finder.create returns synchronously to the
-      // search call below before the blocking scan begins.
-      setTimeout(() => {
-        try {
-          const scan = finder.waitForScan(15_000)
-          resolve(scan.ok ? { ok: true } : { ok: false, reason: "waitForScan returned !ok" })
-        } catch (e) {
-          resolve({ ok: false, reason: String(e) })
-        }
-      }, 0)
-    })
+    // Delay one tick so finder.create returns synchronously to the first
+    // search call before the blocking scan begins.
+    const scanReady: Effect.Effect<ScanOutcome> = Effect.sleep(0).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          try {
+            const scan = finder.waitForScan(15_000)
+            return scan.ok
+              ? ({ ok: true } satisfies ScanOutcome)
+              : ({ ok: false, reason: "waitForScan returned !ok" } satisfies ScanOutcome)
+          } catch (e) {
+            return { ok: false, reason: String(e) } satisfies ScanOutcome
+          }
+        }),
+      ),
+    )
 
     const entry: FinderEntry = { finder, scanReady }
     finders.set(cwd, entry)
@@ -136,7 +135,7 @@ export const searchFiles = (
 > =>
   Effect.gen(function* () {
     const entry = yield* ensureFinder(cwd, home)
-    const outcome = yield* Effect.promise(() => entry.scanReady)
+    const outcome = yield* entry.scanReady
     if (!outcome.ok) {
       return yield* new FileFinderScanError({ reason: outcome.reason })
     }
