@@ -401,6 +401,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             } satisfies SidecarRecord
           })
 
+        // Sidecar boots an HTTP server in a separate process; there is no
+        // IPC channel back to this Effect runtime. The poll is a genuine
+        // network-side time wait, not a state-transition wait — so
+        // Effect.sleep here is appropriate (and TestClock-friendly).
         const pollHealth = (baseUrl: string, cwd: string, timeoutMs: number) =>
           Effect.gen(function* () {
             const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
@@ -430,6 +434,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             }
           })
 
+        // OS-level grace period between SIGTERM and SIGKILL. The kernel
+        // delivers the signal asynchronously and we have no in-process
+        // signal back from the foreign pid, so the timed sleep is the
+        // right primitive here.
         const terminatePid = (pid: number) =>
           Effect.gen(function* () {
             if (!(yield* isPidAlive(pid))) return
