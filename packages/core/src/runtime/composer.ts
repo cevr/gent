@@ -9,6 +9,7 @@
 
 import { Layer } from "effect"
 import type { Context } from "effect"
+import type { SqlClient } from "effect/unstable/sql"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -34,6 +35,7 @@ import {
   mergeErasedLayers,
   omitErasedContext,
   restoreErasedLayer,
+  type ErasedLayer,
 } from "./extensions/effect-membrane.js"
 
 export interface EphemeralRuntimeInputs<Provides> {
@@ -44,7 +46,7 @@ export interface EphemeralRuntimeInputs<Provides> {
 }
 
 export interface EphemeralRuntimeOverrides {
-  readonly storage: Layer.Layer<Storage, unknown, unknown>
+  readonly storage: ErasedLayer
   readonly eventStore: Layer.Layer<EventStore, unknown, unknown>
   readonly eventPublisher: Layer.Layer<EventPublisher | BuiltinEventSink, unknown, unknown>
   readonly approval: Layer.Layer<ApprovalService, unknown, unknown>
@@ -54,8 +56,8 @@ export interface EphemeralRuntimeOverrides {
   readonly sessionRuntime: Layer.Layer<SessionRuntime, unknown, unknown>
 }
 
-type EphemeralOverrideProvides =
-  | Storage
+type EphemeralStorageProvides =
+  | SqlClient.SqlClient
   | SessionStorage
   | BranchStorage
   | MessageStorage
@@ -66,6 +68,9 @@ type EphemeralOverrideProvides =
   | InteractionStorage
   | InteractionPendingReader
   | SearchStorage
+
+type EphemeralOverrideProvides =
+  | EphemeralStorageProvides
   | EventStore
   | EventPublisher
   | BuiltinEventSink

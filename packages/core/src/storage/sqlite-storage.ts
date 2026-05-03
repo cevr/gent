@@ -128,12 +128,6 @@ const makeStorage = Effect.gen(function* () {
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
 
-/**
- * Build focused sub-Tag layers from a layer that provides Storage.
- * Called at composition roots (dependencies.ts, test layers) to wire
- * sub-Tags alongside the existing Storage Tag. NOT wired inside Storage
- * class methods to prevent ephemeral compositor leakage.
- */
 /** Build focused sub-Tag layers from a StorageService value (no extra scope). */
 const subTagLayersFromService = (
   s: StorageService,

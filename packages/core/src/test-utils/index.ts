@@ -4,6 +4,7 @@ import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
+import type { StorageError } from "../domain/storage-error.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import {
@@ -201,13 +202,20 @@ export const mockToolCallResponse = (
   finishPart({ finishReason: "tool-calls" }),
 ]
 
-export const ensureStorageParents = (input: {
+export function ensureStorageParents(input: {
+  readonly sessionId: SessionId | string
+  readonly branchId?: undefined
+}): Effect.Effect<void, StorageError, SessionStorage>
+export function ensureStorageParents(input: {
+  readonly sessionId: SessionId | string
+  readonly branchId: BranchId | string
+}): Effect.Effect<void, StorageError, SessionStorage | BranchStorage>
+export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
   readonly branchId?: BranchId | string | undefined
-}) =>
-  Effect.gen(function* () {
+}): Effect.Effect<void, StorageError, SessionStorage | BranchStorage> {
+  return Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
-    const branchStorage = yield* BranchStorage
     const sessionId = SessionId.make(input.sessionId)
     const branchId = input.branchId === undefined ? undefined : BranchId.make(input.branchId)
     const now = yield* DateTime.nowAsDate
@@ -226,6 +234,7 @@ export const ensureStorageParents = (input: {
     }
 
     if (branchId !== undefined) {
+      const branchStorage = yield* BranchStorage
       const branch = yield* branchStorage.getBranch(branchId)
       if (branch === undefined) {
         yield* branchStorage
@@ -240,6 +249,7 @@ export const ensureStorageParents = (input: {
       }
     }
   })
+}
 
 // E2E test layer
 export {
