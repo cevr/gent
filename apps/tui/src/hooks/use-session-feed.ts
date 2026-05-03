@@ -16,13 +16,14 @@ import {
   messagePartReasoning,
   messagePartText,
   messagePartToolCall,
+  messagePartsToolInteractions,
+  buildToolResultMapFromMessages,
+  type ToolResultState,
 } from "@gent/core/domain/message-part-projection.js"
 import {
   extractText,
   extractReasoning,
   extractImages,
-  buildToolResultMap,
-  extractToolCallsWithResults,
   type Message as DomainMessage,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
@@ -68,7 +69,7 @@ const isMessage = (item: SessionItem): item is Message =>
 
 const buildSegments = (
   parts: DomainMessage["parts"],
-  resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
+  resultMap: ReadonlyMap<string, ToolResultState>,
 ): AssistantSegment[] => {
   const segments: AssistantSegment[] = []
   for (const part of parts) {
@@ -92,19 +93,11 @@ const buildSegments = (
 
     const tc = messagePartToolCall(part)
     if (tc !== undefined) {
-      const result = resultMap.get(tc.id)
-      let tcStatus: "running" | "completed" | "error" = "running"
-      if (result !== undefined) tcStatus = result.isError ? "error" : "completed"
+      const toolCall = messagePartsToolInteractions([part], resultMap)[0]
+      if (toolCall === undefined) continue
       segments.push({
         _tag: "tool-call",
-        toolCall: {
-          id: tc.id,
-          toolName: tc.toolName,
-          status: tcStatus,
-          input: tc.input,
-          summary: result?.summary,
-          output: result?.output,
-        },
+        toolCall,
       })
     }
   }
@@ -112,11 +105,11 @@ const buildSegments = (
 }
 
 const buildMessages = (msgs: readonly DomainMessage[]): Message[] => {
-  const resultMap = buildToolResultMap(msgs)
+  const resultMap = buildToolResultMapFromMessages(msgs)
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
-    const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+    const toolCalls = [...messagePartsToolInteractions(m.parts, resultMap)]
     const segments = m.role === "assistant" ? buildSegments(m.parts, resultMap) : undefined
     const message = {
       id: m.id,

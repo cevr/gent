@@ -62,13 +62,4 @@ export type {
 } from "./client.js"
 
 // Utility functions
-export {
-  extractText,
-  extractReasoning,
-  extractImages,
-  extractToolCalls,
-  extractToolCallsWithResults,
-  buildToolResultMap,
-  type ImageInfo,
-  type ExtractedToolCall,
-} from "./client.js"
+export { extractText, extractReasoning, extractImages, type ImageInfo } from "./client.js"

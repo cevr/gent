@@ -1,15 +1,11 @@
 import { describe, test, expect } from "bun:test"
-import {
-  extractText,
-  extractImages,
-  extractToolCalls,
-  buildToolResultMap,
-  extractToolCallsWithResults,
-  Message,
-  type Message as DomainMessage,
-} from "@gent/sdk"
+import { extractText, extractImages, Message, type Message as DomainMessage } from "@gent/sdk"
 import { type MessagePart, ToolCallPart, ToolResultPart, TextPart } from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import {
+  buildToolResultMapFromMessages,
+  messagePartsToolInteractions,
+} from "@gent/core/domain/message-part-projection"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
@@ -90,8 +86,8 @@ describe("extractImages", () => {
   })
 })
 
-describe("extractToolCalls", () => {
-  test("extracts tool calls from parts", () => {
+describe("messagePartsToolInteractions", () => {
+  test("extracts running tool calls from parts", () => {
     const parts: MessagePart[] = [
       {
         type: "tool-call",
@@ -108,12 +104,12 @@ describe("extractToolCalls", () => {
       },
     ]
 
-    const calls = extractToolCalls(parts)
+    const calls = messagePartsToolInteractions(parts, new Map())
     expect(calls.length).toBe(2)
     expect(calls[0]).toEqual({
       id: "tc1",
       toolName: "read",
-      status: "completed",
+      status: "running",
       input: { path: "/foo" },
       summary: undefined,
       output: undefined,
@@ -121,7 +117,7 @@ describe("extractToolCalls", () => {
     expect(calls[1]).toEqual({
       id: "tc2",
       toolName: "edit",
-      status: "completed",
+      status: "running",
       input: { path: "/bar" },
       summary: undefined,
       output: undefined,
@@ -130,11 +126,11 @@ describe("extractToolCalls", () => {
 
   test("returns empty array when no tool calls", () => {
     const parts: MessagePart[] = [{ type: "text", text: "Just text" }]
-    expect(extractToolCalls(parts)).toEqual([])
+    expect(messagePartsToolInteractions(parts, new Map())).toEqual([])
   })
 })
 
-describe("buildToolResultMap", () => {
+describe("buildToolResultMapFromMessages", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
     Message.Regular.make({
       id: MessageId.make(Bun.randomUUIDv7()),
@@ -168,7 +164,7 @@ describe("buildToolResultMap", () => {
       makeMsg("tool", [toolResult("tc1", "file contents here")]),
     ]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.size).toBe(1)
     expect(map.get("tc1")).toEqual({
       summary: "file contents here",
@@ -180,7 +176,7 @@ describe("buildToolResultMap", () => {
   test("handles error results", () => {
     const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", "File not found", true)])]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.get("tc1")).toEqual({
       summary: "File not found",
       output: "File not found",
@@ -192,7 +188,7 @@ describe("buildToolResultMap", () => {
     const longText = "x".repeat(150)
     const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", longText)])]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     const result = map.get("tc1")!
     expect(result.summary.length).toBe(103) // 100 + "..."
     expect(result.summary.endsWith("...")).toBe(true)
@@ -203,7 +199,7 @@ describe("buildToolResultMap", () => {
     const multiline = "First line\nSecond line\nThird line"
     const messages: DomainMessage[] = [makeMsg("tool", [toolResult("tc1", multiline)])]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.get("tc1")?.summary).toBe("First line")
   })
 
@@ -212,7 +208,7 @@ describe("buildToolResultMap", () => {
       makeMsg("tool", [toolResult("tc1", { files: ["a.ts", "b.ts"] })]),
     ]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     const result = map.get("tc1")!
     expect(result.summary).toBe('{"files":["a.ts","b.ts"]}')
     expect(result.output).toContain('"files"')
@@ -223,7 +219,7 @@ describe("buildToolResultMap", () => {
       makeMsg("tool", [toolResult("tc1", "result1"), toolResult("tc2", "result2")]),
     ]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.size).toBe(2)
     expect(map.get("tc1")?.output).toBe("result1")
     expect(map.get("tc2")?.output).toBe("result2")
@@ -235,12 +231,12 @@ describe("buildToolResultMap", () => {
       makeMsg("assistant", [TextPart.make({ type: "text", text: "Hi there" })]),
     ]
 
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.size).toBe(0)
   })
 })
 
-describe("extractToolCallsWithResults", () => {
+describe("messagePartsToolInteractions with results", () => {
   test("joins tool calls with results from map", () => {
     const parts: MessagePart[] = [
       {
@@ -254,7 +250,7 @@ describe("extractToolCallsWithResults", () => {
       ["tc1", { summary: "50 lines", output: "full content", isError: false }],
     ])
 
-    const calls = extractToolCallsWithResults(parts, resultMap)
+    const calls = messagePartsToolInteractions(parts, resultMap)
     expect(calls[0]).toEqual({
       id: "tc1",
       toolName: "read",
@@ -273,7 +269,7 @@ describe("extractToolCallsWithResults", () => {
       ["tc1", { summary: "Error", output: "File not found", isError: true }],
     ])
 
-    const calls = extractToolCallsWithResults(parts, resultMap)
+    const calls = messagePartsToolInteractions(parts, resultMap)
     expect(calls[0]?.status).toBe("error")
   })
 
@@ -283,7 +279,7 @@ describe("extractToolCallsWithResults", () => {
     ]
     const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
 
-    const calls = extractToolCallsWithResults(parts, resultMap)
+    const calls = messagePartsToolInteractions(parts, resultMap)
     expect(calls[0]).toEqual({
       id: "tc1",
       toolName: "read",

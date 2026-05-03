@@ -41,8 +41,6 @@ import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
-  messagePartsToolCalls,
-  messagePartsToolResults,
 } from "@gent/core/domain/message-part-projection.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import {
@@ -120,65 +118,6 @@ export interface ImageInfo {
 
 export function extractImages(parts: readonly MessagePart[]): ImageInfo[] {
   return messagePartsImages(parts).map((image) => ({ mediaType: image.mediaType }))
-}
-
-export interface ExtractedToolCall {
-  id: string
-  toolName: string
-  status: "running" | "completed" | "error"
-  input: unknown | undefined
-  summary: string | undefined
-  output: string | undefined
-}
-
-export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCall[] {
-  return messagePartsToolCalls(parts).map((tc) => ({
-    id: tc.id,
-    toolName: tc.toolName,
-    status: "completed" as const,
-    input: tc.input,
-    summary: undefined,
-    output: undefined,
-  }))
-}
-
-export function buildToolResultMap(
-  messages: readonly Message[],
-): Map<string, { summary: string; output: string; isError: boolean }> {
-  const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
-
-  for (const msg of messages) {
-    if (msg.role === "tool") {
-      for (const result of messagePartsToolResults(msg.parts)) {
-        resultMap.set(result.id, {
-          summary: result.summary,
-          output: result.text,
-          isError: result.isError,
-        })
-      }
-    }
-  }
-
-  return resultMap
-}
-
-export function extractToolCallsWithResults(
-  parts: readonly MessagePart[],
-  resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
-): ExtractedToolCall[] {
-  return messagePartsToolCalls(parts).map((tc) => {
-    const result = resultMap.get(tc.id)
-    let status: ExtractedToolCall["status"] = "running"
-    if (result !== undefined) status = result.isError ? "error" : "completed"
-    return {
-      id: tc.id,
-      toolName: tc.toolName,
-      status,
-      input: tc.input,
-      summary: result?.summary,
-      output: result?.output,
-    }
-  })
 }
 
 // ---------------------------------------------------------------------------

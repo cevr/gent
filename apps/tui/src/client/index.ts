@@ -19,13 +19,9 @@ export {
   type ToolResultPart,
   type PermissionRule,
   type ImageInfo,
-  type ExtractedToolCall,
   extractText,
   extractReasoning,
   extractImages,
-  extractToolCalls,
-  extractToolCallsWithResults,
-  buildToolResultMap,
 } from "@gent/sdk"
 
 // Local context exports

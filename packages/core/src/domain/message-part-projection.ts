@@ -8,6 +8,7 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  type Message,
   type MessagePart,
 } from "./message.js"
 
@@ -29,6 +30,21 @@ export interface ToolResultPartProjection {
   readonly value: unknown
   readonly summary: string
   readonly text: string
+  readonly isError: boolean
+}
+
+export interface ToolInteractionState {
+  readonly id: string
+  readonly toolName: string
+  readonly status: "running" | "completed" | "error"
+  readonly input: unknown | undefined
+  readonly summary: string | undefined
+  readonly output: string | undefined
+}
+
+export interface ToolResultState {
+  readonly summary: string
+  readonly output: string
   readonly isError: boolean
 }
 
@@ -138,6 +154,41 @@ export const messagePartsToolResultParts = (
   parts: ReadonlyArray<MessagePart>,
 ): ReadonlyArray<ToolResultPart> =>
   parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
+
+export const buildToolResultMapFromMessages = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyMap<string, ToolResultState> => {
+  const resultMap = new Map<string, ToolResultState>()
+  for (const message of messages) {
+    if (message.role !== "tool") continue
+    for (const result of messagePartsToolResults(message.parts)) {
+      resultMap.set(result.id, {
+        summary: result.summary,
+        output: result.text,
+        isError: result.isError,
+      })
+    }
+  }
+  return resultMap
+}
+
+export const messagePartsToolInteractions = (
+  parts: ReadonlyArray<MessagePart>,
+  resultMap: ReadonlyMap<string, ToolResultState>,
+): ReadonlyArray<ToolInteractionState> =>
+  messagePartsToolCalls(parts).map((toolCall) => {
+    const result = resultMap.get(toolCall.id)
+    let status: ToolInteractionState["status"] = "running"
+    if (result !== undefined) status = result.isError ? "error" : "completed"
+    return {
+      id: toolCall.id,
+      toolName: toolCall.toolName,
+      status,
+      input: toolCall.input,
+      summary: result?.summary,
+      output: result?.output,
+    }
+  })
 
 /**
  * Human-readable transcript display. Renders user-visible text plus tool

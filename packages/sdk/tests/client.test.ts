@@ -4,15 +4,17 @@ import {
   Gent,
   extractText,
   extractImages,
-  extractToolCalls,
-  buildToolResultMap,
   Message,
   type Message as DomainMessage,
 } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { ToolResultPart } from "@gent/core/domain/message"
+import { ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import {
+  buildToolResultMapFromMessages,
+  messagePartsToolInteractions,
+} from "@gent/core/domain/message-part-projection"
 
 describe("sdk client helpers", () => {
   test("sdk entrypoint exports the public constructors", () => {
@@ -37,22 +39,23 @@ describe("sdk client helpers", () => {
     expect(images[0]?.mediaType).toBe("image/png")
   })
 
-  test("extractToolCalls extracts tool calls", () => {
+  test("canonical tool interactions expose running calls", () => {
     const parts = [
-      {
+      ToolCallPart.make({
         type: "tool-call" as const,
         toolCallId: ToolCallId.make("tc1"),
         toolName: "read",
         input: { path: "/foo" },
-      },
+      }),
     ]
-    const calls = extractToolCalls(parts)
+    const calls = messagePartsToolInteractions(parts, new Map())
     expect(calls.length).toBe(1)
     expect(calls[0]?.id).toBe("tc1")
     expect(calls[0]?.toolName).toBe("read")
+    expect(calls[0]?.status).toBe("running")
   })
 
-  test("buildToolResultMap indexes tool outputs by call id", () => {
+  test("canonical tool result state indexes tool outputs by call id", () => {
     const messages: DomainMessage[] = [
       Message.Regular.make({
         id: MessageId.make("m1"),
@@ -70,7 +73,7 @@ describe("sdk client helpers", () => {
         createdAt: new Date(),
       }),
     ]
-    const map = buildToolResultMap(messages)
+    const map = buildToolResultMapFromMessages(messages)
     expect(map.size).toBe(1)
     expect(map.get("tc1")?.output).toBe("file contents")
   })
