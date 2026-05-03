@@ -39,7 +39,8 @@ import {
   resolveExistingSessionBranch,
   resolveSessionEnvironmentOrFail,
 } from "./session-runtime-context.js"
-import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
+import { SessionRuntimeStateSchema, type SessionRuntimeState } from "./agent/agent-loop.state.js"
+export { SessionRuntimeStateSchema, type SessionRuntimeState }
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -148,9 +149,6 @@ export const SessionRuntimeSessionTarget = Schema.Struct({
   sessionId: SessionId,
 })
 export type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
-
-export const SessionRuntimeStateSchema = LoopRuntimeStateSchema
-export type SessionRuntimeState = LoopRuntimeState
 
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Number,

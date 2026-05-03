@@ -262,9 +262,10 @@ export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForI
 
 // ── Runtime projection (transport/UI) ──
 // Public runtime state mirrors the machine directly. No parallel `phase/status`
-// matrix — the discriminator is the state.
+// matrix — the discriminator is the state. Owned here so the public projection
+// has a single canonical declaration; `session-runtime.ts` re-exports.
 
-export const LoopRuntimeStateSchema = TaggedEnumClass("LoopRuntimeState", {
+export const SessionRuntimeStateSchema = TaggedEnumClass("SessionRuntimeState", {
   Idle: {
     agent: AgentName,
     queue: QueueSnapshot,
@@ -278,9 +279,7 @@ export const LoopRuntimeStateSchema = TaggedEnumClass("LoopRuntimeState", {
     queue: QueueSnapshot,
   },
 })
-export type LoopRuntimeState = Schema.Schema.Type<typeof LoopRuntimeStateSchema>
-
-export const isLoopRuntimeIdle = (state: LoopRuntimeState): boolean => state._tag === "Idle"
+export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateSchema>
 
 // ── State builders ──
 
@@ -351,17 +350,17 @@ export const queueContainsContent = (
 export const runtimeStateFromLoopState = (
   state: LoopState,
   queue: LoopQueueState,
-): LoopRuntimeState => {
+): SessionRuntimeState => {
   const agent = state.currentAgent ?? DEFAULT_AGENT_NAME
   const queueSnapshot = queueSnapshotFromQueueState(queue)
 
   switch (state._tag) {
     case "Idle":
-      return LoopRuntimeStateSchema.Idle.make({ agent, queue: queueSnapshot })
+      return SessionRuntimeStateSchema.Idle.make({ agent, queue: queueSnapshot })
     case "Running":
-      return LoopRuntimeStateSchema.Running.make({ agent, queue: queueSnapshot })
+      return SessionRuntimeStateSchema.Running.make({ agent, queue: queueSnapshot })
     case "WaitingForInteraction":
-      return LoopRuntimeStateSchema.WaitingForInteraction.make({
+      return SessionRuntimeStateSchema.WaitingForInteraction.make({
         agent,
         queue: queueSnapshot,
       })
@@ -400,5 +399,5 @@ export const buildInitialAgentLoopState = (params: {
   startingState: undefined,
 })
 
-export const projectRuntimeState = (s: AgentLoopState): LoopRuntimeState =>
+export const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState =>
   runtimeStateFromLoopState(s.state, s.queue)

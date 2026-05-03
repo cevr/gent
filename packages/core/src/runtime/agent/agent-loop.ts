@@ -76,7 +76,7 @@ import {
   buildRunningState,
   countQueuedFollowUps,
   emptyLoopQueueState,
-  LoopRuntimeStateSchema,
+  SessionRuntimeStateSchema,
   queueSnapshotFromQueueState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
@@ -86,7 +86,7 @@ import {
   projectRuntimeState,
   type AgentLoopState,
   type LoopQueueState,
-  type LoopRuntimeState,
+  type SessionRuntimeState,
   type LoopState,
   QueuedTurnItemSchema,
   type QueuedTurnItem,
@@ -450,11 +450,11 @@ export interface AgentLoopService {
   readonly getState: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<LoopRuntimeState, AgentLoopError>
+  }) => Effect.Effect<SessionRuntimeState, AgentLoopError>
   readonly watchState: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<Stream.Stream<LoopRuntimeState>, AgentLoopError>
+  }) => Effect.Effect<Stream.Stream<SessionRuntimeState>, AgentLoopError>
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
   readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void>
 }
@@ -2214,7 +2214,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       restoreSession: () => Effect.void,
       getState: () =>
         Effect.succeed(
-          LoopRuntimeStateSchema.Idle.make({
+          SessionRuntimeStateSchema.Idle.make({
             agent: DEFAULT_AGENT_NAME,
             queue: emptyQueueSnapshot(),
           }),
