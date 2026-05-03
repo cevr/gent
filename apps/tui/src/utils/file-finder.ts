@@ -95,9 +95,9 @@ const ensureFinder = (
 
     const finder = result.value
 
-    // Delay one tick so finder.create returns synchronously to the first
+    // Yield one tick so finder.create returns synchronously to the first
     // search call before the blocking scan begins.
-    const scanReady: Effect.Effect<ScanOutcome> = Effect.sleep(0).pipe(
+    const scanReady: Effect.Effect<ScanOutcome> = Effect.yieldNow.pipe(
       Effect.andThen(
         Effect.sync(() => {
           try {
