@@ -994,7 +994,7 @@ const plugin: Plugin = {
             if (node.finalizer == null) return
             context.report({
               message:
-                "Do not use `try/finally` cleanup in tests. Put resource lifetime in the Effect scope instead: `Effect.scoped`, `FileSystem.makeTempDirectoryScoped()`, or `Effect.acquireRelease`.",
+                "Do not use `try/finally` cleanup in tests. Import `it` from `effect-bun-test` and put lifetime in the Effect scope: `it.scopedLive(...)`, `FileSystem.makeTempDirectoryScoped()`, or `Effect.acquireRelease(...)`.",
               node,
             })
           },
@@ -1002,7 +1002,7 @@ const plugin: Plugin = {
             if (node.async !== true) return
             context.report({
               message:
-                "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
+                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
               node,
             })
           },
@@ -1010,7 +1010,7 @@ const plugin: Plugin = {
             if (node.async !== true) return
             context.report({
               message:
-                "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
+                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
               node,
             })
           },
@@ -1018,14 +1018,14 @@ const plugin: Plugin = {
             if (node.async !== true) return
             context.report({
               message:
-                "Do not use `async` test functions. Return an Effect through `it.live` / `Effect.scoped`, or use Effect runtime helpers at an explicit boundary.",
+                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
               node,
             })
           },
           AwaitExpression(node) {
             context.report({
               message:
-                "Do not use `await` in tests. Stay in Effect with `yield*`, `it.live`, and scoped resources instead of Promise control flow.",
+                "Do not use `await` in tests. Import `it` from `effect-bun-test`; use `yield*` inside `Effect.gen`, `Effect.promise` only at real async boundaries, and scoped resources for cleanup.",
               node,
             })
           },
@@ -1034,7 +1034,7 @@ const plugin: Plugin = {
             const method = promiseChainMethodName(node)
             if (method !== undefined) {
               context.report({
-                message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Stay in Effect with \`yield*\`, \`it.live\`, and scoped resources instead.`,
+                message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,
                 node,
               })
               return
@@ -1042,7 +1042,7 @@ const plugin: Plugin = {
             const staticMethod = promiseStaticMethodName(node)
             if (staticMethod === undefined) return
             context.report({
-              message: `Do not use \`Promise.${staticMethod}(...)\` in tests. Stay in Effect with \`Effect.succeed\`, \`Effect.fail\`, \`Deferred\`, and scoped resources instead.`,
+              message: `Do not use \`Promise.${staticMethod}(...)\` in tests. Use \`Effect.all([...], { concurrency: ... })\` for aggregation, \`Effect.succeed\` / \`Effect.fail\` for values, and \`Deferred\` for test coordination.`,
               node,
             })
           },
@@ -1050,7 +1050,7 @@ const plugin: Plugin = {
             if (!isAstNode(node) || !isPromiseConstructor(node)) return
             context.report({
               message:
-                "Do not construct raw Promises in tests. Use `Deferred`, `Effect.sleep`, `Effect.async`, or an explicit Effect boundary instead.",
+                "Do not construct raw Promises in tests. Import `it` from `effect-bun-test`; use `Deferred` for coordination, `Effect.sleep` for delays, `Effect.async` for callback APIs, or `Effect.promise` only at a real external async boundary.",
               node,
             })
           },

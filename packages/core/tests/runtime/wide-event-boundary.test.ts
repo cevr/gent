@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, MutableRef } from "effect"
+import { Effect, MutableRef, References } from "effect"
 import {
   WideEvent,
   withWideEvent,
@@ -26,17 +26,32 @@ const captured = () => MutableRef.make<Array<LogEvent>>([])
 const getAnnotations = (ref: MutableRef.MutableRef<Array<LogEvent>>, index = 0) =>
   MutableRef.get(ref)[index]!.annotations
 
+const captureWideEvents = <A, E, R>(
+  ref: MutableRef.MutableRef<Array<LogEvent>>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  effect.pipe(
+    Effect.provide(WideEventLogger.Capture(ref)),
+    Effect.provideService(References.MinimumLogLevel, "Info"),
+  )
+
 describe("wide-event-boundary", () => {
   describe("context factories", () => {
     it.live("turnBoundary produces agent-loop context with session envelope", () =>
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* WideEvent.set({ model: "claude-4" }).pipe(
-          withWideEvent(
-            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+        yield* captureWideEvents(
+          ref,
+          WideEvent.set({ model: "claude-4" }).pipe(
+            withWideEvent(
+              turnBoundary(
+                SessionId.make("sess-1"),
+                BranchId.make("br-1"),
+                AgentName.make("cowork"),
+              ),
+            ),
           ),
-          Effect.provide(WideEventLogger.Capture(ref)),
         )
 
         const a = getAnnotations(ref)
@@ -55,9 +70,9 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* Effect.void.pipe(
-          withWideEvent(toolBoundary("bash", ToolCallId.make("tc-123"))),
-          Effect.provide(WideEventLogger.Capture(ref)),
+        yield* captureWideEvents(
+          ref,
+          Effect.void.pipe(withWideEvent(toolBoundary("bash", ToolCallId.make("tc-123")))),
         )
 
         const a = getAnnotations(ref)
@@ -71,9 +86,11 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* WideEvent.set({ inputTokens: 100, outputTokens: 50 }).pipe(
-          withWideEvent(providerStreamBoundary("claude-opus-4-6")),
-          Effect.provide(WideEventLogger.Capture(ref)),
+        yield* captureWideEvents(
+          ref,
+          WideEvent.set({ inputTokens: 100, outputTokens: 50 }).pipe(
+            withWideEvent(providerStreamBoundary("claude-opus-4-6")),
+          ),
         )
 
         const a = getAnnotations(ref)
@@ -89,9 +106,11 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* WideEvent.set({ sessionId: SessionId.make("sess-1") }).pipe(
-          withWideEvent(rpcBoundary("sendMessage")),
-          Effect.provide(WideEventLogger.Capture(ref)),
+        yield* captureWideEvents(
+          ref,
+          WideEvent.set({ sessionId: SessionId.make("sess-1") }).pipe(
+            withWideEvent(rpcBoundary("sendMessage")),
+          ),
         )
 
         const a = getAnnotations(ref)
@@ -105,9 +124,13 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* WideEvent.set({ childSessionId: "child-1" }).pipe(
-          withWideEvent(agentRunBoundary(AgentName.make("researcher"), SessionId.make("parent-1"))),
-          Effect.provide(WideEventLogger.Capture(ref)),
+        yield* captureWideEvents(
+          ref,
+          WideEvent.set({ childSessionId: "child-1" }).pipe(
+            withWideEvent(
+              agentRunBoundary(AgentName.make("researcher"), SessionId.make("parent-1")),
+            ),
+          ),
         )
 
         const a = getAnnotations(ref)
@@ -125,15 +148,21 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* Effect.fail({ _tag: "AgentLoopError", message: "turn failed" }).pipe(
-          withWideEvent(
-            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+        yield* captureWideEvents(
+          ref,
+          Effect.fail({ _tag: "AgentLoopError", message: "turn failed" }).pipe(
+            withWideEvent(
+              turnBoundary(
+                SessionId.make("sess-1"),
+                BranchId.make("br-1"),
+                AgentName.make("cowork"),
+              ),
+            ),
+            Effect.catchIf(
+              () => true,
+              () => Effect.void,
+            ),
           ),
-          Effect.catchIf(
-            () => true,
-            () => Effect.void,
-          ),
-          Effect.provide(WideEventLogger.Capture(ref)),
         )
 
         const a = getAnnotations(ref)
@@ -148,17 +177,23 @@ describe("wide-event-boundary", () => {
       Effect.gen(function* () {
         const ref = captured()
 
-        yield* Effect.gen(function* () {
-          yield* WideEvent.set({ agent: "cowork" })
+        yield* captureWideEvents(
+          ref,
+          Effect.gen(function* () {
+            yield* WideEvent.set({ agent: "cowork" })
 
-          yield* WideEvent.set({ toolResult: "ok" }).pipe(
-            withWideEvent(toolBoundary("read", ToolCallId.make("tc-1"))),
-          )
-        }).pipe(
-          withWideEvent(
-            turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), AgentName.make("cowork")),
+            yield* WideEvent.set({ toolResult: "ok" }).pipe(
+              withWideEvent(toolBoundary("read", ToolCallId.make("tc-1"))),
+            )
+          }).pipe(
+            withWideEvent(
+              turnBoundary(
+                SessionId.make("sess-1"),
+                BranchId.make("br-1"),
+                AgentName.make("cowork"),
+              ),
+            ),
           ),
-          Effect.provide(WideEventLogger.Capture(ref)),
         )
 
         const events = MutableRef.get(ref)

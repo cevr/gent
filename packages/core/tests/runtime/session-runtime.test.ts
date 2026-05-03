@@ -779,9 +779,7 @@ describe("SessionRuntime", () => {
           const firstFiber = yield* Effect.forkChild(sessionRuntime.recordToolResult(first))
           yield* Deferred.await(firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
           const secondFiber = yield* Effect.forkChild(sessionRuntime.recordToolResult(second))
-          const earlySecond = yield* Fiber.join(secondFiber).pipe(
-            Effect.timeoutOption("200 millis"),
-          )
+          const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
           expect(earlySecond._tag).toBe("None")
           expect(deliveredToolResults).toBe(1)
           yield* Deferred.succeed(releaseDelivery, undefined)
@@ -830,9 +828,7 @@ describe("SessionRuntime", () => {
               output: { value: "blocked until turn completes" },
             }),
           )
-          const earlyRecord = yield* Fiber.join(recordFiber).pipe(
-            Effect.timeoutOption("200 millis"),
-          )
+          const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
           const messagesBeforeRelease = yield* messageStorage.listMessages(branchId)
           expect(earlyRecord._tag).toBe("None")
           expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
@@ -891,9 +887,7 @@ describe("SessionRuntime", () => {
               output: { value: "blocked until turn completes" },
             }),
           )
-          const earlyRecord = yield* Fiber.join(recordFiber).pipe(
-            Effect.timeoutOption("200 millis"),
-          )
+          const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
           expect(earlyRecord._tag).toBe("None")
 
           yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))

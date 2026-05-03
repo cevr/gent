@@ -5,7 +5,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { AuthApi, AuthInfo, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
-import { Clock, Effect, Layer, Logger, Schema } from "effect"
+import { Clock, Effect, Layer, Logger, References, Schema } from "effect"
 
 describe("AuthStore", () => {
   const AuthInfoJson = Schema.fromJsonString(AuthInfo)
@@ -105,7 +105,12 @@ describe("AuthStore", () => {
 
     return Effect.gen(function* () {
       const auth = yield* AuthStore
-      const result = yield* auth.get("openai").pipe(Effect.provide(Logger.layer([captureLogger])))
+      const result = yield* auth
+        .get("openai")
+        .pipe(
+          Effect.provide(Logger.layer([captureLogger])),
+          Effect.provideService(References.MinimumLogLevel, "Info"),
+        )
       expect(result).toBeUndefined()
       const logMessages = logEntries.map((entry) => messageText(entry.message))
       expect(logMessages).toContain("failed to discard invalid auth info")

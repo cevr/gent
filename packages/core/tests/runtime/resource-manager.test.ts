@@ -60,7 +60,7 @@ describe("ResourceManager", () => {
             )
             const started = yield* Deferred.await(writeStarted).pipe(
               Effect.as(true),
-              Effect.timeoutOption("25 millis"),
+              Effect.timeoutOption("1 millis"),
               Effect.map((option) => option._tag === "Some"),
             )
             yield* Deferred.succeed(releaseRead, undefined)

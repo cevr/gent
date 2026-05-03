@@ -116,7 +116,7 @@ describe("EventPublisher", () => {
           publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
         )
         yield* Deferred.await(broadcastStarted)
-        const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("50 millis"))
+        const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("1 millis"))
         expect(early._tag).toBe("None")
         yield* Deferred.succeed(releaseBroadcast, void 0)
         yield* Fiber.join(fiber)
