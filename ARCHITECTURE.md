@@ -480,7 +480,7 @@ Cross-session replay via `onInit`: child sessions verify ancestry includes `acti
 
 - Auto detects context fill → queues follow-up telling model to call `handoff` tool
 - Handoff extension owns presentation, cooldown, and user interaction
-- Handoff extension skips when auto is active (guard on auto actor snapshot)
+- Handoff extension skips when auto is active (guard on `AutoRpc.IsActive`)
 
 ### Task Service
 
