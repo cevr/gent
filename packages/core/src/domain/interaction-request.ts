@@ -61,17 +61,19 @@ export class InteractionRequestMismatchError extends Schema.TaggedErrorClass<Int
 // Durable interaction record
 // ============================================================================
 
-export type InteractionRequestStatus = "pending" | "resolved"
+export const InteractionRequestStatus = Schema.Literals(["pending", "resolved"])
+export type InteractionRequestStatus = typeof InteractionRequestStatus.Type
 
-export interface InteractionRequestRecord {
-  readonly requestId: InteractionRequestId
-  readonly type: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly paramsJson: string
-  readonly status: InteractionRequestStatus
-  readonly createdAt: number
-}
+export const InteractionRequestRecord = Schema.Struct({
+  requestId: InteractionRequestId,
+  type: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
+  paramsJson: Schema.String,
+  status: InteractionRequestStatus,
+  createdAt: Schema.Number,
+})
+export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
 
 /** All interaction records use this type — the old per-handler types are gone */
 export const INTERACTION_TYPE = "approval" as const

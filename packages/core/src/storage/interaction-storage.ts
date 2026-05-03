@@ -1,31 +1,57 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema, SchemaGetter as Getter } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import type { InteractionRequestRecord } from "../domain/interaction-request.js"
-import { InteractionRequestId, type SessionId, type BranchId } from "../domain/ids.js"
+import {
+  InteractionRequestRecord,
+  InteractionRequestStatus,
+} from "../domain/interaction-request.js"
+import { SessionId, BranchId } from "../domain/ids.js"
+import type { InteractionRequestId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 
-interface InteractionRequestRow {
-  request_id: string
-  type: string
-  session_id: SessionId
-  branch_id: BranchId
-  params_json: string
-  status: string
-  created_at: number
-}
+const InteractionRequestRow = Schema.Struct({
+  request_id: Schema.String,
+  type: Schema.String,
+  session_id: SessionId,
+  branch_id: BranchId,
+  params_json: Schema.String,
+  // Read raw status string off the wire; the transform coerces
+  // unknown values back to "pending".
+  status: Schema.String,
+  created_at: Schema.Number,
+})
+type InteractionRequestRow = typeof InteractionRequestRow.Type
+type InteractionRequestRecordEncoded = typeof InteractionRequestRecord.Encoded
 
-const isStatus = (s: string): s is InteractionRequestRecord["status"] =>
-  s === "pending" || s === "resolved"
+const isStatus = Schema.is(InteractionRequestStatus)
 
-const fromRow = (row: InteractionRequestRow): InteractionRequestRecord => ({
-  requestId: InteractionRequestId.make(row.request_id),
+const rowToRecord = (row: InteractionRequestRow): InteractionRequestRecordEncoded => ({
+  requestId: row.request_id,
   type: row.type,
   sessionId: row.session_id,
   branchId: row.branch_id,
   paramsJson: row.params_json,
-  status: isStatus(row.status) ? row.status : "pending",
+  status: isStatus(row.status) ? row.status : ("pending" as const),
   createdAt: row.created_at,
 })
+
+const recordToRow = (record: InteractionRequestRecordEncoded): InteractionRequestRow => ({
+  request_id: record.requestId,
+  type: record.type,
+  session_id: SessionId.make(record.sessionId),
+  branch_id: BranchId.make(record.branchId),
+  params_json: record.paramsJson,
+  status: record.status,
+  created_at: record.createdAt,
+})
+
+const RowToRecord = InteractionRequestRow.pipe(
+  Schema.decodeTo(InteractionRequestRecord, {
+    decode: Getter.transform(rowToRecord),
+    encode: Getter.transform(recordToRow),
+  }),
+)
+
+const decodeRow = Schema.decodeSync(RowToRecord)
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
@@ -78,7 +104,7 @@ export class InteractionStorage extends Context.Service<
               scope === undefined
                 ? yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' ORDER BY created_at ASC`
                 : yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' AND session_id = ${scope.sessionId} AND branch_id = ${scope.branchId} ORDER BY created_at ASC`
-            return rows.map(fromRow)
+            return rows.map((row) => decodeRow(row))
           },
           Effect.mapError(mapError("Failed to list pending interaction requests")),
         ),

@@ -1,19 +1,21 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema, SchemaGetter as Getter } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
+import { SessionId, BranchId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 
-interface AgentLoopCheckpointRow {
-  session_id: SessionId
-  branch_id: BranchId
-  version: number
-  state_tag: string
-  state_json: string
-  updated_at: number
-}
+const AgentLoopCheckpointRow = Schema.Struct({
+  session_id: SessionId,
+  branch_id: BranchId,
+  version: Schema.Int,
+  state_tag: Schema.String,
+  state_json: Schema.String,
+  updated_at: Schema.Number,
+})
+type AgentLoopCheckpointRow = typeof AgentLoopCheckpointRow.Type
+type AgentLoopCheckpointRecordEncoded = typeof AgentLoopCheckpointRecord.Encoded
 
-const fromRow = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecord => ({
+const rowToRecord = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecordEncoded => ({
   sessionId: row.session_id,
   branchId: row.branch_id,
   version: row.version,
@@ -21,6 +23,24 @@ const fromRow = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecord => ({
   stateJson: row.state_json,
   updatedAt: row.updated_at,
 })
+
+const recordToRow = (record: AgentLoopCheckpointRecordEncoded): AgentLoopCheckpointRow => ({
+  session_id: SessionId.make(record.sessionId),
+  branch_id: BranchId.make(record.branchId),
+  version: record.version,
+  state_tag: record.stateTag,
+  state_json: record.stateJson,
+  updated_at: record.updatedAt,
+})
+
+const RowToRecord = AgentLoopCheckpointRow.pipe(
+  Schema.decodeTo(AgentLoopCheckpointRecord, {
+    decode: Getter.transform(rowToRecord),
+    encode: Getter.transform(recordToRow),
+  }),
+)
+
+const decodeRow = Schema.decodeSync(RowToRecord)
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
@@ -62,7 +82,7 @@ export class CheckpointStorage extends Context.Service<
             const rows =
               yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
             const row = rows[0]
-            return row === undefined ? undefined : fromRow(row)
+            return row === undefined ? undefined : decodeRow(row)
           },
           Effect.mapError(mapError("Failed to get agent loop checkpoint")),
         ),
@@ -71,7 +91,7 @@ export class CheckpointStorage extends Context.Service<
           function* () {
             const rows =
               yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints ORDER BY updated_at ASC`
-            return rows.map(fromRow)
+            return rows.map((row) => decodeRow(row))
           },
           Effect.mapError(mapError("Failed to list agent loop checkpoints")),
         ),
