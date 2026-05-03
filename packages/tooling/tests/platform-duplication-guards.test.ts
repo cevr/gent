@@ -19,6 +19,7 @@ describe("platform duplication guards", () => {
           "const a = ExtensionRuntime",
           "const b = ExtensionTurnControl",
           "const c = TurnEvent",
+          "const d = TurnEventUsage",
         ].join("\n"),
       ),
     ).toEqual([
@@ -36,6 +37,26 @@ describe("platform duplication guards", () => {
         file: "packages/core/src/runtime/example.ts",
         line: 3,
         message: "TurnEvent duplicates Effect AI response parts",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 4,
+        message: "TurnEvent duplicates Effect AI response parts",
+      },
+    ])
+  })
+
+  test("flags deleted storage subtag adapter", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/storage/example.ts",
+        "const layer = subTagLayers(base)",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/storage/example.ts",
+        line: 1,
+        message: "Storage subtag adapter is deleted; use Storage.*WithSql composition roots",
       },
     ])
   })
