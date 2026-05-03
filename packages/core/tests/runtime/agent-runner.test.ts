@@ -30,7 +30,7 @@ import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { getToolId, tool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
@@ -48,18 +48,16 @@ import {
 } from "../../src/runtime/session-runtime"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
-/** Scripted provider: returns stream parts from an array, one response per stream() call. */
+/** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
   responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
 ): Layer.Layer<Provider> => {
   let index = 0
-  return Layer.succeed(Provider, {
-    stream: () =>
-      Effect.succeed(
-        Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
-      ),
-    generate: () => Effect.succeed("test response"),
-  })
+  return Provider.TestStream(() =>
+    Effect.succeed(
+      Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
+    ),
+  )
 }
 const bashStubTool = tool({
   id: "bash",
@@ -249,9 +247,9 @@ describe("RunSpec", () => {
           assertRequest: (request) => {
             expect(request.model).toBe("custom/model")
             expect(request.reasoning).toBe("high")
-            expect(request.tools?.map((candidate) => String(getToolId(candidate)))).toEqual([
-              "bash",
-            ])
+          },
+          assertOptions: (options) => {
+            expect(options.tools.map((tool) => tool.name)).toEqual(["bash"])
           },
         },
       ])
@@ -1184,7 +1182,10 @@ describe("ephemeral service propagation", () => {
           parentSessionId: SessionId.make("parent-approve"),
           parentBranchId: BranchId.make("parent-approve-branch"),
           cwd: process.cwd(),
-          runSpec: { persistence: "ephemeral" },
+          runSpec: {
+            persistence: "ephemeral",
+            overrides: { allowedTools: ["approve_test"] },
+          },
         })
         // Should succeed — approval was auto-resolved, tool ran, text followed
         expect(result._tag).toBe("success")

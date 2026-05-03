@@ -2,12 +2,18 @@ import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream 
 import { getToolId, type ToolToken } from "../domain/capability/tool.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
-import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
+import {
+  ProviderAuthError,
+  type ProviderAuthInfo,
+  type ProviderHints,
+  type ProviderResolution,
+} from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../runtime/extensions/driver-registry.js"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -139,6 +145,13 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
   })
 }
 
+const providerAiError = (method: string, message: string) =>
+  AiError.make({
+    module: "Provider",
+    method,
+    reason: new AiError.UnknownError({ description: message }),
+  })
+
 // ── Provider Error ──
 // Definition lives in domain/ so `domain/driver.ts` can reference it without
 // back-importing infrastructure. One brand, single source.
@@ -148,16 +161,10 @@ export { ProviderError }
 // ── Provider Stream Parts ──
 
 export type ProviderToolMap = Record<string, AiTool.Any>
-type ProviderStream<Tools extends ProviderToolMap = ProviderToolMap> = Stream.Stream<
-  ProviderStreamPart<Tools>,
-  ProviderError
->
-
 // ── Provider Request ──
 
-interface ProviderRequestBase {
+export interface ModelRequest {
   readonly model: string
-  readonly prompt: Prompt.RawInput
   readonly maxTokens?: number
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
@@ -167,41 +174,12 @@ interface ProviderRequestBase {
   readonly driverId?: string
 }
 
-export interface ProviderRequest<
-  Tools extends ProviderToolMap = ProviderToolMap,
-> extends ProviderRequestBase {
-  readonly tools?: ReadonlyArray<ToolToken>
-  readonly toolkit?: AiToolkit.WithHandler<Tools>
-}
-
-// Simple generate request (no tools, no streaming)
-
-export interface GenerateRequest {
-  readonly model: string
-  readonly prompt: Prompt.RawInput
-  readonly maxTokens?: number
-  /** Per-turn driver registry override (per-cwd profile). */
-  readonly driverRegistry?: DriverRegistryService
-  /** Per-agent driver id override (from `ModelDriverRef.id`). */
-  readonly driverId?: string
-}
-
 // ── Provider Service ──
 
 export interface ProviderService {
-  readonly stream: {
-    <Tools extends ProviderToolMap>(
-      request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
-    ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
-    (
-      request: ProviderRequest & { readonly tools: ReadonlyArray<ToolToken> },
-    ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
-    (request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
-  }
-
-  readonly generate: (
-    request: GenerateRequest,
-  ) => Effect.Effect<string, ProviderError | ProviderAuthError>
+  readonly resolve: (
+    request: ModelRequest,
+  ) => Effect.Effect<ProviderResolution, ProviderError | ProviderAuthError>
 }
 
 // ── Tool Conversion (Capability → advertise-only Toolkit) ──
@@ -224,7 +202,9 @@ const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
     ),
 })
 
-function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.WithHandler<ProviderToolMap> {
+export function convertTools(
+  tools: ReadonlyArray<ToolToken>,
+): AiToolkit.WithHandler<ProviderToolMap> {
   const toolsRecord: ProviderToolMap = {}
 
   for (const capability of tools) {
@@ -255,7 +235,7 @@ const _retryBudgetFor = (text: string): number => {
   return 0
 }
 
-const _buildReply = (request: ProviderRequest, latestUserText: string): string => {
+const _buildReply = (request: ModelRequest, latestUserText: string): string => {
   const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
   const modelLabel = request.model.startsWith("openai/") ? "deepwork" : "cowork"
 
@@ -296,6 +276,49 @@ const _makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) =>
   )
 }
 
+const _testModel = (
+  request: ModelRequest,
+  streamText: (options: ProviderOptions) => Stream.Stream<ProviderStreamPart, AiError.AiError>,
+  generateText: (options: ProviderOptions) => Effect.Effect<string, AiError.AiError>,
+): ProviderResolution =>
+  AiModel.make(
+    "test",
+    request.model,
+    Layer.effect(
+      LanguageModel.LanguageModel,
+      LanguageModel.make({
+        generateText: (options) =>
+          generateText(options).pipe(
+            Effect.map((text) => [_encodePart(options, Response.makePart("text", { text }))]),
+          ),
+        streamText: (options) =>
+          streamText(options).pipe(Stream.map((part) => _encodeStreamPart(options, part))),
+      }),
+    ),
+  )
+
+const _encodePart = (
+  options: ProviderOptions,
+  part: Response.Part<ProviderToolMap>,
+): Response.PartEncoded =>
+  Schema.encodeUnknownSync(Response.Part(_toolkitFromProviderOptions(options)))(part)
+
+const _encodeStreamPart = (
+  options: ProviderOptions,
+  part: ProviderStreamPart,
+): Response.StreamPartEncoded =>
+  Schema.encodeUnknownSync(Response.StreamPart(_toolkitFromProviderOptions(options)))(part)
+
+const _toolkitFromProviderOptions = (
+  options: ProviderOptions,
+): AiToolkit.WithHandler<ProviderToolMap> => {
+  const toolsRecord: ProviderToolMap = {}
+  for (const tool of options.tools) {
+    toolsRecord[tool.name] = tool
+  }
+  return makeAdvertiseOnlyToolkit(toolsRecord)
+}
+
 // Forward-reference Provider class below via late binding — these
 // closures are only invoked at runtime (never during module init),
 // so `Provider` is fully defined by then.
@@ -310,31 +333,35 @@ const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
       const retries = options?.retries ?? delayMs === 0
       const attempts = new Map<string, number>()
 
-      const stream = (request: ProviderRequest) =>
+      const resolve = (request: ModelRequest) =>
         Effect.suspend(() => {
-          const latestUserText = _extractLatestUserText(request.prompt)
-          const key = `${request.model}:${latestUserText}`
-          const seen = attempts.get(key) ?? 0
-          const retryBudget = retries ? _retryBudgetFor(latestUserText) : 0
+          return Effect.succeed(
+            _testModel(
+              request,
+              (modelOptions) =>
+                Effect.suspend(() => {
+                  const latestUserText = _extractLatestUserText(modelOptions.prompt)
+                  const key = `${request.model}:${latestUserText}`
+                  const seen = attempts.get(key) ?? 0
+                  const retryBudget = retries ? _retryBudgetFor(latestUserText) : 0
 
-          if (seen < retryBudget) {
-            attempts.set(key, seen + 1)
-            return Effect.fail(
-              new ProviderError({
-                message: "Rate limit exceeded (429)",
-                model: request.model,
-              }),
-            )
-          }
+                  if (seen < retryBudget) {
+                    attempts.set(key, seen + 1)
+                    return Effect.fail(
+                      providerAiError("Debug.streamText", "Rate limit exceeded (429)"),
+                    )
+                  }
 
-          attempts.delete(key)
-          const reply = _buildReply(request, latestUserText)
-          return Effect.succeed(_makeReplyStream(latestUserText, reply, delayMs))
+                  attempts.delete(key)
+                  const reply = _buildReply(request, latestUserText)
+                  return Effect.succeed(_makeReplyStream(latestUserText, reply, delayMs))
+                }).pipe(Stream.unwrap),
+              () => Effect.succeed("debug scenario"),
+            ),
+          )
         })
 
-      const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
-
-      return { stream, generate }
+      return { resolve }
     }),
   )
 
@@ -343,14 +370,13 @@ let _debugFailingProviderCache: Layer.Layer<Provider> | undefined
 const _DebugFailingProvider = () => {
   if (_debugFailingProviderCache === undefined) {
     _debugFailingProviderCache = Layer.succeed(Provider, {
-      stream: (request: ProviderRequest) =>
+      resolve: (request: ModelRequest) =>
         Effect.fail(
           new ProviderError({
             message: "provider exploded",
             model: request.model,
           }),
         ),
-      generate: () => Effect.succeed("debug failure"),
     } satisfies ProviderService)
   }
   return _debugFailingProviderCache
@@ -369,7 +395,8 @@ export interface SignalProviderControls {
 
 export interface SequenceStep {
   readonly parts: ReadonlyArray<ProviderStreamPart>
-  readonly assertRequest?: (request: ProviderRequest) => void
+  readonly assertRequest?: (request: ModelRequest) => void
+  readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
 }
 
@@ -450,14 +477,21 @@ const _SignalProvider = (
     ]
 
     const layer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(streamStarted, void 0)
-          return Stream.fromIterable(allParts).pipe(
-            Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part))),
-          )
-        }),
-      generate: () => Effect.succeed(reply),
+      resolve: (request: ModelRequest) =>
+        Effect.succeed(
+          _testModel(
+            request,
+            () =>
+              Stream.fromEffect(Deferred.succeed(streamStarted, void 0)).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable(allParts).pipe(
+                    Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part))),
+                  ),
+                ),
+              ),
+            () => Effect.succeed(reply),
+          ),
+        ),
     })
 
     const controls: SignalProviderControls = {
@@ -483,42 +517,58 @@ const _SequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
     })
 
     const layer = Layer.succeed(Provider, {
-      stream: (request: ProviderRequest) =>
-        Effect.gen(function* () {
-          const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
+      resolve: (request: ModelRequest) => {
+        const streamText = (options: ProviderOptions) =>
+          Effect.gen(function* () {
+            const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
 
-          if (idx >= steps.length) {
-            return yield* new ProviderError({
-              message: `Sequence provider: stream() called ${idx + 1} times but only ${steps.length} steps scripted`,
-              model: request.model,
-            })
-          }
+            if (idx >= steps.length) {
+              return yield* providerAiError(
+                "Sequence.streamText",
+                `Sequence provider: streamText() called ${idx + 1} times but only ${steps.length} steps scripted`,
+              )
+            }
 
-          const step = steps[idx] ?? steps[0]
-          const started = callStarted[idx] ?? callStarted[0]
-          const gate = emitGates[idx] ?? emitGates[0]
+            const step = steps[idx] ?? steps[0]
+            const started = callStarted[idx] ?? callStarted[0]
+            const gate = emitGates[idx] ?? emitGates[0]
 
-          if (started !== undefined) yield* Deferred.succeed(started, void 0)
+            if (started !== undefined) yield* Deferred.succeed(started, void 0)
 
-          if (step?.assertRequest) {
-            yield* Effect.try({
-              try: () => step.assertRequest?.(request),
-              catch: (e) =>
-                new ProviderError({
-                  message: `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
-                  model: request.model,
-                }),
-            })
-          }
+            if (step?.assertRequest) {
+              yield* Effect.try({
+                try: () => step.assertRequest?.(request),
+                catch: (e) =>
+                  providerAiError(
+                    "Sequence.streamText",
+                    `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
+                  ),
+              })
+            }
 
-          if (gate !== undefined) {
-            return Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
-            )
-          }
-          return Stream.fromIterable(step?.parts ?? [])
-        }),
-      generate: () => Effect.succeed("sequence provider"),
+            if (step?.assertOptions) {
+              yield* Effect.try({
+                try: () => step.assertOptions?.(options),
+                catch: (e) =>
+                  providerAiError(
+                    "Sequence.streamText",
+                    `Sequence provider: assertOptions failed at step ${idx}: ${e}`,
+                  ),
+              })
+            }
+
+            if (gate !== undefined) {
+              return Stream.fromEffect(Deferred.await(gate)).pipe(
+                Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
+              )
+            }
+            return Stream.fromIterable(step?.parts ?? [])
+          }).pipe(Stream.unwrap)
+
+        return Effect.succeed(
+          _testModel(request, streamText, () => Effect.succeed("sequence provider")),
+        )
+      },
     })
 
     const controls: SequenceProviderControls = {
@@ -569,7 +619,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       const registry = yield* DriverRegistry
       const getModel = makeModelResolver(authStore, registry)
 
-      const streamImpl = Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
+      const resolve = Effect.fn("Provider.resolve")(function* (request: ModelRequest) {
         const hints: ProviderHints = {
           reasoning: request.reasoning,
           maxTokens: request.maxTokens,
@@ -581,79 +631,29 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           request.driverRegistry,
           request.driverId,
         )
-
-        const withHandler =
-          request.toolkit ?? (request.tools !== undefined ? convertTools(request.tools) : undefined)
-
-        const rawStream =
-          withHandler !== undefined
-            ? LanguageModel.streamText({
-                prompt: request.prompt,
-                toolkit: withHandler,
-                disableToolCallResolution: true as const,
-              })
-            : LanguageModel.streamText({
-                prompt: request.prompt,
-              })
-
-        return rawStream.pipe(
-          Stream.provide(model),
-          Stream.catch((error: unknown) =>
-            Stream.fail(
-              new ProviderError({
-                message: AiError.isAiError(error) ? error.message : String(error),
-                model: request.model,
-                cause: error,
-              }),
-            ),
-          ),
-        )
+        return model
       })
 
-      function stream<Tools extends ProviderToolMap>(
-        request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
-      ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
-      function stream(
-        request: ProviderRequest & { readonly tools: ReadonlyArray<ToolToken> },
-      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
-      function stream(
-        request: ProviderRequest,
-      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
-      function stream(
-        request: ProviderRequest,
-      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError> {
-        return streamImpl(request) as Effect.Effect<
-          ProviderStream,
-          ProviderError | ProviderAuthError
-        >
-      }
-      return {
-        stream,
-        generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const model = yield* getModel(
-            request.model,
-            { maxTokens: request.maxTokens },
-            request.driverRegistry,
-            request.driverId,
-          )
-          const result = yield* LanguageModel.generateText({ prompt: request.prompt }).pipe(
-            // @effect-diagnostics-next-line strictEffectProvide:off provider model boundary
-            Effect.provide(model),
-            Effect.mapError(
-              (error: unknown) =>
-                new ProviderError({
-                  message: AiError.isAiError(error) ? error.message : `Generate failed: ${error}`,
-                  model: request.model,
-                  cause: error,
-                }),
-            ),
-          )
-
-          return result.text
-        }),
-      } satisfies ProviderService
+      return { resolve } satisfies ProviderService
     }),
   )
+
+  static TestStream = (
+    stream: (
+      request: ModelRequest,
+      options: ProviderOptions,
+    ) => Effect.Effect<Stream.Stream<ProviderStreamPart, AiError.AiError>, AiError.AiError>,
+  ): Layer.Layer<Provider> =>
+    Layer.succeed(Provider, {
+      resolve: (request) =>
+        Effect.succeed(
+          _testModel(
+            request,
+            (options) => stream(request, options).pipe(Stream.unwrap),
+            () => Effect.succeed("test response"),
+          ),
+        ),
+    })
 
   // ── Debug provider statics ──
 

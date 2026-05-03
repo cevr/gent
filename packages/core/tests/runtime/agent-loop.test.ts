@@ -1,8 +1,9 @@
 import { describe, expect, test, it } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
+import * as AiError from "effect/unstable/ai/AiError"
 import { SqlClient } from "effect/unstable/sql"
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -23,12 +24,10 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import {
   Provider,
-  ProviderError,
   finishPart,
   reasoningDeltaPart,
   textDeltaPart,
   toolCallPart,
-  type ProviderRequest,
   type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
@@ -237,10 +236,9 @@ const checkpointStorageLayer = (options?: {
   })
 }
 const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemoveOn?: number }) => {
-  const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-    generate: () => Effect.succeed("test response"),
-  })
+  const providerLayer = Provider.TestStream(() =>
+    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+  )
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     checkpointStorageLayer(options),
@@ -262,24 +260,24 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
     Layer.merge(deps, eventPublisherLayer),
   )
 }
-/** Scripted provider: returns stream parts from an array, one response per stream() call. */
+/** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
   responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
 ): Layer.Layer<Provider> => {
   let index = 0
-  return Layer.succeed(Provider, {
-    stream: () =>
-      Effect.succeed(
-        Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
-      ),
-    generate: () => Effect.succeed("test response"),
-  })
+  return Provider.TestStream(() =>
+    Effect.succeed(
+      Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
+    ),
+  )
 }
 const retryableStreamError = () =>
-  new ProviderError({
-    message: "rate limit exceeded (429)",
-    model: "test",
-    cause: { headers: new Headers({ "retry-after": "0" }) },
+  AiError.make({
+    module: "Test",
+    method: "streamText",
+    reason: new AiError.RateLimitError({
+      retryAfter: Duration.zero,
+    }),
   })
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
@@ -415,10 +413,9 @@ const makeExternalLayerWithEvents = (
       externalDrivers: resolved.externalDrivers,
     }),
   )
-  const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-    generate: () => Effect.succeed("unused"),
-  })
+  const providerLayer = Provider.TestStream(() =>
+    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+  )
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
@@ -482,23 +479,20 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream(() => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return finishPart({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -524,23 +518,20 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream(() => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return finishPart({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const delayedStorage = Layer.effect(
         Storage,
@@ -600,22 +591,19 @@ describe("streaming", () => {
       const startedA = yield* Deferred.make<void>()
       const startedB = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => {
-          calls += 1
-          const gate = calls === 1 ? gateA : gateB
-          const started = calls === 1 ? startedA : startedB
-          return Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(started, undefined)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-          )
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream(() => {
+        calls += 1
+        const gate = calls === 1 ? gateA : gateB
+        const started = calls === 1 ? startedA : startedB
+        return Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
+          ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -648,23 +636,20 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream(() => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return finishPart({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -696,10 +681,9 @@ describe("streaming", () => {
   )
   it.live("publishes StreamStarted and TurnCompleted events", () =>
     Effect.gen(function* () {
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const layer = makeRecordingLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -818,33 +802,30 @@ describe("streaming", () => {
         latestUserText: string
       }> = []
       let streamCount = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: (request: ProviderRequest) => {
-          const latestUserText = [...Prompt.make(request.prompt).content]
-            .reverse()
-            .find((message) => message.role === "user")
-            ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-          providerCalls.push({
-            model: request.model,
-            latestUserText: latestUserText ?? "",
-          })
-          streamCount += 1
-          if (streamCount === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream((request, options) => {
+        const latestUserText = [...Prompt.make(options.prompt).content]
+          .reverse()
+          .find((message) => message.role === "user")
+          ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join("\n")
+        providerCalls.push({
+          model: request.model,
+          latestUserText: latestUserText ?? "",
+        })
+        streamCount += 1
+        if (streamCount === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return finishPart({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -879,23 +860,20 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+      const providerLayer = Provider.TestStream(() => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return finishPart({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -941,43 +919,46 @@ describe("streaming", () => {
       const firstStarted = yield* Deferred.make<void>()
       const providerCalls: string[] = []
       let streamCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: (request: ProviderRequest) => {
-          const latestUserText =
-            Prompt.make(request.prompt)
-              .content.slice()
-              .reverse()
-              .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-              .find(
-                (part: unknown): part is Prompt.TextPart =>
-                  typeof part === "object" &&
-                  part !== null &&
-                  (
-                    part as {
-                      type?: unknown
-                    }
-                  ).type === "text",
-              )?.text ?? ""
-          providerCalls.push(latestUserText)
-          streamCalls += 1
-          if (streamCalls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, undefined)
-                  yield* Deferred.await(gate)
-                  return undefined
-                }),
-              ).pipe(
-                Stream.flatMap(() =>
-                  Stream.fail(new ProviderError({ message: "provider exploded", model: "test" })),
+      const providerLayer = Provider.TestStream((_request, options) => {
+        const latestUserText =
+          Prompt.make(options.prompt)
+            .content.slice()
+            .reverse()
+            .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+            .find(
+              (part: unknown): part is Prompt.TextPart =>
+                typeof part === "object" &&
+                part !== null &&
+                (
+                  part as {
+                    type?: unknown
+                  }
+                ).type === "text",
+            )?.text ?? ""
+        providerCalls.push(latestUserText)
+        streamCalls += 1
+        if (streamCalls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return undefined
+              }),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "streamText",
+                    reason: new AiError.UnknownError({ description: "provider exploded" }),
+                  }),
                 ),
               ),
-            )
-          }
-          return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
-        },
-        generate: () => Effect.succeed("test response"),
+            ),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -1011,20 +992,18 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.sync(() => {
-            streamCalls += 1
-            if (streamCalls === 1) {
-              return Stream.fail(retryableStreamError())
-            }
-            return Stream.fromIterable([
-              textDeltaPart("after retry"),
-              finishPart({ finishReason: "stop" }),
-            ])
-          }),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          if (streamCalls === 1) {
+            return Stream.fail(retryableStreamError())
+          }
+          return Stream.fromIterable([
+            textDeltaPart("after retry"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const storage = yield* Storage
@@ -1043,31 +1022,29 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.sync(() => {
-            streamCalls += 1
-            if (streamCalls === 1) {
-              return Stream.concat(
-                Stream.fromIterable([
-                  Response.makePart("response-metadata", {
-                    id: "response-before-output",
-                    modelId: "test",
-                    timestamp: undefined,
-                    request: undefined,
-                  }),
-                  Response.makePart("text-start", { id: "text-before-output" }),
-                ]),
-                Stream.fail(retryableStreamError()),
-              )
-            }
-            return Stream.fromIterable([
-              textDeltaPart("after metadata retry"),
-              finishPart({ finishReason: "stop" }),
-            ])
-          }),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          if (streamCalls === 1) {
+            return Stream.concat(
+              Stream.fromIterable([
+                Response.makePart("response-metadata", {
+                  id: "response-before-output",
+                  modelId: "test",
+                  timestamp: undefined,
+                  request: undefined,
+                }),
+                Response.makePart("text-start", { id: "text-before-output" }),
+              ]),
+              Stream.fail(retryableStreamError()),
+            )
+          }
+          return Stream.fromIterable([
+            textDeltaPart("after metadata retry"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const storage = yield* Storage
@@ -1092,14 +1069,12 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.sync(() => {
-            streamCalls += 1
-            return Stream.fail(retryableStreamError())
-          }),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          return Stream.fail(retryableStreamError())
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const storage = yield* Storage
@@ -1124,23 +1099,21 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.sync(() => {
-            streamCalls += 1
-            if (streamCalls === 1) {
-              return Stream.concat(
-                Stream.fromIterable([textDeltaPart("partial answer")]),
-                Stream.fail(retryableStreamError()),
-              )
-            }
-            return Stream.fromIterable([
-              textDeltaPart("duplicate answer"),
-              finishPart({ finishReason: "stop" }),
-            ])
-          }),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          if (streamCalls === 1) {
+            return Stream.concat(
+              Stream.fromIterable([textDeltaPart("partial answer")]),
+              Stream.fail(retryableStreamError()),
+            )
+          }
+          return Stream.fromIterable([
+            textDeltaPart("duplicate answer"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const storage = yield* Storage
@@ -1158,17 +1131,15 @@ describe("streaming", () => {
   test("native response error parts fail the stream and preserve partial output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromIterable([
-              textDeltaPart("partial answer"),
-              Response.makePart("error", { error: new Error("native response part failed") }),
-              textDeltaPart("unreachable"),
-            ]),
-          ),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(
+          Stream.fromIterable([
+            textDeltaPart("partial answer"),
+            Response.makePart("error", { error: new Error("native response part failed") }),
+            textDeltaPart("unreachable"),
+          ]),
+        ),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const storage = yield* Storage
@@ -1590,36 +1561,33 @@ describe("interaction", () => {
           return { resolved: true, value: params.value }
         }),
     })
-  // Stateful provider: first stream() returns a tool call (triggers interaction),
-  // subsequent stream() calls return text only (completes the turn).
+  // Stateful provider: first model stream returns a tool call (triggers interaction),
+  // subsequent model streams return text only (completes the turn).
   // Without this, the loop re-streams the same tool call 199 times until maxTurnSteps.
   const makeInteractionProviderLayer = () => {
     let streamCall = 0
-    return Layer.succeed(Provider, {
-      stream: () => {
-        const call = streamCall++
-        if (call === 0) {
-          return Effect.succeed(
-            Stream.fromIterable([
-              toolCallPart(
-                "interaction-tool",
-                { value: "test" },
-                {
-                  toolCallId: ToolCallId.make("tc-1"),
-                },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
-            ] satisfies ProviderStreamPart[]),
-          )
-        }
+    return Provider.TestStream(() => {
+      const call = streamCall++
+      if (call === 0) {
         return Effect.succeed(
           Stream.fromIterable([
-            textDeltaPart("done"),
-            finishPart({ finishReason: "stop" }),
+            toolCallPart(
+              "interaction-tool",
+              { value: "test" },
+              {
+                toolCallId: ToolCallId.make("tc-1"),
+              },
+            ),
+            finishPart({ finishReason: "tool-calls" }),
           ] satisfies ProviderStreamPart[]),
         )
-      },
-      generate: () => Effect.succeed("test"),
+      }
+      return Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("done"),
+          finishPart({ finishReason: "stop" }),
+        ] satisfies ProviderStreamPart[]),
+      )
     })
   }
   const makeInteractionRecordingLayer = (
@@ -1775,13 +1743,11 @@ describe("interaction", () => {
     Effect.gen(function* () {
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
-        Layer.succeed(Provider, {
-          stream: () =>
-            Effect.succeed(
-              Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
-            ),
-          generate: () => Effect.succeed("test"),
-        }),
+        Provider.TestStream(() =>
+          Effect.succeed(
+            Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
+          ),
+        ),
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
@@ -1823,30 +1789,28 @@ describe("interaction", () => {
       const tool = makeInteractionTool(callCount, resolution)
       const providerCallsRef = Ref.makeUnsafe(0)
       let streamCallIndex = 0
-      const separateCallProvider = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.gen(function* () {
-            yield* Ref.update(providerCallsRef, (n) => n + 1)
-            const idx = streamCallIndex++
-            if (idx === 0) {
-              return Stream.fromIterable([
-                toolCallPart(
-                  getToolId(tool),
-                  { value: "guard-test" },
-                  {
-                    toolCallId: ToolCallId.make("tc-guard"),
-                  },
-                ),
-                finishPart({ finishReason: "tool-calls" }),
-              ] satisfies ProviderStreamPart[])
-            }
+      const separateCallProvider = Provider.TestStream(() =>
+        Effect.gen(function* () {
+          yield* Ref.update(providerCallsRef, (n) => n + 1)
+          const idx = streamCallIndex++
+          if (idx === 0) {
             return Stream.fromIterable([
-              textDeltaPart("interaction resolved"),
-              finishPart({ finishReason: "stop" }),
+              toolCallPart(
+                getToolId(tool),
+                { value: "guard-test" },
+                {
+                  toolCallId: ToolCallId.make("tc-guard"),
+                },
+              ),
+              finishPart({ finishReason: "tool-calls" }),
             ] satisfies ProviderStreamPart[])
-          }),
-        generate: () => Effect.succeed("test"),
-      })
+          }
+          return Stream.fromIterable([
+            textDeltaPart("interaction resolved"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      )
       const layer = makeLiveToolLayer(separateCallProvider, [tool])
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -1915,14 +1879,12 @@ describe("checkpoint persistence", () => {
   it.live("failed checkpoint save removes the dead loop so later turns can recreate it", () =>
     Effect.gen(function* () {
       let providerCalls = 0
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.sync(() => {
-            providerCalls += 1
-            return Stream.fromIterable([finishPart({ finishReason: "stop" })])
-          }),
-        generate: () => Effect.succeed("test response"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.sync(() => {
+          providerCalls += 1
+          return Stream.fromIterable([finishPart({ finishReason: "stop" })])
+        }),
+      )
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 1 }),
@@ -1959,19 +1921,17 @@ describe("checkpoint persistence", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ),
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
           ),
-        generate: () => Effect.succeed("test response"),
-      })
+        ),
+      )
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 2 }),
@@ -2017,19 +1977,17 @@ describe("checkpoint persistence", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ),
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
           ),
-        generate: () => Effect.succeed("test response"),
-      })
+        ),
+      )
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 2 }),
@@ -2086,19 +2044,17 @@ describe("checkpoint persistence", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ),
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
           ),
-        generate: () => Effect.succeed("test response"),
-      })
+        ),
+      )
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 3 }),
@@ -2215,20 +2171,18 @@ describe("recovery", () => {
         externalDrivers: recoveryResolved.externalDrivers,
       }),
     )
-    const providerLayer = Layer.succeed(Provider, {
-      stream: () =>
-        Ref.update(params.providerCalls ?? Ref.makeUnsafe(0), (count) => count + 1).pipe(
-          Effect.as(
-            Stream.fromIterable(
-              params.providerParts ?? [
-                textDeltaPart("recovered assistant"),
-                finishPart({ finishReason: "stop" }),
-              ],
-            ),
+    const providerLayer = Provider.TestStream(() =>
+      Ref.update(params.providerCalls ?? Ref.makeUnsafe(0), (count) => count + 1).pipe(
+        Effect.as(
+          Stream.fromIterable(
+            params.providerParts ?? [
+              textDeltaPart("recovered assistant"),
+              finishPart({ finishReason: "stop" }),
+            ],
           ),
         ),
-      generate: () => Effect.succeed("generated"),
-    })
+      ),
+    )
     const toolRunnerLayer = Layer.succeed(ToolRunner, {
       run: (input) =>
         Effect.succeed(
@@ -2598,32 +2552,30 @@ describe("durable suspension and queue drain regression", () => {
       parts: [new TextPart({ type: "text", text })],
       createdAt: new Date(),
     })
-  // Provider script: first stream() emits the interaction-tool call,
+  // Provider script: first model stream emits the interaction-tool call,
   // second emits a final text + stop. Tracks the call index so that
   // the second scope (post-tear-down) keeps advancing the script when
   // the resumed turn re-streams.
   const makeSuspendProviderLayer = (streamCallRef: Ref.Ref<number>, toolId: string) =>
-    Layer.succeed(Provider, {
-      stream: () =>
-        Effect.gen(function* () {
-          const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
-          if (idx === 0) {
-            return Stream.fromIterable([
-              toolCallPart(
-                toolId,
-                { value: "suspend" },
-                { toolCallId: ToolCallId.make("tc-suspend") },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
-            ] satisfies ProviderStreamPart[])
-          }
+    Provider.TestStream(() =>
+      Effect.gen(function* () {
+        const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
+        if (idx === 0) {
           return Stream.fromIterable([
-            textDeltaPart("resumed"),
-            finishPart({ finishReason: "stop" }),
+            toolCallPart(
+              toolId,
+              { value: "suspend" },
+              { toolCallId: ToolCallId.make("tc-suspend") },
+            ),
+            finishPart({ finishReason: "tool-calls" }),
           ] satisfies ProviderStreamPart[])
-        }),
-      generate: () => Effect.succeed("test"),
-    })
+        }
+        return Stream.fromIterable([
+          textDeltaPart("resumed"),
+          finishPart({ finishReason: "stop" }),
+        ] satisfies ProviderStreamPart[])
+      }),
+    )
   // Build a per-scope live-tool layer pointed at the same dbPath. The
   // tool fixture closes over an external `callCount` Ref so its state
   // survives scope teardown (stand-in for any persistence external to
@@ -2793,7 +2745,7 @@ describe("durable suspension and queue drain regression", () => {
         const drainBranchId = BranchId.make("branch-loop-drain")
         // Provider gates each turn on a per-turn Deferred so the test can
         // serialize "submit while Running" semantics deterministically.
-        // First stream() call is gated by gates[0], second by gates[1], etc.
+        // First model stream call is gated by gates[0], second by gates[1], etc.
         // Each call records its index into `streamOrder` and returns a
         // simple text+stop response when its gate resolves.
         const gates = [
@@ -2804,22 +2756,20 @@ describe("durable suspension and queue drain regression", () => {
         ]
         const streamOrder = Ref.makeUnsafe<readonly number[]>([])
         const streamCallRef = Ref.makeUnsafe(0)
-        const gatedProvider = Layer.succeed(Provider, {
-          stream: () =>
-            Effect.gen(function* () {
-              const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
-              yield* Ref.update(streamOrder, (arr) => [...arr, idx])
-              const gate = gates[idx]
-              if (gate !== undefined) {
-                yield* Deferred.await(gate)
-              }
-              return Stream.fromIterable([
-                textDeltaPart(`turn-${idx}`),
-                finishPart({ finishReason: "stop" }),
-              ] satisfies ProviderStreamPart[])
-            }),
-          generate: () => Effect.succeed("test"),
-        })
+        const gatedProvider = Provider.TestStream(() =>
+          Effect.gen(function* () {
+            const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
+            yield* Ref.update(streamOrder, (arr) => [...arr, idx])
+            const gate = gates[idx]
+            if (gate !== undefined) {
+              yield* Deferred.await(gate)
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`turn-${idx}`),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies ProviderStreamPart[])
+          }),
+        )
         const deps = Layer.mergeAll(
           Storage.TestWithSql(),
           gatedProvider,
@@ -2859,9 +2809,9 @@ describe("durable suspension and queue drain regression", () => {
                 }),
                 { interactive: true },
               )
-            // Submit turn #0; wait until the provider's stream() has
+            // Submit turn #0; wait until the provider's model stream has
             // actually been entered (parked on gate[0]). Phase transitions
-            // to Running before stream() is called, so we poll on
+            // to Running before model streaming starts, so we poll on
             // streamCallRef instead.
             yield* submitOne("msg-drain-0", "first")
             yield* Effect.gen(function* () {
@@ -2869,16 +2819,16 @@ describe("durable suspension and queue drain regression", () => {
                 if ((yield* Ref.get(streamCallRef)) >= 1) return
                 yield* Effect.sleep("1 millis")
               }
-              throw new Error("timed out waiting for first stream() call")
+              throw new Error("timed out waiting for first model stream call")
             })
             expect(yield* Ref.get(streamCallRef)).toBe(1)
             // Submit #1, #2, #3 while #0 is still parked. They MUST
             // enqueue (Running → Running re-enter) — they cannot start
-            // a new stream() until #0's gate releases.
+            // a new model stream until #0's gate releases.
             yield* submitOne("msg-drain-1", "second")
             yield* submitOne("msg-drain-2", "third")
             yield* submitOne("msg-drain-3", "fourth")
-            // Confirm stream() was not re-entered.
+            // Confirm model streaming was not re-entered.
             expect(yield* Ref.get(streamCallRef)).toBe(1)
             // Release all gates. Drain proceeds: #0 → #1 → #2 → #3.
             yield* Deferred.succeed(gates[0]!, void 0)

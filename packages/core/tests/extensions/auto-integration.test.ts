@@ -279,7 +279,7 @@ describe("Auto extension E2E", () => {
         // Fork the run — it will process turn 1, then start turn 2 which blocks on the gate
         const runFiber = yield* Effect.forkChild(agentLoop.run(makeMessage("begin")))
 
-        // Wait for the gated turn to start (provider.stream() called for step index 1)
+        // Wait for the gated turn to start (model stream call for step index 1)
         yield* controls.waitForCall(1)
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked

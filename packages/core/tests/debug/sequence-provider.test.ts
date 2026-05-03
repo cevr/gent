@@ -1,22 +1,55 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Fiber, Stream } from "effect"
+import { Cause, Effect, Fiber, Schema, Stream } from "effect"
 import {
   textStep,
   toolCallStep,
   textThenToolCallStep,
   multiToolCallStep,
 } from "@gent/core/debug/provider"
-import { Provider, type ProviderRequest, type SequenceStep } from "@gent/core/providers/provider"
+import {
+  convertTools,
+  Provider,
+  type ModelRequest,
+  type SequenceStep,
+} from "@gent/core/providers/provider"
+import { LanguageModel } from "effect/unstable/ai"
+import type * as Response from "effect/unstable/ai/Response"
+import { tool } from "@gent/core/extensions/api"
 
-const dummyRequest: ProviderRequest = {
+const dummyRequest: ModelRequest = {
   model: "test/model",
-  prompt: [],
 }
+
+const testToolkit = convertTools([
+  tool({
+    id: "my_tool",
+    description: "Test tool",
+    params: Schema.Record(Schema.String, Schema.Unknown),
+    execute: () => Effect.void,
+  }),
+  tool({
+    id: "tool_a",
+    description: "Test tool A",
+    params: Schema.Record(Schema.String, Schema.Unknown),
+    execute: () => Effect.void,
+  }),
+  tool({
+    id: "tool_b",
+    description: "Test tool B",
+    params: Schema.Record(Schema.String, Schema.Unknown),
+    execute: () => Effect.void,
+  }),
+])
 
 const callProvider = Effect.gen(function* () {
   const provider = yield* Provider
-  const stream = yield* provider.stream(dummyRequest)
-  return yield* Stream.runCollect(stream)
+  const model = yield* provider.resolve(dummyRequest)
+  const parts = yield* LanguageModel.streamText({
+    prompt: [],
+    toolkit: testToolkit,
+    disableToolCallResolution: true,
+  }).pipe(Stream.provide(model), Stream.runCollect)
+  return Array.from(parts) as ReadonlyArray<Response.AnyPart>
 })
 
 describe("Provider.Sequence", () => {
@@ -56,7 +89,7 @@ describe("Provider.Sequence", () => {
     }),
   )
 
-  it.scoped("waitForCall resolves on stream() #n", () =>
+  it.scoped("waitForCall resolves on model stream #n", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* Provider.Sequence([textStep("a"), textStep("b")])
 
@@ -94,7 +127,7 @@ describe("Provider.Sequence", () => {
     }),
   )
 
-  it.scoped("extra stream() call fails", () =>
+  it.scoped("extra model stream call fails", () =>
     Effect.gen(function* () {
       const { layer } = yield* Provider.Sequence([textStep("only")])
 

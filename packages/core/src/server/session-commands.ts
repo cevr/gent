@@ -28,6 +28,9 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import { toPrompt } from "../providers/ai-transcript.js"
+import { LanguageModel } from "effect/unstable/ai"
+import * as AiError from "effect/unstable/ai/AiError"
+import { ProviderError } from "../domain/provider-error.js"
 import {
   SessionRuntime,
   type SessionRuntimeService,
@@ -704,14 +707,24 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const streamEffect = yield* provider.stream({
+        const model = yield* provider.resolve({
           model: NAME_GEN_MODEL,
-          prompt: toPrompt([summaryMessage]),
           maxTokens: 400,
         })
+        const stream = LanguageModel.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
+          Stream.provide(model),
+          Stream.mapError(
+            (error: unknown) =>
+              new ProviderError({
+                message: AiError.isAiError(error) ? error.message : String(error),
+                model: NAME_GEN_MODEL,
+                cause: error,
+              }),
+          ),
+        )
 
         const parts: string[] = []
-        yield* Stream.runForEach(streamEffect, (part) =>
+        yield* Stream.runForEach(stream, (part) =>
           Effect.sync(() => {
             if (part.type === "text-delta") parts.push(part.delta)
           }),

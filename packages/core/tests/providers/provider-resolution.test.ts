@@ -12,8 +12,10 @@ import {
   type AuthStoreService,
 } from "@gent/core/domain/auth-store"
 import {
+  convertTools,
   Provider,
   type ProviderError,
+  type ModelRequest,
   type ProviderResolution,
   finishPart,
   toolCallPart,
@@ -26,8 +28,7 @@ import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
-import type * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 const emptyAuthInfo: Record<string, AuthInfo> = {}
@@ -84,28 +85,50 @@ const buildProviderLayer = (
   const authLayer = Layer.succeed(AuthStore, authStore)
   return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
 }
+const resolveModel = (request: ModelRequest) =>
+  Effect.gen(function* () {
+    const provider = yield* Provider
+    return yield* provider.resolve(request)
+  })
+const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<string, AiTool.Any>>(
+  request: ModelRequest & {
+    readonly prompt: Prompt.RawInput
+    readonly tools?: ReadonlyArray<ToolToken>
+    readonly toolkit?: AiToolkit.WithHandler<Tools>
+  },
+) =>
+  Effect.gen(function* () {
+    const provider = yield* Provider
+    const model = yield* provider.resolve(request)
+    if (request.toolkit !== undefined) {
+      return yield* LanguageModel.streamText({
+        prompt: request.prompt,
+        toolkit: request.toolkit,
+        disableToolCallResolution: true,
+      }).pipe(Stream.provide(model), Stream.runCollect)
+    }
+    if (request.tools !== undefined) {
+      return yield* LanguageModel.streamText({
+        prompt: request.prompt,
+        toolkit: convertTools(request.tools),
+        disableToolCallResolution: true,
+      }).pipe(Stream.provide(model), Stream.runCollect)
+    }
+    return yield* LanguageModel.streamText({ prompt: request.prompt }).pipe(
+      Stream.provide(model),
+      Stream.runCollect,
+    )
+  })
 describe("Provider model resolution", () => {
   it.live("resolves model through extension-registered provider", () =>
     Effect.gen(function* () {
       const layer = buildProviderLayer([makeExt("test-ext", [makeProvider("custom")])])
       const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          const provider = yield* Provider
-          // Should resolve successfully (the stream will fail with stub error, not resolution error)
-          const stream = yield* provider.stream({
-            model: "custom/gpt-5",
-            prompt: [],
-          })
-          // Consume one chunk to trigger the stream — expect the stub error, not "Unknown provider"
-          yield* Stream.runHead(stream)
+        resolveModel({
+          model: "custom/gpt-5",
         }).pipe(Effect.provide(layer)),
       )
-      if (result._tag === "Failure") {
-        const pretty = result.cause.toString()
-        expect(pretty).not.toContain("Unknown provider")
-        // Stub LanguageModel fails with AiError — wrapped as ProviderError
-        expect(pretty).toContain("stub")
-      }
+      expect(result._tag).toBe("Success")
     }),
   )
   it.live("errors for unregistered provider", () =>
@@ -113,10 +136,8 @@ describe("Provider model resolution", () => {
       const layer = buildProviderLayer([])
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.stream({
+          yield* resolveModel({
             model: "unknown-provider/some-model",
-            prompt: [],
           })
         }).pipe(Effect.provide(layer)),
       )
@@ -136,10 +157,8 @@ describe("Provider model resolution", () => {
       const layer = buildProviderLayer([makeExt("broken-ext", [throwingProvider])])
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.stream({
+          yield* resolveModel({
             model: "broken/model",
-            prompt: [],
           })
         }).pipe(Effect.provide(layer)),
       )
@@ -177,10 +196,8 @@ describe("Provider model resolution", () => {
       const layer = buildProviderLayer([makeExt("auth-missing-ext", [failingAuthProvider])])
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.stream({
+          yield* resolveModel({
             model: "auth-missing/model",
-            prompt: [],
           })
         }).pipe(Effect.provide(layer)),
       )
@@ -217,10 +234,8 @@ describe("Provider model resolution", () => {
       const layer = buildProviderLayer([makeExt("bedrock-shaped-ext", [bedrockShaped])])
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.stream({
+          yield* resolveModel({
             model: "bedrock/some-model",
-            prompt: [],
           })
         }).pipe(Effect.provide(layer)),
       )
@@ -252,10 +267,8 @@ describe("Provider model resolution", () => {
       const layer = buildProviderLayer([makeExt("auth-fails-ext", [provider])], authStore)
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.stream({
+          yield* resolveModel({
             model: "auth-fails/model",
-            prompt: [],
           })
         }).pipe(Effect.provide(layer)),
       )
@@ -287,13 +300,10 @@ describe("Provider model resolution", () => {
       )
       const result = yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          const stream = yield* provider.stream({
+          yield* resolveModel({
             model: "shadowed/some-model",
-            prompt: [],
             driverRegistry: overrideRegistry,
           })
-          yield* Stream.runHead(stream)
         }).pipe(Effect.provide(capturedLayer)),
       )
       // Resolution should NOT fail with "Unknown provider" — overrideRegistry has "shadowed".
@@ -334,19 +344,16 @@ describe("Provider model resolution", () => {
       ])
       yield* Effect.exit(
         Effect.gen(function* () {
-          const provider = yield* Provider
-          const stream = yield* provider.stream({
+          yield* resolveModel({
             model: "primary/foo",
-            prompt: [],
             driverId: "alt",
           })
-          yield* Stream.runHead(stream)
         }).pipe(Effect.provide(layer)),
       )
       expect(chosenDriver).toBe("alt")
     }),
   )
-  it.live("request.tools advertises capabilities through the live stream path", () =>
+  it.live("runtime tools advertise capabilities through the live stream path", () =>
     Effect.gen(function* () {
       let captured:
         | {
@@ -382,13 +389,11 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
-        const provider = yield* Provider
-        const stream = yield* provider.stream({
+        return yield* streamResolvedModel({
           model: "tools-live/gpt-5",
           prompt: [],
           tools: [echoCapability],
         })
-        return yield* Stream.runCollect(stream)
       }).pipe(Effect.provide(layer))
       expect(captured?.disableToolCallResolution).toBe(true)
       const toolkit = captured?.toolkit
@@ -417,7 +422,7 @@ describe("Provider model resolution", () => {
       )
     }),
   )
-  it.live("request.toolkit preserves typed Effect tool maps through the live stream path", () =>
+  it.live("runtime toolkit preserves typed Effect tool maps through the live stream path", () =>
     Effect.gen(function* () {
       const typedEchoTool = AiTool.dynamic("typedEcho", {
         description: "Typed echo input",
@@ -469,14 +474,11 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
       const parts = yield* Effect.gen(function* () {
-        const provider = yield* Provider
-        const stream = yield* provider.stream({
+        return yield* streamResolvedModel<TypedTools>({
           model: "typed-toolkit-live/gpt-5",
           prompt: [],
           toolkit: typedToolkit,
         })
-        const typedStream: Stream.Stream<Response.StreamPart<TypedTools>, ProviderError> = stream
-        return yield* Stream.runCollect(typedStream)
       }).pipe(Effect.provide(layer))
       expect(capturedToolkit).toBe(typedToolkit)
       const collected = Array.from(parts)
@@ -499,10 +501,10 @@ describe("Provider model resolution", () => {
           modelFromService(
             "prompt-live",
             makeLanguageModel<{
-              readonly prompt?: Prompt.Prompt
+              readonly prompt?: Prompt.RawInput
             }>({
               streamText: (options) => {
-                capturedPrompt = options.prompt
+                capturedPrompt = Prompt.make(options.prompt ?? [])
                 return Stream.fromIterable([
                   finishPart({
                     finishReason: "stop",
@@ -515,8 +517,7 @@ describe("Provider model resolution", () => {
       }
       const layer = buildProviderLayer([makeExt("prompt-live-ext", [streamingProvider])])
       yield* Effect.gen(function* () {
-        const provider = yield* Provider
-        const stream = yield* provider.stream({
+        const parts = yield* streamResolvedModel({
           model: "prompt-live/gpt-5",
           prompt: toPrompt(
             [
@@ -556,7 +557,7 @@ describe("Provider model resolution", () => {
             { systemPrompt: "System policy." },
           ),
         })
-        yield* Stream.runCollect(stream)
+        expect(parts.length).toBe(1)
       }).pipe(Effect.provide(layer))
       expect(capturedPrompt?.content.map((message) => message.role)).toEqual([
         "system",
@@ -593,94 +594,6 @@ describe("Provider model resolution", () => {
             : false,
         ),
       ).toBe(false)
-    }),
-  )
-  // Cause-preservation contract (provider.ts:631-639, provider.ts:673-680):
-  // when the underlying LanguageModel fails, both `Provider.stream`'s
-  // `Stream.catch` and `Provider.generate`'s `Effect.mapError` must wrap
-  // the original error as `ProviderError.cause`. Loss of cause severs
-  // the upstream chain — the resulting ProviderError reads as a generic
-  // wrapper with the underlying AiError.reason / driver-specific detail
-  // unrecoverable.
-  it.live("Provider.stream preserves the underlying AiError as ProviderError.cause", () =>
-    Effect.gen(function* () {
-      const originalAiError = AiError.make({
-        module: "Test",
-        method: "streamText",
-        reason: new AiError.UnknownError({ description: "stream-cause-marker" }),
-      })
-      const causeProvidingModel: LanguageModel.Service = {
-        ...failingLanguageModel,
-        streamText: () => Stream.fail(originalAiError),
-      }
-      const causeProvider: ModelDriverContribution = {
-        id: "cause-stream",
-        name: "CauseStream",
-        resolveModel: () => modelFromService("cause-stream", causeProvidingModel),
-      }
-      const layer = buildProviderLayer([makeExt("cause-stream-ext", [causeProvider])])
-      const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          const provider = yield* Provider
-          const stream = yield* provider.stream({
-            model: "cause-stream/gpt-5",
-            prompt: [],
-          })
-          yield* Stream.runHead(stream)
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(errOpt._tag).toBe("Some")
-        if (errOpt._tag === "Some") {
-          const err = errOpt.value as ProviderError
-          expect(err._tag).toBe("ProviderError")
-          // The original AiError must be preserved by reference. A future
-          // refactor that constructed a fresh error or stringified the
-          // cause would break this — and would silently sever the upstream
-          // chain in production at the same time.
-          expect(err.cause).toBe(originalAiError)
-        }
-      }
-    }),
-  )
-  it.live("Provider.generate preserves the underlying AiError as ProviderError.cause", () =>
-    Effect.gen(function* () {
-      const originalAiError = AiError.make({
-        module: "Test",
-        method: "generateText",
-        reason: new AiError.UnknownError({ description: "generate-cause-marker" }),
-      })
-      const causeProvidingModel: LanguageModel.Service = {
-        ...failingLanguageModel,
-        generateText: () => Effect.fail(originalAiError),
-      }
-      const causeProvider: ModelDriverContribution = {
-        id: "cause-generate",
-        name: "CauseGenerate",
-        resolveModel: () => modelFromService("cause-generate", causeProvidingModel),
-      }
-      const layer = buildProviderLayer([makeExt("cause-generate-ext", [causeProvider])])
-      const result = yield* Effect.exit(
-        Effect.gen(function* () {
-          const provider = yield* Provider
-          yield* provider.generate({
-            model: "cause-generate/gpt-5",
-            prompt: [],
-          })
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(errOpt._tag).toBe("Some")
-        if (errOpt._tag === "Some") {
-          const err = errOpt.value as ProviderError
-          expect(err._tag).toBe("ProviderError")
-          expect(err.cause).toBe(originalAiError)
-        }
-      }
     }),
   )
 })

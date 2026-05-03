@@ -7,8 +7,8 @@
  * cover services in isolation. Those passed even when two HIGH-severity
  * wiring bugs slipped in:
  *
- *   1. **Cache-Ref lifetime**: `resolveModel` runs once per
- *      `Provider.stream`/`Provider.generate` call. Allocating
+ *   1. **Cache-Ref lifetime**: `resolveModel` runs once per model resolution.
+ *      Allocating
  *      `Ref<CredentialCacheCell>` and `Ref<BetaCacheCell>` inside
  *      `makeOauthAnthropicLayer` gave each request a fresh empty
  *      cache — cross-request beta learning + credential reuse were

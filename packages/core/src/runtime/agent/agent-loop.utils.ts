@@ -12,7 +12,7 @@ import {
 } from "../../domain/message-part-projection.js"
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
-import type { ProviderRequest } from "../../providers/provider.js"
+import type { ModelRequest } from "../../providers/provider.js"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
@@ -133,7 +133,7 @@ export const buildTurnPrompt = (
 export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
-): ProviderRequest["reasoning"] | undefined => {
+): ModelRequest["reasoning"] | undefined => {
   if (sessionOverride !== undefined && isReasoningEffort(sessionOverride)) {
     return sessionOverride
   }

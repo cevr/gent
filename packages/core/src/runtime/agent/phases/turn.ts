@@ -1,4 +1,4 @@
-import { DateTime, Effect, Ref, type Stream } from "effect"
+import { DateTime, Effect, Ref, Stream } from "effect"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -49,12 +49,10 @@ import type { PermissionService } from "../../../domain/permission.js"
 import type { ExtensionHostContext } from "../../../domain/extension-host-context.js"
 import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
 import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
-import {
-  type ProviderError,
-  type ProviderStreamPart,
-  type ProviderService,
-} from "../../../providers/provider.js"
+import { convertTools, ProviderError, type ProviderService } from "../../../providers/provider.js"
 import { toPrompt } from "../../../providers/ai-transcript.js"
+import { LanguageModel } from "effect/unstable/ai"
+import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../../retry"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../../wide-event-boundary"
@@ -689,10 +687,7 @@ export const runTurnBeforeHook = (
 type ModelTurnSource = {
   readonly driverKind: "model"
   readonly driverId?: string
-  readonly stream: Effect.Effect<
-    Stream.Stream<ProviderStreamPart, ProviderError>,
-    ProviderError | ProviderAuthError
-  >
+  readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
@@ -754,10 +749,8 @@ export const resolveTurnSource = (params: {
       } satisfies ExternalTurnSource
     }
 
-    const streamEffect = params.provider.stream({
+    const model = yield* params.provider.resolve({
       model: resolved.modelId,
-      prompt: toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt }),
-      tools: [...resolved.tools],
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
       ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       driverRegistry: params.driverRegistry,
@@ -765,10 +758,30 @@ export const resolveTurnSource = (params: {
         ? { driverId: resolved.driver.id }
         : {}),
     })
+    const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
+    const toolkit = convertTools([...resolved.tools])
+    const rawStream =
+      resolved.tools.length > 0
+        ? LanguageModel.streamText({
+            prompt,
+            toolkit,
+            disableToolCallResolution: true as const,
+          })
+        : LanguageModel.streamText({ prompt })
 
     return {
       driverKind: "model" as const,
-      stream: streamEffect,
+      stream: rawStream.pipe(
+        Stream.provide(model),
+        Stream.mapError(
+          (error: unknown) =>
+            new ProviderError({
+              message: AiError.isAiError(error) ? error.message : String(error),
+              model: resolved.modelId,
+              cause: error,
+            }),
+        ),
+      ),
       formatStreamError: formatStreamErrorMessage,
       collect: <R>(
         effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
@@ -929,20 +942,16 @@ export const runTurnStreamPhase = (params: {
     const collected =
       source.driverKind === "model"
         ? yield* source.collect(
-            source.stream.pipe(
-              Effect.flatMap((turnStream) =>
-                collectModelTurnResponse({
-                  turnStream,
-                  publishEvent: params.publishEvent,
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  modelId: params.resolved.modelId,
-                  activeStream: params.activeStream,
-                  formatStreamError: source.formatStreamError,
-                  retryPreOutputFailures: true,
-                }),
-              ),
-            ),
+            collectModelTurnResponse({
+              turnStream: source.stream,
+              publishEvent: params.publishEvent,
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              modelId: params.resolved.modelId,
+              activeStream: params.activeStream,
+              formatStreamError: source.formatStreamError,
+              retryPreOutputFailures: true,
+            }),
           )
         : yield* source.collect(
             collectExternalTurnResponse({

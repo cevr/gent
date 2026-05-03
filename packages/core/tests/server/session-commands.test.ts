@@ -1386,8 +1386,8 @@ describe("message.send", () => {
         const { layer: providerLayer, controls } = yield* Provider.Sequence([
           {
             ...textStep(assistantText),
-            assertRequest: (request) => {
-              expect(JSON.stringify(request.prompt)).toContain(
+            assertOptions: (options) => {
+              expect(JSON.stringify(options.prompt)).toContain(
                 `parentToolCallId:${parentToolCallId}`,
               )
             },

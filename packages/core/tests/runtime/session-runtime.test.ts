@@ -191,10 +191,9 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
   failUpsertOn?: number
   failRemoveOn?: number
 }) => {
-  const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-    generate: () => Effect.succeed("test"),
-  })
+  const providerLayer = Provider.TestStream(() =>
+    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+  )
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
@@ -353,29 +352,26 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
   })
 const makeInteractionProviderLayer = () => {
   let streamCall = 0
-  return Layer.succeed(Provider, {
-    stream: () => {
-      const call = streamCall++
-      if (call === 0) {
-        return Effect.succeed(
-          Stream.fromIterable([
-            toolCallPart(
-              "interaction-tool",
-              { value: "test" },
-              { toolCallId: ToolCallId.make("tc-1") },
-            ),
-            finishPart({ finishReason: "tool-calls" }),
-          ] satisfies ProviderStreamPart[]),
-        )
-      }
+  return Provider.TestStream(() => {
+    const call = streamCall++
+    if (call === 0) {
       return Effect.succeed(
         Stream.fromIterable([
-          textDeltaPart("done"),
-          finishPart({ finishReason: "stop" }),
+          toolCallPart(
+            "interaction-tool",
+            { value: "test" },
+            { toolCallId: ToolCallId.make("tc-1") },
+          ),
+          finishPart({ finishReason: "tool-calls" }),
         ] satisfies ProviderStreamPart[]),
       )
-    },
-    generate: () => Effect.succeed("test"),
+    }
+    return Effect.succeed(
+      Stream.fromIterable([
+        textDeltaPart("done"),
+        finishPart({ finishReason: "stop" }),
+      ] satisfies ProviderStreamPart[]),
+    )
   })
 }
 describe("SessionRuntime", () => {
@@ -804,18 +800,16 @@ describe("SessionRuntime", () => {
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(streamStarted, undefined)
-            yield* Deferred.await(streamReleased)
-            return Stream.fromIterable([
-              textDeltaPart("done"),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies ProviderStreamPart[])
-          }),
-        generate: () => Effect.succeed("test"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.await(streamReleased)
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      )
       const layer = makeRuntimeLayer(providerLayer)
       yield* narrowR(
         Effect.gen(function* () {
@@ -876,19 +870,21 @@ describe("SessionRuntime", () => {
           gated: true,
           assertRequest: (request) => {
             expect(request.model).toBe("test/default")
-            expect(latestUserText(request)).toBe("first")
+          },
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("first")
           },
         },
         {
           ...textStep("steer reply"),
-          assertRequest: (request) => {
-            expect(latestUserText(request)).toBe("steer now")
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("steer now")
           },
         },
         {
           ...textStep("queued reply"),
-          assertRequest: (request) => {
-            expect(latestUserText(request)).toBe("queued")
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("queued")
           },
         },
       ])
@@ -941,14 +937,14 @@ describe("SessionRuntime", () => {
         {
           ...textStep("first reply"),
           gated: true,
-          assertRequest: (request) => {
-            expect(latestUserText(request)).toBe("first")
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("first")
           },
         },
         {
           ...textStep("second reply"),
-          assertRequest: (request) => {
-            expect(latestUserText(request)).toBe("second")
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("second")
           },
         },
       ])
@@ -990,8 +986,8 @@ describe("SessionRuntime", () => {
         {
           ...textStep("first reply"),
           gated: true,
-          assertRequest: (request) => {
-            expect(latestUserText(request)).toBe("first")
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("first")
           },
         },
         textStep("should not run"),

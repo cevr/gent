@@ -192,10 +192,9 @@ const makeLayerWithEvents = (
   },
 ) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
-  const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-    generate: () => Effect.succeed("unused"),
-  })
+  const providerLayer = Provider.TestStream(() =>
+    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+  )
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
@@ -387,10 +386,9 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       // Use the default agent (model-backed) with a simple provider
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("test"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const agentsResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("agents") },
@@ -550,10 +548,9 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("unused"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
@@ -634,10 +631,9 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("unused"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
@@ -730,10 +726,9 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("unused"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
@@ -825,10 +820,9 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Layer.succeed(Provider, {
-        stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-        generate: () => Effect.succeed("unused"),
-      })
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),

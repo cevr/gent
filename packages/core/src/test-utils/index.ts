@@ -1,13 +1,11 @@
 import { Clock, Context, DateTime, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
-  Provider,
   finishPart,
   textDeltaPart,
   toolCallPart,
@@ -71,43 +69,6 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
     }),
   )
 }
-
-// Recording Provider
-
-export const RecordingProvider = (
-  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
-): Layer.Layer<Provider, never, SequenceRecorder> =>
-  Layer.effect(
-    Provider,
-    Effect.gen(function* () {
-      const recorder = yield* SequenceRecorder
-      const indexRef = yield* Ref.make(0)
-
-      return {
-        stream: Effect.fn("RecordingProvider.stream")(function* (request) {
-          const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          yield* recorder.record({
-            service: "Provider",
-            method: "stream",
-            args: {
-              model: request.model,
-              messageCount: Prompt.make(request.prompt).content.length,
-            },
-          })
-          const parts = responses[idx] ?? [finishPart({ finishReason: "stop" })]
-          return Stream.fromIterable(parts)
-        }),
-        generate: Effect.fn("RecordingProvider.generate")(function* (request) {
-          yield* recorder.record({
-            service: "Provider",
-            method: "generate",
-            args: { model: request.model },
-          })
-          return "test response"
-        }),
-      }
-    }),
-  )
 
 // Recording EventStore
 
