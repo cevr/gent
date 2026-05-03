@@ -18,7 +18,7 @@ import {
   SessionId,
   ToolCallId,
 } from "../domain/ids.js"
-import { Message, TextPart } from "../domain/message.js"
+import { Message, TextPart, type MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ModelId } from "../domain/model.js"
@@ -220,6 +220,12 @@ export interface SessionRuntimeService {
     interactive?: boolean
     runSpec?: RunSpec
   }) => Effect.Effect<void, AgentRunError>
+  readonly queueFollowUp: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+    content: string
+    metadata?: MessageMetadata
+  }) => Effect.Effect<void, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
@@ -359,6 +365,11 @@ const makeLiveSessionRuntime: Effect.Effect<
     storage,
     actorEngine,
     receptionist,
+    overrides: {
+      sessionControl: {
+        queueFollowUp: (input) => agentLoop.queueFollowUp(input),
+      },
+    },
   })
 
   // Every public session-scoped boundary (dispatch + reads) MUST validate the
@@ -514,6 +525,12 @@ const makeLiveSessionRuntime: Effect.Effect<
         ),
       ),
 
+    queueFollowUp: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() => agentLoop.queueFollowUp(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
+      ),
+
     drainQueuedMessages: (input) =>
       requireSessionBranch(input).pipe(
         Effect.flatMap(() => agentLoop.drainQueue(input)),
@@ -609,6 +626,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     Layer.succeed(SessionRuntime, {
       dispatch: () => Effect.void,
       runPrompt: () => Effect.void,
+      queueFollowUp: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>

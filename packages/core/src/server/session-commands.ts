@@ -177,7 +177,7 @@ const forgetDeletedSessionRuntimeState = Effect.fn(
 export type SessionCommandError = StorageError | EventStoreError | NotFoundError | InvalidStateError
 
 // SessionCommands is the RPC-facing surface: dedup-wrapped session creates,
-// branch operations with summarization, and turn-control. Bodies that mutate
+// branch operations with summarization, and session runtime commands. Bodies that mutate
 // purely-durable state (rename, child-session create, branch/message delete)
 // live on `SessionMutations` (extension surface) and SessionCommands delegates
 // to it via `mutations.*` so there is exactly one implementation of each

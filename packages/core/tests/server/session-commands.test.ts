@@ -100,6 +100,7 @@ const sendFailingSessionCommandsLayer = () => {
   const failingRuntimeLayer = Layer.succeed(SessionRuntime, {
     dispatch: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
     runPrompt: () => Effect.void,
+    queueFollowUp: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () =>
@@ -163,6 +164,7 @@ const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array
   Layer.succeed(SessionRuntime, {
     dispatch: () => Effect.void,
     runPrompt: () => Effect.void,
+    queueFollowUp: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () =>
@@ -1521,6 +1523,7 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
         runPrompt: () => Effect.void,
+        queueFollowUp: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () =>
@@ -1597,6 +1600,7 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
         runPrompt: () => Effect.void,
+        queueFollowUp: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () =>

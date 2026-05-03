@@ -37,7 +37,6 @@ import {
   ExecutorConnectionRunner,
   ExecutorConnectionRunnerLayer,
 } from "@gent/extensions/executor/connection-runner"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
 import { EventStore } from "@gent/core/domain/event"
@@ -152,7 +151,6 @@ const makeExecutorExtension = (overrides?: {
   return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
-  const turnControl = ExtensionTurnControl.Test()
   const storage = Layer.orDie(Storage.Test())
   const resolved = { extensions: [extension] } as unknown as ResolvedExtensions
   // Build the actor runtime stack: `ActorEngine.Live` provides engine +
@@ -179,7 +177,7 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
     (acc, resource) => Layer.provideMerge(resource, acc),
     baseStack,
   )
-  return Layer.mergeAll(machineWithResources, EventStore.Memory, turnControl)
+  return Layer.mergeAll(machineWithResources, EventStore.Memory)
 }
 const executorSnapshot = Effect.gen(function* () {
   const executor = yield* ExecutorRead

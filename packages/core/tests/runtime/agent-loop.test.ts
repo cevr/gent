@@ -7,7 +7,11 @@ import { SqlClient } from "effect/unstable/sql"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
+import {
+  AgentLoop,
+  AgentLoopError,
+  type AgentLoopService,
+} from "../../src/runtime/agent/agent-loop"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
@@ -15,7 +19,6 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ConfigService } from "../../src/runtime/config-service"
-import { ExtensionTurnControl, TurnControlError } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import {
@@ -150,7 +153,6 @@ const makeLayer = (
     makeExtRegistry(tools, resources),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
@@ -174,7 +176,6 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     makeExtRegistry(),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ToolRunner.Test(),
@@ -247,7 +248,6 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
     makeExtRegistry(),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
@@ -286,7 +286,6 @@ const makeLiveToolLayer = (
   tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
-  const turnControlLayer = ExtensionTurnControl.Live
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
     Storage.TestWithSql(),
@@ -294,7 +293,6 @@ const makeLiveToolLayer = (
     extRegistry,
     ActorEngine.Live,
     ActorEngine.Live,
-    turnControlLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
@@ -337,7 +335,6 @@ const makeLayerWithEvents = (
     makeExtRegistry(tools),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
@@ -362,7 +359,6 @@ const makeLayerWithEventPublisher = (
     makeExtRegistry(),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
@@ -430,7 +426,6 @@ const makeExternalLayerWithEvents = (
     registryLayer,
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
@@ -566,7 +561,6 @@ describe("streaming", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -1642,7 +1636,6 @@ describe("interaction", () => {
       makeExtRegistry(tools),
       ActorEngine.Live,
       ActorEngine.Live,
-      ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       ApprovalService.Test(),
@@ -1794,7 +1787,6 @@ describe("interaction", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -1940,7 +1932,6 @@ describe("checkpoint persistence", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -1990,7 +1981,6 @@ describe("checkpoint persistence", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -2025,7 +2015,7 @@ describe("checkpoint persistence", () => {
       )
     }),
   )
-  it.live("turn-control follow-up fails only after durable queue mutation fails", () =>
+  it.live("queueFollowUp fails only after durable queue mutation fails", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
@@ -2042,7 +2032,6 @@ describe("checkpoint persistence", () => {
           ),
         generate: () => Effect.succeed("test response"),
       })
-      const turnControlLayer = ExtensionTurnControl.Live
       const deps = Layer.mergeAll(
         Storage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 2 }),
@@ -2050,7 +2039,6 @@ describe("checkpoint persistence", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        turnControlLayer,
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -2066,14 +2054,13 @@ describe("checkpoint persistence", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const turnControl = yield* ExtensionTurnControl
           const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeMessage("turn-control-checkpoint-session", "b1", "first")),
+            runAgentLoop(agentLoop, makeMessage("follow-up-checkpoint-session", "b1", "first")),
           )
           yield* Deferred.await(firstStarted)
           const queued = yield* Effect.exit(
-            turnControl.queueFollowUp({
-              sessionId: SessionId.make("turn-control-checkpoint-session"),
+            agentLoop.queueFollowUp({
+              sessionId: SessionId.make("follow-up-checkpoint-session"),
               branchId: BranchId.make("b1"),
               content: "queued",
             }),
@@ -2081,12 +2068,13 @@ describe("checkpoint persistence", () => {
           expect(queued._tag).toBe("Failure")
           if (queued._tag === "Failure") {
             const error = Cause.squash(queued.cause)
-            expect(error).toBeInstanceOf(TurnControlError)
-            expect((error as TurnControlError).command).toBe("QueueFollowUp")
-            expect((error as TurnControlError).message).toContain("Failed to apply QueueFollowUp")
+            expect(error).toBeInstanceOf(AgentLoopError)
+            expect((error as AgentLoopError).message).toContain(
+              "Failed to persist agent loop checkpoint",
+            )
           }
           const snapshot = yield* agentLoop.getQueue({
-            sessionId: SessionId.make("turn-control-checkpoint-session"),
+            sessionId: SessionId.make("follow-up-checkpoint-session"),
             branchId: BranchId.make("b1"),
           })
           expect(snapshot).toEqual(emptyQueueSnapshot())
@@ -2120,7 +2108,6 @@ describe("checkpoint persistence", () => {
         makeExtRegistry(),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
@@ -2261,7 +2248,6 @@ describe("recovery", () => {
       extensionLayer,
       ActorEngine.Live,
       ActorEngine.Live,
-      ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       providerLayer,
@@ -2690,7 +2676,6 @@ describe("durable suspension and queue drain regression", () => {
       extRegistry,
       ActorEngine.Live,
       ActorEngine.Live,
-      ExtensionTurnControl.Live,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       ApprovalService.Test(),
@@ -2843,7 +2828,6 @@ describe("durable suspension and queue drain regression", () => {
           makeExtRegistry(),
           ActorEngine.Live,
           ActorEngine.Live,
-          ExtensionTurnControl.Test(),
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
           ConfigService.Test(),
           EventStore.Memory,

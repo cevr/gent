@@ -251,9 +251,9 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       run: die("AgentRunnerService"),
     } as MakeExtensionHostContextDeps["agentRunner"],
     sessionMutations,
-    turnControl: {
-      queueFollowUp: die("ExtensionTurnControl"),
-    } as unknown as MakeExtensionHostContextDeps["turnControl"],
+    sessionControl: {
+      queueFollowUp: die("SessionControl"),
+    } as MakeExtensionHostContextDeps["sessionControl"],
   }
   return { deps, published }
 }

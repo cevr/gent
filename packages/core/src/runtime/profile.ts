@@ -34,7 +34,6 @@ import {
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { buildResourceLayer } from "./extensions/resource-host/index.js"
 import { ActorEngine } from "./extensions/actor-engine.js"
 import { ActorHost, ActorHostFailures, type ActorSpawnFailure } from "./extensions/actor-host.js"
@@ -348,7 +347,6 @@ export const buildExtensionLayers = (
       modelDrivers: resolved.modelDrivers,
       externalDrivers: resolved.externalDrivers,
     }),
-    ExtensionTurnControl.Live,
     actorRuntimeLive,
   )
 

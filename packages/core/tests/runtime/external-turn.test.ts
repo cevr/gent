@@ -12,7 +12,6 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider, finishPart } from "@gent/core/providers/provider"
 import { ImagePart, Message, TextPart } from "@gent/core/domain/message"
@@ -164,7 +163,6 @@ const makeLayerWithEvents = (
     makeDriverRegistry(executor, options?.tools),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -324,7 +322,6 @@ describe("external turn execution", () => {
         }),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -485,7 +482,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         // Messages go through Storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
@@ -580,7 +576,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -669,7 +664,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -765,7 +759,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         ActorEngine.Live,
         ActorEngine.Live,
-        ExtensionTurnControl.Test(),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

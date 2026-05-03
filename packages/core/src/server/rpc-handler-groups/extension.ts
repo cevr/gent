@@ -158,6 +158,11 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         receptionist,
         storage: deps.storage,
         ...(capabilityContext !== undefined ? { capabilityContext } : {}),
+        overrides: {
+          sessionControl: {
+            queueFollowUp: (input) => deps.sessionRuntime.queueFollowUp(input),
+          },
+        },
       })
       const hostCtx = makeExtensionHostContext(
         {

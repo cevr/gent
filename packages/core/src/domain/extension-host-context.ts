@@ -145,10 +145,8 @@ export declare namespace ExtensionHostContext {
       },
     ) => Effect.Effect<ReadonlyArray<ExtensionHostSearchResult>, ExtensionHostError>
 
-    // Turn control — slot handlers and direct callers can enqueue a
-    // follow-up to the current turn. Wraps `ExtensionTurnControl.queueFollowUp`
-    // and surfaces failures as `ExtensionHostError` so callers don't have to
-    // import a runtime error type.
+    // Follow-up control: slot handlers and direct callers enqueue through the
+    // session runtime and receive host-shaped errors.
     readonly queueFollowUp: (params: {
       readonly content: string
       readonly metadata?: MessageMetadata

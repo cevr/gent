@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Context, Effect, Stream } from "effect"
+import { Context, Effect } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -25,19 +25,24 @@ import {
 import { BranchId, SessionId } from "../domain/ids.js"
 import type { ActorEngineService } from "./extensions/actor-engine.js"
 import type { ReceptionistService } from "./extensions/receptionist.js"
-import {
-  ExtensionTurnControl,
-  type ExtensionTurnControlService,
-} from "./extensions/turn-control.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
-import type { Message } from "../domain/message.js"
+import type { Message, MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
+
+export interface ExtensionSessionControlService {
+  readonly queueFollowUp: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly content: string
+    readonly metadata?: MessageMetadata
+  }) => Effect.Effect<void, Error>
+}
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
@@ -56,11 +61,7 @@ export interface MakeExtensionHostContextDeps {
    */
   readonly actorEngine: ActorEngineService
   readonly receptionist: ReceptionistService
-  /**
-   * Turn-control surface. Threaded into the `session.queueFollowUp`
-   * facet so slot handlers and direct callers can enqueue follow-ups.
-   */
-  readonly turnControl: ExtensionTurnControlService
+  readonly sessionControl: ExtensionSessionControlService
 }
 
 export interface MakeExtensionHostContextRunInfo {
@@ -79,7 +80,7 @@ type AmbientHostContextDefaults = Pick<
   | "searchStorage"
   | "agentRunner"
   | "sessionMutations"
-  | "turnControl"
+  | "sessionControl"
 >
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
@@ -154,14 +155,11 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
     }),
   },
 )
-export const HostTurnControlRef = Context.Reference<ExtensionTurnControlService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostTurnControlRef",
+export const HostSessionControlRef = Context.Reference<ExtensionSessionControlService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostSessionControlRef",
   {
     defaultValue: () => ({
-      queueFollowUp: unavailable("ExtensionTurnControl"),
-      interject: unavailable("ExtensionTurnControl"),
-      commands: Stream.empty,
-      withOwner: (_owner, effect) => effect,
+      queueFollowUp: unavailable("SessionControl"),
     }),
   },
 )
@@ -190,7 +188,7 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   searchStorage: Effect.service(HostSearchStorageRef),
   agentRunner: Effect.service(HostAgentRunnerRef),
   sessionMutations: Effect.service(HostSessionMutationsRef),
-  turnControl: Effect.service(HostTurnControlRef),
+  sessionControl: Effect.service(HostSessionControlRef),
 })
 type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
 
@@ -203,7 +201,6 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
       sessionMutations: Effect.serviceOption(SessionMutations),
-      turnControl: Effect.serviceOption(ExtensionTurnControl),
     })
 
     return {
@@ -222,9 +219,6 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
         : {}),
       ...(available.sessionMutations._tag === "Some"
         ? { sessionMutations: available.sessionMutations.value }
-        : {}),
-      ...(available.turnControl._tag === "Some"
-        ? { turnControl: available.turnControl.value }
         : {}),
     }
   },
@@ -253,8 +247,8 @@ const withAmbientHostContextOverrides = <A, E, R>(
   if (overrides.sessionMutations !== undefined) {
     next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
   }
-  if (overrides.turnControl !== undefined) {
-    next = next.pipe(Effect.provideService(HostTurnControlRef, overrides.turnControl))
+  if (overrides.sessionControl !== undefined) {
+    next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
   }
   return next
 }
@@ -290,7 +284,7 @@ export const makeAmbientExtensionHostContextDeps = (
       sessionMutations: defaults.sessionMutations,
       actorEngine: input.actorEngine,
       receptionist: input.receptionist,
-      turnControl: defaults.turnControl,
+      sessionControl: defaults.sessionControl,
     }
   })
 
@@ -393,7 +387,7 @@ export const makeExtensionHostContext = (
         ),
 
       queueFollowUp: (params) =>
-        deps.turnControl
+        deps.sessionControl
           .queueFollowUp({
             sessionId: runInfo.sessionId,
             branchId: params.branchId ?? runInfo.branchId,

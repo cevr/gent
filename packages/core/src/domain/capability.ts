@@ -31,7 +31,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
 /**
  * A single fat `CapabilityContext extends ExtensionHostContext` would expose
  * typed request dispatch, session mutation,
- * interaction, and turn-control surfaces to every read capability — making
+ * interaction, and follow-up surfaces to every read capability — making
  * the `intent: "read"` fence dishonest at the context level even when lint
  * stops write-shaped service calls.
  *
@@ -44,7 +44,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
  * second parameter:
  *   - `(input, ctx: CapabilityCoreContext) => …` — the default, audience-neutral
  *   - `(input, ctx: ModelCapabilityContext) => …` — model tools that need
- *     subagent / interaction / turn-control surfaces
+ *     subagent / interaction / follow-up surfaces
  *
  * The host always passes the full `ModelCapabilityContext`; the structural
  * subtype relationship guarantees that handlers asking for less get less in
@@ -62,7 +62,7 @@ export interface CapabilityCoreContext {
 }
 
 /** The wide tool-execution context. Read+write surfaces, agent runner,
- *  session mutations, interaction, and turn-control are all reachable. */
+ *  session mutations, interaction, and follow-up controls are all reachable. */
 export interface ModelCapabilityContext extends ExtensionHostContext, CapabilityCoreContext {}
 
 /**

@@ -24,7 +24,6 @@ import { Permission } from "@gent/core/domain/permission"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
-import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control.js"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 const makeTestExtensions = () => {
   const cowork = AgentDefinition.make({
@@ -60,7 +59,6 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     }),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),

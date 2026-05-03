@@ -7,7 +7,6 @@ import { AutoExtension, AutoMsg, AutoService } from "@gent/extensions/auto"
 import { type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
 import { testSetupCtx } from "@gent/core/test-utils"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../src/runtime/extensions/actor-host"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
@@ -35,11 +34,10 @@ const autoExtension: LoadedExtension = {
 }
 
 const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = []) => {
-  const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
   const resolved = { extensions: [autoExtension] } as unknown as ResolvedExtensions
   const actorRuntime = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
-  return Layer.mergeAll(actorRuntime, EventStore.Memory, turnControl, storage, ...extraLayers)
+  return Layer.mergeAll(actorRuntime, EventStore.Memory, storage, ...extraLayers)
 }
 
 const makeLayer = () => seededMachineLayer()

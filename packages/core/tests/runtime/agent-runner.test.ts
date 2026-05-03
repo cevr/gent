@@ -12,7 +12,6 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
 import { ConfigService } from "../../src/runtime/config-service"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
@@ -140,7 +139,6 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     ToolRunner.Test(),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
@@ -204,6 +202,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
               ),
             )
           }),
+        queueFollowUp: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () => SubscriptionRef.get(runtimeState),

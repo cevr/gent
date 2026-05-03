@@ -9,7 +9,6 @@ import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { ActorEngine } from "../../../src/runtime/extensions/actor-engine"
 import { ActorHost } from "../../../src/runtime/extensions/actor-host"
-import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { buildResourceLayer } from "../../../src/runtime/extensions/resource-host/resource-layer"
 import { resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -19,7 +18,6 @@ export const makeActorRuntimeLayer = (config: {
   readonly withStorage?: boolean
   readonly extensionLayers?: ReadonlyArray<Layer.Layer<never>>
 }) => {
-  const turnControl = ExtensionTurnControl.Test()
   const storage = Storage.Test()
   const resolved = resolveExtensions(config.extensions)
   const actorRuntime = ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
@@ -31,7 +29,6 @@ export const makeActorRuntimeLayer = (config: {
   const baseInfra = Layer.mergeAll(
     actorRuntime,
     EventStore.Memory,
-    turnControl,
     ...(config.withStorage ? [storage] : []),
   )
 

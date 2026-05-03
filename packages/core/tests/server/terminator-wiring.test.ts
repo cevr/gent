@@ -57,6 +57,7 @@ const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionR
   Layer.succeed(SessionRuntime, {
     dispatch: () => Effect.void,
     runPrompt: () => Effect.void,
+    queueFollowUp: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () =>

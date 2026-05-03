@@ -3,7 +3,7 @@
  *
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
  * prod-shaped event publisher, real ActorHost, real ToolRunner.Live,
- * and real ExtensionTurnControl.Live — so QueueFollowUp actually drives multi-turn loops.
+ * and direct session-loop follow-ups — so QueueFollowUp actually drives multi-turn loops.
  *
  * Import from @gent/core/test-utils/e2e-layer
  */
@@ -37,7 +37,6 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { ActorHost } from "../runtime/extensions/actor-host.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
@@ -92,7 +91,7 @@ export interface E2ELayerConfig {
  * - ActorHost.fromResolved(extensions) — spawns real actors
  * - EventPublisherLive — appends and broadcasts committed events
  * - ToolRunner.Live — executes tools for real
- * - ExtensionTurnControl.Live — QueueFollowUp enqueues directly into the live loop
+ * - session-loop follow-ups — QueueFollowUp enqueues directly into the live loop
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions — the test-agents pseudo-extension carries the test
@@ -223,7 +222,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         config.providerLayer,
         extensionRegistryLive,
         driverRegistryLive,
-        ExtensionTurnControl.Live,
         actorRuntimeLive,
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),

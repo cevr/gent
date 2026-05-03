@@ -31,7 +31,6 @@ import {
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
 import { ActorEngine, type ActorEngineService } from "./extensions/actor-engine.js"
 import { Receptionist, type ReceptionistService } from "./extensions/receptionist.js"
-import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
@@ -217,7 +216,6 @@ export class SessionProfileCache extends Context.Service<
                   modelDrivers: resolved.modelDrivers,
                   externalDrivers: resolved.externalDrivers,
                 }),
-                ExtensionTurnControl.Live,
                 ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),

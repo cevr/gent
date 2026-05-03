@@ -146,7 +146,7 @@ export interface ToolInput<
    *  prompt fragments resolved per-turn from services, use a turn projection reaction. */
   readonly prompt?: PromptSection
   /** The tool body. Receives decoded `params` and a `ToolCapabilityContext`
-   *  (the wide host context — subagents, interaction, turn-control all reachable —
+   *  (the wide host context — subagents, interaction, follow-ups all reachable —
    *  with `toolCallId` narrowed to required). */
   readonly execute: (
     params: Schema.Schema.Type<Params>,

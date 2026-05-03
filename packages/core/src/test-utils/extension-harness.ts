@@ -41,7 +41,6 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
@@ -236,7 +235,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
     config.subagentRunner ?? defaultRunner,
   )
 
-  const turnControlLayer = ExtensionTurnControl.Test()
   return Layer.unwrap(
     Effect.gen(function* () {
       const setupResult = yield* setupBuiltinExtensions({
@@ -269,7 +267,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         storageLayer,
         EventStore.Memory,
         ExtensionRegistry.fromResolved(reconciled.resolved),
-        turnControlLayer,
         subagentRunnerLayer,
         PromptPresenter.Test(),
         Permission.Test(),

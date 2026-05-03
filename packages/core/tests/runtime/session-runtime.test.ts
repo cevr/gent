@@ -36,7 +36,6 @@ import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -98,7 +97,6 @@ const makeRuntimeLayer = (
     }),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -141,7 +139,6 @@ const makeRuntimeLayerWithEventPublisher = (
     }),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -212,7 +209,6 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
     }),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -245,7 +241,6 @@ const makeLiveToolRuntimeLayer = (
     }),
     ActorEngine.Live,
     ActorEngine.Live,
-    ExtensionTurnControl.Test(),
     eventStoreLayer,
     recorderLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

@@ -43,7 +43,6 @@ import {
   resolveRuntimeProfile,
 } from "../../src/runtime/profile"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { Receptionist } from "../../src/runtime/extensions/receptionist"
 
 const fsLayer = Layer.mergeAll(
@@ -180,9 +179,7 @@ describe("resolveRuntimeProfile", () => {
           extensions: [sectionExtension],
         })
 
-        const layer = buildExtensionLayers(profile.resolved).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-        )
+        const layer = buildExtensionLayers(profile.resolved)
 
         const registryService = yield* Effect.gen(function* () {
           return yield* ExtensionRegistry
@@ -204,9 +201,7 @@ describe("resolveRuntimeProfile", () => {
           platform: "darwin",
           extensions: [dynamicExtension],
         })
-        const layer = buildExtensionLayers(profile.resolved).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-        )
+        const layer = buildExtensionLayers(profile.resolved)
         const registryService = yield* Effect.gen(function* () {
           return yield* ExtensionRegistry
         }).pipe(Effect.provide(layer))
@@ -246,9 +241,7 @@ describe("resolveRuntimeProfile", () => {
           extensions: [actorExtension],
         })
 
-        const layer = buildExtensionLayers(profile.resolved).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-        )
+        const layer = buildExtensionLayers(profile.resolved)
 
         const refs = yield* Effect.gen(function* () {
           const reg = yield* Receptionist

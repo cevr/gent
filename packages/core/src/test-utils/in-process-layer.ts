@@ -19,7 +19,6 @@ import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ServerProfileService } from "../runtime/scope-brands.js"
@@ -64,7 +63,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
-  const actorRuntimeLive = Layer.mergeAll(ActorEngine.Live, ExtensionTurnControl.Live)
+  const actorRuntimeLive = ActorEngine.Live
   const memoryStorage = Storage.MemoryWithSql()
   const baseDeps = Layer.mergeAll(
     memoryStorage,
