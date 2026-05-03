@@ -792,10 +792,10 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
     }),
   )
-  it.live("duplicate tool-call response parts de-duplicate in the stored transcript", () =>
+  it.live("duplicate final tool response parts de-duplicate in the stored transcript", () =>
     Effect.gen(function* () {
       // Upstream drivers can repeat the same provider tool-call part while
-      // streaming. Normalization keeps one transcript tool-call per id.
+      // streaming. Normalization keeps one transcript tool-call/result per id.
       const e2eSessionId = SessionId.make("e2e-tool-dup-session")
       const e2eBranchId = BranchId.make("e2e-tool-dup-branch")
       const e2eExecutor: TurnExecutor = {
@@ -803,6 +803,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           Stream.fromIterable([
             toolCall(ToolCallId.make("tc-dup"), "write_file"),
             toolCall(ToolCallId.make("tc-dup"), "write_file"),
+            toolResult(ToolCallId.make("tc-dup"), "write_file", {}),
             toolResult(ToolCallId.make("tc-dup"), "write_file", {}),
             finish(),
           ]),
@@ -864,8 +865,11 @@ describe("ExternalDriverContribution end-to-end", () => {
           const storage = yield* Storage
           const messages = yield* storage.listMessages(e2eBranchId)
           const toolCallParts = messages.flatMap((m) => messagePartsToolCallParts(m.parts))
+          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("write_file")
+          expect(toolResultParts.length).toBe(1)
+          expect(toolResultParts[0]?.toolName).toBe("write_file")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
