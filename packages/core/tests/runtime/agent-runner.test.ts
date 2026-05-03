@@ -15,6 +15,7 @@ import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { IdService } from "../../src/runtime/id-service"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import {
   dateFromMillis,
@@ -145,6 +146,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     providerLayer,
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    IdService.Live,
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
@@ -172,6 +174,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   BunServices.layer,
   Permission.Live([], "allow"),
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  IdService.Live,
   ServerProfileService.Test(),
   ConfigService.Test(),
   ModelRegistry.Test(),

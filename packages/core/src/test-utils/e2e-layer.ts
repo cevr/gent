@@ -37,6 +37,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
+import { IdService } from "../runtime/id-service.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
@@ -222,6 +223,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        IdService.Live,
         subagentRunnerLayer,
         authStoreLive,
         authGuardLive,

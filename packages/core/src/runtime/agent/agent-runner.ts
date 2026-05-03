@@ -70,6 +70,7 @@ import {
   type StorageTransactionService,
 } from "../../storage/storage-transaction.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { IdService, type IdServiceShape } from "../id-service.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
@@ -342,6 +343,7 @@ export const getSessionDepth = (
 const makeSharedRunnerHelpers = (
   storage: Pick<AgentRunStorage, "transaction" | "sessions" | "branches" | "relationships">,
   eventPublisher: EventPublisherService,
+  idServiceRef: IdServiceShape,
 ) => {
   const createDurableAgentRunSession = (params: {
     agent: { name: AgentName }
@@ -359,8 +361,8 @@ const makeSharedRunnerHelpers = (
         })
       }
 
-      const sessionId = SessionId.make(Bun.randomUUIDv7())
-      const branchId = BranchId.make(Bun.randomUUIDv7())
+      const sessionId = SessionId.make(yield* idServiceRef.next)
+      const branchId = BranchId.make(yield* idServiceRef.next)
       const now = yield* DateTime.nowAsDate
 
       const committed = yield* storage.transaction.withTransaction(
@@ -668,9 +670,10 @@ const runEphemeralAgent = (params: {
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
+  sessionId: SessionId
+  branchId: BranchId
 }) => {
-  const sessionId = SessionId.make(Bun.randomUUIDv7())
-  const branchId = BranchId.make(Bun.randomUUIDv7())
+  const { sessionId, branchId } = params
   const normalizedRunSpec = params.runSpec
   // The ephemeral runtime builder owns the parent-omit set; adding a new
   // child-owned service requires editing one composition root.
@@ -896,6 +899,7 @@ export const InProcessRunner = (
   | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
+  | IdService
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -925,7 +929,8 @@ export const InProcessRunner = (
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
 
-      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher)
+      const idServiceRef = yield* IdService
+      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, idServiceRef)
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
       const publishAgentSwitch = (params: {
         sessionId: SessionId
@@ -974,22 +979,28 @@ export const InProcessRunner = (
           }
 
           if (persistence === "ephemeral") {
-            return runEphemeralAgent({
-              runnerConfig,
-              shared,
-              extensionRegistry,
-              parentServices,
-              parentProfile,
-              parentSessionId: params.parentSessionId,
-              parentBranchId: params.parentBranchId,
-              toolCallId,
-              cwd: params.cwd,
-              agentName: params.agent.name,
-              prompt: params.prompt,
-              runSpec: normalizedRunSpec,
-              persistence,
-              parentBaseEventStore: baseEventStore,
-              notifyMirroredEventObservers,
+            return Effect.gen(function* () {
+              const sessionId = SessionId.make(yield* idServiceRef.next)
+              const branchId = BranchId.make(yield* idServiceRef.next)
+              return yield* runEphemeralAgent({
+                runnerConfig,
+                shared,
+                extensionRegistry,
+                parentServices,
+                parentProfile,
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId,
+                cwd: params.cwd,
+                agentName: params.agent.name,
+                prompt: params.prompt,
+                runSpec: normalizedRunSpec,
+                persistence,
+                parentBaseEventStore: baseEventStore,
+                notifyMirroredEventObservers,
+                sessionId,
+                branchId,
+              })
             })
           }
 
@@ -1101,6 +1112,7 @@ export const SubprocessRunner = (
   | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
+  | IdService
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -1130,7 +1142,8 @@ export const SubprocessRunner = (
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
 
-      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher)
+      const idServiceRef = yield* IdService
+      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, idServiceRef)
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
 
       return {
@@ -1138,22 +1151,28 @@ export const SubprocessRunner = (
           const persistence = resolveRunPersistence(params.runSpec)
           const toolCallId = params.runSpec?.parentToolCallId
           if (persistence === "ephemeral") {
-            return runEphemeralAgent({
-              runnerConfig: config,
-              shared,
-              extensionRegistry,
-              parentServices,
-              parentProfile,
-              parentSessionId: params.parentSessionId,
-              parentBranchId: params.parentBranchId,
-              toolCallId,
-              cwd: params.cwd,
-              agentName: params.agent.name,
-              prompt: params.prompt,
-              runSpec: params.runSpec,
-              persistence,
-              parentBaseEventStore: baseEventStore,
-              notifyMirroredEventObservers,
+            return Effect.gen(function* () {
+              const sessionId = SessionId.make(yield* idServiceRef.next)
+              const branchId = BranchId.make(yield* idServiceRef.next)
+              return yield* runEphemeralAgent({
+                runnerConfig: config,
+                shared,
+                extensionRegistry,
+                parentServices,
+                parentProfile,
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId,
+                cwd: params.cwd,
+                agentName: params.agent.name,
+                prompt: params.prompt,
+                runSpec: params.runSpec,
+                persistence,
+                parentBaseEventStore: baseEventStore,
+                notifyMirroredEventObservers,
+                sessionId,
+                branchId,
+              })
             })
           }
 

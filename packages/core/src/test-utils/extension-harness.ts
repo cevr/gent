@@ -23,6 +23,7 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { IdService } from "../runtime/id-service.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
@@ -104,6 +105,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         Permission.Test(),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        IdService.Live,
         ...(config.extraLayers ?? []),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, baseLayer)
