@@ -128,33 +128,6 @@ const makeStorage = Effect.gen(function* () {
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
 
-/** Build focused sub-Tag layers from a StorageService value (no extra scope). */
-const subTagLayersFromService = (
-  s: StorageService,
-): Layer.Layer<BranchStorage | MessageStorage | EventStorage | RelationshipStorage> =>
-  Layer.mergeAll(
-    BranchStorage.fromStorage(s),
-    MessageStorage.fromStorage(s),
-    EventStorage.fromStorage(s),
-    RelationshipStorage.fromStorage(s),
-  )
-
-/**
- * Layer that derives sub-Tags from Storage already in context.
- * Use with `Layer.provideMerge` when Storage is already provided — this
- * avoids double-instantiating the base layer (no `base` argument needed).
- */
-const subTagsFromContext: Layer.Layer<
-  BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
-  never,
-  Storage
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    const s = yield* Storage
-    return subTagLayersFromService(s)
-  }),
-)
-
 export class Storage extends Context.Service<Storage, StorageService>()(
   "@gent/core/src/storage/sqlite-storage/Storage",
 ) {
@@ -214,7 +187,10 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     return Layer.mergeAll(
       base,
       Layer.provide(SessionStorage.Live, base),
-      Layer.provide(subTagsFromContext, base),
+      Layer.provide(BranchStorage.Live, base),
+      Layer.provide(MessageStorage.Live, base),
+      Layer.provide(EventStorage.Live, base),
+      Layer.provide(RelationshipStorage.Live, base),
       Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
@@ -249,7 +225,10 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     return Layer.mergeAll(
       base,
       Layer.provide(SessionStorage.Live, base),
-      Layer.provide(subTagsFromContext, base),
+      Layer.provide(BranchStorage.Live, base),
+      Layer.provide(MessageStorage.Live, base),
+      Layer.provide(EventStorage.Live, base),
+      Layer.provide(RelationshipStorage.Live, base),
       Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
