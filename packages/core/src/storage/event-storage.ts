@@ -1,7 +1,7 @@
 /**
  * EventStorage — focused service for agent event persistence + queries.
  *
- * Split from the `Storage` god-interface.
+ * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
 import { Clock, Context, Effect, Layer } from "effect"

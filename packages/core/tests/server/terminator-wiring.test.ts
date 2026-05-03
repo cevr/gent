@@ -50,7 +50,7 @@ import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
-import { Storage } from "../../src/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 
 const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
@@ -95,7 +95,7 @@ const baseDeps = ({
   withRegistration: boolean
   runtimeLayer: Layer.Layer<SessionRuntime>
 }) => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const terminatorLayer = SessionCommands.SessionRuntimeTerminatorLive
   const registerLayer = withRegistration
     ? Layer.provide(

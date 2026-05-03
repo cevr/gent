@@ -32,7 +32,7 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   },
   {
     pattern: /\bsubTagLayers\s*\(/,
-    message: "Storage subtag adapter is deleted; use Storage.*WithSql composition roots",
+    message: "Storage subtag adapter is deleted; use SqliteStorage composition roots",
   },
   {
     pattern: /\bctx\.extension\b/,

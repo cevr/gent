@@ -27,7 +27,7 @@ import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "../../src/server/event-publisher"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -196,7 +196,7 @@ const makeLayerWithEvents = (
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
@@ -396,7 +396,7 @@ describe("external turn execution", () => {
         },
       ])
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         providerLayer,
         ExtensionRegistry.fromResolved(agentsResolved),
         DriverRegistry.fromResolved({
@@ -549,14 +549,14 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         providerLayer,
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
           externalDrivers: e2eResolved.externalDrivers,
         }),
-        // Messages go through Storage directly — EventStore path is orthogonal.
+        // Messages go through focused storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -630,7 +630,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         providerLayer,
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
@@ -725,7 +725,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         providerLayer,
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
@@ -819,7 +819,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         providerLayer,
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({

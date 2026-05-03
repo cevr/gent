@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect } from "effect"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import {
   InteractionStorage,
   type InteractionStorageService,
@@ -30,7 +30,7 @@ const persistInteraction = (is: InteractionStorageService, record: InteractionRe
 // Interaction Request — cold interaction mechanics
 // ============================================================================
 describe("Interaction Request", () => {
-  const storageLive = Storage.MemoryWithSql()
+  const storageLive = SqliteStorage.MemoryWithSql()
   it.live("present persists request to storage and throws InteractionPendingError", () =>
     Effect.gen(function* () {
       yield* Effect.gen(function* () {

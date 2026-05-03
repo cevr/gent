@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { Storage } from "../../src/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 
@@ -64,7 +64,7 @@ describe("SessionProfileCache", () => {
           initialProfiles: [initialProfile],
         }).pipe(
           Layer.provide(
-            Layer.mergeAll(BunServices.layer, configServiceLive, Storage.MemoryWithSql()),
+            Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
           ),
         )
         const resolvedProfile = yield* Effect.gen(function* () {
@@ -116,7 +116,7 @@ describe("SessionProfileCache", () => {
         extensions: [],
       }).pipe(
         Layer.provide(
-          Layer.mergeAll(BunServices.layer, configServiceLive, Storage.MemoryWithSql()),
+          Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
         ),
       )
 

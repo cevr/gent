@@ -56,7 +56,7 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/storage/example.ts",
         line: 1,
-        message: "Storage subtag adapter is deleted; use Storage.*WithSql composition roots",
+        message: "Storage subtag adapter is deleted; use SqliteStorage composition roots",
       },
     ])
   })

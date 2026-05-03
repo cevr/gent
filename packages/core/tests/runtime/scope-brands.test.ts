@@ -21,7 +21,6 @@ import {
 } from "../../src/runtime/scope-brands"
 import { buildEphemeralRuntime, type EphemeralRuntimeOverrides } from "../../src/runtime/composer"
 import { runWithBuiltLayer } from "../../src/runtime/run-with-built-layer"
-import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -62,22 +61,6 @@ describe("scope brand type fences", () => {
   const parentServices = Context.empty() as Context.Context<never>
 
   const storageOverride = () =>
-    Layer.mergeAll(
-      Layer.succeed(SqlClient.SqlClient, { sentinel: "child-sql" } as never),
-      Layer.succeed(Storage, { sentinel: "child-storage" } as never),
-      Layer.succeed(SessionStorage, { sentinel: "child-session" } as never),
-      Layer.succeed(BranchStorage, { sentinel: "child-branch" } as never),
-      Layer.succeed(MessageStorage, { sentinel: "child-message" } as never),
-      Layer.succeed(EventStorage, { sentinel: "child-event" } as never),
-      Layer.succeed(RelationshipStorage, { sentinel: "child-relationship" } as never),
-      Layer.succeed(StorageTransaction, { sentinel: "child-transaction" } as never),
-      Layer.succeed(CheckpointStorage, { sentinel: "child-checkpoint" } as never),
-      Layer.succeed(InteractionStorage, { sentinel: "child-interaction" } as never),
-      Layer.succeed(InteractionPendingReader, { sentinel: "child-pending" } as never),
-      Layer.succeed(SearchStorage, { sentinel: "child-search" } as never),
-    )
-
-  const focusedStorageOverride = () =>
     Layer.mergeAll(
       Layer.succeed(SqlClient.SqlClient, { sentinel: "child-sql" } as never),
       Layer.succeed(SessionStorage, { sentinel: "child-session" } as never),
@@ -272,23 +255,16 @@ describe("scope brand type fences", () => {
     )
   })
 
-  test("ephemeral storage override replaces Storage and focused sub-Tags", () => {
-    // Construct a parent context with Storage + SessionStorage +
-    // InteractionPendingReader. After the storage override family is applied,
-    // the parent's versions must be stripped — the child's in-memory
-    // layer should win, and InteractionPendingReader from the parent
-    // (which is bound to the parent's interaction store) must NOT
-    // leak through. Otherwise ephemeral subagents read parent's
-    // durable interactions while writing to a fresh in-memory store.
+  test("ephemeral storage override replaces focused storage sub-Tags", () => {
+    // Construct a parent context with SessionStorage + InteractionPendingReader.
+    // After the storage override family is applied, the parent's versions must
+    // be stripped. Otherwise ephemeral subagents read parent durable
+    // interactions while writing to a fresh in-memory store.
     return Effect.runPromise(
       Effect.gen(function* () {
-        // Build a parent with a sentinel Storage + SessionStorage
-        // + InteractionPendingReader.
-        const sentinelStorage = { sentinel: "parent-storage" } as never
         const sentinelSession = { sentinel: "parent-session" } as never
         const sentinelPending = { sentinel: "parent-pending" } as never
         const parentServices = Context.empty().pipe(
-          Context.add(Storage, sentinelStorage),
           Context.add(SessionStorage, sentinelSession),
           Context.add(InteractionPendingReader, sentinelPending),
         ) as Context.Context<never>
@@ -301,11 +277,6 @@ describe("scope brand type fences", () => {
           overrides: { ...baseOverrides(), storage: childStorageLayer },
         })
 
-        const broad = yield* Effect.gen(function* () {
-          return yield* Storage
-        }).pipe(Effect.provide(composed.layer))
-        expect((broad as unknown as { sentinel: string }).sentinel).toBe("child-storage")
-
         const session = yield* Effect.gen(function* () {
           return yield* SessionStorage
         }).pipe(Effect.provide(composed.layer))
@@ -315,42 +286,6 @@ describe("scope brand type fences", () => {
           return yield* InteractionPendingReader
         }).pipe(Effect.provide(composed.layer))
         expect((pending as unknown as { sentinel: string }).sentinel).toBe("child-pending")
-      }),
-    )
-  })
-
-  test("ephemeral extension layers cannot see parent broad Storage", () => {
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        class ExtensionStorageProbe extends Context.Service<
-          ExtensionStorageProbe,
-          { readonly storage: unknown }
-        >()("@gent/core/tests/scope-brands/ExtensionStorageProbe") {}
-
-        const parentServices = Context.empty().pipe(
-          Context.add(Storage, { sentinel: "parent-storage" } as never),
-        ) as Context.Context<never>
-
-        const extensionLayer = Layer.effect(
-          ExtensionStorageProbe,
-          Effect.gen(function* () {
-            const storage = yield* Storage
-            return { storage }
-          }),
-        )
-
-        const composed = buildEphemeralRuntime({
-          parent: serverParent,
-          parentServices,
-          overrides: { ...baseOverrides(), storage: focusedStorageOverride() },
-          extensionLayers: extensionLayer,
-        })
-
-        const exit = yield* Effect.gen(function* () {
-          return yield* ExtensionStorageProbe
-        }).pipe(Effect.provide(composed.layer), Effect.exit)
-
-        expect(exit._tag).toBe("Failure")
       }),
     )
   })

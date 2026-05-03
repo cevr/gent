@@ -23,7 +23,7 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
-import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
 import type { ExternalDriverContribution } from "@gent/core/domain/driver"
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -60,12 +60,12 @@ describe("resolveSessionEnvironment", () => {
         extensions: [],
       }).pipe(
         Layer.provide(
-          Layer.mergeAll(BunServices.layer, configServiceLive, Storage.MemoryWithSql()),
+          Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
         ),
       )
       const testLayer = Layer.mergeAll(
         BunServices.layer,
-        Storage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
         runtimePlatformLive,
@@ -156,7 +156,7 @@ describe("resolveSessionEnvironment", () => {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
-        Storage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         runtimePlatformLayer,
       )
@@ -194,7 +194,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        Storage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
         runtimePlatformLayer,
@@ -284,7 +284,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        Storage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         defaultDriverRegistryLayer,
         runtimePlatformLayer,

@@ -16,7 +16,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
 import { setupExtension } from "../../src/runtime/extensions/loader"
-import { Storage } from "../../src/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -453,7 +453,7 @@ describe("extension command RPCs", () => {
                     Layer.mergeAll(
                       BunServices.layer,
                       ConfigService.Test(),
-                      Storage.MemoryWithSql(),
+                      SqliteStorage.MemoryWithSql(),
                     ),
                   ),
                 ) as Layer.Layer<SessionProfileCache>

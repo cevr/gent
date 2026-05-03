@@ -29,7 +29,7 @@ import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
@@ -63,7 +63,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
-  const memoryStorage = Storage.MemoryWithSql()
+  const memoryStorage = SqliteStorage.MemoryWithSql()
   const clusterRunnerLive = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     memoryStorage,

@@ -22,7 +22,7 @@ import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -95,8 +95,8 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const storageLive =
     persistenceMode === "memory"
-      ? Storage.MemoryWithSql()
-      : Storage.LiveWithSql(config.dbPath ?? ".gent/data.db")
+      ? SqliteStorage.MemoryWithSql()
+      : SqliteStorage.LiveWithSql(config.dbPath ?? ".gent/data.db")
   const clusterRunnerLive = Layer.provide(
     SingleRunner.layer({
       runnerStorage: persistenceMode === "memory" ? "memory" : "sql",

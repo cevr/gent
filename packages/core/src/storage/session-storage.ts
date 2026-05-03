@@ -1,9 +1,8 @@
 /**
  * SessionStorage — focused service for session CRUD.
  *
- * Split from the `Storage` god-interface. Each consumer yields
- * only the narrow Tag it needs; the full SQLite implementation provides
- * all sub-Tags through `Storage.LiveWithSql` / `Storage.MemoryWithSql`.
+ * Consumers yield only the narrow Tag they need; `SqliteStorage` provides
+ * all focused storage Tags from one SQLite client.
  */
 
 import { Context, Effect, Layer } from "effect"

@@ -56,7 +56,7 @@ import {
 } from "../../domain/message-part-projection.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { ToolCallId } from "../../domain/ids.js"
-import { Storage } from "../../storage/sqlite-storage.js"
+import { SqliteStorage } from "../../storage/sqlite-storage.js"
 import { SessionStorage, type SessionStorageService } from "../../storage/session-storage.js"
 import { BranchStorage, type BranchStorageService } from "../../storage/branch-storage.js"
 import { MessageStorage, type MessageStorageService } from "../../storage/message-storage.js"
@@ -502,7 +502,7 @@ const buildEphemeralLayer = (params: {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
     Context.get(params.parentServices as Context.Context<unknown>, tag)
 
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     storageLayer,

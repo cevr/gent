@@ -1,7 +1,7 @@
 /**
  * RelationshipStorage — focused service for session tree / relationship queries.
  *
- * Split from the `Storage` god-interface.
+ * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
 import { Context, Effect, Layer } from "effect"

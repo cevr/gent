@@ -33,7 +33,7 @@ import {
 import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
 import { ExecutorExtension } from "@gent/extensions/executor"
 import { EventStore } from "@gent/core/domain/event"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
@@ -142,7 +142,7 @@ const makeExecutorExtension = (overrides?: {
   return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
-  const storage = Layer.orDie(Storage.TestWithSql())
+  const storage = Layer.orDie(SqliteStorage.TestWithSql())
   const extLayers = (extension.contributions.resources ?? [])
     .filter((r) => r.scope === "process")
     .map((r) => r.layer as Layer.Layer<any, never, any>)
@@ -569,7 +569,7 @@ describe("Executor runtime lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       const resolved = resolveExtensions([extension])
       const layer = buildExtensionLayers(resolved).pipe(
-        Layer.provideMerge(Storage.TestWithSql()),
+        Layer.provideMerge(SqliteStorage.TestWithSql()),
         Layer.provideMerge(EventStore.Memory),
         Layer.provideMerge(BunServices.layer),
       )

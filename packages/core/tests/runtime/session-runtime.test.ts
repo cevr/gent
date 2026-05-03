@@ -43,7 +43,7 @@ import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
-import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -80,7 +80,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
 }
 const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
   SessionRuntime.LiveWithEntity(baseSections)
-const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof Storage.TestWithSql>) =>
+const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
   Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
@@ -90,7 +90,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const baseDepsWithoutProfile = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -132,7 +132,7 @@ const makeRuntimeLayerWithEventPublisher = (
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -200,7 +200,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -233,7 +233,7 @@ const makeLiveToolRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),

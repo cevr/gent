@@ -6,7 +6,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
@@ -16,7 +16,7 @@ import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 
 // Single in-memory db: TestWithSql exposes both Storage and SqlClient.
 // TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
-const baseLayer = Storage.TestWithSql()
+const baseLayer = SqliteStorage.TestWithSql()
 const taskStorageLayer = Layer.provide(TaskStorage.Live, baseLayer)
 const testLayer = Layer.merge(baseLayer, taskStorageLayer)
 
@@ -136,7 +136,7 @@ describe("Task Storage", () => {
     )
     db.close()
 
-    const base = Storage.LiveWithSql(dbPath).pipe(
+    const base = SqliteStorage.LiveWithSql(dbPath).pipe(
       Layer.provide(BunFileSystem.layer),
       Layer.provide(BunServices.layer),
     )

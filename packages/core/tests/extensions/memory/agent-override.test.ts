@@ -21,7 +21,7 @@ import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
 import { Permission } from "@gent/core/domain/permission"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -48,7 +48,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     storageLayer,

@@ -46,7 +46,7 @@ import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
 import {
   reconcileLoadedExtensions,
@@ -172,7 +172,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       //
       // Extension layers may require SqlClient — provide it below via
       // `provideMerge(resourceLayer, baseDeps)`.
-      const storageLayer = Storage.MemoryWithSql()
+      const storageLayer = SqliteStorage.MemoryWithSql()
       const clusterRunnerLive = Layer.provide(
         SingleRunner.layer({ runnerStorage: "memory" }),
         storageLayer,

@@ -25,7 +25,7 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SqliteStorage } from "../storage/sqlite-storage.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
@@ -94,7 +94,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       })
 
       const activeExtensions = reconciled.resolved.extensions
-      const storageLayer = Layer.orDie(Storage.TestWithSql())
+      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const baseLayer = Layer.mergeAll(
         storageLayer,
         EventStore.Memory,

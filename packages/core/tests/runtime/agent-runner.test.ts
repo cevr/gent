@@ -29,7 +29,7 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { ModelId } from "@gent/core/domain/model"
 import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -111,7 +111,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     },
   ])
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
-  const storageLayer = Storage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql()
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     storageLayer,
@@ -315,7 +315,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -398,7 +398,7 @@ describe("AgentRunner", () => {
   )
   it.live("rolls back durable child session when spawn event append fails", () =>
     Effect.gen(function* () {
-      const storageLayer = Layer.orDie(Storage.TestWithSql())
+      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const failingPublisherLayer = Layer.succeed(EventPublisher, {
         append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
         deliver: () => Effect.void,
@@ -457,7 +457,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -506,7 +506,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -556,7 +556,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         eventStoreLayer,
         eventPublisherLayer,
         testRegistryLayer,
@@ -611,7 +611,7 @@ describe("AgentRunner", () => {
   )
   it.live("ephemeral helper runs mirror child tool events into the parent store", () =>
     Effect.gen(function* () {
-      const storageLayer = Layer.orDie(Storage.TestWithSql())
+      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
@@ -683,7 +683,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -735,7 +735,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = SqliteStorage.TestWithSql()
       // Mock agent loop that writes a reasoning-only assistant message
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
@@ -806,7 +806,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = SqliteStorage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const messages = yield* MessageStorage
@@ -879,7 +879,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.TestWithSql()
+      const storageLayer = SqliteStorage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const messages = yield* MessageStorage
@@ -968,7 +968,7 @@ describe("session depth guard", () => {
     effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
   ) =>
     Effect.runPromise(
-      effect.pipe(Effect.timeout("4 seconds"), Effect.provide(Storage.TestWithSql())),
+      effect.pipe(Effect.timeout("4 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
     )
   const makeSession = (id: string, parentSessionId?: string) =>
     new Session({
@@ -1116,7 +1116,7 @@ describe("session depth guard", () => {
 })
 describe("ephemeral service propagation", () => {
   const makeEphemeralLayer = (providerLayer: Layer.Layer<Provider>) => {
-    const storageLayer = Layer.orDie(Storage.TestWithSql())
+    const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
     const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
@@ -1199,7 +1199,7 @@ describe("ephemeral service propagation", () => {
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])
-      const storageLayer = Layer.orDie(Storage.TestWithSql())
+      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(

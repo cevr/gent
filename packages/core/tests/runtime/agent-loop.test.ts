@@ -59,7 +59,7 @@ import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "../../src/server/event-publisher"
-import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -150,7 +150,7 @@ const makeLayer = (
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools, resources),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -171,7 +171,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -239,7 +239,7 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     checkpointStorageLayer(options),
     providerLayer,
     makeExtRegistry(),
@@ -283,7 +283,7 @@ const makeLiveToolLayer = (
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     extRegistry,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -323,7 +323,7 @@ const makeLayerWithEvents = (
   tools: ReadonlyArray<ToolToken> = [],
 ) => {
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -342,10 +342,10 @@ const makeLayerWithEvents = (
 }
 const makeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
-  eventPublisherLayer: Layer.Layer<EventPublisher, never, Storage>,
+  eventPublisherLayer: Layer.Layer<EventPublisher>,
 ) => {
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -408,7 +408,7 @@ const makeExternalLayerWithEvents = (
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
-    Storage.TestWithSql(),
+    SqliteStorage.TestWithSql(),
     providerLayer,
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -533,7 +533,7 @@ describe("streaming", () => {
           }
         }),
       )
-      const baseStorageLayer = Storage.TestWithSql()
+      const baseStorageLayer = SqliteStorage.TestWithSql()
       const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(
         slowStorage,
@@ -1586,7 +1586,7 @@ describe("interaction", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
-      Storage.TestWithSql(),
+      SqliteStorage.TestWithSql(),
       providerLayer ?? makeInteractionProviderLayer(),
       makeExtRegistry(tools),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -1729,7 +1729,7 @@ describe("interaction", () => {
   it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
     Effect.gen(function* () {
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         Provider.TestStream(() =>
           Effect.succeed(
             Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
@@ -1871,7 +1871,7 @@ describe("checkpoint persistence", () => {
         }),
       )
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 1 }),
         providerLayer,
         makeExtRegistry(),
@@ -1916,7 +1916,7 @@ describe("checkpoint persistence", () => {
         ),
       )
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 2 }),
         providerLayer,
         makeExtRegistry(),
@@ -1970,7 +1970,7 @@ describe("checkpoint persistence", () => {
         ),
       )
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 2 }),
         providerLayer,
         makeExtRegistry(),
@@ -2035,7 +2035,7 @@ describe("checkpoint persistence", () => {
         ),
       )
       const deps = Layer.mergeAll(
-        Storage.TestWithSql(),
+        SqliteStorage.TestWithSql(),
         checkpointStorageLayer({ failUpsertOn: 3 }),
         providerLayer,
         makeExtRegistry(),
@@ -2125,7 +2125,7 @@ describe("recovery", () => {
     providerParts?: ReadonlyArray<ProviderStreamPart>
     providerCalls?: Ref.Ref<number>
   }) => {
-    const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
+    const storageLayer = SqliteStorage.LiveWithSql(params.dbPath).pipe(
       Layer.provide(BunFileSystem.layer),
       Layer.provide(BunServices.layer),
     )
@@ -2589,7 +2589,7 @@ describe("durable suspension and queue drain regression", () => {
           return { resolved: true, value: toolParams.value }
         }),
     })
-    const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
+    const storageLayer = SqliteStorage.LiveWithSql(params.dbPath).pipe(
       Layer.provide(BunFileSystem.layer),
       Layer.provide(BunServices.layer),
     )
@@ -2746,7 +2746,7 @@ describe("durable suspension and queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          Storage.TestWithSql(),
+          SqliteStorage.TestWithSql(),
           gatedProvider,
           makeExtRegistry(),
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

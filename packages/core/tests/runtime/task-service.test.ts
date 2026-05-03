@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -14,7 +14,7 @@ const sessionId = SessionId.make("task-test-session")
 const branchId = BranchId.make("task-test-branch")
 
 const makeLayer = () => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
   const baseDeps = Layer.mergeAll(
     storageLayer,

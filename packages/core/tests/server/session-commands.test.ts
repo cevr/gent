@@ -20,7 +20,7 @@ import { dedupRequest, SessionCommands } from "../../src/server/session-commands
 import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
-import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
@@ -90,7 +90,7 @@ const failingPublisherLayer = Layer.succeed(EventPublisher, {
 })
 
 const failingSessionCommandsLayer = () => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
     SessionRuntime.Test(),
@@ -128,7 +128,7 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
 })
 
 const sendFailingSessionCommandsLayer = () => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const failingRuntimeLayer = Layer.succeed(
     SessionRuntime,
     makeSessionRuntimeStub({
@@ -151,7 +151,7 @@ const sendFailingSessionCommandsLayer = () => {
 }
 
 const sessionCommandsLayer = () => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
     SessionRuntime.Test(),
@@ -186,7 +186,7 @@ const sessionCommandsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
     runtimeTerminated === undefined
@@ -205,7 +205,7 @@ const sessionCommandsLayerWithMachineProbe = (
 }
 
 const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
   const terminatorRegistrationLayer = Layer.provide(
     SessionCommands.RegisterSessionRuntimeTerminatorLive,
@@ -228,7 +228,7 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
   runtimeTerminated: Array<SessionId>,
   runtimeRestored: Array<SessionId>,
 ) => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const failingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -266,7 +266,7 @@ const racySessionCommandsLayer = (params: {
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
-  const storageLayer = Storage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql()
   const racingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -1498,7 +1498,7 @@ describe("requestId idempotency", () => {
             }),
         }),
       )
-      const storageLayer = Storage.MemoryWithSql()
+      const storageLayer = SqliteStorage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
@@ -1552,7 +1552,7 @@ describe("requestId idempotency", () => {
             }),
         }),
       )
-      const storageLayer = Storage.MemoryWithSql()
+      const storageLayer = SqliteStorage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,

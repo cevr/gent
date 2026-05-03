@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { Effect } from "effect"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -10,7 +10,7 @@ import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-stor
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
-const test = it.live.layer(Storage.TestWithSql())
+const test = it.live.layer(SqliteStorage.TestWithSql())
 
 // Fixture helpers
 

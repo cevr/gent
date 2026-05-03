@@ -1,7 +1,7 @@
 /**
  * MessageStorage — focused service for message CRUD.
  *
- * Split from the `Storage` god-interface.
+ * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
 import { Context, Effect, Layer } from "effect"

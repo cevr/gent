@@ -1,7 +1,7 @@
 /**
  * BranchStorage — focused service for branch CRUD + message counting.
  *
- * Split from the `Storage` god-interface.
+ * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
 import { Context, Effect, Layer } from "effect"

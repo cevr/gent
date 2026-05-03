@@ -6,7 +6,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
@@ -42,7 +42,7 @@ describe("Storage", () => {
         expect(retrieved).toBeDefined()
         expect(retrieved?.id).toBe(SessionId.make("test-session"))
         expect(retrieved?.name).toBe("Test Session")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("lists sessions", () =>
       Effect.gen(function* () {
@@ -65,7 +65,7 @@ describe("Storage", () => {
         )
         const sessionsResult = yield* sessions.listSessions()
         expect(sessionsResult.length).toBe(2)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("lists first branch per session", () =>
       Effect.gen(function* () {
@@ -90,7 +90,7 @@ describe("Storage", () => {
           SessionId.make("s2"),
           SessionId.make("s1"),
         ])
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("updates a session", () =>
       Effect.gen(function* () {
@@ -105,7 +105,7 @@ describe("Storage", () => {
         yield* sessions.updateSession(new Session({ ...session, name: "Updated" }))
         const retrieved = yield* sessions.getSession(SessionId.make("update-test"))
         expect(retrieved?.name).toBe("Updated")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("deletes a session", () =>
       Effect.gen(function* () {
@@ -120,7 +120,7 @@ describe("Storage", () => {
         yield* sessions.deleteSession(SessionId.make("delete-test"))
         const retrieved = yield* sessions.getSession(SessionId.make("delete-test"))
         expect(retrieved).toBeUndefined()
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("enables sqlite foreign key enforcement", () =>
       Effect.gen(function* () {
@@ -129,7 +129,7 @@ describe("Storage", () => {
           foreign_keys: number
         }>`PRAGMA foreign_keys`
         expect(rows[0]?.foreign_keys).toBe(1)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.scoped("configures file-backed sqlite durability pragmas", () =>
       Effect.gen(function* () {
@@ -137,7 +137,7 @@ describe("Storage", () => {
           Effect.sync(() => mkdtempSync(join(tmpdir(), "gent-storage-pragmas-"))),
           (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
         )
-        const layer = Storage.LiveWithSql(join(dir, "gent.db")).pipe(
+        const layer = SqliteStorage.LiveWithSql(join(dir, "gent.db")).pipe(
           Layer.provide(BunFileSystem.layer),
           Layer.provide(BunServices.layer),
         )
@@ -264,7 +264,7 @@ describe("Storage", () => {
         db.run(`INSERT INTO retired_fts(content) VALUES (?)`, ["old index"])
         db.close()
 
-        const layer = Storage.LiveWithSql(dbPath).pipe(
+        const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
           Layer.provide(BunFileSystem.layer),
           Layer.provide(BunServices.layer),
         )
@@ -335,7 +335,7 @@ describe("Storage", () => {
           (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
         )
         const dbPath = join(dir, "gent.db")
-        const layer = Storage.LiveWithSql(dbPath).pipe(
+        const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
           Layer.provide(BunFileSystem.layer),
           Layer.provide(BunServices.layer),
         )
@@ -418,7 +418,7 @@ describe("Storage", () => {
           sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${"missing-session"}, NULL, ${"SessionStarted"}, ${"{}"}, ${now})`,
         )
         expect(eventExit._tag).toBe("Failure")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("rejects invalid session parent and active branch relationships", () =>
       Effect.gen(function* () {
@@ -466,7 +466,7 @@ describe("Storage", () => {
           sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"wrong-active"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
         expect(wrongActiveBranchExit._tag).toBe("Failure")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("rejects parent branch without parent session through storage service", () =>
       Effect.gen(function* () {
@@ -486,7 +486,7 @@ describe("Storage", () => {
         expect(
           yield* sessions.getSession(SessionId.make("storage-dangling-parent-branch")),
         ).toBeUndefined()
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("rejects branch creation with a parent branch outside the same session", () =>
       Effect.gen(function* () {
@@ -523,7 +523,7 @@ describe("Storage", () => {
           sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
         )
         expect(directInsertExit._tag).toBe("Failure")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("rejects deleting branches that own child branches or child sessions", () =>
       Effect.gen(function* () {
@@ -591,7 +591,7 @@ describe("Storage", () => {
         expect(directChildSessionExit._tag).toBe("Failure")
         expect(yield* branches.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
         expect(yield* sessions.getSession(SessionId.make("delete-child-session"))).toBeDefined()
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("deletes session children and storage projections", () =>
       Effect.gen(function* () {
@@ -693,14 +693,14 @@ describe("Storage", () => {
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
         expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
         const cascadedIds = yield* sessions.deleteSession(SessionId.make("never-existed"))
         expect(cascadedIds).toEqual([])
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     // Observable post-state contract (sqlite-storage.ts:1204-1209):
     // when `deleteSession(parent)` races with concurrent
@@ -830,7 +830,7 @@ describe("Storage", () => {
             expect(inCascade || inDb).toBe(true)
           }
         }
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
     )
   })
   describe("Events", () => {
@@ -876,7 +876,7 @@ describe("Storage", () => {
         if (latest && latest._tag === "AgentSwitched") {
           expect(latest.toAgent).toBe(AgentName.make("cowork"))
         }
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
   })
   describe("Branches", () => {
@@ -900,7 +900,7 @@ describe("Storage", () => {
         const retrieved = yield* branches.getBranch(BranchId.make("test-branch"))
         expect(retrieved).toBeDefined()
         expect(retrieved?.sessionId).toBe(SessionId.make("branch-session"))
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("lists branches for a session", () =>
       Effect.gen(function* () {
@@ -930,7 +930,7 @@ describe("Storage", () => {
         )
         const branchesResult = yield* branches.listBranches(SessionId.make("multi-branch"))
         expect(branchesResult.length).toBe(2)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("updates branch summary", () =>
       Effect.gen(function* () {
@@ -953,7 +953,7 @@ describe("Storage", () => {
         yield* branches.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
         const retrieved = yield* branches.getBranch(BranchId.make("summary-branch"))
         expect(retrieved?.summary).toBe("Short summary")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
   })
   describe("Messages", () => {
@@ -989,7 +989,7 @@ describe("Storage", () => {
         expect(retrieved).toBeDefined()
         expect(retrieved?.role).toBe("user")
         expect(retrieved?.parts[0]?.type).toBe("text")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("round-trips all persisted transcript part types", () =>
       Effect.gen(function* () {
@@ -1072,7 +1072,7 @@ describe("Storage", () => {
             output: { type: "json", value: { ok: true } },
           }),
         )
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("stores message parts in shared content chunks", () =>
       Effect.gen(function* () {
@@ -1125,7 +1125,7 @@ describe("Storage", () => {
         expect(chunkRows[0]?.count).toBe(1)
         expect(refRows[0]?.count).toBe(2)
         expect(messagesResult.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("counts messages in a branch", () =>
       Effect.gen(function* () {
@@ -1168,7 +1168,7 @@ describe("Storage", () => {
         )
         const count = yield* branches.countMessages(BranchId.make("count-branch"))
         expect(count).toBe(2)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("lists messages for a branch", () =>
       Effect.gen(function* () {
@@ -1213,7 +1213,7 @@ describe("Storage", () => {
         expect(messagesResult.length).toBe(2)
         expect(messagesResult[0]?.role).toBe("user")
         expect(messagesResult[1]?.role).toBe("assistant")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("deletes message chunk refs and search projection rows", () =>
       Effect.gen(function* () {
@@ -1272,7 +1272,7 @@ describe("Storage", () => {
         expect(refs[0]?.count).toBe(0)
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("updates session updatedAt when creating message", () =>
       Effect.gen(function* () {
@@ -1307,7 +1307,7 @@ describe("Storage", () => {
         )
         const session = yield* sessions.getSession(SessionId.make("session-updated-at"))
         expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("rolls back message insert when session timestamp update fails", () =>
       Effect.gen(function* () {
@@ -1355,7 +1355,7 @@ describe("Storage", () => {
         expect(yield* messages.getMessage(MessageId.make("tx-message"))).toBeUndefined()
         const session = yield* sessions.getSession(SessionId.make("tx-message-session"))
         expect(session?.updatedAt.getTime()).toBe(start.getTime())
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("createMessageIfAbsent leaves session timestamp unchanged when insert is ignored", () =>
       Effect.gen(function* () {
@@ -1403,7 +1403,7 @@ describe("Storage", () => {
         expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
         const message = yield* messages.getMessage(MessageId.make("if-absent-message"))
         expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("orders messages by createdAt then id", () =>
       Effect.gen(function* () {
@@ -1448,7 +1448,7 @@ describe("Storage", () => {
         const messagesResult = yield* messages.listMessages(BranchId.make("order-branch"))
         expect(messagesResult[0]?.id).toBe(MessageId.make("a"))
         expect(messagesResult[1]?.id).toBe(MessageId.make("b"))
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
   })
   describe("Message Metadata", () => {
@@ -1500,7 +1500,7 @@ describe("Storage", () => {
             }
           ).iteration,
         ).toBe(3)
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("createMessageIfAbsent preserves metadata", () =>
       Effect.gen(function* () {
@@ -1536,7 +1536,7 @@ describe("Storage", () => {
         expect(messagesResult[0]!.metadata).toBeDefined()
         expect(messagesResult[0]!.metadata!.hidden).toBe(true)
         expect(messagesResult[0]!.metadata!.extensionId).toBe("review-loop")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("messages without metadata have undefined metadata", () =>
       Effect.gen(function* () {
@@ -1569,7 +1569,7 @@ describe("Storage", () => {
         )
         const messagesResult = yield* messages.listMessages(BranchId.make("no-meta-b"))
         expect(messagesResult[0]!.metadata).toBeUndefined()
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("invalid stored metadata decodes to undefined across read surfaces", () =>
       Effect.gen(function* () {
@@ -1602,7 +1602,7 @@ describe("Storage", () => {
         expect(detail.branches).toHaveLength(1)
         expect(detail.branches[0]!.messages).toHaveLength(1)
         expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     test("domain message preserves metadata for transport", () => {
       const message = Message.Regular.make({
@@ -1651,7 +1651,7 @@ describe("Storage", () => {
         if (stored === undefined) throw new Error("expected interjection message")
         expect(stored._tag).toBe("interjection")
         expect(stored.role).toBe("user")
-      }).pipe(Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     test("domain message omits metadata when absent", () => {
       const message = Message.Regular.make({
@@ -1666,7 +1666,7 @@ describe("Storage", () => {
     })
   })
   describe("Event decoding", () => {
-    const layer = Storage.TestWithSql()
+    const layer = SqliteStorage.TestWithSql()
     it.live("listEvents skips events with unknown _tag instead of crashing", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -1776,7 +1776,7 @@ describe("Storage", () => {
         }
         // Negative control: real interleaving, not accidental serialization.
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
       Effect.gen(function* () {
@@ -1808,7 +1808,7 @@ describe("Storage", () => {
         const persisted = yield* events.listEvents({ sessionId, branchId })
         expect(persisted.length).toBe(N)
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
       Effect.gen(function* () {
@@ -1851,7 +1851,7 @@ describe("Storage", () => {
           expect(seen.has(id)).toBe(true)
         }
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
     )
   })
 })
