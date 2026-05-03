@@ -104,12 +104,30 @@ export const isToolToken = (value: unknown): value is ToolToken => {
   return getToolMetadataOption(value) !== undefined
 }
 
+/**
+ * Invariant violation: a `ToolToken` should always carry `GentToolMetadata`.
+ * Surfaces as a typed defect (via `Effect.die`) when callers thread through
+ * an Effect; surfaces as a synchronous throw otherwise. Either path is a
+ * programmer-misuse-only signal — no runtime code can construct a `ToolToken`
+ * without metadata through the public `tool({...})` factory.
+ */
+export class ToolMetadataMissingError extends Schema.TaggedErrorClass<ToolMetadataMissingError>()(
+  "ToolMetadataMissingError",
+  {
+    toolName: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Tool "${this.toolName}" is missing Gent metadata`
+  }
+}
+
 export const getToolMetadata = <Input, Output, Error>(
   tool: ToolToken<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error> => {
   const metadata = getToolMetadataOption(tool)
   if (metadata === undefined) {
-    throw new Error(`Tool "${tool.name}" is missing Gent metadata`)
+    throw new ToolMetadataMissingError({ toolName: tool.name })
   }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken carries Input/Output as a phantom type; annotation storage is intentionally heterogeneous.
   return metadata as GentToolMetadata<Input, Output, Error>

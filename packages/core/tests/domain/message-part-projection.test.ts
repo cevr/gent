@@ -345,6 +345,8 @@ describe("message part projection", () => {
         mediaType: "image/png",
       } satisfies Partial<Prompt.FilePart>),
     )
-    expect(() => assistantMessagePartToResponsePart(part)).toThrow("data URL images")
+    expect(() => assistantMessagePartToResponsePart(part)).toThrow(
+      'responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "https://example.test/image.png"',
+    )
   })
 })

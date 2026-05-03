@@ -7,6 +7,7 @@
  * Per-tag conflict rules are NOT uniform — see the per-tag resolvers below.
  */
 
+import { Schema } from "effect"
 import type {
   AutocompleteContribution,
   BorderLabelItem,
@@ -21,6 +22,25 @@ import {
   SCOPE_PRECEDENCE,
   type ExtensionScope as CoreExtensionScope,
 } from "@gent/core/runtime/extensions/disabled"
+
+/**
+ * Surfaces invariant violations in the TUI extension resolver: a same-scope
+ * contribution collision (two extensions claim the same key) or an
+ * unknown contribution `_tag`. Both are programmer-misuse-only signals —
+ * either two extensions registered conflicting ids in the same scope, or a
+ * new contribution tag was added without updating `HANDLED_TAGS`.
+ */
+export class TuiExtensionResolveError extends Schema.TaggedErrorClass<TuiExtensionResolveError>()(
+  "TuiExtensionResolveError",
+  {
+    reason: Schema.Literals(["same-scope-collision", "unknown-tag"]),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail
+  }
+}
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 
@@ -70,9 +90,10 @@ const checkCollision = (
   key: string,
 ): void => {
   if (prev !== undefined && prev.scope === ext.scope && prev.source !== ext.filePath) {
-    throw new Error(
-      `Same-scope TUI ${label} collision: "${key}" from "${prev.source}" and "${ext.filePath}" in scope "${ext.scope}"`,
-    )
+    throw new TuiExtensionResolveError({
+      reason: "same-scope-collision",
+      detail: `Same-scope TUI ${label} collision: "${key}" from "${prev.source}" and "${ext.filePath}" in scope "${ext.scope}"`,
+    })
   }
 }
 
@@ -308,10 +329,12 @@ export const resolveTuiExtensions = (
   // Exhaustiveness gate — fail loud if a contribution carries an unknown _tag.
   for (const { ext, contribution } of flat) {
     if (!HANDLED_TAGS.has(contribution._tag)) {
-      throw new Error(
-        `Unknown TUI client contribution tag "${contribution._tag}" from "${ext.id}" (${ext.filePath}). ` +
+      throw new TuiExtensionResolveError({
+        reason: "unknown-tag",
+        detail:
+          `Unknown TUI client contribution tag "${contribution._tag}" from "${ext.id}" (${ext.filePath}). ` +
           `Add it to HANDLED_TAGS and register a per-tag resolver in apps/tui/src/extensions/resolve.ts.`,
-      )
+      })
     }
   }
 

@@ -188,11 +188,17 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
                   const tree = commit.tree()
                   const entry = tree.getPath(filePath)
                   if (entry === null || entry === undefined) {
-                    throw new Error(`File not found: ${filePath}`)
+                    throw new GitReaderError({
+                      message: `File not found: ${filePath}`,
+                      operation: "readFile",
+                    })
                   }
                   const blob = entry.toObject(repo).peelToBlob()
                   if (blob === null || blob === undefined) {
-                    throw new Error(`Not a blob: ${filePath}`)
+                    throw new GitReaderError({
+                      message: `Not a blob: ${filePath}`,
+                      operation: "readFile",
+                    })
                   }
                   return {
                     content: new Uint8Array(blob.content()),

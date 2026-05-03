@@ -1,7 +1,19 @@
+import { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "./ids.js"
 import { stringifyOutput, summarizeOutput } from "./tool-output.js"
+
+export class UrlBackedImageNotSupportedError extends Schema.TaggedErrorClass<UrlBackedImageNotSupportedError>()(
+  "UrlBackedImageNotSupportedError",
+  {
+    image: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "${this.image}"`
+  }
+}
 import {
   ImagePart,
   ReasoningPart,
@@ -378,9 +390,7 @@ export const dataUrlToBytes = (value: string): Uint8Array | undefined => {
 export const imagePartToResponseFilePart = (part: ImagePart): Response.FilePart => {
   const data = dataUrlToBytes(part.image)
   if (data === undefined) {
-    throw new Error(
-      `responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "${part.image}"`,
-    )
+    throw new UrlBackedImageNotSupportedError({ image: part.image })
   }
   return Response.makePart("file", {
     data,

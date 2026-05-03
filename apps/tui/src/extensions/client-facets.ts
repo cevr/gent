@@ -24,7 +24,7 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import type { Effect, ManagedRuntime } from "effect"
+import { Schema, type Effect, type ManagedRuntime } from "effect"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
@@ -347,9 +347,26 @@ export function defineClientExtension<R extends ClientRuntimeServices = ClientDe
 ): ExtensionClientModule<R> {
   if (typeof idOrExtension === "string") {
     if (spec === undefined) {
-      throw new Error("defineClientExtension(id, spec) requires a setup spec")
+      throw new DefineClientExtensionError({ reason: "missing-spec" })
     }
     return standaloneClientModule(idOrExtension, spec)
   }
   return standaloneClientModule(String(idOrExtension.manifest.id), idOrExtension.client)
+}
+
+/**
+ * Surfaces author-facing misuse of `defineClientExtension`. Thrown
+ * synchronously since the factory is called at module top level — by
+ * the time the bundler reaches it, only a programmer error can leave
+ * `spec` undefined.
+ */
+export class DefineClientExtensionError extends Schema.TaggedErrorClass<DefineClientExtensionError>()(
+  "DefineClientExtensionError",
+  {
+    reason: Schema.Literals(["missing-spec"]),
+  },
+) {
+  override get message(): string {
+    return "defineClientExtension(id, spec) requires a setup spec"
+  }
 }

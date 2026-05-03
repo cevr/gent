@@ -325,9 +325,8 @@ export const responsePartsFromMessages = (
               case "text":
               case "reasoning":
               case "tool-call":
-              case "image": {
+              case "image":
                 return [assistantMessagePartToResponsePart(part)]
-              }
               default:
                 return []
             }

@@ -120,7 +120,9 @@ export const buildOpenAIModelDriver = (
     // expects that format
     if (authInfo?.type === "oauth") {
       if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
-        throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
+        throw new ProviderAuthError({
+          message: `Model "${modelName}" not available with ChatGPT OAuth`,
+        })
       }
       return AiModel.make(
         "openai",

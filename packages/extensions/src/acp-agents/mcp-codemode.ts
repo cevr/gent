@@ -9,12 +9,23 @@
  *
  * @module
  */
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { getToolId, type ToolToken } from "@gent/core/extensions/api"
+
+export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
+  "McpCodemodeUnknownToolError",
+  {
+    toolName: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Unknown tool: ${this.toolName}`
+  }
+}
 
 // ── Types ──
 
@@ -98,7 +109,7 @@ const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig[
       get: (_target, toolName: string) => {
         if (!toolNames.has(toolName)) {
           return () => {
-            throw new Error(`Unknown tool: ${toolName}`)
+            throw new McpCodemodeUnknownToolError({ toolName })
           }
         }
 

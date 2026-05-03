@@ -1,4 +1,4 @@
-import { Console, Effect, Option, Random } from "effect"
+import { Console, Effect, Option, Random, Schema } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
@@ -11,6 +11,25 @@ import type {
 import type { Session as ClientSession } from "./client/index"
 import { Route } from "./router/index"
 import type { AppRoute } from "./router/index"
+
+/**
+ * Surfaces a corrupt session record (session row exists but has no
+ * `activeBranchId`). Caught at the bootstrap boundary in `main.tsx`
+ * so the user sees a structured error message instead of a stack
+ * trace. Thrown synchronously because `resolveAppBootstrap` is a
+ * synchronous projection at the render boundary.
+ */
+export class AppBootstrapError extends Schema.TaggedErrorClass<AppBootstrapError>()(
+  "AppBootstrapError",
+  {
+    sessionId: SessionId,
+    reason: Schema.Literals(["missing-branch"]),
+  },
+) {
+  override get message(): string {
+    return `Session ${this.sessionId} has no branch — cannot render`
+  }
+}
 
 export type InitialState =
   | { _tag: "session"; session: DomainSession; prompt?: string }
@@ -81,7 +100,7 @@ export const resolveAppBootstrap = (
       // activeBranchId is always present for sessions created by resolveInitialState.
       // Guard for corrupt session records from -s <id> with missing branch.
       if (state.session.activeBranchId === undefined) {
-        throw new Error(`Session ${state.session.id} has no branch — cannot render`)
+        throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
       }
       return {
         initialSession: toSession(state.session),

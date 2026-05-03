@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
@@ -36,6 +36,25 @@ import {
 } from "../runtime/session-profile.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
+
+/**
+ * Wiring contract failure — fires only when a Layer that depends on a
+ * pre-resolved seed (the launch SessionProfile or base prompt sections)
+ * is materialized before the resolver Layer that populates the seed.
+ *
+ * In a correctly wired composition this is unreachable; surfacing it as
+ * a typed error means the failure channel of the bootstrap layer carries
+ * an explicit `BootstrapError` instead of an opaque defect.
+ */
+export class BootstrapError extends Schema.TaggedErrorClass<BootstrapError>()("BootstrapError", {
+  seed: Schema.Literals(["launchSessionProfile", "baseSections"]),
+}) {
+  override get message(): string {
+    return this.seed === "launchSessionProfile"
+      ? "Launch session profile seed was not initialized"
+      : "Base prompt sections were not initialized"
+  }
+}
 
 export interface DependenciesConfig {
   cwd: string
@@ -273,10 +292,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
   const sessionProfileCacheLive = Layer.provide(
     Layer.unwrap(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const launchProfile = launchSessionProfileSeed
         if (launchProfile === undefined) {
-          throw new Error("Launch session profile seed was not initialized")
+          return yield* new BootstrapError({ seed: "launchSessionProfile" })
         }
         return SessionProfileCache.Live({
           home: config.home,
@@ -296,10 +315,10 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const sessionRuntimeLive = Layer.provide(
     Layer.unwrap(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const baseSections = baseSectionsSeed
         if (baseSections === undefined) {
-          throw new Error("Base prompt sections were not initialized")
+          return yield* new BootstrapError({ seed: "baseSections" })
         }
         return SessionRuntime.LiveWithEntity({ baseSections })
       }),
@@ -321,10 +340,10 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const baseSections = baseSectionsSeed
         if (baseSections === undefined) {
-          throw new Error("Base prompt sections were not initialized")
+          return yield* new BootstrapError({ seed: "baseSections" })
         }
         const runnerConfig = {
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
