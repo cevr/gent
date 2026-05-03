@@ -110,6 +110,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts",
     expectedCount: 10,
   },
+  {
+    rule: "gent/no-projection-writes",
+    invalid: "no-projection-writes.invalid.ts",
+    valid: "no-projection-writes.valid.ts",
+    // 3 forms × 1 write each = 3 reports
+    expectedCount: 3,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
