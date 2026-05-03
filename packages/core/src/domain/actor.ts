@@ -1,7 +1,5 @@
 import { Schema, type Effect, type Stream } from "effect"
 import { ActorId } from "./ids.js"
-import type { ToolPolicyFragment } from "./extension.js"
-import type { PromptSection } from "./prompt.js"
 import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
 
 /**
@@ -12,10 +10,9 @@ import type { AskBranded, ExtractAskReply } from "./schema-tagged-enum-class.js"
  * the type level. The runtime carries only `id` / `name`; `M` is
  * structural-only and erased at runtime.
  *
- * Behaviors compose by message: `receive` is the sole reducer-like
- * surface, `view` is the sole projection surface, `serviceKey` is
- * the sole discovery surface. ActorEngine consumes Behaviors; Receptionist
- * consumes ServiceKeys.
+ * Behaviors compose by message: `receive` is the state transition
+ * surface and `serviceKey` is the discovery surface. ActorEngine
+ * consumes Behaviors; Receptionist consumes ServiceKeys.
  */
 
 /**
@@ -134,18 +131,6 @@ export interface ActorContext<M> {
 }
 
 /**
- * Optional projection emitted by an actor's current state.
- *
- * The runtime samples `view(state)` whenever it needs a snapshot for
- * prompt assembly or tool policy resolution. Should be cheap and
- * deterministic.
- */
-export interface ActorView {
-  readonly prompt?: ReadonlyArray<PromptSection>
-  readonly toolPolicy?: ToolPolicyFragment
-}
-
-/**
  * JSON-shaped value used as the `Encoded` parameter on durable
  * persistence codecs. This is a *type-level* constraint only — it
  * pins what TypeScript will accept as a behavior's encoded shape, so
@@ -221,7 +206,6 @@ export interface ActorSupervision {
 export interface Behavior<M, S, R = never> {
   readonly initialState: S
   readonly receive: (msg: M, state: S, ctx: ActorContext<M>) => Effect.Effect<S, never, R>
-  readonly view?: (state: S) => ActorView
   readonly serviceKey?: ServiceKey<M>
   readonly persistence?: PersistenceConfig<S>
   readonly supervision?: ActorSupervision

@@ -17,15 +17,12 @@ import type {
   ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
-import type { ServiceKey } from "../../domain/actor.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
-import { ActorEngine } from "./actor-engine.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
-import { Receptionist } from "./receptionist.js"
 
 export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
@@ -52,7 +49,7 @@ export interface CompiledExtensionReactions {
   ) => Effect.Effect<string>
   readonly resolveTurnProjection: (
     ctx: ProjectionTurnContext,
-  ) => Effect.Effect<ExtensionTurnProjection, never, ActorEngine | Receptionist>
+  ) => Effect.Effect<ExtensionTurnProjection>
   readonly executeTool: (
     input: ToolExecuteInput,
     base: (input: ToolExecuteInput) => Effect.Effect<unknown, Error | InteractionPendingError>,
@@ -108,12 +105,6 @@ interface ReactionTurnProjectionSlot {
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["turnProjection"]>
 }
 
-interface RegisteredActorViewSource {
-  readonly extensionId: ExtensionId
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ServiceKey<M> is contravariant; storage erases M
-  readonly serviceKey: ServiceKey<any>
-}
-
 interface RegisteredReaction<Input> {
   readonly extensionId: ExtensionId
   readonly slot: ExtensionReaction<Input, unknown, unknown>
@@ -132,19 +123,6 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })
-
-const collectActorViewSources = (
-  extensions: ReadonlyArray<LoadedExtension>,
-): ReadonlyArray<RegisteredActorViewSource> => {
-  const sources: RegisteredActorViewSource[] = []
-  for (const ext of sortExtensions(extensions)) {
-    for (const behavior of ext.contributions.actors ?? []) {
-      if (behavior.serviceKey === undefined) continue
-      sources.push({ extensionId: ext.manifest.id, serviceKey: behavior.serviceKey })
-    }
-  }
-  return sources
-}
 
 const runReaction = <Input>(
   input: Input,
@@ -255,7 +233,6 @@ export const compileExtensionReactions = (
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const toolExecuteSlots: RegisteredToolExecuteRewrite[] = []
   const turnProjectionSlots: ReactionTurnProjectionSlot[] = []
-  const actorViewSources = collectActorViewSources(sorted)
   const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
   const messageOutputSlots: RegisteredReaction<MessageOutputInput>[] = []
@@ -448,37 +425,6 @@ export const compileExtensionReactions = (
             sectionsById,
             policyFragments,
           )
-        }
-
-        if (actorViewSources.length > 0) {
-          const engine = yield* ActorEngine
-          const receptionist = yield* Receptionist
-          for (const source of actorViewSources) {
-            const refsExit = yield* Effect.exit(receptionist.find(source.serviceKey))
-            if (refsExit._tag === "Failure") {
-              yield* Effect.logWarning("extension.actor-view.find.failed").pipe(
-                Effect.annotateLogs({ extensionId: source.extensionId }),
-              )
-              continue
-            }
-            for (const ref of refsExit.value) {
-              const viewExit = yield* Effect.exit(engine.peekView(ref))
-              if (viewExit._tag === "Failure") {
-                yield* Effect.logWarning("extension.actor-view.peek.failed").pipe(
-                  Effect.annotateLogs({ extensionId: source.extensionId }),
-                )
-                continue
-              }
-              const view = viewExit.value
-              if (view === undefined) continue
-              if (view.prompt !== undefined) {
-                for (const section of view.prompt) sectionsById.set(section.id, section)
-              }
-              if (view.toolPolicy !== undefined) {
-                policyFragments.push(view.toolPolicy)
-              }
-            }
-          }
         }
 
         return { promptSections: [...sectionsById.values()], policyFragments }

@@ -16,12 +16,10 @@ const AutoSnapshotLearning = Schema.Struct({
   content: Schema.String,
 })
 
-/** Snapshot reply schema. Carries enough state for both:
- *   - interceptors (active + iteration + maxIterations + goal)
- *   - the prompt projection (learnings, lastSummary, nextIdea) — replaces the
- *     workflow's previous `derive().promptSections` path that was lost when
- *     `WorkflowContribution.turn` was deleted in .
- *  The TUI widget consumes only the interceptor-shaped fields. */
+/**
+ * Snapshot reply schema. Carries the control state used by RPC callers
+ * plus the learning state needed for turn-time prompt projection.
+ */
 export const AutoSnapshotReply = Schema.Struct({
   active: Schema.Boolean,
   phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),

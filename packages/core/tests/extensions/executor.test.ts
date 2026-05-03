@@ -121,7 +121,7 @@ describe("executor viewForState — prompt + tool policy", () => {
   test("Idle: excludes execute + resume, no prompt section", () => {
     const view = viewForState(ExecutorState.Idle.make({}))
     expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
-    expect(view.prompt).toBeUndefined()
+    expect(view.promptSections).toBeUndefined()
   })
 
   test("Connecting: excludes execute + resume", () => {
@@ -143,7 +143,7 @@ describe("executor viewForState — prompt + tool policy", () => {
       }),
     )
     expect(view.toolPolicy).toEqual({})
-    expect(view.prompt).toBeUndefined()
+    expect(view.promptSections).toBeUndefined()
   })
 
   test("Ready with instructions: prompt section includes guidance", () => {
@@ -155,9 +155,9 @@ describe("executor viewForState — prompt + tool policy", () => {
         executorPrompt: "use frobnicator API",
       }),
     )
-    expect(view.prompt?.length).toBe(1)
-    expect(view.prompt![0]!.id).toBe("executor-guidance")
-    expect(view.prompt![0]!.content).toContain("use frobnicator API")
+    expect(view.promptSections?.length).toBe(1)
+    expect(view.promptSections![0]!.id).toBe("executor-guidance")
+    expect(view.promptSections![0]!.content).toContain("use frobnicator API")
   })
 })
 

@@ -7,7 +7,7 @@
  */
 
 import { Schema } from "effect"
-import { TaggedEnumClass, type ActorView, type PromptSection } from "@gent/core/extensions/api"
+import { TaggedEnumClass, type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 
@@ -89,11 +89,11 @@ const buildPromptSection = (snapshot: ExecutorSnapshotReply): PromptSection | un
   }
 }
 
-export const viewForState = (state: ExecutorState): ActorView => {
+export const viewForState = (state: ExecutorState): TurnProjection => {
   const snapshot = projectSnapshot(state)
   const section = buildPromptSection(snapshot)
   return {
-    ...(section !== undefined ? { prompt: [section] } : {}),
+    ...(section !== undefined ? { promptSections: [section] } : {}),
     toolPolicy: snapshot.status === "ready" ? {} : { exclude: ["execute", "resume"] },
   }
 }

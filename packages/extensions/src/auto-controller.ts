@@ -3,6 +3,7 @@ import {
   ReadOnlyBrand,
   TaggedEnumClass,
   type ReadOnly,
+  type TurnProjection,
   withReadOnly,
 } from "@gent/core/extensions/api"
 import type { AutoSnapshotReply } from "./auto-protocol.js"
@@ -143,11 +144,11 @@ const buildPromptSection = (snapshot: AutoSnapshotReply) => {
   }
 }
 
-export const viewForState = (state: AutoState) => {
+export const viewForState = (state: AutoState): TurnProjection => {
   const snapshot = projectSnapshot(state)
   const section = buildPromptSection(snapshot)
   return {
-    ...(section !== undefined ? { prompt: [section] } : {}),
+    ...(section !== undefined ? { promptSections: [section] } : {}),
     toolPolicy: snapshot.active ? {} : { exclude: [AUTO_CHECKPOINT_TOOL] },
   }
 }

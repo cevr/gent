@@ -88,7 +88,6 @@ export {
   ActorAskTimeout,
   type ActorContext,
   type ActorRef,
-  type ActorView,
   type Behavior,
 } from "../domain/actor.js"
 

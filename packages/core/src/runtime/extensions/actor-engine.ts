@@ -64,7 +64,6 @@ import {
   ActorTerminated,
   type ActorContext,
   type ActorRef,
-  type ActorView,
   type Behavior,
   type JsonValueT,
   type ServiceKey,
@@ -105,21 +104,6 @@ interface MailboxEntry {
    * concrete `S` is pinned by the caller's `Behavior<M, S>`.
    */
   readonly subscribeState: () => Stream.Stream<unknown>
-  /**
-   * Sample the actor's `behavior.view(state)` once. Returns
-   * `undefined` when the spawned behavior did not declare a `view`
-   * (most actors don't — only the ones that contribute to prompt
-   * assembly). The mailbox owns both the live `S` and the
-   * `view` closure captured at spawn time, so this is the only
-   * surface that can pair them; callers outside the engine can't
-   * because `ActorRef<M>` does not carry `S` or `view`.
-   *
-   * Quiescence: the read acquires the same per-actor permit as
-   * `receive` and `snapshot`, so the sampled state is the post-state
-   * of whatever message most recently completed — never an in-flight
-   * `receive` mid-step.
-   */
-  readonly peekView: () => Effect.Effect<ActorView | undefined>
 }
 
 /**
@@ -219,15 +203,6 @@ export interface ActorEngineService {
    * the caller narrows at the consumption seam (typically by `_tag`).
    */
   readonly subscribeState: <M, S>(target: ActorRef<M, S>) => Stream.Stream<S>
-  /**
-   * Sample the target actor's `behavior.view(state)` once. Returns
-   * `undefined` for unknown refs (mirrors `tell` no-op semantics) or
-   * for behaviors that did not declare a `view`. Used by prompt
-   * assembly to fold actor-derived prompt sections + tool policy
-   * fragments into the per-turn prompt evaluation without a round-trip
-   * through `ask`.
-   */
-  readonly peekView: <M>(target: ActorRef<M>) => Effect.Effect<ActorView | undefined>
 }
 
 export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService>()(
@@ -384,18 +359,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                 }),
               )
 
-            const peekViewForActor: MailboxEntry["peekView"] = () =>
-              behavior.view === undefined
-                ? Effect.succeed(undefined)
-                : stateSemaphore.withPermits(1)(
-                    Effect.gen(function* () {
-                      const current = yield* SubscriptionRef.get(stateChannel)
-                      const viewFn = behavior.view
-                      if (viewFn === undefined) return undefined
-                      return viewFn(current)
-                    }),
-                  )
-
             const entry: MailboxEntry = {
               id,
               offer: (env) => Effect.asVoid(Queue.offer(queue, env)),
@@ -404,7 +367,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
                 restoreErasedValue<Stream.Stream<unknown>>(
                   SubscriptionRef.changes(stateChannel).pipe(Stream.changes),
                 ),
-              peekView: peekViewForActor,
             }
             yield* Ref.update(mailboxes, (m) => new Map(m).set(id, entry))
 
@@ -629,13 +591,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             ),
           )
 
-        const peekView = <M>(target: ActorRef<M>): Effect.Effect<ActorView | undefined> =>
-          lookup(target.id).pipe(
-            Effect.flatMap((entry) =>
-              entry === undefined ? Effect.succeed(undefined) : entry.peekView(),
-            ),
-          )
-
         return {
           runtimeScope,
           service: {
@@ -645,7 +600,6 @@ export class ActorEngine extends Context.Service<ActorEngine, ActorEngineService
             snapshot,
             snapshotSettled,
             subscribeState,
-            peekView,
           } satisfies ActorEngineService,
         }
       }),

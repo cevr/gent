@@ -285,8 +285,6 @@
       "@gent/extensions/auto.js": ["./packages/extensions/src/auto.ts"],
       "@gent/extensions/auto-journal": ["./packages/extensions/src/auto-journal.ts"],
       "@gent/extensions/auto-journal.js": ["./packages/extensions/src/auto-journal.ts"],
-      "@gent/extensions/auto-projection": ["./packages/extensions/src/auto-projection.ts"],
-      "@gent/extensions/auto-projection.js": ["./packages/extensions/src/auto-projection.ts"],
       "@gent/extensions/auto-protocol": ["./packages/extensions/src/auto-protocol.ts"],
       "@gent/extensions/auto-protocol.js": ["./packages/extensions/src/auto-protocol.ts"],
       "@gent/extensions/counsel/counsel-tool": [

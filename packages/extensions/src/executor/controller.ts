@@ -153,15 +153,7 @@ export const ExecutorControllerLive = (
         connect,
         disconnect,
         turnProjection: () =>
-          SubscriptionRef.get(state).pipe(
-            Effect.map((current) => {
-              const view = viewForState(current)
-              return {
-                ...(view.prompt !== undefined ? { promptSections: view.prompt } : {}),
-                ...(view.toolPolicy !== undefined ? { toolPolicy: view.toolPolicy } : {}),
-              } satisfies TurnProjection
-            }),
-          ),
+          SubscriptionRef.get(state).pipe(Effect.map((current) => viewForState(current))),
       } satisfies ExecutorRuntimeShape
 
       const read = withReadOnly({

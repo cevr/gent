@@ -210,8 +210,8 @@ describe("Auto runtime", () => {
       yield* auto.reviewSignal()
 
       const view = yield* auto.turnProjection()
-      expect(view.prompt?.length).toBe(1)
-      const content = view.prompt![0]!.content
+      expect(view.promptSections?.length).toBe(1)
+      const content = view.promptSections![0]!.content
       expect(content).toContain("tried memoization")
       expect(content).toContain("test LRU eviction")
     }).pipe(Effect.provide(makeLayer())),

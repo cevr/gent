@@ -214,7 +214,6 @@ export {
   ActorAskTimeout,
   type ActorContext,
   type ActorRef,
-  type ActorView,
   type Behavior,
   type ServiceKey as ServiceKeyT,
 } from "../domain/actor.js"
