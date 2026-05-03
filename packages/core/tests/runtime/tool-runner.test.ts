@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
+import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -7,7 +8,13 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import {
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 
 class ToolProfileToken extends Context.Service<
@@ -307,6 +314,58 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.output.type).toBe("json")
       expect(result.output.value).toEqual({ value: "selected-profile" })
+    }),
+  )
+  it.live("re-raises interaction pending instead of converting it to a tool result", () =>
+    Effect.gen(function* () {
+      const PendingTool = tool({
+        id: "pending",
+        description: "Requests interaction",
+        params: Schema.Struct({}),
+        execute: (_, ctx) =>
+          Effect.fail(
+            new InteractionPendingError({
+              requestId: InteractionRequestId.make("req-pending"),
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            }),
+          ),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [PendingTool] },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* Effect.flip(
+          runner.run(
+            { toolCallId: ToolCallId.make("tc-pending"), toolName: "pending", input: {} },
+            testToolContext({
+              sessionId: SessionId.make("session-pending"),
+              branchId: BranchId.make("branch-pending"),
+              toolCallId: ToolCallId.make("tc-pending"),
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
+        )
+      }).pipe(Effect.provide(layer))
+      expect(result).toBeInstanceOf(InteractionPendingError)
+      expect(result.requestId).toBe(InteractionRequestId.make("req-pending"))
+      expect(result.sessionId).toBe(SessionId.make("session-pending"))
+      expect(result.branchId).toBe(BranchId.make("branch-pending"))
     }),
   )
 })
