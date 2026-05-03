@@ -292,20 +292,21 @@ export const makeSessionRuntimeEntityHandlers = (
   service: SessionRuntimeService,
 ): SessionRuntimeEntityHandlers =>
   SessionRuntimeEntity.of({
-    sendUserMessage: ({ payload }) => service.sendUserMessage(payload),
-    recordToolResult: ({ payload }) => service.recordToolResult(payload),
-    invokeTool: ({ payload }) => service.invokeTool(payload),
-    steer: ({ payload }) => service.steer(payload),
-    respondInteraction: ({ payload }) => service.respondInteraction(payload),
-    runPrompt: ({ payload }) => service.runPrompt(payload),
-    queueFollowUp: ({ payload }) => service.queueFollowUp(payload),
+    sendUserMessage: ({ payload }) => Rpc.uninterruptible(service.sendUserMessage(payload)),
+    recordToolResult: ({ payload }) => Rpc.uninterruptible(service.recordToolResult(payload)),
+    invokeTool: ({ payload }) => Rpc.uninterruptible(service.invokeTool(payload)),
+    steer: ({ payload }) => Rpc.uninterruptible(service.steer(payload)),
+    respondInteraction: ({ payload }) => Rpc.uninterruptible(service.respondInteraction(payload)),
+    runPrompt: ({ payload }) => Rpc.uninterruptible(service.runPrompt(payload)),
+    queueFollowUp: ({ payload }) => Rpc.uninterruptible(service.queueFollowUp(payload)),
     drainQueuedMessages: ({ payload }) => service.drainQueuedMessages(payload),
     getQueuedMessages: ({ payload }) => service.getQueuedMessages(payload),
     getState: ({ payload }) => service.getState(payload),
     getMetrics: ({ payload }) => service.getMetrics(payload),
     watchState: ({ payload }) => Stream.unwrap(service.watchState(payload)),
-    terminateSession: ({ payload }) => service.terminateSession(payload.sessionId),
-    restoreSession: ({ payload }) => service.restoreSession(payload.sessionId),
+    terminateSession: ({ payload }) =>
+      Rpc.uninterruptible(service.terminateSession(payload.sessionId)),
+    restoreSession: ({ payload }) => Rpc.uninterruptible(service.restoreSession(payload.sessionId)),
   })
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
@@ -657,9 +658,9 @@ const makeLiveSessionRuntime: Effect.Effect<
         return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
-    terminateSession: (sessionId) => serializeCommand(agentLoop.terminateSession(sessionId)),
+    terminateSession: (sessionId) => agentLoop.terminateSession(sessionId),
 
-    restoreSession: (sessionId) => serializeCommand(agentLoop.restoreSession(sessionId)),
+    restoreSession: (sessionId) => agentLoop.restoreSession(sessionId),
   } satisfies SessionRuntimeService
 })
 

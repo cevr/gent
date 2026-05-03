@@ -850,6 +850,60 @@ describe("SessionRuntime", () => {
       )
     }),
   )
+  it.live("terminateSession interrupts an active turn while tool result delivery is waiting", () =>
+    Effect.gen(function* () {
+      const streamStarted = yield* Deferred.make<void>()
+      const streamReleased = yield* Deferred.make<void>()
+      const providerLayer = Provider.TestStream(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.await(streamReleased)
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      )
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranch
+          const submitFiber = yield* Effect.forkChild(
+            sessionRuntime.sendUserMessage({
+              sessionId,
+              branchId,
+              content: "hold the turn open",
+            }),
+          )
+          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+          const recordFiber = yield* Effect.forkChild(
+            sessionRuntime.recordToolResult({
+              commandId: ActorCommandId.make("record-tool-terminate-owner"),
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("tool-call-terminate-owner"),
+              toolName: "read",
+              output: { value: "blocked until turn completes" },
+            }),
+          )
+          const earlyRecord = yield* Fiber.join(recordFiber).pipe(
+            Effect.timeoutOption("200 millis"),
+          )
+          expect(earlyRecord._tag).toBe("None")
+
+          yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
+          yield* Fiber.join(submitFiber).pipe(Effect.ignore)
+          yield* Fiber.join(recordFiber).pipe(Effect.ignore)
+          const afterTerminate = yield* Effect.exit(
+            sessionRuntime.getState({ sessionId, branchId }),
+          )
+          expect(afterTerminate._tag).toBe("Failure")
+          yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
   it.live("steer interject interrupts the active turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* Provider.Sequence([
