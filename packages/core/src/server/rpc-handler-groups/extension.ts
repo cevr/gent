@@ -44,15 +44,6 @@ const resolveExtensionSession = (
   ExtensionProtocolError
 > =>
   Effect.gen(function* () {
-    if (deps.sessionStorage === undefined || deps.branchStorage === undefined) {
-      return yield* extensionRequestError({
-        extensionId: params.extensionId,
-        capabilityId: params.tag,
-        phase: params.phase,
-        message: "Session storage unavailable for extension transport",
-      })
-    }
-
     const requestSessionId = params.sessionId
     const requestBranchId = params.branchId
     const session = yield* deps.sessionStorage.getSession(requestSessionId).pipe(

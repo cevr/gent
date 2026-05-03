@@ -38,8 +38,8 @@ export interface RpcHandlerDeps {
   readonly providerAuth: ProviderAuthService
   readonly extensionRegistry: ExtensionRegistryService
   readonly platform: RuntimePlatformShape
-  readonly sessionStorage: SessionStorageService | undefined
-  readonly branchStorage: BranchStorageService | undefined
+  readonly sessionStorage: SessionStorageService
+  readonly branchStorage: BranchStorageService
   readonly connectionTracker: ConnectionTrackerService | undefined
   readonly serverIdentity: ServerIdentityShape
   readonly resolveSessionServices: (

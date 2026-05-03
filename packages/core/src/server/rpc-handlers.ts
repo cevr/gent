@@ -45,28 +45,22 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const platform = yield* RuntimePlatform
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-    const sessionStorageOpt = yield* Effect.serviceOption(SessionStorage)
-    const sessionStorage = sessionStorageOpt._tag === "Some" ? sessionStorageOpt.value : undefined
-    const branchStorageOpt = yield* Effect.serviceOption(BranchStorage)
-    const branchStorage = branchStorageOpt._tag === "Some" ? branchStorageOpt.value : undefined
+    const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const connectionTracker =
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
     const serverIdentity = yield* ServerIdentity
 
     const loadSession = (sessionId: string) => {
-      if (sessionStorage !== undefined) {
-        return sessionStorage
-          .getSession(SessionId.make(sessionId))
-          .pipe(Effect.orElseSucceed(() => undefined))
-      }
-      // @effect-diagnostics-next-line effectSucceedWithVoid:off -- this branch must preserve Effect<Session | undefined>, not collapse to Effect<void>
-      return Effect.succeed(undefined)
+      return sessionStorage
+        .getSession(SessionId.make(sessionId))
+        .pipe(Effect.orElseSucceed(() => undefined))
     }
 
     const resolveSessionServices = (sessionId: string | undefined) =>
       Effect.gen(function* () {
-        if (sessionId === undefined || profileCache === undefined || sessionStorage === undefined) {
+        if (sessionId === undefined || profileCache === undefined) {
           return {
             registry: extensionRegistry,
           }
