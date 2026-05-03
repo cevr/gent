@@ -67,6 +67,14 @@ interface ToolHandlerResult {
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
+const provideCapabilityContext = <A, E, R>(
+  ctx: ToolContext,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  ctx.capabilityContext === undefined
+    ? effect
+    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+
 interface ToolExecutionToolkit {
   readonly tools: ProviderToolMap
   readonly handle: (
@@ -211,13 +219,16 @@ const makeExecutionToolkit = (params: {
           () => {
             const wrapped = Effect.gen(function* () {
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off — erased heterogeneous tool boundary; failures normalize immediately.
-              const output = yield* metadata
-                .effect(
-                  decodedInput,
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                  params.ctx as Parameters<typeof metadata.effect>[1],
-                )
-                .pipe(Effect.mapError(normalizeToolExecutionError))
+              const output = yield* provideCapabilityContext(
+                params.ctx,
+                metadata
+                  .effect(
+                    decodedInput,
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+                    params.ctx as Parameters<typeof metadata.effect>[1],
+                  )
+                  .pipe(Effect.mapError(normalizeToolExecutionError)),
+              )
               return output
             })
             return wrapped

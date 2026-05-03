@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -9,6 +9,14 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
+
+class ToolProfileToken extends Context.Service<
+  ToolProfileToken,
+  {
+    readonly read: () => Effect.Effect<string>
+  }
+>()("@test/ToolProfileToken") {}
+
 describe("ToolRunner", () => {
   it.live("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
@@ -249,6 +257,56 @@ describe("ToolRunner", () => {
         branchId: BranchId.make("branch-inspect"),
         agentName: AgentName.make("deepwork"),
       })
+    }),
+  )
+  it.live("provides the selected capability context while executing the tool", () =>
+    Effect.gen(function* () {
+      const ContextTool = tool({
+        id: "context_tool",
+        description: "Reads profile-scoped context",
+        params: Schema.Struct({}),
+        execute: () =>
+          Effect.gen(function* () {
+            const token = yield* ToolProfileToken
+            const value = yield* token.read()
+            return { value }
+          }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [ContextTool] },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const capabilityContext = Context.make(ToolProfileToken, {
+        read: () => Effect.succeed("selected-profile"),
+      }) as Context.Context<never>
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: ToolCallId.make("tc-context"), toolName: "context_tool", input: {} },
+          testToolContext({
+            sessionId: SessionId.make("session-context"),
+            branchId: BranchId.make("branch-context"),
+            toolCallId: ToolCallId.make("tc-context"),
+            agentName: AgentName.make("cowork"),
+            capabilityContext,
+          }),
+        )
+      }).pipe(Effect.provide(layer))
+      expect(result.output.type).toBe("json")
+      expect(result.output.value).toEqual({ value: "selected-profile" })
     }),
   )
 })
