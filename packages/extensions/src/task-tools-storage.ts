@@ -178,14 +178,19 @@ const resetIncompatibleTaskTables = Effect.fn("TaskStorage.resetIncompatibleTask
 
 /**
  * Read-only slice of the TaskStorage surface — list/get queries +
- * dependency reads. Projections (and `request({ intent: "read" })`
- * capabilities once  lands) yield this branded sub-Tag instead
- * of `TaskStorage` so the type system blocks accidental write
- * dependencies in read contexts.
+ * dependency reads. Projections and `request({ intent: "read" })`
+ * capabilities yield this branded sub-Tag instead of `TaskStorage`
+ * so the type system blocks accidental write dependencies in read
+ * contexts.
  *
- * The Live layer for `TaskStorage` provides BOTH this Tag and the
- * write-capable `TaskStorage` Tag from the same underlying state —
- * see `TaskStorage.Live` below.
+ * Why two Tags, not one: `TaskStorage` and `TaskStorageReadOnly`
+ * share a single underlying service value — `TaskStorage.Live`
+ * builds the substrate once and registers both Tags pointing at
+ * it (the read-only Tag wrapped with `withReadOnly`). This is a
+ * structural narrowing, not a parallel API: there is one source
+ * of truth, but two access surfaces. Read-intent code yields the
+ * branded sub-Tag and is statically barred from calling write
+ * methods, while write-intent code yields the full Tag.
  */
 export interface TaskStorageReadOnlyService {
   readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, TaskStorageError>
