@@ -1,4 +1,4 @@
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
@@ -37,17 +37,6 @@ import {
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
 
-/** Marker service — construction triggers recovery of pending interaction requests */
-class InteractionRecoveryTag extends Context.Service<
-  InteractionRecoveryTag,
-  { readonly recovered: number }
->()("@gent/core/src/server/dependencies/InteractionRecoveryTag") {}
-
-class BasePromptSectionsTag extends Context.Service<
-  BasePromptSectionsTag,
-  ReadonlyArray<PromptSection>
->()("@gent/core/src/server/dependencies/BasePromptSectionsTag") {}
-
 export interface DependenciesConfig {
   cwd: string
   home: string
@@ -85,6 +74,7 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
 
 export const createDependencies = (config: DependenciesConfig) => {
   let launchSessionProfileSeed: SessionProfile | undefined
+  let baseSectionsSeed: ReadonlyArray<PromptSection> | undefined
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
     home: config.home,
@@ -140,7 +130,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       })
       const profile = sessionProfileFromRuntime(runtime)
       launchSessionProfileSeed = profile
-      const baseSectionsLayer = Layer.succeed(BasePromptSectionsTag, runtime.baseSections)
+      baseSectionsSeed = runtime.baseSections
       // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
       // can construct an EphemeralProfile through the runtime builder without
       // forging the brand themselves. Only this composition root may call
@@ -149,11 +139,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         ServerProfileService,
         brandServerScope({ cwd: profile.cwd, resolved: profile.resolved }),
       )
-      return Layer.mergeAll(
-        Layer.succeedContext(runtime.layerContext),
-        baseSectionsLayer,
-        serverProfileLayer,
-      )
+      return Layer.mergeAll(Layer.succeedContext(runtime.layerContext), serverProfileLayer)
     }),
   )
   // Extension registry needs storageLive for SqlClient (extension task layers use it)
@@ -255,14 +241,13 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Recover pending interaction requests from storage.
   // Iterates persisted pending records and calls approvalService.rehydrate()
   // generically — no per-handler dispatch needed.
-  const interactionRecoveryLive = Layer.effect(
-    InteractionRecoveryTag,
+  const interactionRecoveryLive = Layer.effectDiscard(
     Effect.gen(function* () {
       const interactionStore = yield* InteractionStorage
       const approvalService = yield* ApprovalService
 
       const pending = yield* interactionStore.listPending()
-      if (pending.length === 0) return { recovered: 0 }
+      if (pending.length === 0) return
 
       let recovered = 0
       for (const record of pending) {
@@ -283,8 +268,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       if (recovered > 0) {
         yield* Effect.log(`Recovered ${recovered} pending interaction request(s)`)
       }
-
-      return { recovered }
     }),
   ).pipe(Layer.provide(allDeps))
 
@@ -316,8 +299,11 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const sessionRuntimeLive = Layer.provide(
     Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSections = yield* BasePromptSectionsTag
+      Effect.sync(() => {
+        const baseSections = baseSectionsSeed
+        if (baseSections === undefined) {
+          throw new Error("Base prompt sections were not initialized")
+        }
         return SessionRuntime.LiveWithEntity({ baseSections })
       }),
     ),
@@ -337,8 +323,11 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSections = yield* BasePromptSectionsTag
+      Effect.sync(() => {
+        const baseSections = baseSectionsSeed
+        if (baseSections === undefined) {
+          throw new Error("Base prompt sections were not initialized")
+        }
         const runnerConfig = {
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
