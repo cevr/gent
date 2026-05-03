@@ -58,13 +58,6 @@ interface ToolExecutionProfile {
   readonly publishEvent?: PublishToolEvent
 }
 
-interface ToolHandlerResult {
-  readonly result: unknown
-  readonly encodedResult: unknown
-  readonly isFailure: boolean
-  readonly preliminary: boolean
-}
-
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
 const provideCapabilityContext = <A, E, R>(
@@ -75,12 +68,14 @@ const provideCapabilityContext = <A, E, R>(
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
 
-interface ToolExecutionToolkit {
-  readonly tools: ProviderToolMap
+type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ProviderToolMap>, "tools"> & {
   readonly handle: (
     name: string,
     input: unknown,
-  ) => Effect.Effect<Stream.Stream<ToolHandlerResult>, ToolExecutionError>
+  ) => Effect.Effect<
+    Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>,
+    AiError.AiError
+  >
 }
 
 export interface ToolRunnerService {
@@ -175,7 +170,7 @@ const makeExecutionToolkit = (params: {
   toolCall: ToolCall
   ctx: ToolContext
   registry: ExtensionRegistryService
-}): ToolExecutionToolkit => {
+}): ToolRunnerToolkit => {
   const metadata = getToolMetadata(params.tool)
   const tools = { [String(getToolId(params.tool))]: params.tool }
 
@@ -208,83 +203,87 @@ const makeExecutionToolkit = (params: {
           ),
         )
 
-        const executeResult = yield* params.registry.extensionReactions.executeTool(
-          {
-            toolCallId: params.toolCall.toolCallId,
-            toolName: params.toolCall.toolName,
-            input: decodedInput,
-            sessionId: params.ctx.sessionId,
-            branchId: params.ctx.branchId,
-          },
-          () => {
-            const wrapped = Effect.gen(function* () {
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off — erased heterogeneous tool boundary; failures normalize immediately.
-              const output = yield* provideCapabilityContext(
-                params.ctx,
-                metadata
-                  .effect(
-                    decodedInput,
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                    params.ctx as Parameters<typeof metadata.effect>[1],
+        return Stream.fromEffect(
+          Effect.gen(function* () {
+            const executeResult = yield* params.registry.extensionReactions.executeTool(
+              {
+                toolCallId: params.toolCall.toolCallId,
+                toolName: params.toolCall.toolName,
+                input: decodedInput,
+                sessionId: params.ctx.sessionId,
+                branchId: params.ctx.branchId,
+              },
+              () => {
+                const wrapped = Effect.gen(function* () {
+                  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — erased heterogeneous tool boundary; failures normalize immediately.
+                  const output = yield* provideCapabilityContext(
+                    params.ctx,
+                    metadata
+                      .effect(
+                        decodedInput,
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+                        params.ctx as Parameters<typeof metadata.effect>[1],
+                      )
+                      .pipe(Effect.mapError(normalizeToolExecutionError)),
                   )
-                  .pipe(Effect.mapError(normalizeToolExecutionError)),
+                  return output
+                })
+                return wrapped
+              },
+              params.ctx,
+            )
+
+            const enrichedResult = yield* params.registry.extensionReactions
+              .transformToolResult(
+                {
+                  toolCallId: params.toolCall.toolCallId,
+                  toolName: params.toolCall.toolName,
+                  input: decodedInput,
+                  result: executeResult,
+                  agentName: params.ctx.agentName,
+                  sessionId: params.ctx.sessionId,
+                  branchId: params.ctx.branchId,
+                },
+                params.ctx,
               )
-              return output
-            })
-            return wrapped
-          },
-          params.ctx,
-        )
+              .pipe(
+                Effect.catchEager((e) =>
+                  Effect.logWarning("extension.reaction.tool-result.failed").pipe(
+                    Effect.annotateLogs({ error: String(e) }),
+                    Effect.as(executeResult),
+                  ),
+                ),
+              )
 
-        const enrichedResult = yield* params.registry.extensionReactions
-          .transformToolResult(
-            {
-              toolCallId: params.toolCall.toolCallId,
-              toolName: params.toolCall.toolName,
-              input: decodedInput,
-              result: executeResult,
-              agentName: params.ctx.agentName,
-              sessionId: params.ctx.sessionId,
-              branchId: params.ctx.branchId,
-            },
-            params.ctx,
-          )
-          .pipe(
-            Effect.catchEager((e) =>
-              Effect.logWarning("extension.reaction.tool-result.failed").pipe(
-                Effect.annotateLogs({ error: String(e) }),
-                Effect.as(executeResult),
+            const encodedResult = yield* Schema.encodeUnknownEffect(metadata.output)(
+              enrichedResult,
+            ).pipe(
+              Effect.mapError((cause) =>
+                AiError.make({
+                  module: "ToolRunner",
+                  method: `${String(name)}.handle`,
+                  reason: new AiError.ToolResultEncodingError({
+                    toolName: String(name),
+                    toolResult: enrichedResult,
+                    description: schemaErrorDescription(String(name), cause),
+                  }),
+                }),
               ),
-            ),
-          )
+            )
 
-        const encodedResult = yield* Schema.encodeUnknownEffect(metadata.output)(
-          enrichedResult,
-        ).pipe(
-          Effect.mapError((cause) =>
-            AiError.make({
-              module: "ToolRunner",
-              method: `${String(name)}.handle`,
-              reason: new AiError.ToolResultEncodingError({
-                toolName: String(name),
-                toolResult: enrichedResult,
-                description: schemaErrorDescription(String(name), cause),
-              }),
-            }),
-          ),
+            return {
+              result: enrichedResult,
+              encodedResult,
+              isFailure: false,
+              preliminary: false,
+            } satisfies AiTool.HandlerResult<AiTool.Any>
+          }),
         )
-
-        return Stream.succeed({
-          result: enrichedResult,
-          encodedResult,
-          isFailure: false,
-          preliminary: false,
-        })
       }),
   }
 }
 
-const terminalToolResult = (toolkit: ToolExecutionToolkit, toolCall: ToolCall) =>
+const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
   Effect.gen(function* () {
     const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input)
     const terminal = yield* resultStream.pipe(
