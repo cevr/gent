@@ -81,10 +81,8 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 
 ## Capabilities
 
-Three typed factories replace the old audience routing flag. The
-`audience` concept is gone from authoring entirely — the factory choice
-determines dispatch routing. RPCs still declare `intent: "read" | "write"` for
-read-only fencing and host dispatch.
+Three typed factories own dispatch routing. RPCs declare
+`intent: "read" | "write"` for read-only fencing and host dispatch.
 
 ### tool — LLM-callable
 
@@ -264,12 +262,10 @@ builtin).
 | `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
 | `packages/extensions/src/auto.ts`       | `reactions:` + scoped workflow services      |
 
-## Migration Notes
+## Surface Invariants
 
-- `query(...)` / `mutation(...)` -> `request(...)`
-- `command(...)` -> `action(...)`
-- projection constructor folklore -> `reactions.turnProjection(ctx)`
-- generic middleware APIs are gone from the authoring model
-- `_kind` contribution unions are gone; the bucket name is the discriminator
-
-See `docs/migrations/runtime-union-provider.md` for concrete before/after recipes.
+- Extension callables are `tool(...)`, `request(...)`, and `action(...)`.
+- Prompt shaping and policy derivation live in `reactions.turnProjection`.
+- Long-lived state lives in `defineResource(...)`.
+- Generic middleware APIs are not part of extension authoring.
+- Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.

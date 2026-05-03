@@ -37,8 +37,8 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # Storage tags, schema/migrations, SQLite assembler, focused sub-tag impls
-│   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
+│   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
+│   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
 │   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
@@ -328,7 +328,7 @@ One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?,
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Replaces the legacy `layer`, `lifecycle`, `job`, `workflow`, and local actor buckets. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, a future Effect Entity/RPC owner. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
@@ -472,7 +472,7 @@ State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Ga
 
 `AutoJournal` writes append-only `.gent/auto/<goal-slug>.jsonl` relative to cwd. `active.json` pointer tracks which journal to resume. Row types: `config`, `checkpoint`, `review`.
 
-Cross-session replay via `onInit`: child sessions verify ancestry includes `active.sessionId`. Fail-closed for legacy pointers without `sessionId`. Root sessions never replay.
+Cross-session replay via `onInit`: child sessions verify ancestry includes `active.sessionId`. Pointers without `sessionId` fail closed. Root sessions never replay.
 
 ### Handoff Ownership
 
@@ -592,6 +592,3 @@ Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`cr
 - No process-purity dogma. Same-process direct transport is fine.
 
 This doc describes the architecture we want to keep, not the migration history we already paid for.
-
-If you are migrating old runtime, union, capability, or provider code, see
-`docs/migrations/runtime-union-provider.md`.

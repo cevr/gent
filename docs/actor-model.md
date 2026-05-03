@@ -22,7 +22,7 @@ Public read surface:
 - `drainQueuedMessages(...)`
 - `getMetrics(...)`
 
-`AgentLoop` is internal. `ActorProcess` is dead. RPC, SDK, and direct callers all converge on `SessionRuntime`.
+`AgentLoop` is internal. RPC, SDK, and direct callers all converge on `SessionRuntime`.
 
 ## Runtime Protocol
 
@@ -118,5 +118,3 @@ Persistence is structural, not optional folklore:
 - rebuilding a second mutable runtime bridge
 - local extension actors, receptionist discovery, or mailbox persistence
 - cluster/distribution design in this document
-
-See `docs/migrations/runtime-union-provider.md` for the migration from the old `ActorProcess` boundary.
