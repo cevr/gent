@@ -28,6 +28,7 @@ import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
@@ -94,7 +95,7 @@ const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<s
   request: ModelRequest & {
     readonly prompt: Prompt.RawInput
     readonly tools?: ReadonlyArray<ToolToken>
-    readonly toolkit?: AiToolkit.WithHandler<Tools>
+    readonly toolkit?: ToolkitInput<Tools>
   },
 ) =>
   Effect.gen(function* () {
@@ -371,7 +372,10 @@ describe("Provider model resolution", () => {
       let captured:
         | {
             disableToolCallResolution: boolean | undefined
-            toolkit: AiToolkit.WithHandler<Record<string, AiTool.Any>> | undefined
+            toolkit:
+              | AiToolkit.Toolkit<Record<string, AiTool.Any>>
+              | AiToolkit.WithHandler<Record<string, AiTool.Any>>
+              | undefined
           }
         | undefined
       const streamingProvider: ModelDriverContribution = {
@@ -382,7 +386,9 @@ describe("Provider model resolution", () => {
             "tools-live",
             makeLanguageModel<{
               readonly disableToolCallResolution?: boolean
-              readonly toolkit?: AiToolkit.WithHandler<Record<string, AiTool.Any>>
+              readonly toolkit?:
+                | AiToolkit.Toolkit<Record<string, AiTool.Any>>
+                | AiToolkit.WithHandler<Record<string, AiTool.Any>>
             }>({
               streamText: (options) => {
                 captured = {

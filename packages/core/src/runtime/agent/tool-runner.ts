@@ -14,35 +14,13 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { ToolCallId } from "../../domain/ids.js"
 import type { Option } from "effect"
 import type * as AiTool from "effect/unstable/ai/Tool"
-import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 
-export type ProviderToolMap = Record<string, AiTool.Any>
+export type ProviderToolMap = Record<string, ToolToken>
 
-export function convertTools(
-  tools: ReadonlyArray<ToolToken>,
-): AiToolkit.WithHandler<ProviderToolMap> {
-  const toolsRecord: ProviderToolMap = {}
-
-  for (const capability of tools) {
-    toolsRecord[String(getToolId(capability))] = capability
-  }
-
-  return {
-    tools: toolsRecord,
-    handle: (name) =>
-      Effect.fail(
-        AiError.make({
-          module: "ToolRunner",
-          method: "convertTools.handle",
-          reason: new AiError.ToolConfigurationError({
-            toolName: String(name),
-            description:
-              "toolkit execution requires a ToolRunner context; model streaming disables automatic resolution",
-          }),
-        }),
-      ),
-  }
+export function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.Toolkit<ProviderToolMap> {
+  return AiToolkit.make(...tools)
 }
 
 type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
