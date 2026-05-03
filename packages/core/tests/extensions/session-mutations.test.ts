@@ -6,7 +6,9 @@ import {
 } from "../../src/runtime/make-extension-host-context"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
+import { InvalidStateError, NotFoundError } from "../../src/domain/business-errors"
 import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
+import type { StorageService } from "@gent/core/storage/sqlite-storage"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
   const sessions = new Map<string, Session>()
@@ -84,7 +86,7 @@ const createTestStorage = () => {
       countMessagesByBranches: die("countMessagesByBranches"),
       updateMessageTurnDuration: die("updateMessageTurnDuration"),
       listSessions: die("listSessions"),
-    } as unknown as MakeExtensionHostContextDeps["storage"],
+    } as unknown as StorageService,
     sessions,
     branches,
     messages,
@@ -192,10 +194,16 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
     deleteBranch: ({ sessionId, currentBranchId, branchId }) =>
       Effect.gen(function* () {
         if (branchId === currentBranchId)
-          return yield* Effect.die("Cannot delete the current branch")
+          return yield* new InvalidStateError({
+            message: "Cannot delete the current branch",
+            operation: "deleteBranch",
+          })
         const branch = testStorage.branches.get(branchId)
         if (branch === undefined || branch.sessionId !== sessionId) {
-          return yield* Effect.die(`Branch "${branchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${branchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         yield* testStorage.storage.deleteBranch(branchId)
       }),
@@ -203,7 +211,10 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       Effect.gen(function* () {
         const branch = testStorage.branches.get(branchId)
         if (branch === undefined || branch.sessionId !== sessionId) {
-          return yield* Effect.die(`Branch "${branchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${branchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         yield* testStorage.storage.deleteMessages(branchId, afterMessageId)
       }),
@@ -231,7 +242,10 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       getAgent: die("ExtensionRegistry"),
       resolveDualModelPair: die("ExtensionRegistry"),
     } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
-    storage: testStorage.storage,
+    sessionStorage: testStorage.storage,
+    branchStorage: testStorage.storage,
+    messageStorage: testStorage.storage,
+    relationshipStorage: testStorage.storage,
     searchStorage: {
       searchMessages: () => Effect.succeed([]),
     } as MakeExtensionHostContextDeps["searchStorage"],

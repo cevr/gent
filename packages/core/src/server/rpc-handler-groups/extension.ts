@@ -153,7 +153,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       // dispatch where handlers author against `CapabilityCoreContext`.
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionRegistry: registry,
-        storage: deps.storage,
         ...(capabilityContext !== undefined ? { capabilityContext } : {}),
         overrides: {
           sessionControl: {

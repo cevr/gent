@@ -396,7 +396,6 @@ const makeLiveSessionRuntime: Effect.Effect<
     commandGate.withPermits(1)(effect)
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({
     extensionRegistry,
-    storage,
     overrides: {
       sessionControl: {
         queueFollowUp: (input) => agentLoop.queueFollowUp(input),

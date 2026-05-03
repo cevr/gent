@@ -27,7 +27,7 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
-import { Storage, StorageError, type StorageService } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/domain/read-only"
@@ -110,7 +110,6 @@ describe("resolveSessionEnvironment", () => {
                 sessionStorage,
                 profileCache,
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
-                  storage,
                   extensionRegistry,
                   overrides: { platform },
                 }),
@@ -210,7 +209,6 @@ describe("resolveSessionEnvironment", () => {
                 branchId: BranchId.make("branch-runtime-context-request"),
                 sessionStorage,
                 hostDeps: yield* makeAmbientExtensionHostContextDeps({
-                  storage,
                   extensionRegistry,
                   overrides: { platform },
                 }),
@@ -335,7 +333,6 @@ describe("resolveSessionEnvironment", () => {
                   sessionStorage,
                   profileCache,
                   hostDeps: yield* makeAmbientExtensionHostContextDeps({
-                    storage,
                     extensionRegistry,
                     overrides: { platform },
                   }),
@@ -462,7 +459,6 @@ describe("resolveSessionEnvironment", () => {
               sessionStorage,
               profileCache,
               hostDeps: yield* makeAmbientExtensionHostContextDeps({
-                storage,
                 extensionRegistry,
                 overrides: { platform },
               }),
@@ -520,7 +516,6 @@ describe("resolveSessionEnvironment", () => {
         runtimePlatformLayer,
       )
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
@@ -529,7 +524,6 @@ describe("resolveSessionEnvironment", () => {
           branchId: BranchId.make("missing-branch"),
           sessionStorage,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
-            storage,
             extensionRegistry,
             overrides: { platform },
           }),
@@ -561,14 +555,9 @@ describe("resolveSessionEnvironment", () => {
         runtimePlatformLayer,
       )
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
-        const failingStorage: StorageService = {
-          ...storage,
-          getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
-        }
         const failingSessionStorage: SessionStorageService = {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
@@ -579,7 +568,6 @@ describe("resolveSessionEnvironment", () => {
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
-              storage: failingStorage,
               extensionRegistry,
               overrides: { platform },
             }),
@@ -600,7 +588,6 @@ describe("resolveSessionEnvironment", () => {
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
-              storage: failingStorage,
               extensionRegistry,
               overrides: { platform },
             }),
@@ -701,7 +688,6 @@ describe("resolveSessionEnvironment", () => {
           sessionStorage,
           profileCache: fakeProfileCache,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
-            storage,
             extensionRegistry,
             overrides: { platform },
           }),

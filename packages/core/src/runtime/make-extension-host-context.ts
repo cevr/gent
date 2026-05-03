@@ -27,8 +27,14 @@ import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.j
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import type { StorageService } from "../storage/sqlite-storage.js"
+import { BranchStorage, type BranchStorageService } from "../storage/branch-storage.js"
+import { MessageStorage, type MessageStorageService } from "../storage/message-storage.js"
+import {
+  RelationshipStorage,
+  type RelationshipStorageService,
+} from "../storage/relationship-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
+import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
@@ -48,7 +54,10 @@ export interface MakeExtensionHostContextDeps {
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
-  readonly storage: StorageService
+  readonly sessionStorage: SessionStorageService
+  readonly branchStorage: BranchStorageService
+  readonly messageStorage: MessageStorageService
+  readonly relationshipStorage: RelationshipStorageService
   readonly searchStorage: SearchStorageService
   readonly agentRunner: AgentRunner
   readonly sessionMutations: SessionMutationsService
@@ -68,6 +77,10 @@ type AmbientHostContextDefaults = Pick<
   | "platform"
   | "approvalService"
   | "promptPresenter"
+  | "sessionStorage"
+  | "branchStorage"
+  | "messageStorage"
+  | "relationshipStorage"
   | "searchStorage"
   | "agentRunner"
   | "sessionMutations"
@@ -138,6 +151,60 @@ export const HostSearchStorageRef = Context.Reference<SearchStorageService>(
   },
 )
 
+export const HostSessionStorageRef = Context.Reference<SessionStorageService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostSessionStorageRef",
+  {
+    defaultValue: () => ({
+      createSession: unavailable("SessionStorage"),
+      getSession: unavailable("SessionStorage"),
+      getLastSessionByCwd: unavailable("SessionStorage"),
+      listSessions: unavailable("SessionStorage"),
+      updateSession: unavailable("SessionStorage"),
+      deleteSession: unavailable("SessionStorage"),
+    }),
+  },
+)
+
+export const HostBranchStorageRef = Context.Reference<BranchStorageService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostBranchStorageRef",
+  {
+    defaultValue: () => ({
+      createBranch: unavailable("BranchStorage"),
+      getBranch: unavailable("BranchStorage"),
+      listBranches: unavailable("BranchStorage"),
+      deleteBranch: unavailable("BranchStorage"),
+      updateBranchSummary: unavailable("BranchStorage"),
+      countMessages: unavailable("BranchStorage"),
+      countMessagesByBranches: unavailable("BranchStorage"),
+    }),
+  },
+)
+
+export const HostMessageStorageRef = Context.Reference<MessageStorageService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostMessageStorageRef",
+  {
+    defaultValue: () => ({
+      createMessage: unavailable("MessageStorage"),
+      createMessageIfAbsent: unavailable("MessageStorage"),
+      getMessage: unavailable("MessageStorage"),
+      listMessages: unavailable("MessageStorage"),
+      deleteMessages: unavailable("MessageStorage"),
+      updateMessageTurnDuration: unavailable("MessageStorage"),
+    }),
+  },
+)
+
+export const HostRelationshipStorageRef = Context.Reference<RelationshipStorageService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostRelationshipStorageRef",
+  {
+    defaultValue: () => ({
+      getChildSessions: unavailable("RelationshipStorage"),
+      getSessionAncestors: unavailable("RelationshipStorage"),
+      getSessionDetail: unavailable("RelationshipStorage"),
+    }),
+  },
+)
+
 export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
   "@gent/core/src/runtime/make-extension-host-context/HostAgentRunnerRef",
   {
@@ -176,6 +243,10 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   platform: Effect.service(HostPlatformRef),
   approvalService: Effect.service(HostApprovalServiceRef),
   promptPresenter: Effect.service(HostPromptPresenterRef),
+  sessionStorage: Effect.service(HostSessionStorageRef),
+  branchStorage: Effect.service(HostBranchStorageRef),
+  messageStorage: Effect.service(HostMessageStorageRef),
+  relationshipStorage: Effect.service(HostRelationshipStorageRef),
   searchStorage: Effect.service(HostSearchStorageRef),
   agentRunner: Effect.service(HostAgentRunnerRef),
   sessionMutations: Effect.service(HostSessionMutationsRef),
@@ -189,6 +260,10 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       platform: Effect.serviceOption(RuntimePlatform),
       approvalService: Effect.serviceOption(ApprovalService),
       promptPresenter: Effect.serviceOption(PromptPresenter),
+      sessionStorage: Effect.serviceOption(SessionStorage),
+      branchStorage: Effect.serviceOption(BranchStorage),
+      messageStorage: Effect.serviceOption(MessageStorage),
+      relationshipStorage: Effect.serviceOption(RelationshipStorage),
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
       sessionMutations: Effect.serviceOption(SessionMutations),
@@ -201,6 +276,18 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
         : {}),
       ...(available.promptPresenter._tag === "Some"
         ? { promptPresenter: available.promptPresenter.value }
+        : {}),
+      ...(available.sessionStorage._tag === "Some"
+        ? { sessionStorage: available.sessionStorage.value }
+        : {}),
+      ...(available.branchStorage._tag === "Some"
+        ? { branchStorage: available.branchStorage.value }
+        : {}),
+      ...(available.messageStorage._tag === "Some"
+        ? { messageStorage: available.messageStorage.value }
+        : {}),
+      ...(available.relationshipStorage._tag === "Some"
+        ? { relationshipStorage: available.relationshipStorage.value }
         : {}),
       ...(available.searchStorage._tag === "Some"
         ? { searchStorage: available.searchStorage.value }
@@ -229,6 +316,20 @@ const withAmbientHostContextOverrides = <A, E, R>(
   if (overrides.promptPresenter !== undefined) {
     next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
   }
+  if (overrides.sessionStorage !== undefined) {
+    next = next.pipe(Effect.provideService(HostSessionStorageRef, overrides.sessionStorage))
+  }
+  if (overrides.branchStorage !== undefined) {
+    next = next.pipe(Effect.provideService(HostBranchStorageRef, overrides.branchStorage))
+  }
+  if (overrides.messageStorage !== undefined) {
+    next = next.pipe(Effect.provideService(HostMessageStorageRef, overrides.messageStorage))
+  }
+  if (overrides.relationshipStorage !== undefined) {
+    next = next.pipe(
+      Effect.provideService(HostRelationshipStorageRef, overrides.relationshipStorage),
+    )
+  }
   if (overrides.searchStorage !== undefined) {
     next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
   }
@@ -247,7 +348,6 @@ const withAmbientHostContextOverrides = <A, E, R>(
 export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
-  readonly storage: StorageService
   readonly overrides?: Partial<AmbientHostContextDefaults>
 }
 
@@ -267,7 +367,10 @@ export const makeAmbientExtensionHostContextDeps = (
       ...(input.capabilityContext !== undefined
         ? { capabilityContext: input.capabilityContext }
         : {}),
-      storage: input.storage,
+      sessionStorage: defaults.sessionStorage,
+      branchStorage: defaults.branchStorage,
+      messageStorage: defaults.messageStorage,
+      relationshipStorage: defaults.relationshipStorage,
       searchStorage: defaults.searchStorage,
       agentRunner: defaults.agentRunner,
       sessionMutations: defaults.sessionMutations,
@@ -328,15 +431,15 @@ export const makeExtensionHostContext = (
 
     session: {
       listMessages: (branchId) =>
-        deps.storage
+        deps.messageStorage
           .listMessages(branchId ?? runInfo.branchId)
           .pipe(Effect.mapError(toHostError("session.listMessages"))),
       getSession: (sessionId) =>
-        deps.storage
+        deps.sessionStorage
           .getSession(sessionId ?? runInfo.sessionId)
           .pipe(Effect.mapError(toHostError("session.getSession"))),
       getDetail: (sessionId) =>
-        deps.storage
+        deps.relationshipStorage
           .getSessionDetail(sessionId)
           .pipe(Effect.mapError(toHostError("session.getDetail"))),
       renameCurrent: (name) =>
@@ -345,7 +448,7 @@ export const makeExtensionHostContext = (
           .pipe(Effect.mapError(toHostError("session.renameCurrent"))),
       estimateContextPercent: (options) =>
         Effect.gen(function* () {
-          const messages: ReadonlyArray<Message> = yield* deps.storage.listMessages(
+          const messages: ReadonlyArray<Message> = yield* deps.messageStorage.listMessages(
             runInfo.branchId,
           )
           const modelId = options?.modelId ?? DEFAULT_MODEL_ID
@@ -378,7 +481,7 @@ export const makeExtensionHostContext = (
           .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
 
       listBranches: () =>
-        deps.storage
+        deps.branchStorage
           .listBranches(runInfo.sessionId)
           .pipe(Effect.mapError(toHostError("session.listBranches"))),
 
@@ -421,12 +524,12 @@ export const makeExtensionHostContext = (
           .pipe(Effect.mapError(toHostError("session.createChildSession"))),
 
       getChildSessions: () =>
-        deps.storage
+        deps.relationshipStorage
           .getChildSessions(runInfo.sessionId)
           .pipe(Effect.mapError(toHostError("session.getChildSessions"))),
 
       getSessionAncestors: (sessionId) =>
-        deps.storage
+        deps.relationshipStorage
           .getSessionAncestors(sessionId ?? runInfo.sessionId)
           .pipe(Effect.mapError(toHostError("session.getSessionAncestors"))),
 

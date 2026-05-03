@@ -590,7 +590,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
             const hostDeps = yield* makeAmbientExtensionHostContextDeps({
               extensionRegistry,
-              storage,
               overrides: {
                 sessionControl: {
                   queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
