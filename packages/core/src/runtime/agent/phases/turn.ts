@@ -441,7 +441,7 @@ export const resolveTurnContext = (params: {
         ? AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
         : effectiveAgent
 
-    // Derive extension projections from state machines and explicit prompt/message slots.
+    // Derive extension projections from explicit prompt/message slots.
     const allTools = yield* params.extensionRegistry.listModelCapabilities()
     const turnCtx = {
       sessionId: params.sessionId,

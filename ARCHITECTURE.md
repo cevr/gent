@@ -426,7 +426,7 @@ tests/
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage, search-storage, actor persistence, task storage
+├── storage/       # sqlite-storage, search-storage, task storage
 ├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```

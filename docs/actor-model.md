@@ -98,17 +98,10 @@ Core rule: let it crash inside the owned boundary, then recover at the boundary 
 - provider stream failure -> loop emits error receipt and runtime surfaces failure
 - tool timeout / failure -> tool receipt emitted, loop applies policy
 - restart / crash -> checkpoint + storage restore loop/runtime state
-- extension actor defect -> fiber dies, actor cleanup unregisters service refs, and the owning host restarts or quarantines according to the behavior supervision policy
-- extension actor runtime-boundary failure -> logged and isolated when it is recoverable, such as a durable commit hook failure before an ask reply is released
 
-`Behavior.receive` has no typed failure channel. Recoverable extension outcomes belong in actor state or typed replies. Unexpected faults should use defects so the supervisor sees a real crash instead of a hidden local convention.
-
-Dead refs have one policy:
-
-- `tell` to an unknown actor is a no-op
-- `ask` to an unknown actor returns `ActorAskTimeout`
-- state/view reads on unknown actors are empty or `undefined`
-- receptionist discovery drops refs during actor cleanup
+Extensions do not get a parallel local actor substrate. Extension state lives in
+declared resources/services and crosses the runtime through explicit slots:
+capabilities, RPC requests, reactions, drivers, and scheduled resources.
 
 ## Persistence
 
@@ -118,13 +111,12 @@ Persistence is structural, not optional folklore:
 - SQLite storage is split into a small public assembler plus schema and focused implementation modules
 - checkpoint holds resumable loop/runtime state
 - interaction resume replays from storage, not in-memory continuations
-- durable actor state commits at the mutation boundary before buffered ask replies are released
-- actor snapshots remain a backup/compaction path, not the first durable acknowledgement
 
 ## Non-Goals
 
 - exposing internal loop actors as public APIs
 - rebuilding a second mutable runtime bridge
+- local extension actors, receptionist discovery, or mailbox persistence
 - cluster/distribution design in this document
 
 See `docs/migrations/runtime-union-provider.md` for the migration from the old `ActorProcess` boundary.
