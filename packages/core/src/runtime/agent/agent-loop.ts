@@ -45,7 +45,7 @@ import {
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { ConfigService } from "../config-service.js"
-import { IdService } from "../id-service.js"
+import { GentPlatform } from "../gent-platform.js"
 import { ModelRegistry } from "../model-registry.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -480,7 +480,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ResourceManager
     | ConfigService
     | ModelRegistry
-    | IdService
+    | GentPlatform
   > =>
     Layer.effect(
       AgentLoop,
@@ -502,7 +502,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
-        const idService = yield* IdService
+        const platform = yield* GentPlatform
         // Yield ConfigService at setup so the captured service shape is
         // available to inner closures without leaking the requirement
         // into Stream/Machine task signatures.
@@ -1792,7 +1792,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
             case "Interject": {
               const interjectMessage = Message.Interjection.make({
-                id: MessageId.make(yield* idService.next),
+                id: MessageId.make(yield* platform.randomId),
                 sessionId: command.command.sessionId,
                 branchId: command.command.branchId,
                 role: "user",
@@ -1854,7 +1854,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.gen(function* () {
                 yield* getLoop(command.sessionId, command.branchId)
                 const recordCommandId =
-                  command.commandId ?? ActorCommandId.make(yield* idService.next)
+                  command.commandId ?? ActorCommandId.make(yield* platform.randomId)
                 yield* recordToolResultPhase({
                   storage: turnStorage,
                   eventPublisher,
@@ -1879,7 +1879,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             .withPermits(1)(
               Effect.gen(function* () {
                 const loop = yield* getLoop(command.sessionId, command.branchId)
-                const commandId = command.commandId ?? ActorCommandId.make(yield* idService.next)
+                const commandId = command.commandId ?? ActorCommandId.make(yield* platform.randomId)
                 const currentTurnAgent = (yield* currentRuntimeState(loop)).agent
                 const environment = yield* loop.resolveTurnProfile
 
@@ -1998,7 +1998,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         service = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
             const userMessage = Message.Regular.make({
-              id: MessageId.make(yield* idService.next),
+              id: MessageId.make(yield* platform.randomId),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
@@ -2077,7 +2077,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           queueFollowUp: Effect.fn("AgentLoop.queueFollowUp")(function* (input) {
             const message = Message.Regular.make({
-              id: MessageId.make(yield* idService.next),
+              id: MessageId.make(yield* platform.randomId),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",

@@ -15,7 +15,7 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core/extensions/api"
-import { BuiltinEventSink, IdService } from "../internal/builtin.js"
+import { BuiltinEventSink, GentPlatform } from "../internal/builtin.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
@@ -59,7 +59,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, never, BuiltinEventSink | IdService>
+  }) => Effect.Effect<Task, never, BuiltinEventSink | GentPlatform>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -108,8 +108,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
                 const eventSink = yield* BuiltinEventSink
-                const idService = yield* IdService
-                const id = TaskId.make(yield* idService.next)
+                const platform = yield* GentPlatform
+                const id = TaskId.make(yield* platform.randomId)
                 const now = yield* DateTime.nowAsDate
                 const task = Task.make({
                   id,

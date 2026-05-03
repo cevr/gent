@@ -1180,7 +1180,7 @@ const plugin: Plugin = {
     /**
      * Bans `Bun.*` references outside platform adapters, scripts, tooling,
      * and tests. The `Bun` global is a platform-specific runtime API; product
-     * code should route through Effect platform services (`IdService`,
+     * code should route through Effect platform services (`GentPlatform`,
      * `FileSystem`, `ChildProcess`, `KeyValueStore`, `Config`) so the runtime
      * is portable and the I/O boundary is explicit.
      *
@@ -1192,8 +1192,8 @@ const plugin: Plugin = {
      *   - `**\/main.ts` (process entrypoints)
      *   - `*.test.ts` and files under `tests/`
      *
-     * The IdService.Live `Bun.randomUUIDv7` call has been extracted into
-     * `runtime/id-service-adapter.ts`, so the runtime/id-service.ts special
+     * The GentPlatform.Live `Bun.randomUUIDv7` call has been extracted into
+     * `runtime/gent-platform-bun.ts`, so the runtime/gent-platform.ts special
      * case is gone. The `lint/` exemption was dead — the plugin file only
      * mentions `Bun` in strings/comments, not MemberExpressions.
      */
@@ -1229,7 +1229,7 @@ const plugin: Plugin = {
             else if (prop?.type === "StringLiteral") propName = getStringField(prop, "value")
             const suffix = propName !== undefined ? `.${propName}` : ""
             context.report({
-              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`IdService\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`) or move the call into a \`*-adapter.ts\` file.`,
+              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`) or move the call into a \`*-adapter.ts\` file.`,
               node,
             })
           },

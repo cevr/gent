@@ -37,7 +37,8 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { IdService } from "../runtime/id-service.js"
+import type { GentPlatform } from "../runtime/gent-platform.js"
+import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
@@ -65,7 +66,7 @@ export interface E2ELayerConfig {
   /** AgentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Approval service override. Default auto-approves for E2E tests. */
-  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | IdService>
+  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
   /** Optional per-cwd profile cache for shared-server routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
@@ -210,7 +211,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         authStoreLive,
         extensionRegistryLive,
         driverRegistryLive,
-        IdService.Live,
+        BunGentPlatformLive,
       )
       const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
@@ -226,7 +227,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        IdService.Live,
+        BunGentPlatformLive,
         subagentRunnerLayer,
         authStoreLive,
         authGuardLive,
@@ -251,7 +252,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const approvalLayer =
         config.approvalLayer === undefined
           ? ApprovalService.Test()
-          : Layer.provide(config.approvalLayer, Layer.merge(eventPublisherLive, IdService.Live))
+          : Layer.provide(
+              config.approvalLayer,
+              Layer.merge(eventPublisherLive, BunGentPlatformLive),
+            )
       const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
       const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(

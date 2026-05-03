@@ -37,7 +37,7 @@ import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../src/runtime/model-registry"
-import { IdService } from "../../src/runtime/id-service"
+import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
@@ -107,7 +107,7 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
-    IdService.Test(),
+    GentPlatform.Test(),
   )
   const baseDeps =
     profileCacheLayer === undefined
@@ -149,7 +149,7 @@ const makeRuntimeLayerWithEventPublisher = (
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
-    IdService.Test(),
+    GentPlatform.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
@@ -223,7 +223,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
-    IdService.Test(),
+    GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   return Layer.provideMerge(
@@ -257,7 +257,7 @@ const makeLiveToolRuntimeLayer = (
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
-    IdService.Test(),
+    GentPlatform.Test(),
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)

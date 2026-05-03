@@ -19,7 +19,7 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { IdService } from "../runtime/id-service.js"
+import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ServerProfileService } from "../runtime/scope-brands.js"
@@ -47,7 +47,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
     },
   ])
 
-  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, IdService.Live)
+  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, BunGentPlatformLive)
   const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
@@ -74,7 +74,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     providerLive,
     extensionRegistryLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    IdService.Live,
+    BunGentPlatformLive,
     Permission.Test(),
     ConfigService.Test(),
     ModelRegistry.Test(),

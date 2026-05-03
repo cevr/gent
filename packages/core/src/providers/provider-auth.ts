@@ -8,7 +8,7 @@ import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../runtime/extensions/driver-registry.js"
-import { IdService } from "../runtime/id-service.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 
 export { ProviderAuthError } from "../domain/driver.js"
 
@@ -31,7 +31,7 @@ export interface ProviderAuthService {
 export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry | IdService> =
+  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry | GentPlatform> =
     Layer.effect(
       ProviderAuth,
       Effect.gen(function* () {
@@ -43,10 +43,10 @@ export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthServ
 
 const makeProviderAuth = (
   driverRegistry: DriverRegistryService,
-): Effect.Effect<ProviderAuthService, never, AuthStore | IdService> =>
+): Effect.Effect<ProviderAuthService, never, AuthStore | GentPlatform> =>
   Effect.gen(function* () {
     const authStore = yield* AuthStore
-    const idService = yield* IdService
+    const platform = yield* GentPlatform
 
     /** Build a PersistAuth callback for a provider — writes credentials to AuthStore */
     const makePersist =
@@ -107,7 +107,7 @@ const makeProviderAuth = (
           message: `Provider "${provider}" does not support authorize`,
         })
       }
-      const authorizationId = yield* idService.next
+      const authorizationId = yield* platform.randomId
       const extResult = yield* extProvider.auth
         .authorize({
           sessionId,

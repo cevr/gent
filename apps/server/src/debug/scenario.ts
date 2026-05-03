@@ -35,7 +35,7 @@ import { SessionStorage } from "@gent/core/storage/session-storage.js"
 import { BranchStorage } from "@gent/core/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
-import { IdService } from "@gent/core/runtime/id-service.js"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
 import { ref } from "@gent/core/extensions/api"
@@ -81,9 +81,9 @@ const createParentTurnMessages = (
   nowMillis: number,
 ) =>
   Effect.gen(function* () {
-    const idService = yield* IdService
+    const platform = yield* GentPlatform
     const assistant = Message.Regular.make({
-      id: MessageId.make(yield* idService.next),
+      id: MessageId.make(yield* platform.randomId),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "assistant",
@@ -126,7 +126,7 @@ const createParentTurnMessages = (
     })
 
     const tool = Message.Regular.make({
-      id: MessageId.make(yield* idService.next),
+      id: MessageId.make(yield* platform.randomId),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "tool",
@@ -201,9 +201,9 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
-    const idService = yield* IdService
+    const platform = yield* GentPlatform
     const user = Message.Regular.make({
-      id: MessageId.make(yield* idService.next),
+      id: MessageId.make(yield* platform.randomId),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "user",
@@ -223,9 +223,9 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
-    const idService = yield* IdService
-    const sessionId = SessionId.make(yield* idService.next)
-    const branchId = BranchId.make(yield* idService.next)
+    const platform = yield* GentPlatform
+    const sessionId = SessionId.make(yield* platform.randomId)
+    const branchId = BranchId.make(yield* platform.randomId)
     const now = yield* DateTime.nowAsDate
 
     yield* sessionStorage.createSession(

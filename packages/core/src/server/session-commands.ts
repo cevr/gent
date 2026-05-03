@@ -29,7 +29,7 @@ import { toPrompt } from "../providers/ai-transcript.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
-import { IdService } from "../runtime/id-service.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 import { SessionRuntime, type SessionRuntimeService } from "../runtime/session-runtime.js"
 import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
 import type {
@@ -176,7 +176,7 @@ const makeSessionMutationsService: Effect.Effect<
   | MessageStorage
   | RelationshipStorage
   | SessionRuntime
-  | IdService
+  | GentPlatform
 > = Effect.gen(function* () {
   const storageTransaction = yield* StorageTransaction
   const sessionStorage = yield* SessionStorage
@@ -186,7 +186,7 @@ const makeSessionMutationsService: Effect.Effect<
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const sessionRuntime = yield* SessionRuntime
-  const idService = yield* IdService
+  const platform = yield* GentPlatform
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -341,7 +341,7 @@ const makeSessionMutationsService: Effect.Effect<
 
     createSessionBranch: Effect.fn("SessionMutations.createSessionBranch")(function* (input) {
       const branch = new Branch({
-        id: BranchId.make(yield* idService.next),
+        id: BranchId.make(yield* platform.randomId),
         sessionId: input.sessionId,
         parentBranchId: input.parentBranchId,
         name: input.name,
@@ -374,7 +374,7 @@ const makeSessionMutationsService: Effect.Effect<
       }
 
       const branch = new Branch({
-        id: BranchId.make(yield* idService.next),
+        id: BranchId.make(yield* platform.randomId),
         sessionId: input.sessionId,
         parentBranchId: input.fromBranchId,
         parentMessageId: input.atMessageId,
@@ -387,7 +387,7 @@ const makeSessionMutationsService: Effect.Effect<
           for (const message of messages.slice(0, targetIndex + 1)) {
             yield* messageStorage.createMessage(
               copyMessageToBranch(message, {
-                id: MessageId.make(yield* idService.next),
+                id: MessageId.make(yield* platform.randomId),
                 branchId: branch.id,
               }),
             )
@@ -444,8 +444,8 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     createChildSession: Effect.fn("SessionMutations.createChildSession")(function* (input) {
-      const sessionId = SessionId.make(yield* idService.next)
-      const branchId = BranchId.make(yield* idService.next)
+      const sessionId = SessionId.make(yield* platform.randomId)
+      const branchId = BranchId.make(yield* platform.randomId)
       const now = yield* DateTime.nowAsDate
       const session = new Session({
         id: sessionId,
@@ -559,7 +559,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
-      const idService = yield* IdService
+      const platform = yield* GentPlatform
       // SessionCommands delegates pure-mutation bodies (branch create, branch
       // fork, switch active branch, session/branch/message delete) to
       // SessionMutations so there is exactly one implementation of each. The
@@ -642,7 +642,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         if (conversation === "") return ""
 
         const summaryMessage = Message.Regular.make({
-          id: MessageId.make(yield* idService.next),
+          id: MessageId.make(yield* platform.randomId),
           sessionId: firstMessage.sessionId,
           branchId,
           role: "user",
@@ -695,7 +695,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
         input: CreateSessionInput,
       ) {
-        const sessionId = SessionId.make(yield* idService.next)
+        const sessionId = SessionId.make(yield* platform.randomId)
         if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
           return yield* new NotFoundError({
             message: "parentBranchId requires parentSessionId",
@@ -721,7 +721,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        const branchId = BranchId.make(yield* idService.next)
+        const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
         const session = new Session({

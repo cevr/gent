@@ -18,7 +18,7 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { IdService } from "../runtime/id-service.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 
 export interface DebugSessionInfo {
   readonly sessionId: SessionId
@@ -43,9 +43,9 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
   const messages = yield* MessageStorage
-  const idService = yield* IdService
-  const sessionId = SessionId.make(yield* idService.next)
-  const branchId = BranchId.make(yield* idService.next)
+  const platform = yield* GentPlatform
+  const sessionId = SessionId.make(yield* platform.randomId)
+  const branchId = BranchId.make(yield* platform.randomId)
   const now = yield* Clock.currentTimeMillis
   const nowPlus = (offsetMs: number) => dateFromMillis(now + offsetMs)
 
@@ -66,7 +66,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   yield* branches.createBranch(branch)
 
   const user1 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "user",
@@ -75,7 +75,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant1 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "assistant",
@@ -130,7 +130,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults1 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "tool",
@@ -179,7 +179,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant2 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "assistant",
@@ -188,7 +188,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user2 = Message.Interjection.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "user",
@@ -197,7 +197,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant3 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "assistant",
@@ -210,7 +210,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user3 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "user",
@@ -219,7 +219,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant4 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "assistant",
@@ -275,7 +275,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults2 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "tool",
@@ -310,7 +310,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant5 = Message.Regular.make({
-    id: MessageId.make(yield* idService.next),
+    id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
     role: "assistant",

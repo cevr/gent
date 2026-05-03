@@ -21,7 +21,7 @@ import {
   type InteractionService,
   type InteractionStorageConfig,
 } from "../domain/interaction-request.js"
-import type { IdService } from "./id-service.js"
+import type { GentPlatform } from "./gent-platform.js"
 
 export interface ApprovalServiceShape {
   /** Present an approval request to the user. Throws InteractionPendingError on first call (cold). */
@@ -51,7 +51,7 @@ export interface ApprovalServiceShape {
 export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceShape>()(
   "@gent/core/src/runtime/approval-service/ApprovalService",
 ) {
-  static Live: Layer.Layer<ApprovalService, never, EventPublisher | IdService> = Layer.effect(
+  static Live: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> = Layer.effect(
     ApprovalService,
     Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
@@ -68,7 +68,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
 
   static LiveWithStorage = (
     storage: InteractionStorageConfig,
-  ): Layer.Layer<ApprovalService, never, EventPublisher | IdService> =>
+  ): Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> =>
     Layer.effect(
       ApprovalService,
       Effect.gen(function* () {
@@ -117,7 +117,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
 const makeApprovalInteractionService = (
   eventPublisher: EventPublisherService,
   storage?: InteractionStorageConfig,
-): Effect.Effect<InteractionService, never, IdService> =>
+): Effect.Effect<InteractionService, never, GentPlatform> =>
   makeInteractionService({
     onPresent: (requestId, params, ctx) =>
       eventPublisher.publish(

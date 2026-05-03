@@ -1,8 +1,8 @@
 export {
   BuiltinEventSink,
   type BuiltinEventSinkService,
-  IdService,
-  type IdServiceShape,
+  GentPlatform,
+  type GentPlatformShape,
   InteractionPendingReader,
   ToolRunner,
 } from "../../core/src/extensions/internal.js"

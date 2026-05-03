@@ -21,7 +21,7 @@ import { resolveProfileRuntime } from "../runtime/profile.js"
 import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { IdService } from "../runtime/id-service.js"
+import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
@@ -170,7 +170,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
   )
-  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, IdService.Live)
+  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, BunGentPlatformLive)
   const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
@@ -190,7 +190,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
-    IdService.Live,
+    BunGentPlatformLive,
     storageLive,
     clusterRunnerLive,
     baseEventStoreLive,

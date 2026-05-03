@@ -16,7 +16,7 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
-import { IdService } from "../../../src/runtime/id-service"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
@@ -70,7 +70,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
-    IdService.Test(),
+    GentPlatform.Test(),
     Permission.Test(),
     SessionProfileCache.Test(),
   )

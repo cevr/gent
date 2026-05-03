@@ -70,7 +70,7 @@ import {
   type StorageTransactionService,
 } from "../../storage/storage-transaction.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { IdService, type IdServiceShape } from "../id-service.js"
+import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
@@ -343,7 +343,7 @@ export const getSessionDepth = (
 const makeSharedRunnerHelpers = (
   storage: Pick<AgentRunStorage, "transaction" | "sessions" | "branches" | "relationships">,
   eventPublisher: EventPublisherService,
-  idServiceRef: IdServiceShape,
+  platform: GentPlatformShape,
 ) => {
   const createDurableAgentRunSession = (params: {
     agent: { name: AgentName }
@@ -361,8 +361,8 @@ const makeSharedRunnerHelpers = (
         })
       }
 
-      const sessionId = SessionId.make(yield* idServiceRef.next)
-      const branchId = BranchId.make(yield* idServiceRef.next)
+      const sessionId = SessionId.make(yield* platform.randomId)
+      const branchId = BranchId.make(yield* platform.randomId)
       const now = yield* DateTime.nowAsDate
 
       const committed = yield* storage.transaction.withTransaction(
@@ -520,7 +520,7 @@ const buildEphemeralLayer = (params: {
   const parentProviderLayer = Layer.succeed(Provider, parentService(Provider))
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
-  const parentIdServiceLayer = Layer.succeed(IdService, parentService(IdService))
+  const parentGentPlatformLayer = Layer.succeed(GentPlatform, parentService(GentPlatform))
   const promptPresenterLayer = Layer.provide(
     PromptPresenterLive,
     Layer.mergeAll(
@@ -569,7 +569,7 @@ const buildEphemeralLayer = (params: {
           parentProviderLayer,
           parentConfigLayer,
           parentModelRegistryLayer,
-          parentIdServiceLayer,
+          parentGentPlatformLayer,
         ),
         storageLayer,
       ),
@@ -901,7 +901,7 @@ export const InProcessRunner = (
   | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
-  | IdService
+  | GentPlatform
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -931,8 +931,8 @@ export const InProcessRunner = (
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
 
-      const idServiceRef = yield* IdService
-      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, idServiceRef)
+      const platform = yield* GentPlatform
+      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, platform)
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
       const publishAgentSwitch = (params: {
         sessionId: SessionId
@@ -982,8 +982,8 @@ export const InProcessRunner = (
 
           if (persistence === "ephemeral") {
             return Effect.gen(function* () {
-              const sessionId = SessionId.make(yield* idServiceRef.next)
-              const branchId = BranchId.make(yield* idServiceRef.next)
+              const sessionId = SessionId.make(yield* platform.randomId)
+              const branchId = BranchId.make(yield* platform.randomId)
               return yield* runEphemeralAgent({
                 runnerConfig,
                 shared,
@@ -1114,7 +1114,7 @@ export const SubprocessRunner = (
   | ModelRegistry
   | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
-  | IdService
+  | GentPlatform
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -1144,8 +1144,8 @@ export const SubprocessRunner = (
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
 
-      const idServiceRef = yield* IdService
-      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, idServiceRef)
+      const platform = yield* GentPlatform
+      const shared = makeSharedRunnerHelpers(agentRunStorage, eventPublisher, platform)
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
 
       return {
@@ -1154,8 +1154,8 @@ export const SubprocessRunner = (
           const toolCallId = params.runSpec?.parentToolCallId
           if (persistence === "ephemeral") {
             return Effect.gen(function* () {
-              const sessionId = SessionId.make(yield* idServiceRef.next)
-              const branchId = BranchId.make(yield* idServiceRef.next)
+              const sessionId = SessionId.make(yield* platform.randomId)
+              const branchId = BranchId.make(yield* platform.randomId)
               return yield* runEphemeralAgent({
                 runnerConfig: config,
                 shared,

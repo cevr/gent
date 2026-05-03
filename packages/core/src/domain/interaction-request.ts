@@ -14,7 +14,7 @@
  */
 
 import { Clock, Effect, Ref, Schema } from "effect"
-import { IdService } from "../runtime/id-service.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 import { EventStoreError } from "./event"
 import { BranchId, InteractionRequestId, SessionId } from "./ids"
 
@@ -167,9 +167,9 @@ interface InteractionState {
 
 export const makeInteractionService = (
   config: InteractionServiceConfig,
-): Effect.Effect<InteractionService, never, IdService> =>
+): Effect.Effect<InteractionService, never, GentPlatform> =>
   Effect.gen(function* () {
-    const idService = yield* IdService
+    const platform = yield* GentPlatform
     const state = yield* Ref.make<InteractionState>({
       storedResolutions: new Map(),
       pendingByContext: new Map(),
@@ -234,7 +234,7 @@ export const makeInteractionService = (
           return stored.decision
         }
 
-        const requestId = InteractionRequestId.make(yield* idService.next)
+        const requestId = InteractionRequestId.make(yield* platform.randomId)
 
         // Persist to storage before publishing event (crash-safe)
         if (config.storage !== undefined) {
