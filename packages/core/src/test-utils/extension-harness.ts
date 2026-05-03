@@ -41,7 +41,6 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -274,11 +273,9 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ...(config.extraLayers ?? []),
       )
-      const actorRuntimeLayer = ActorEngine.Live
-      const runtimeDeps = Layer.merge(baseLayer, actorRuntimeLayer)
-      const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
+      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseLayer)
       const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
-        runtimeDeps,
+        baseLayer,
         eventPublisherLayer,
       )
 
@@ -317,12 +314,6 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   home: "/tmp",
   extension: {
     request: dieStub("extension.request"),
-  },
-  actors: {
-    find: dieStub("actors.find"),
-    findOne: dieStub("actors.findOne"),
-    tell: dieStub("actors.tell"),
-    ask: dieStub("actors.ask"),
   },
   agent: {
     get: dieStub("agent.get"),

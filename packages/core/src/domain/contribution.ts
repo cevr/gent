@@ -19,7 +19,6 @@
  *
  * @module
  */
-import type { Behavior } from "./actor.js"
 import type { AgentDefinition } from "./agent.js"
 import type { ActionToken } from "./capability/action.js"
 import type { RequestToken } from "./capability/request.js"
@@ -35,27 +34,6 @@ import type { ExtensionReactions as ExtensionReactionsType } from "./extension.j
  * own E/R at the declaration site (e.g. `Effect.provide(Layer)`).
  */
 export type ExtensionReactions = ExtensionReactionsType<unknown, unknown>
-
-/**
- * Bucket leaf for the `actors` field. The `Behavior` shape is
- * existentially quantified across the message and state type
- * parameters so a bucket can hold heterogeneously-typed behaviors.
- *
- * `M` and `S` use `any` (not `unknown`) because `Behavior` is invariant
- * in both: `receive: (msg: M, state: S) => Effect<S>` puts `M` in
- * contravariant position and `S` in both positions. A widener
- * (`unknown`) would force every caller through an identity cast;
- * `any` opts out of variance checking so authors can route behaviors
- * through the typed `behavior()` smart constructor below — which
- * performs the cast in exactly one place.
- *
- * The requirements parameter is fixed to `never` at the bucket
- * boundary — the host has no extra services to provide, so
- * behaviors that need additional dependencies must close them at the
- * declaration site (e.g. `pipe(Effect.provide(Layer))`).
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- bucket leaf: invariant Behavior position; `behavior()` smart constructor below is the named cast site
-export type AnyBehavior = Behavior<any, any, never>
 
 // ── Typed buckets ──
 
@@ -91,7 +69,6 @@ export interface ExtensionContributions {
    */
   readonly rpc?: ReadonlyArray<RequestToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
-  readonly actors?: ReadonlyArray<AnyBehavior>
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
    * tool-result handlers. Per-extension, per-session — fired by the runtime
@@ -155,15 +132,3 @@ export const resource = <A, S extends ResourceScope, R, E>(
 ): AnyResourceContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   r as unknown as AnyResourceContribution
-
-/**
- * Identity smart constructor for the Behavior primitive. Generic over
- * `<M, S>` so authors keep their typed Behavior shape; the leaf is
- * widened to `AnyBehavior` at the bucket boundary. The requirements
- * channel is closed to `never` at the boundary — behaviors that need
- * extra services must close them at the declaration site via
- * `Effect.provide`.
- */
-export const behavior = <M, S>(b: Behavior<M, S, never>): AnyBehavior =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- bucket boundary: invariant Behavior<M,S> existentially quantified to AnyBehavior
-  b as unknown as AnyBehavior

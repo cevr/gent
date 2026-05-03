@@ -1,9 +1,9 @@
 /**
- * E2E test layer with real extension actors, queued event publishing, and tool execution.
+ * E2E test layer with queued event publishing and tool execution.
  *
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
- * prod-shaped event publisher, real ActorHost, real ToolRunner.Live,
- * and direct session-loop follow-ups — so QueueFollowUp actually drives multi-turn loops.
+ * prod-shaped event publisher, real ToolRunner.Live, and direct session-loop
+ * follow-ups — so QueueFollowUp actually drives multi-turn loops.
  *
  * Import from @gent/core/test-utils/e2e-layer
  */
@@ -36,8 +36,6 @@ import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
-import { ActorEngine } from "../runtime/extensions/actor-engine.js"
-import { ActorHost } from "../runtime/extensions/actor-host.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
@@ -86,10 +84,9 @@ export interface E2ELayerConfig {
 }
 
 /**
- * Build a complete E2E test layer with real extension actors and queued event publishing.
+ * Build a complete E2E test layer with queued event publishing.
  *
  * Key differences from baseLocalLayerWithProvider:
- * - ActorHost.fromResolved(extensions) — spawns real actors
  * - EventPublisherLive — appends and broadcasts committed events
  * - ToolRunner.Live — executes tools for real
  * - session-loop follow-ups — QueueFollowUp enqueues directly into the live loop
@@ -171,11 +168,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const resolved = reconciled.resolved
 
       // Build the process-scope Resource layer the same way prod does
-      // (`buildResourceLayer` in profile.ts) so `Resource.start` fires —
-      // this is load-bearing for actor-only extensions whose Behavior is
-      // spawned inside `start` and discovered via Receptionist + the
-      // route fallback in ActorEngine. The legacy "extract `r.layer`
-      // and merge" path skipped lifecycle entirely.
+      // (`buildResourceLayer` in profile.ts) so `Resource.start` fires.
       //
       // Extension layers may require SqlClient — provide it below via
       // `provideMerge(resourceLayer, baseDeps)`.
@@ -216,9 +209,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
       const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-      const actorRuntimeLive = ActorHost.fromResolved(resolved).pipe(
-        Layer.provideMerge(ActorEngine.Live),
-      )
       // Base services — everything that doesn't depend on reducing event store
       const baseDepsCore = Layer.mergeAll(
         BunServices.layer,
@@ -228,7 +218,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         config.providerLayer,
         extensionRegistryLive,
         driverRegistryLive,
-        actorRuntimeLive,
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
@@ -247,11 +236,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         ...(config.extraLayers ?? []),
       )
 
-      // Mirror `buildExtensionLayers` in profile.ts: feed `baseDepsCore`
-      // (which carries `ActorEngine`, `Receptionist`, storage, …) into
-      // the Resource layer via `provideMerge` so `Resource.start` hooks
-      // see the full service set, while keeping `baseDepsCore`'s outputs
-      // in the merged result.
+      // Mirror `buildExtensionLayers` in profile.ts: feed `baseDepsCore` into
+      // the Resource layer via `provideMerge` so `Resource.start` hooks see the
+      // full service set, while keeping `baseDepsCore`'s outputs in the merged
+      // result.
       const baseDeps = Layer.provideMerge(extensionResourceLayer, baseDepsCore)
 
       const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)

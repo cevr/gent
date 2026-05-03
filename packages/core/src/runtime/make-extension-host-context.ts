@@ -23,8 +23,6 @@ import {
   type AgentName,
 } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
-import type { ActorEngineService } from "./extensions/actor-engine.js"
-import type { ReceptionistService } from "./extensions/receptionist.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
@@ -54,13 +52,6 @@ export interface MakeExtensionHostContextDeps {
   readonly searchStorage: SearchStorageService
   readonly agentRunner: AgentRunner
   readonly sessionMutations: SessionMutationsService
-  /**
-   * Actor primitive surface. Threaded into the `actors` facet so non-
-   * actor callers (slot handlers, capability handlers) can resolve
-   * `ServiceKey`s into `ActorRef`s and tell/ask through the engine.
-   */
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly sessionControl: ExtensionSessionControlService
 }
 
@@ -257,8 +248,6 @@ export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
   readonly storage: StorageService
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly overrides?: Partial<AmbientHostContextDefaults>
 }
 
@@ -282,8 +271,6 @@ export const makeAmbientExtensionHostContextDeps = (
       searchStorage: defaults.searchStorage,
       agentRunner: defaults.agentRunner,
       sessionMutations: defaults.sessionMutations,
-      actorEngine: input.actorEngine,
-      receptionist: input.receptionist,
       sessionControl: defaults.sessionControl,
     }
   })
@@ -313,13 +300,6 @@ export const makeExtensionHostContext = (
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
         return provided as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
       },
-    },
-
-    actors: {
-      find: (key) => deps.receptionist.find(key),
-      findOne: (key) => deps.receptionist.findOne(key),
-      tell: (ref, msg) => deps.actorEngine.tell(ref, msg),
-      ask: (ref, msg) => deps.actorEngine.ask(ref, msg),
     },
 
     agent: {

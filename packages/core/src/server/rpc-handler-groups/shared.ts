@@ -15,15 +15,11 @@ import type { SessionCommandsService } from "../session-commands.js"
 import type { SessionQueriesService } from "../session-queries.js"
 import type { WatchRuntimeInput } from "../transport-contract.js"
 import type { DriverRegistryService } from "../../runtime/extensions/driver-registry.js"
-import type { ActorEngineService } from "../../runtime/extensions/actor-engine.js"
-import type { ReceptionistService } from "../../runtime/extensions/receptionist.js"
 import type { ExtensionRegistryService } from "../../runtime/extensions/registry.js"
 import type { ModelRegistryService } from "../../runtime/model-registry.js"
 
 export interface ResolvedSessionServices {
   readonly registry: ExtensionRegistryService
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>
 }
 

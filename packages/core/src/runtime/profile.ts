@@ -2,7 +2,7 @@
  * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
  * every composition root that needs to *discover* extensions.
  *
- * Three callers build the same registry / actor / resource layer shape via
+ * Three callers build the same registry / resource layer shape via
  * `buildExtensionLayers`:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
@@ -13,7 +13,7 @@
  *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
  *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
- * All three end up with the same registry / actor / resource shape — no more
+ * All three end up with the same registry / resource shape — no more
  * drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
@@ -22,7 +22,7 @@
  * @module
  */
 
-import { Context, Duration, Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import type { GentExtension } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
 import {
@@ -35,9 +35,6 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { buildResourceLayer } from "./extensions/resource-host/index.js"
-import { ActorEngine } from "./extensions/actor-engine.js"
-import { ActorHost, ActorHostFailures, type ActorSpawnFailure } from "./extensions/actor-host.js"
-import { Receptionist } from "./extensions/receptionist.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -125,10 +122,7 @@ const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") =
   return "extension.startup.failed"
 }
 
-export const logRuntimeProfileFailures = (
-  profile: RuntimeProfile,
-  actorSpawnFailures: ReadonlyArray<ActorSpawnFailure> = [],
-) =>
+export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
   Effect.gen(function* () {
     for (const failed of profile.resolved.failedExtensions) {
       const message = extensionFailureLogMessage(failed.phase)
@@ -146,15 +140,6 @@ export const logRuntimeProfileFailures = (
         Effect.annotateLogs({
           extensionId: failure.extensionId,
           jobId: failure.jobId,
-          error: failure.error,
-          cwd: profile.cwd,
-        }),
-      )
-    }
-    for (const failure of actorSpawnFailures) {
-      yield* Effect.logWarning("extension.actor.spawn.failed").pipe(
-        Effect.annotateLogs({
-          extensionId: failure.extensionId,
           error: failure.error,
           cwd: profile.cwd,
         }),
@@ -301,45 +286,12 @@ export const compileBaseSections = (
  * `ResolvedExtensions` (same cwd) instead of re-discovering, but they then
  * call this same builder so the wiring shape is identical.
  */
-export interface BuildExtensionLayersOptions {
-  /**
-   * When present, the actor host wires `ActorPersistenceStorage` for
-   * spawn-time hydrate + periodic write. Absent → in-memory mode
-   * (used by lock tests + ephemeral runs that don't persist actors).
-   */
-  readonly actorPersistence?: {
-    readonly profileId: string
-    readonly writeInterval?: Duration.Input
-  }
-}
-
-export const buildExtensionLayers = (
-  resolved: ResolvedExtensions,
-  options?: BuildExtensionLayersOptions,
-) => {
+export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   // Process-scope Resource layer — services merged in parallel, lifecycle
   // (start/stop) threaded sequentially with reverse-order teardown. cwd /
   // session / branch Resources are routed through the per-cwd / ephemeral
   // composers (added in later commits).
   const resourceLayer = buildResourceLayer(resolved.extensions, "process")
-
-  // Actor engine + host: ActorEngine.Live is self-contained (it
-  // composes its own Receptionist). ActorHost walks every extension's
-  // `actors` bucket at build time and spawns each Behavior into the
-  // engine; spawn lifetime is bound to the host scope so runtime
-  // teardown interrupts every actor fiber.
-  //
-  // When `actorPersistence` is configured the host hydrates each
-  // durable behavior from `ActorPersistenceStorage(profileId, namespacedKey)`
-  // before spawn and forks a periodic writer. Absent → in-memory mode.
-  //
-  const actorRuntimeLive =
-    options?.actorPersistence !== undefined
-      ? ActorHost.fromResolvedWithPersistence(resolved, {
-          profileId: options.actorPersistence.profileId,
-          writeInterval: options.actorPersistence.writeInterval ?? Duration.seconds(30),
-        }).pipe(Layer.provideMerge(ActorEngine.Live))
-      : ActorHost.fromResolved(resolved).pipe(Layer.provideMerge(ActorEngine.Live))
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -347,12 +299,11 @@ export const buildExtensionLayers = (
       modelDrivers: resolved.modelDrivers,
       externalDrivers: resolved.externalDrivers,
     }),
-    actorRuntimeLive,
   )
 
   // Resource layers may declare `R` deps on services from `baseLayers`
-  // (e.g. `ExecutorConnectionRunnerLayer` consumes `ActorEngine` +
-  // `Receptionist`). `Layer.mergeAll` does NOT cross-wire siblings, so
+  // (e.g. `ExtensionRegistry` / `DriverRegistry`). `Layer.mergeAll`
+  // does NOT cross-wire siblings, so
   // we feed `baseLayers` into the resource layer via `provideMerge` —
   // resource deps are satisfied AND base outputs stay in the result.
   return Layer.provideMerge(resourceLayer, baseLayers)
@@ -363,15 +314,10 @@ export const buildProfileRuntime = (params: {
   readonly configService: ConfigServiceService
 }) =>
   Effect.gen(function* () {
-    const combinedLayer = buildExtensionLayers(params.profile.resolved, {
-      actorPersistence: { profileId: params.profile.cwd },
-    })
+    const combinedLayer = buildExtensionLayers(params.profile.resolved)
     const layerContext = yield* Layer.build(combinedLayer)
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)
-    const actorEngine = Context.get(layerContext, ActorEngine)
-    const receptionist = Context.get(layerContext, Receptionist)
-    const actorHostFailures = yield* Context.get(layerContext, ActorHostFailures).snapshot
     const permissionService = makeProfilePermissionService({
       cwd: params.profile.cwd,
       configService: params.configService,
@@ -388,9 +334,6 @@ export const buildProfileRuntime = (params: {
       permissionService,
       registryService,
       driverRegistryService,
-      actorEngine,
-      receptionist,
-      actorHostFailures,
       baseSections,
     }
   })
@@ -400,6 +343,6 @@ export const resolveProfileRuntime = (inputs: RuntimeProfileInputs) =>
     const configService = yield* ConfigService
     const profile = yield* resolveRuntimeProfile(inputs)
     const built = yield* buildProfileRuntime({ profile, configService })
-    yield* logRuntimeProfileFailures(profile, built.actorHostFailures)
+    yield* logRuntimeProfileFailures(profile)
     return built
   })

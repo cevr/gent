@@ -53,8 +53,6 @@ import { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
-import { ActorEngine } from "../extensions/actor-engine.js"
-import { Receptionist } from "../extensions/receptionist.js"
 import { ToolRunner } from "./tool-runner"
 import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -471,8 +469,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ResourceManager
     | ConfigService
     | ModelRegistry
-    | ActorEngine
-    | Receptionist
   > =>
     Layer.effect(
       AgentLoop,
@@ -482,8 +478,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
-        const actorEngine = yield* ActorEngine
-        const receptionist = yield* Receptionist
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
@@ -594,8 +588,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const hostDeps = yield* makeAmbientExtensionHostContextDeps({
               extensionRegistry,
               storage,
-              actorEngine,
-              receptionist,
               overrides: {
                 sessionControl: {
                   queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
@@ -893,11 +885,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   baseSections: turnBaseSections,
                   interactive: state.interactive,
                   hostCtx: turnHostCtx,
-                }).pipe(
-                  Effect.provideService(ConfigService, configServiceForRun),
-                  Effect.provideService(ActorEngine, actorEngine),
-                  Effect.provideService(Receptionist, receptionist),
-                )
+                }).pipe(Effect.provideService(ConfigService, configServiceForRun))
                 if (resolved === undefined) break
 
                 currentTurnAgent = resolved.currentTurnAgent

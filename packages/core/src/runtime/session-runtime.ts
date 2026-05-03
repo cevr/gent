@@ -30,8 +30,6 @@ import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
-import { ActorEngine } from "./extensions/actor-engine.js"
-import { Receptionist } from "./extensions/receptionist.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import {
@@ -250,8 +248,6 @@ type SessionRuntimeEntityLayerRequirements =
   | EventPublisher
   | ExtensionRegistry
   | DriverRegistry
-  | ActorEngine
-  | Receptionist
   | ModelRegistry
   | LayerRequirements<ReturnType<typeof AgentLoop.Live>>
 
@@ -373,14 +369,7 @@ interface RunPromptInput {
 const makeLiveSessionRuntime: Effect.Effect<
   SessionRuntimeService,
   never,
-  | AgentLoop
-  | Storage
-  | EventPublisher
-  | ExtensionRegistry
-  | DriverRegistry
-  | ActorEngine
-  | Receptionist
-  | ModelRegistry
+  AgentLoop | Storage | EventPublisher | ExtensionRegistry | DriverRegistry | ModelRegistry
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
   const storage = yield* Storage
@@ -391,16 +380,12 @@ const makeLiveSessionRuntime: Effect.Effect<
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
   const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
-  const actorEngine = yield* ActorEngine
-  const receptionist = yield* Receptionist
   const commandGate = yield* Semaphore.make(1)
   const serializeCommand = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     commandGate.withPermits(1)(effect)
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({
     extensionRegistry,
     storage,
-    actorEngine,
-    receptionist,
     overrides: {
       sessionControl: {
         queueFollowUp: (input) => agentLoop.queueFollowUp(input),

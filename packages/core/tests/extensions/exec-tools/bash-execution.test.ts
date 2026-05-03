@@ -30,12 +30,6 @@ const stubCtx: ToolContext = {
   extension: {
     request: dieStub("request"),
   },
-  actors: {
-    find: dieStub("actors.find"),
-    findOne: dieStub("actors.findOne"),
-    tell: dieStub("actors.tell"),
-    ask: dieStub("actors.ask"),
-  } as never,
   agent: {
     get: dieStub("get"),
     require: dieStub("require"),

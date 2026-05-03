@@ -48,12 +48,7 @@ import type {
   ExtensionSetupContext,
   ExtensionManifest,
 } from "../domain/extension.js"
-import type {
-  AnyBehavior,
-  ExtensionContributions,
-  ExtensionReactions,
-} from "../domain/contribution.js"
-import type { Behavior } from "../domain/actor.js"
+import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionToken } from "../domain/capability/action.js"
 import type { RequestToken } from "../domain/capability/request.js"
@@ -207,7 +202,6 @@ export {
   // in is the discrimination (no `_kind` field).
   defineResource,
   resource,
-  behavior,
 } from "../domain/contribution.js"
 export {
   ServiceKey,
@@ -334,7 +328,6 @@ export interface DefineExtensionInput<Client = unknown> {
    */
   readonly rpc?: FieldSpec<RequestToken>
   readonly agents?: FieldSpec<AgentDefinition>
-  readonly actors?: FieldSpec<AnyBehavior>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
@@ -349,10 +342,6 @@ export type DefineToolExtensionInput<Client = unknown> = Pick<
   DefineExtensionInput<Client>,
   "id" | "client" | "tools" | "commands" | "rpc" | "reactions" | "resources" | "agents"
 >
-
-export type DefineStatefulExtensionInput<Client = unknown> = DefineToolExtensionInput<Client> & {
-  readonly actor: Behavior<unknown, unknown, never> | AnyBehavior
-}
 
 export type DefineUiExtensionInput<Client> = DefineToolExtensionInput<Client> & {
   readonly client: Client
@@ -570,7 +559,6 @@ export function defineExtension(
         const commands = yield* resolveField(manifest, "commands", params.commands, ctx)
         const rpc = yield* resolveField(manifest, "rpc", params.rpc, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
-        const actors = yield* resolveField(manifest, "actors", params.actors, ctx)
         const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
         const externalDrivers = yield* resolveField(
           manifest,
@@ -584,7 +572,6 @@ export function defineExtension(
           ...(commands.length > 0 ? { commands } : {}),
           ...(rpc.length > 0 ? { rpc } : {}),
           ...(agents.length > 0 ? { agents } : {}),
-          ...(actors.length > 0 ? { actors } : {}),
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
@@ -609,25 +596,6 @@ export function defineToolExtension(
   params: DefineToolExtensionInput,
 ): GentExtension & { readonly client?: unknown } {
   return defineExtension(params)
-}
-
-/** Define an extension that owns one stateful actor plus optional surfaces. */
-export function defineStatefulExtension(
-  params: DefineStatefulExtensionInput & { readonly client?: undefined },
-): GentExtension
-export function defineStatefulExtension<Client>(
-  params: DefineStatefulExtensionInput<Client> & { readonly client: Client },
-): GentExtension & { readonly client: Client }
-export function defineStatefulExtension<Client>(
-  params: DefineStatefulExtensionInput<Client>,
-): GentExtension & { readonly client?: Client }
-export function defineStatefulExtension(
-  params: DefineStatefulExtensionInput,
-): GentExtension & { readonly client?: unknown } {
-  return defineExtension({
-    ...params,
-    actors: [params.actor as AnyBehavior],
-  })
 }
 
 /** Define an extension whose primary surface is a client facet. */

@@ -59,8 +59,6 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../../retry"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../../wide-event-boundary"
-import type { ActorEngine } from "../../extensions/actor-engine.js"
-import type { Receptionist } from "../../extensions/receptionist.js"
 import type { DriverRegistryService } from "../../extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "../../extensions/registry.js"
 import type { ResourceManagerService } from "../../resource-manager.js"
@@ -402,11 +400,7 @@ export const resolveTurnContext = (params: {
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
-}): Effect.Effect<
-  ResolvedTurnContext | undefined,
-  StorageError,
-  ConfigService | ActorEngine | Receptionist
-> =>
+}): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
     const rawMessages = yield* params.storage

@@ -19,9 +19,9 @@ describe("Plan extension", () => {
       expect(toolIds).toContain("plan")
     }).pipe(Effect.runPromise))
 
-  test("has no actor (tool-only extension)", () =>
+  test("has no resources (tool-only extension)", () =>
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
-      expect(contributions.actors ?? []).toEqual([])
+      expect(contributions.resources ?? []).toEqual([])
     }).pipe(Effect.runPromise))
 })

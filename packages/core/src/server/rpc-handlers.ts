@@ -1,8 +1,6 @@
 import { Effect } from "effect"
 import { SessionId } from "../domain/ids.js"
 import { GentRpcs } from "./rpcs"
-import { ActorEngine } from "../runtime/extensions/actor-engine.js"
-import { Receptionist } from "../runtime/extensions/receptionist.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -42,8 +40,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
-    const actorEngine = yield* ActorEngine
-    const receptionist = yield* Receptionist
     const extensionRegistry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
@@ -70,23 +66,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         if (sessionId === undefined || profileCache === undefined || storage === undefined) {
           return {
             registry: extensionRegistry,
-            actorEngine,
-            receptionist,
           }
         }
         const session = yield* loadSession(sessionId)
         if (session?.cwd === undefined) {
           return {
             registry: extensionRegistry,
-            actorEngine,
-            receptionist,
           }
         }
         const profile = yield* profileCache.resolve(session.cwd)
         return {
           registry: profile.registryService,
-          actorEngine: profile.actorEngine,
-          receptionist: profile.receptionist,
           capabilityContext: profile.layerContext,
         }
       })

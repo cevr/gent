@@ -13,7 +13,6 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
-  defineStatefulExtension,
   defineToolExtension,
   defineUiExtension,
   GentToolMetadataTag,
@@ -32,8 +31,6 @@ import { compileExtensionReactions } from "../../src/runtime/extensions/extensio
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { AgentName } from "@gent/core/domain/agent"
-import { ServiceKey, type Behavior } from "../../src/domain/actor"
-import { TaggedEnumClass } from "../../src/domain/schema-tagged-enum-class"
 
 const stubHostCtx = {
   sessionId: SessionId.make("test-session"),
@@ -57,20 +54,6 @@ const stubProjectionCtx = {
 }
 
 const setupOf = (ext: GentExtension) => ext.setup(testSetupCtx())
-const HelperMsg = TaggedEnumClass("HelperMsg", {
-  Get: TaggedEnumClass.askVariant<number>()({}),
-})
-type HelperMsg = Schema.Schema.Type<typeof HelperMsg>
-const HelperKey = ServiceKey<HelperMsg>("helper")
-const helperBehavior: Behavior<HelperMsg, { readonly count: number }, never> = {
-  initialState: { count: 1 },
-  serviceKey: HelperKey,
-  receive: (msg, state, ctx) =>
-    Effect.gen(function* () {
-      if (msg._tag === "Get") yield* ctx.reply(state.count)
-      return state
-    }),
-}
 
 describe("defineExtension", () => {
   it.live("empty extension produces empty contribution buckets", () =>
@@ -362,9 +345,8 @@ describe("defineExtension", () => {
           }),
         ],
       })
-      const statefulExt = defineStatefulExtension({
-        id: "helper-state",
-        actor: helperBehavior,
+      const rpcExt = defineExtension({
+        id: "helper-rpc",
         rpc: [readSnapshot],
       })
       const uiClient = { setup: Effect.succeed([]) }
@@ -374,12 +356,11 @@ describe("defineExtension", () => {
       })
 
       const toolContribs = yield* setupOf(toolExt)
-      const statefulContribs = yield* setupOf(statefulExt)
+      const rpcContribs = yield* setupOf(rpcExt)
       const uiContribs = yield* setupOf(uiExt)
 
       expect(toolContribs.tools?.map((t) => String(getToolId(t)))).toEqual(["helper-tool-call"])
-      expect(statefulContribs.actors).toHaveLength(1)
-      expect(statefulContribs.rpc?.map((r) => String(r.id))).toEqual(["read-snapshot"])
+      expect(rpcContribs.rpc?.map((r) => String(r.id))).toEqual(["read-snapshot"])
       expect(uiExt.client).toBe(uiClient)
       expect(uiContribs).toEqual({})
     }),

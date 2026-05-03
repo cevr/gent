@@ -383,7 +383,6 @@ const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   agent: {} as ExtensionHostContext["agent"],
   session: {} as ExtensionHostContext["session"],
   interaction: {} as ExtensionHostContext["interaction"],
-  actors: {} as ExtensionHostContext["actors"],
 })
 describe("codemode proxy via makeAcpRunTool", () => {
   it.live("runs through the boundary helper and reaches ToolRunner", () =>

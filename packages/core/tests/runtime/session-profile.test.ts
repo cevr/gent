@@ -10,8 +10,6 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { Storage } from "../../src/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
-import { Receptionist } from "../../src/runtime/extensions/receptionist"
 
 const makeEmptyProfile = (cwd: string) =>
   Effect.gen(function* () {
@@ -23,7 +21,6 @@ const makeEmptyProfile = (cwd: string) =>
           modelDrivers: resolved.modelDrivers,
           externalDrivers: resolved.externalDrivers,
         }),
-        ActorEngine.Live,
       ),
     )
     return {
@@ -39,8 +36,6 @@ const makeEmptyProfile = (cwd: string) =>
       },
       registryService: Context.get(layerContext, ExtensionRegistry),
       driverRegistryService: Context.get(layerContext, DriverRegistry),
-      actorEngine: Context.get(layerContext, ActorEngine),
-      receptionist: Context.get(layerContext, Receptionist),
       baseSections: [],
       instructions: "",
     }

@@ -6,8 +6,6 @@ import type { AgentName } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { StorageError, type StorageService } from "../storage/sqlite-storage.js"
-import type { ActorEngineService } from "./extensions/actor-engine.js"
-import type { ReceptionistService } from "./extensions/receptionist.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import {
@@ -54,8 +52,6 @@ export interface ExistingSessionBranch {
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -76,8 +72,6 @@ const resolveActiveRuntimeBindings = (params: {
   readonly defaults: SessionEnvironmentDefaults
 }): ActiveRuntimeBindings => ({
   extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
-  actorEngine: params.profile?.actorEngine ?? params.hostDeps.actorEngine,
-  receptionist: params.profile?.receptionist ?? params.hostDeps.receptionist,
   capabilityContext: params.profile?.layerContext ?? params.hostDeps.capabilityContext,
   driverRegistry: params.profile?.driverRegistryService ?? params.defaults.driverRegistry,
   permission: params.profile?.permissionService ?? params.defaults.permission,
@@ -102,8 +96,6 @@ const buildSessionEnvironment = (params: {
     {
       ...params.hostDeps,
       extensionRegistry: params.bindings.extensionRegistry,
-      actorEngine: params.bindings.actorEngine,
-      receptionist: params.bindings.receptionist,
       ...(params.bindings.capabilityContext !== undefined
         ? { capabilityContext: params.bindings.capabilityContext }
         : {}),

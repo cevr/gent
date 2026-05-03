@@ -19,7 +19,6 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { ActorEngine } from "../runtime/extensions/actor-engine.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ServerProfileService } from "../runtime/scope-brands.js"
@@ -64,7 +63,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
-  const actorRuntimeLive = ActorEngine.Live
   const memoryStorage = Storage.MemoryWithSql()
   const clusterRunnerLive = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
@@ -76,7 +74,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     subTagLayers(memoryStorage),
     providerLive,
     extensionRegistryLive,
-    actorRuntimeLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),

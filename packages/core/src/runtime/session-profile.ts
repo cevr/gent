@@ -29,13 +29,10 @@ import {
   ExtensionRegistry,
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
-import { ActorEngine, type ActorEngineService } from "./extensions/actor-engine.js"
-import { Receptionist, type ReceptionistService } from "./extensions/receptionist.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
 import { runWithBuiltLayer } from "./run-with-built-layer.js"
-import { ActorPersistenceStorage } from "../storage/actor-persistence-storage.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
@@ -54,8 +51,6 @@ export interface SessionProfile {
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
 }
@@ -88,12 +83,7 @@ export class SessionProfileCache extends Context.Service<
   ): Layer.Layer<
     SessionProfileCache,
     never,
-    | FileSystem.FileSystem
-    | Path.Path
-    | ChildProcessSpawner
-    | ConfigService
-    | ActorPersistenceStorage
-    | ScopeType.Scope
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | ScopeType.Scope
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -102,7 +92,6 @@ export class SessionProfileCache extends Context.Service<
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
-        const actorPersistenceStorage = yield* ActorPersistenceStorage
         const initialCache = new Map<string, SessionProfile>(
           (config.initialProfiles ?? []).map((profile) => [pathSvc.resolve(profile.cwd), profile]),
         )
@@ -114,15 +103,11 @@ export class SessionProfileCache extends Context.Service<
         // Capture platform services as a layer so initProfile can use functions
         // that require FileSystem | Path | ChildProcessSpawner | ConfigService from
         // the Effect context (profile resolution loads instructions via ConfigService).
-        // ActorPersistenceStorage is captured here so the per-cwd profile build
-        // (which now wires the durable actor surface) can resolve it without
-        // pulling Storage into every callsite of `resolveProfileRuntime`.
         const platformLayer = Layer.mergeAll(
           Layer.succeed(FileSystem.FileSystem, fs),
           Layer.succeed(Path.Path, pathSvc),
           Layer.succeed(ChildProcessSpawner, spawner),
           Layer.succeed(ConfigService, configService),
-          Layer.succeed(ActorPersistenceStorage, actorPersistenceStorage),
         )
 
         const initProfile = (cwd: string) =>
@@ -216,7 +201,6 @@ export class SessionProfileCache extends Context.Service<
                   modelDrivers: resolved.modelDrivers,
                   externalDrivers: resolved.externalDrivers,
                 }),
-                ActorEngine.Live,
               ),
             ).pipe(Effect.scoped),
           )
@@ -228,8 +212,6 @@ export class SessionProfileCache extends Context.Service<
             permissionService: allowAllPermission,
             registryService: Context.get(layerContext, ExtensionRegistry),
             driverRegistryService: Context.get(layerContext, DriverRegistry),
-            actorEngine: Context.get(layerContext, ActorEngine),
-            receptionist: Context.get(layerContext, Receptionist),
             baseSections: [],
             instructions: "",
           }
@@ -246,8 +228,6 @@ export const sessionProfileFromRuntime = (runtime: {
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
-  readonly actorEngine: ActorEngineService
-  readonly receptionist: ReceptionistService
   readonly baseSections: ReadonlyArray<PromptSection>
 }): SessionProfile => ({
   cwd: runtime.profile.cwd,
@@ -257,8 +237,6 @@ export const sessionProfileFromRuntime = (runtime: {
   permissionService: runtime.permissionService,
   registryService: runtime.registryService,
   driverRegistryService: runtime.driverRegistryService,
-  actorEngine: runtime.actorEngine,
-  receptionist: runtime.receptionist,
   baseSections: runtime.baseSections,
   instructions: runtime.profile.instructions,
 })

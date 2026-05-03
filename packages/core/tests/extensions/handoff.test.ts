@@ -104,7 +104,6 @@ describe("HandoffCooldown", () => {
   it.live("suppress and turnCompleted preserve cooldown semantics", () =>
     Effect.gen(function* () {
       const contributions = yield* HandoffExtension.setup(testSetupCtx())
-      expect(contributions.actors ?? []).toEqual([])
       expect((contributions.resources ?? []).length).toBe(1)
 
       const program = Effect.gen(function* () {

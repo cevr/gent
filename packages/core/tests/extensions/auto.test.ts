@@ -40,10 +40,9 @@ const turnCompleted = Effect.gen(function* () {
 })
 
 describe("Auto runtime", () => {
-  it.live("declares process resources without actor contributions", () =>
+  it.live("declares process resources", () =>
     Effect.sync(() => {
       const contributions = Effect.runSync(AutoExtension.setup(testSetupCtx()))
-      expect(contributions.actors).toBeUndefined()
       expect(contributions.resources?.length).toBe(2)
     }),
   )

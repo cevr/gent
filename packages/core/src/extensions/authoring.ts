@@ -11,11 +11,9 @@
 
 export {
   defineExtension,
-  defineStatefulExtension,
   defineToolExtension,
   defineUiExtension,
   type DefineExtensionInput,
-  type DefineStatefulExtensionInput,
   type DefineToolExtensionInput,
   type DefineUiExtensionInput,
   type FieldSpec,
@@ -70,7 +68,6 @@ export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.j
 export {
   defineResource,
   resource,
-  behavior,
   type ExtensionContributions,
   type ExtensionReactions,
 } from "../domain/contribution.js"
