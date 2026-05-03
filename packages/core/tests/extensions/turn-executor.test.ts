@@ -6,19 +6,21 @@
  */
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Stream } from "effect"
+import * as Response from "effect/unstable/ai/Response"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core/domain/ids"
-import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
+import { finishPart } from "@gent/core/providers/provider"
+import type { TurnExecutor, TurnContext } from "@gent/core/domain/driver"
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
 }
 const echoExecutor: TurnExecutor = {
   executeTurn: (ctx: TurnContext) =>
-    Stream.fromIterable<TurnEvent>([
-      { _tag: "text-delta", text: `echo: ${ctx.systemPrompt}` },
-      { _tag: "finished", stopReason: "stop" },
+    Stream.fromIterable([
+      Response.makePart("text-delta", { id: "test-text", delta: `echo: ${ctx.systemPrompt}` }),
+      finishPart({ finishReason: "stop" }),
     ]),
 }
 const makeExt = (

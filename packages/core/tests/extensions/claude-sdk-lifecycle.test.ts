@@ -4,7 +4,7 @@
  * Validates the executor's session-management contract using a controllable
  * fake `ClaudeSdkServiceShape` plus a stub token reader — keeping the
  * tests independent of the macOS keychain so they run in CI. Pure SDK
- * message → TurnEvent mapping tests live in
+ * message → response part mapping tests live in
  * `claude-code-executor.test.ts`.
  *
  *   1. Cache hit returns the same session for matching fingerprints and

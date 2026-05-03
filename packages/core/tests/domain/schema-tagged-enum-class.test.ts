@@ -172,7 +172,7 @@ describe("TaggedEnumClass — construction-time validation", () => {
   })
 })
 describe("TaggedEnumClass — explicit wire tags", () => {
-  const TurnEvent = TaggedEnumClass("TestTurnEvent", {
+  const WireEvent = TaggedEnumClass("TestWireEvent", {
     TextDelta: TaggedEnumClass.variant("text-delta", { text: Schema.String }),
     ToolCall: TaggedEnumClass.variant("tool-call", {
       name: Schema.String,
@@ -182,20 +182,20 @@ describe("TaggedEnumClass — explicit wire tags", () => {
     Finished: TaggedEnumClass.variant("finished", { reason: Schema.String }),
   })
   test("kebab-case wire tags construct through PascalCase members", () => {
-    const e = TurnEvent.TextDelta.make({ text: "hello" })
+    const e = WireEvent.TextDelta.make({ text: "hello" })
     expect(e._tag).toBe("text-delta")
     expect(e.text).toBe("hello")
   })
   test("kebab-case wire tags decode into direct member classes", () => {
-    const decoded = Schema.decodeUnknownSync(TurnEvent)({
+    const decoded = Schema.decodeUnknownSync(WireEvent)({
       _tag: "text-delta",
       text: "hi",
     })
-    expect(decoded instanceof TurnEvent.TextDelta).toBe(true)
+    expect(decoded instanceof WireEvent.TextDelta).toBe(true)
   })
   test("direct-member match dispatches from wire tags", () => {
-    const e = TurnEvent.ToolCall.make({ name: "read", input: { path: "/x" } })
-    const out = TurnEvent.match({
+    const e = WireEvent.ToolCall.make({ name: "read", input: { path: "/x" } })
+    const out = WireEvent.match({
       TextDelta: (e) => `text:${e.text}`,
       ToolCall: (e) => `tool:${e.name}`,
       ToolResult: () => `result`,
@@ -204,15 +204,15 @@ describe("TaggedEnumClass — explicit wire tags", () => {
     expect(out).toBe("tool:read")
   })
   test("`isAnyOf` accepts direct member names and wire tags", () => {
-    const e = TurnEvent.TextDelta.make({ text: "hello" })
-    expect(TurnEvent.isAnyOf(["TextDelta"])(e)).toBe(true)
-    expect(TurnEvent.isAnyOf(["text-delta" as never])(e)).toBe(true)
-    expect(TurnEvent.isAnyOf(["ToolCall"])(e)).toBe(false)
-    expect(TurnEvent.isAnyOf(["tool-call" as never])(e)).toBe(false)
+    const e = WireEvent.TextDelta.make({ text: "hello" })
+    expect(WireEvent.isAnyOf(["TextDelta"])(e)).toBe(true)
+    expect(WireEvent.isAnyOf(["text-delta" as never])(e)).toBe(true)
+    expect(WireEvent.isAnyOf(["ToolCall"])(e)).toBe(false)
+    expect(WireEvent.isAnyOf(["tool-call" as never])(e)).toBe(false)
   })
   test("rejects lowercase or kebab members even when they would be valid wire tags", () => {
     expect(() =>
-      TaggedEnumClass("BadTurnEvent", {
+      TaggedEnumClass("BadWireEvent", {
         "text-delta": { text: Schema.String } as never,
       }),
     ).toThrow(/PascalCase/)

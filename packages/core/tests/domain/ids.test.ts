@@ -4,13 +4,11 @@
  * Tests cover:
  * - `Schema.decodeUnknownSync` roundtrip for each branded id
  * - cross-brand assignability is a compile-time error (recorded via @ts-expect-error)
- * - `TurnEvent.Tool*` decode produces `ToolCallId`-branded `toolCallId`
  *
  * @module
  */
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
-import { TurnEvent } from "@gent/core/domain/driver"
 import {
   ActorCommandId,
   ActorId,
@@ -98,50 +96,5 @@ describe("branded ids — cross-brand assignability is a type error", () => {
     // @ts-expect-error
     const c: ToolId = rpc
     expect([String(a), String(b), String(c)]).toEqual(["read_file", "executor-start", "task.list"])
-  })
-})
-
-describe("TurnEvent — toolCallId is branded ToolCallId", () => {
-  test("ToolCall variant decodes toolCallId as ToolCallId", () => {
-    const decoded = Schema.decodeUnknownSync(TurnEvent)({
-      _tag: "tool-call",
-      toolCallId: ToolCallId.make("tc-7"),
-      toolName: "echo",
-      input: { text: "hi" },
-    })
-    expect(decoded._tag).toBe("tool-call")
-    if (decoded._tag !== "tool-call") throw new Error("unreachable")
-    // Compile-time: assigning to ToolCallId should typecheck.
-    const id: ToolCallId = decoded.toolCallId
-    expect(String(id)).toBe("tc-7")
-  })
-
-  test("ToolStarted, ToolCompleted, ToolFailed all carry branded toolCallId", () => {
-    const started = Schema.decodeUnknownSync(TurnEvent)({
-      _tag: "tool-started",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "echo",
-    })
-    const completed = Schema.decodeUnknownSync(TurnEvent)({
-      _tag: "tool-completed",
-      toolCallId: ToolCallId.make("tc-2"),
-    })
-    const failed = Schema.decodeUnknownSync(TurnEvent)({
-      _tag: "tool-failed",
-      toolCallId: ToolCallId.make("tc-3"),
-      error: "boom",
-    })
-    if (started._tag === "tool-started") {
-      const id: ToolCallId = started.toolCallId
-      expect(String(id)).toBe("tc-1")
-    }
-    if (completed._tag === "tool-completed") {
-      const id: ToolCallId = completed.toolCallId
-      expect(String(id)).toBe("tc-2")
-    }
-    if (failed._tag === "tool-failed") {
-      const id: ToolCallId = failed.toolCallId
-      expect(String(id)).toBe("tc-3")
-    }
   })
 })

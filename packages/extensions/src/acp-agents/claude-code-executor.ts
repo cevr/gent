@@ -18,7 +18,7 @@
  *     session-fatal — the manager evicts the cached session via
  *     `tapErrorCause` so the next turn rebuilds.
  *
- * Streaming: `mapSdkMessage` consumes both full `assistant` messages
+ * Streaming: `mapSdkMessageToResponseParts` consumes both full `assistant` messages
  * (for tool_use blocks; text/thinking are taken from the partial
  * stream_event path so we don't double-emit) and `stream_event`
  * partial deltas (for token-level text/thinking).
@@ -26,17 +26,12 @@
  * @module
  */
 import { Effect, Stream } from "effect"
+import * as Response from "effect/unstable/ai/Response"
 import {
-  ReasoningDelta,
-  TextDelta,
-  ToolCompleted,
   TurnError,
-  ToolFailed,
-  ToolStarted,
-  TurnFinished,
   type TurnContext,
-  type TurnEvent,
   type TurnExecutor,
+  type TurnStreamPart,
 } from "@gent/core/extensions/api"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeSdkError, type ClaudeSdkServiceShape, type ClaudeSdkSession } from "./claude-sdk.js"
@@ -51,22 +46,73 @@ import {
   renderLiveUserPrompt,
 } from "./transcript.js"
 
-// ── SDK message → TurnEvent mapping ──
+// ── SDK message → Response part mapping ──
+
+export interface SdkResponsePartMapper {
+  readonly toolNamesById: Map<string, string>
+}
+
+export const makeSdkResponsePartMapper = (): SdkResponsePartMapper => ({
+  toolNamesById: new Map(),
+})
 
 /**
- * Map a `result` message to the terminal `finished` event.
+ * Map a `result` message to the terminal finish part.
  */
-const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEvent =>
-  TurnFinished.make({
-    stopReason: msg.subtype === "success" ? (msg.stop_reason ?? "end_turn") : msg.subtype,
+const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnStreamPart =>
+  Response.makePart("finish", {
+    reason: toResponseFinishReason(
+      msg.subtype === "success" ? (msg.stop_reason ?? "end_turn") : msg.subtype,
+    ),
     usage:
-      msg.usage !== undefined
-        ? {
-            inputTokens: msg.usage.input_tokens,
-            outputTokens: msg.usage.output_tokens,
-          }
-        : undefined,
+      msg.usage === undefined
+        ? emptyUsage()
+        : new Response.Usage({
+            inputTokens: {
+              uncached: undefined,
+              total: msg.usage.input_tokens,
+              cacheRead: undefined,
+              cacheWrite: undefined,
+            },
+            outputTokens: {
+              total: msg.usage.output_tokens,
+              text: undefined,
+              reasoning: undefined,
+            },
+          }),
+    response: undefined,
   })
+
+const emptyUsage = (): Response.Usage =>
+  new Response.Usage({
+    inputTokens: {
+      uncached: undefined,
+      total: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: undefined,
+      text: undefined,
+      reasoning: undefined,
+    },
+  })
+
+const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
+  switch (stopReason) {
+    case "stop":
+    case "length":
+    case "content-filter":
+    case "tool-calls":
+    case "error":
+    case "pause":
+    case "other":
+    case "unknown":
+      return stopReason
+    default:
+      return "unknown"
+  }
+}
 
 /**
  * Map a full `assistant` message. Text/thinking are emitted via the
@@ -77,10 +123,11 @@ const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEve
  */
 const mapAssistantMessage = (
   msg: Extract<SDKMessage, { type: "assistant" }>,
-): ReadonlyArray<TurnEvent> => {
-  const events: TurnEvent[] = []
+  mapper: SdkResponsePartMapper,
+): ReadonlyArray<TurnStreamPart> => {
+  const parts: TurnStreamPart[] = []
   const rawBlocks: unknown = msg.message.content ?? []
-  if (!Array.isArray(rawBlocks)) return events
+  if (!Array.isArray(rawBlocks)) return parts
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const blocks = rawBlocks as ReadonlyArray<Record<string, unknown>>
   for (const block of blocks) {
@@ -88,36 +135,63 @@ const mapAssistantMessage = (
     const id = typeof block["id"] === "string" ? block["id"] : undefined
     const name = typeof block["name"] === "string" ? block["name"] : "unknown"
     if (id !== undefined) {
-      events.push(
-        ToolStarted.make({
-          toolCallId: id,
-          toolName: name,
-          input: block["input"],
+      mapper.toolNamesById.set(id, name)
+      parts.push(
+        Response.makePart("tool-call", {
+          id,
+          name,
+          params: block["input"] ?? {},
+          providerExecuted: false,
         }),
       )
     }
   }
-  return events
+  return parts
 }
 
-const mapUserMessage = (msg: Extract<SDKMessage, { type: "user" }>): ReadonlyArray<TurnEvent> => {
-  const events: TurnEvent[] = []
+const mapUserMessage = (
+  msg: Extract<SDKMessage, { type: "user" }>,
+  mapper: SdkResponsePartMapper,
+): ReadonlyArray<TurnStreamPart> => {
+  const parts: TurnStreamPart[] = []
   const rawBlocks: unknown = msg.message.content ?? []
-  if (!Array.isArray(rawBlocks)) return events
+  if (!Array.isArray(rawBlocks)) return parts
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const blocks = rawBlocks as ReadonlyArray<Record<string, unknown>>
   for (const block of blocks) {
     if (block["type"] !== "tool_result") continue
     const id = typeof block["tool_use_id"] === "string" ? block["tool_use_id"] : undefined
     if (id === undefined) continue
+    const name = mapper.toolNamesById.get(id) ?? "external"
     if (block["is_error"] === true) {
       const errText = stringifyContent(block["content"]) ?? "tool failed"
-      events.push(ToolFailed.make({ toolCallId: id, error: errText }))
+      parts.push(
+        Response.makePart("tool-result", {
+          id,
+          name,
+          result: errText,
+          encodedResult: { error: errText },
+          isFailure: true,
+          providerExecuted: false,
+          preliminary: false,
+        }),
+      )
     } else {
-      events.push(ToolCompleted.make({ toolCallId: id, output: block["content"] }))
+      const result = block["content"] ?? null
+      parts.push(
+        Response.makePart("tool-result", {
+          id,
+          name,
+          result,
+          encodedResult: result,
+          isFailure: false,
+          providerExecuted: false,
+          preliminary: false,
+        }),
+      )
     }
   }
-  return events
+  return parts
 }
 
 /**
@@ -127,7 +201,7 @@ const mapUserMessage = (msg: Extract<SDKMessage, { type: "user" }>): ReadonlyArr
  */
 const mapStreamEvent = (
   msg: Extract<SDKMessage, { type: "stream_event" }>,
-): ReadonlyArray<TurnEvent> => {
+): ReadonlyArray<TurnStreamPart> => {
   const rawEvent: unknown = msg.event
   if (typeof rawEvent !== "object" || rawEvent === null) return []
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
@@ -137,11 +211,17 @@ const mapStreamEvent = (
   if (typeof delta !== "object" || delta === null) return []
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const d = delta as Record<string, unknown>
+  const index = typeof e["index"] === "number" ? e["index"] : 0
   if (d["type"] === "text_delta" && typeof d["text"] === "string" && d["text"] !== "") {
-    return [TextDelta.make({ text: d["text"] })]
+    return [Response.makePart("text-delta", { id: `claude-text-${index}`, delta: d["text"] })]
   }
   if (d["type"] === "thinking_delta" && typeof d["thinking"] === "string" && d["thinking"] !== "") {
-    return [ReasoningDelta.make({ text: d["thinking"] })]
+    return [
+      Response.makePart("reasoning-delta", {
+        id: `claude-reasoning-${index}`,
+        delta: d["thinking"],
+      }),
+    ]
   }
   return []
 }
@@ -158,23 +238,28 @@ const stringifyContent = (content: unknown): string | undefined => {
   return undefined
 }
 
-/** @internal Exported for testing — convert one SDK message into 0..N TurnEvents. */
-export const mapSdkMessage = (msg: SDKMessage): ReadonlyArray<TurnEvent> => {
+/** @internal Exported for testing — convert one SDK message into 0..N response parts. */
+export const mapSdkMessageToResponseParts = (
+  msg: SDKMessage,
+  mapper: SdkResponsePartMapper = makeSdkResponsePartMapper(),
+): ReadonlyArray<TurnStreamPart> => {
   if (msg.type === "result") return [mapResultMessage(msg)]
-  if (msg.type === "assistant") return mapAssistantMessage(msg)
-  if (msg.type === "user") return mapUserMessage(msg)
+  if (msg.type === "assistant") return mapAssistantMessage(msg, mapper)
+  if (msg.type === "user") return mapUserMessage(msg, mapper)
   if (msg.type === "stream_event") return mapStreamEvent(msg)
   return []
 }
 
 const mapSdkMessageStream = (
   stream: Stream.Stream<SDKMessage, ClaudeSdkError>,
-): Stream.Stream<TurnEvent, TurnError> =>
-  stream.pipe(
-    Stream.mapEffect((msg) => Effect.succeed(mapSdkMessage(msg))),
+): Stream.Stream<TurnStreamPart, TurnError> => {
+  const mapper = makeSdkResponsePartMapper()
+  return stream.pipe(
+    Stream.mapEffect((msg) => Effect.succeed(mapSdkMessageToResponseParts(msg, mapper))),
     Stream.flatMap((events) => Stream.fromIterable(events)),
     Stream.mapError((err) => new TurnError({ message: err.message, cause: err.cause })),
   )
+}
 
 // ── Session manager (SDK-backed) ──
 

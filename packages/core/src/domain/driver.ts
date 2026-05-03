@@ -13,7 +13,7 @@
  *                                     (anthropic/openai/google/mistral/bedrock)
  *                                     register one each.
  *   - `ExternalDriverContribution`  — wraps a `TurnExecutor` that streams
- *                                     `TurnEvent`s for fully external loops
+ *                                     Effect AI response parts for fully external loops
  *                                     (ACP agents: claude-code/opencode/gemini-cli).
  *
  * Agents reference a driver by `driver: DriverRef`; the agent loop dispatches
@@ -30,11 +30,12 @@
  */
 import { Schema, type Effect, type Layer, type Stream } from "effect"
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import type * as Response from "effect/unstable/ai/Response"
 import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
 import type { ToolToken } from "./capability/tool.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import { ToolCallId, type BranchId, type SessionId } from "./ids.js"
+import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
 import type { ProviderError } from "./provider-error.js"
@@ -188,72 +189,9 @@ export interface ModelDriverContribution {
 
 // ── External-driver shapes ──
 //
-// What an external driver streams back per turn (TurnEvent), the per-turn
-// context it receives (TurnContext), the failure type it can raise (TurnError),
-// and the executor interface itself (TurnExecutor) live here as part of the
-// driver primitive. Pre- they were a parallel `domain/turn-executor.ts`
-// primitive — collapsed into the driver module to remove the parallel API.
-
-export const TurnEventUsage = Schema.Struct({
-  inputTokens: Schema.optional(Schema.Number),
-  outputTokens: Schema.optional(Schema.Number),
-})
-export type TurnEventUsage = typeof TurnEventUsage.Type
-
-/**
- * `TurnEvent` — what an external driver streams back per turn.
- *
- * Authored via `TaggedEnumClass`. Kebab-case wire tags are pinned with
- * `TaggedEnumClass.variant(...)`, while constructors stay on PascalCase
- * members such as `TurnEvent.TextDelta`.
- */
-export const TurnEvent = TaggedEnumClass("TurnEvent", {
-  TextDelta: TaggedEnumClass.variant("text-delta", {
-    text: Schema.String,
-  }),
-  ReasoningDelta: TaggedEnumClass.variant("reasoning-delta", {
-    text: Schema.String,
-  }),
-  ToolCall: TaggedEnumClass.variant("tool-call", {
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    input: Schema.Unknown,
-  }),
-  ToolStarted: TaggedEnumClass.variant("tool-started", {
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    input: Schema.optional(Schema.Unknown),
-  }),
-  ToolCompleted: TaggedEnumClass.variant("tool-completed", {
-    toolCallId: ToolCallId,
-    output: Schema.optional(Schema.Unknown),
-  }),
-  ToolFailed: TaggedEnumClass.variant("tool-failed", {
-    toolCallId: ToolCallId,
-    error: Schema.String,
-  }),
-  Finished: TaggedEnumClass.variant("finished", {
-    stopReason: Schema.String,
-    usage: Schema.optional(TurnEventUsage),
-  }),
-})
-export type TurnEvent = Schema.Schema.Type<typeof TurnEvent>
-
-// Per-variant re-exports — same class identity as the direct enum members.
-export const TextDelta = TurnEvent.TextDelta
-export type TextDelta = typeof TurnEvent.TextDelta.Type
-export const ReasoningDelta = TurnEvent.ReasoningDelta
-export type ReasoningDelta = typeof TurnEvent.ReasoningDelta.Type
-export const ToolCall = TurnEvent.ToolCall
-export type ToolCall = typeof TurnEvent.ToolCall.Type
-export const ToolStarted = TurnEvent.ToolStarted
-export type ToolStarted = typeof TurnEvent.ToolStarted.Type
-export const ToolCompleted = TurnEvent.ToolCompleted
-export type ToolCompleted = typeof TurnEvent.ToolCompleted.Type
-export const ToolFailed = TurnEvent.ToolFailed
-export type ToolFailed = typeof TurnEvent.ToolFailed.Type
-export const Finished = TurnEvent.Finished
-export type Finished = typeof TurnEvent.Finished.Type
+// External drivers stream upstream Effect AI response parts directly. Gent's
+// durable events remain receipts derived at the runtime edge.
+export type TurnStreamPart = Response.AnyPart
 
 /** Failure raised by an external driver while streaming a turn. */
 export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {
@@ -283,7 +221,7 @@ export interface TurnContext {
  *  cache key, so it cannot target a specific cached session correctly.
  *  Counsel  — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
-  readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
+  readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnStreamPart, TurnError>
 }
 
 export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
@@ -291,7 +229,7 @@ export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
 export interface TurnSource {
   readonly driverKind: "model" | "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<TurnEvent, ProviderError | TurnError>
+  readonly stream: Stream.Stream<Response.AnyPart, ProviderError | TurnError>
   readonly toolEventMode: TurnToolEventMode
   readonly formatStreamError: (streamError: ProviderError | TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -317,7 +255,7 @@ export type ToolSurface = "native" | "codemode"
 
 /**
  * Registers an external execution loop as a driver. The wrapped
- * `TurnExecutor` streams `TurnEvent`s; the agent loop collects them into an
+ * `TurnExecutor` streams Effect AI response parts; the agent loop collects them into an
  * assistant draft. The driver registry routes a
  * `DriverRef({ _tag: "external", id })` to the matching contribution.
  */

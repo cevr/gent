@@ -1,26 +1,21 @@
 /**
- * ACP Turn Executor — maps ACP session events to gent TurnEvents.
+ * ACP Turn Executor — maps ACP session events to Effect AI response parts.
  *
  * Implements the TurnExecutor interface from @gent/core. Each turn:
  * 1. Gets/creates an ACP connection + session via the session manager
- * 2. Forks a listener on conn.updates → maps to TurnEvent stream
+ * 2. Forks a listener on conn.updates → maps to Response part stream
  * 3. Sends conn.prompt with the last user message
  * 4. Emits "finished" when prompt response returns
  *
  * @module
  */
 import { Deferred, Effect, Stream } from "effect"
+import * as Response from "effect/unstable/ai/Response"
 import {
-  ReasoningDelta,
-  TextDelta,
-  ToolCompleted,
   TurnError,
-  ToolFailed,
-  ToolStarted,
-  TurnFinished,
   type TurnContext,
-  type TurnEvent,
   type TurnExecutor,
+  type TurnStreamPart,
 } from "@gent/core/extensions/api"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import type { AcpConnection } from "./protocol.js"
@@ -74,7 +69,15 @@ export interface AcpSessionManager {
   readonly disposeAll: () => Effect.Effect<void>
 }
 
-// ── ACP → TurnEvent mapping ──
+// ── ACP → Response part mapping ──
+
+export interface AcpResponsePartMapper {
+  readonly toolNamesById: Map<string, string>
+}
+
+export const makeAcpResponsePartMapper = (): AcpResponsePartMapper => ({
+  toolNamesById: new Map(),
+})
 
 /** Extract text from an ACP content block. Returns undefined for non-text content. */
 const extractTextFromContent = (content: unknown): string | undefined => {
@@ -115,30 +118,85 @@ const extractToolResultOutput = (obj: Record<string, unknown>): unknown => {
   return [...texts.map((text) => ({ type: "text", text })), ...others]
 }
 
-/** Map a tool_call_update to a TurnEvent based on status. */
-const mapToolCallUpdate = (obj: Record<string, unknown>): TurnEvent | undefined => {
+const finishPart = (stopReason: string): TurnStreamPart =>
+  Response.makePart("finish", {
+    reason: toResponseFinishReason(stopReason),
+    usage: emptyUsage(),
+    response: undefined,
+  })
+
+const emptyUsage = (): Response.Usage =>
+  new Response.Usage({
+    inputTokens: {
+      uncached: undefined,
+      total: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: undefined,
+      text: undefined,
+      reasoning: undefined,
+    },
+  })
+
+const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
+  switch (stopReason) {
+    case "stop":
+    case "length":
+    case "content-filter":
+    case "tool-calls":
+    case "error":
+    case "pause":
+    case "other":
+    case "unknown":
+      return stopReason
+    default:
+      return "unknown"
+  }
+}
+
+/** Map a tool_call_update to a response part based on status. */
+const mapToolCallUpdate = (
+  obj: Record<string, unknown>,
+  mapper: AcpResponsePartMapper,
+): TurnStreamPart | undefined => {
   const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
   const status = typeof obj["status"] === "string" ? obj["status"] : undefined
   if (toolCallId === undefined) return undefined
+  const toolName = mapper.toolNamesById.get(toolCallId) ?? "external"
   if (status === "completed") {
-    const output = extractToolResultOutput(obj)
-    return output === undefined
-      ? ToolCompleted.make({ toolCallId })
-      : ToolCompleted.make({ toolCallId, output })
+    const output = extractToolResultOutput(obj) ?? null
+    return Response.makePart("tool-result", {
+      id: toolCallId,
+      name: toolName,
+      result: output,
+      encodedResult: output,
+      isFailure: false,
+      providerExecuted: false,
+      preliminary: false,
+    })
   }
   if (status === "failed") {
-    return ToolFailed.make({
-      toolCallId,
-      error: typeof obj["error"] === "string" ? obj["error"] : "tool failed",
+    const error = typeof obj["error"] === "string" ? obj["error"] : "tool failed"
+    return Response.makePart("tool-result", {
+      id: toolCallId,
+      name: toolName,
+      result: error,
+      encodedResult: { error },
+      isFailure: true,
+      providerExecuted: false,
+      preliminary: false,
     })
   }
   return undefined
 }
 
 /** @internal Exported for testing. */
-export const mapAcpUpdateToTurnEvent = (
+export const mapAcpUpdateToResponsePart = (
   notification: SessionNotification,
-): TurnEvent | undefined => {
+  mapper: AcpResponsePartMapper = makeAcpResponsePartMapper(),
+): TurnStreamPart | undefined => {
   const update = notification.update
   if (typeof update !== "object" || update === null) return undefined
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
@@ -148,22 +206,30 @@ export const mapAcpUpdateToTurnEvent = (
   switch (kind) {
     case "agent_message_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined ? TextDelta.make({ text }) : undefined
+      return text !== undefined
+        ? Response.makePart("text-delta", { id: "acp-text", delta: text })
+        : undefined
     }
     case "agent_thought_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined ? ReasoningDelta.make({ text }) : undefined
+      return text !== undefined
+        ? Response.makePart("reasoning-delta", { id: "acp-reasoning", delta: text })
+        : undefined
     }
     case "tool_call": {
       const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
       if (toolCallId === undefined) return undefined
-      return ToolStarted.make({
-        toolCallId,
-        toolName: typeof obj["title"] === "string" ? obj["title"] : "unknown",
+      const toolName = typeof obj["title"] === "string" ? obj["title"] : "unknown"
+      mapper.toolNamesById.set(toolCallId, toolName)
+      return Response.makePart("tool-call", {
+        id: toolCallId,
+        name: toolName,
+        params: {},
+        providerExecuted: false,
       })
     }
     case "tool_call_update":
-      return mapToolCallUpdate(obj)
+      return mapToolCallUpdate(obj, mapper)
     default:
       return undefined
   }
@@ -258,10 +324,12 @@ export const makeAcpTurnExecutor = (
           Effect.forkScoped,
         )
 
+      const mapper = makeAcpResponsePartMapper()
+
       // Stream updates until the prompt completes
-      const updateStream: Stream.Stream<TurnEvent, TurnError> = session.conn.updates.pipe(
-        Stream.map(mapAcpUpdateToTurnEvent),
-        Stream.filter((e): e is TurnEvent => e !== undefined),
+      const updateStream: Stream.Stream<TurnStreamPart, TurnError> = session.conn.updates.pipe(
+        Stream.map((notification) => mapAcpUpdateToResponsePart(notification, mapper)),
+        Stream.filter((part): part is TurnStreamPart => part !== undefined),
         Stream.interruptWhen(Deferred.await(promptDone)),
         Stream.mapError((e) =>
           e instanceof AcpError
@@ -270,10 +338,10 @@ export const makeAcpTurnExecutor = (
         ),
       )
 
-      // After updates drain, emit the finished event
-      const finishedStream: Stream.Stream<TurnEvent, TurnError> = Stream.fromEffect(
+      // After updates drain, emit the terminal finish part.
+      const finishedStream: Stream.Stream<TurnStreamPart, TurnError> = Stream.fromEffect(
         Deferred.await(promptDone).pipe(
-          Effect.map((stopReason): TurnEvent => TurnFinished.make({ stopReason })),
+          Effect.map((stopReason): TurnStreamPart => finishPart(stopReason)),
         ),
       )
 

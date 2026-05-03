@@ -7,6 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -21,17 +22,8 @@ import {
   messagePartsToolResultParts,
 } from "@gent/core/domain/message-part-projection"
 import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
-import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
-import {
-  Finished,
-  ReasoningDelta,
-  TextDelta,
-  ToolCall,
-  ToolCompleted,
-  ToolFailed,
-  ToolStarted,
-  TurnError,
-} from "@gent/core/domain/driver"
+import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core/domain/driver"
+import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "../../src/server/event-publisher"
@@ -79,18 +71,65 @@ const runAgentLoopOnce = (
   ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
     Effect.flatMap(() => agentLoop.runOnce(input)),
   )
-/** Create a TurnExecutor that emits a sequence of TurnEvents. */
-const makeMockExecutor = (events: TurnEvent[]): TurnExecutor => ({
-  executeTurn: () => Stream.fromIterable(events) as Stream.Stream<TurnEvent, TurnError>,
+const textDelta = (text: string): TurnStreamPart =>
+  Response.makePart("text-delta", { id: "external-test-text", delta: text })
+
+const reasoningDelta = (text: string): TurnStreamPart =>
+  Response.makePart("reasoning-delta", { id: "external-test-reasoning", delta: text })
+
+const toolCall = (toolCallId: ToolCallId, toolName: string, input: unknown = {}): TurnStreamPart =>
+  Response.makePart("tool-call", {
+    id: toolCallId,
+    name: toolName,
+    params: input,
+    providerExecuted: false,
+  })
+
+const toolResult = (
+  toolCallId: ToolCallId,
+  toolName: string,
+  result: unknown = null,
+): TurnStreamPart =>
+  Response.makePart("tool-result", {
+    id: toolCallId,
+    name: toolName,
+    result,
+    encodedResult: result,
+    isFailure: false,
+    providerExecuted: false,
+    preliminary: false,
+  })
+
+const failedToolResult = (
+  toolCallId: ToolCallId,
+  toolName: string,
+  error: string,
+): TurnStreamPart =>
+  Response.makePart("tool-result", {
+    id: toolCallId,
+    name: toolName,
+    result: error,
+    encodedResult: { error },
+    isFailure: true,
+    providerExecuted: false,
+    preliminary: false,
+  })
+
+const finish = (finishReason: Response.FinishReason = "stop"): TurnStreamPart =>
+  finishPart({ finishReason })
+
+/** Create a TurnExecutor that emits a sequence of response parts. */
+const makeMockExecutor = (parts: ReadonlyArray<TurnStreamPart>): TurnExecutor => ({
+  executeTurn: () => Stream.fromIterable(parts),
 })
 /** Create a TurnExecutor that captures the TurnContext for assertions. */
 const makeCapturingExecutor = (
-  events: TurnEvent[],
+  parts: ReadonlyArray<TurnStreamPart>,
   capture: (ctx: TurnContext) => void,
 ): TurnExecutor => ({
   executeTurn: (ctx) => {
     capture(ctx)
-    return Stream.fromIterable(events) as Stream.Stream<TurnEvent, TurnError>
+    return Stream.fromIterable(parts)
   },
 })
 /** Create a TurnExecutor that fails. */
@@ -183,9 +222,9 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
-        TextDelta.make({ text: "Hello from " }),
-        TextDelta.make({ text: "external agent" }),
-        Finished.make({ stopReason: "stop" }),
+        textDelta("Hello from "),
+        textDelta("external agent"),
+        finish(),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
@@ -207,10 +246,10 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
-        ToolStarted.make({ toolCallId: ToolCallId.make("tc-1"), toolName: "read_file" }),
-        ToolCompleted.make({ toolCallId: ToolCallId.make("tc-1") }),
-        TextDelta.make({ text: "File contents here" }),
-        Finished.make({ stopReason: "stop" }),
+        toolCall(ToolCallId.make("tc-1"), "read_file"),
+        toolResult(ToolCallId.make("tc-1"), "read_file"),
+        textDelta("File contents here"),
+        finish(),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
       yield* Effect.scoped(
@@ -231,9 +270,9 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
-        ToolStarted.make({ toolCallId: ToolCallId.make("tc-fail"), toolName: "bash" }),
-        ToolFailed.make({ toolCallId: ToolCallId.make("tc-fail"), error: "permission denied" }),
-        Finished.make({ stopReason: "stop" }),
+        toolCall(ToolCallId.make("tc-fail"), "bash"),
+        failedToolResult(ToolCallId.make("tc-fail"), "bash", "permission denied"),
+        finish(),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
@@ -271,10 +310,10 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
-        ToolStarted.make({ toolCallId: ToolCallId.make("tc-1"), toolName: "bash" }),
-        ToolCompleted.make({ toolCallId: ToolCallId.make("tc-1") }),
-        TextDelta.make({ text: "done" }),
-        Finished.make({ stopReason: "stop" }),
+        toolCall(ToolCallId.make("tc-1"), "bash"),
+        toolResult(ToolCallId.make("tc-1"), "bash"),
+        textDelta("done"),
+        finish(),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
@@ -351,7 +390,7 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let capturedCtx: TurnContext | undefined
-      const executor = makeCapturingExecutor([Finished.make({ stopReason: "stop" })], (ctx) => {
+      const executor = makeCapturingExecutor([finish()], (ctx) => {
         capturedCtx = ctx
       })
       const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
@@ -376,7 +415,7 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let capturedCtx: TurnContext | undefined
-      const executor = makeCapturingExecutor([Finished.make({ stopReason: "stop" })], (ctx) => {
+      const executor = makeCapturingExecutor([finish()], (ctx) => {
         capturedCtx = ctx
       })
       const layer = makeLayerWithEvents(executor, eventsRef)
@@ -408,9 +447,9 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
-        ReasoningDelta.make({ text: "thinking..." }),
-        TextDelta.make({ text: "answer" }),
-        Finished.make({ stopReason: "stop" }),
+        reasoningDelta("thinking..."),
+        textDelta("answer"),
+        finish(),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
@@ -439,14 +478,10 @@ describe("ExternalDriverContribution end-to-end", () => {
     Effect.gen(function* () {
       const e2eSessionId = SessionId.make("e2e-session")
       const e2eBranchId = BranchId.make("e2e-branch")
-      // A simple TurnExecutor that emits a known text chunk then finishes.
+      // A simple TurnExecutor that emits a known response chunk then finishes.
       const expectedText = "hello from my-test-driver"
       const e2eExecutor: TurnExecutor = {
-        executeTurn: () =>
-          Stream.fromIterable([
-            TextDelta.make({ text: expectedText }),
-            Finished.make({ stopReason: "stop" }),
-          ]) as Stream.Stream<TurnEvent, TurnError>,
+        executeTurn: () => Stream.fromIterable([textDelta(expectedText), finish()]),
       }
       // Agent referencing the external driver by id.
       const e2eAgent = AgentDefinition.make({
@@ -518,15 +553,9 @@ describe("ExternalDriverContribution end-to-end", () => {
   )
   it.live("external-driver tool calls and results persist into the assistant transcript", () =>
     Effect.gen(function* () {
-      // Regression lock: before this fix, `collectExternalTurnResponse`
-      // only pushed a `tool-call` response part when the executor emitted
-      // `TurnEvent.ToolCall`. ACP executors (claude-code-executor) skip
-      // that variant and go straight from `tool-started` to
-      // `tool-completed`, so stored messages lost the tool history and
-      // the next turn sent the model a transcript with no record of the
-      // tool turn. The tool-completed branch also hardcoded
-      // `toolName: "external"` — dropping the real name from the
-      // `ToolCallSucceeded` event.
+      // External drivers stream the same Effect AI response parts as model
+      // providers, so tool calls and results should persist without a Gent-only
+      // adapter DTO between the driver and transcript projection.
       const e2eSessionId = SessionId.make("e2e-tool-session")
       const e2eBranchId = BranchId.make("e2e-tool-branch")
       const toolInput = { path: "/tmp/example" }
@@ -534,15 +563,11 @@ describe("ExternalDriverContribution end-to-end", () => {
       const e2eExecutor: TurnExecutor = {
         executeTurn: () =>
           Stream.fromIterable([
-            ToolStarted.make({
-              toolCallId: ToolCallId.make("tc-A"),
-              toolName: "read_file",
-              input: toolInput,
-            }),
-            ToolCompleted.make({ toolCallId: ToolCallId.make("tc-A"), output: toolOutput }),
-            TextDelta.make({ text: "done" }),
-            Finished.make({ stopReason: "stop" }),
-          ]) as Stream.Stream<TurnEvent, TurnError>,
+            toolCall(ToolCallId.make("tc-A"), "read_file", toolInput),
+            toolResult(ToolCallId.make("tc-A"), "read_file", toolOutput),
+            textDelta("done"),
+            finish(),
+          ]),
       }
       const e2eAgent = AgentDefinition.make({
         name: "tool-test-agent" as never,
@@ -626,11 +651,11 @@ describe("ExternalDriverContribution end-to-end", () => {
       const e2eExecutor: TurnExecutor = {
         executeTurn: () =>
           Stream.fromIterable([
-            ToolStarted.make({ toolCallId: ToolCallId.make("tc-F"), toolName: "bash" }),
-            ToolFailed.make({ toolCallId: ToolCallId.make("tc-F"), error: "permission denied" }),
-            TextDelta.make({ text: "ok" }),
-            Finished.make({ stopReason: "stop" }),
-          ]) as Stream.Stream<TurnEvent, TurnError>,
+            toolCall(ToolCallId.make("tc-F"), "bash"),
+            failedToolResult(ToolCallId.make("tc-F"), "bash", "permission denied"),
+            textDelta("ok"),
+            finish(),
+          ]),
       }
       const e2eAgent = AgentDefinition.make({
         name: "tool-fail-agent" as never,
@@ -705,27 +730,20 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
     }),
   )
-  it.live("explicit ToolCall event de-duplicates against ToolStarted for the same id", () =>
+  it.live("duplicate tool-call response parts de-duplicate in the stored transcript", () =>
     Effect.gen(function* () {
-      // Some external drivers emit `ToolCall` before `ToolStarted`; both
-      // carry the toolName. The collector must record exactly one
-      // `tool-call` response part per id (not two), otherwise the stored
-      // transcript has a duplicated tool-call that the model sees on the
-      // next turn.
+      // Upstream drivers can repeat the same provider tool-call part while
+      // streaming. Normalization keeps one transcript tool-call per id.
       const e2eSessionId = SessionId.make("e2e-tool-dup-session")
       const e2eBranchId = BranchId.make("e2e-tool-dup-branch")
       const e2eExecutor: TurnExecutor = {
         executeTurn: () =>
           Stream.fromIterable([
-            ToolCall.make({
-              toolCallId: ToolCallId.make("tc-dup"),
-              toolName: "write_file",
-              input: {},
-            }),
-            ToolStarted.make({ toolCallId: ToolCallId.make("tc-dup"), toolName: "write_file" }),
-            ToolCompleted.make({ toolCallId: ToolCallId.make("tc-dup"), output: {} }),
-            Finished.make({ stopReason: "stop" }),
-          ]) as Stream.Stream<TurnEvent, TurnError>,
+            toolCall(ToolCallId.make("tc-dup"), "write_file"),
+            toolCall(ToolCallId.make("tc-dup"), "write_file"),
+            toolResult(ToolCallId.make("tc-dup"), "write_file", {}),
+            finish(),
+          ]),
       }
       const e2eAgent = AgentDefinition.make({
         name: "tool-dup-agent" as never,

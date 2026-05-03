@@ -77,7 +77,7 @@ import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "../../src/runtime/agent/agent-loop.utils"
-import type { TurnError, TurnEvent } from "@gent/core/domain/driver"
+import type { TurnStreamPart } from "@gent/core/domain/driver"
 import {
   buildLoopCheckpointRecord,
   type AgentLoopCheckpointRecord,
@@ -378,7 +378,7 @@ const parityExternalAgent = AgentDefinition.make({
   driver: ExternalDriverRef.make({ id: "test-parity-driver" }),
 })
 const makeExternalLayerWithEvents = (
-  events: ReadonlyArray<TurnEvent>,
+  responseParts: ReadonlyArray<TurnStreamPart>,
   eventsRef: Ref.Ref<AgentEvent[]>,
 ) => {
   const resolved = resolveExtensions([
@@ -400,8 +400,7 @@ const makeExternalLayerWithEvents = (
           {
             id: "test-parity-driver",
             executor: {
-              executeTurn: () =>
-                Stream.fromIterable<TurnEvent>(events) as Stream.Stream<TurnEvent, TurnError>,
+              executeTurn: () => Stream.fromIterable(responseParts),
             },
             invalidate: () => Effect.void,
           },
@@ -1531,13 +1530,12 @@ describe("turn stream parity", () => {
         Effect.provide(
           makeExternalLayerWithEvents(
             [
-              { _tag: "reasoning-delta", text: "thinking" },
-              { _tag: "text-delta", text: "hello from parity" },
-              {
-                _tag: "finished",
-                stopReason: "stop",
+              reasoningDeltaPart("thinking"),
+              textDeltaPart("hello from parity"),
+              finishPart({
+                finishReason: "stop",
                 usage: { inputTokens: 3, outputTokens: 5 },
-              },
+              }),
             ],
             externalEventsRef,
           ),

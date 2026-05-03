@@ -68,6 +68,7 @@ interface NormalizedResponseState {
   readonly normalized: Array<Response.AnyPart>
   readonly activeTextDeltas: Map<string, string>
   readonly activeReasoningDeltas: Map<string, string>
+  readonly toolCallIds: Set<string>
 }
 
 type TextResponsePart = Extract<
@@ -147,8 +148,13 @@ const normalizePassthroughResponsePart = (
     case "tool-result":
       if (part.preliminary !== true) state.normalized.push(part)
       return
-    case "file":
     case "tool-call":
+      if (!state.toolCallIds.has(part.id)) {
+        state.toolCallIds.add(part.id)
+        state.normalized.push(part)
+      }
+      return
+    case "file":
     case "tool-approval-request":
     case "source":
     case "response-metadata":
@@ -167,6 +173,7 @@ export const normalizeResponseParts = (
     normalized: [],
     activeTextDeltas: new Map<string, string>(),
     activeReasoningDeltas: new Map<string, string>(),
+    toolCallIds: new Set<string>(),
   }
 
   for (const part of parts) {

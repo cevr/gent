@@ -384,7 +384,7 @@ export interface RequestResult<State, Reply> extends ReduceResult<State> {
 // `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
-export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"
+export type { TurnExecutor, TurnContext, TurnStreamPart, TurnError } from "./driver.js"
 
 // Driver auth + hint shared types — re-exported from dedicated file
 //

@@ -1,5 +1,5 @@
 /**
- * Claude Code executor — SDK message → TurnEvent mapping unit tests.
+ * Claude Code executor — SDK message → response part mapping unit tests.
  *
  * Validates the mapping logic without spawning a subprocess. Full
  * end-to-end coverage (executor through `ClaudeSdk.Test` driving a real
@@ -7,21 +7,14 @@
  */
 import { describe, test, expect } from "bun:test"
 import {
-  ReasoningDelta,
-  TextDelta,
-  ToolCompleted,
-  ToolFailed,
-  ToolStarted,
-  TurnFinished,
-} from "@gent/core/extensions/api"
-import { mapSdkMessage } from "@gent/extensions/acp-agents/claude-code-executor"
-// SDK types are noisy; tests only build the fields the mapper reads.
-type SDKMessage = any
-import { ToolCallId } from "@gent/core/domain/ids"
+  makeSdkResponsePartMapper,
+  mapSdkMessageToResponseParts,
+} from "@gent/extensions/acp-agents/claude-code-executor"
+type SDKMessage = Parameters<typeof mapSdkMessageToResponseParts>[0]
 
 const stubBase = { uuid: "u-1", session_id: "s-1", parent_tool_use_id: null }
 
-describe("mapSdkMessage", () => {
+describe("mapSdkMessageToResponseParts", () => {
   test("stream_event content_block_delta text_delta → text-delta", () => {
     const msg = {
       type: "stream_event",
@@ -32,9 +25,9 @@ describe("mapSdkMessage", () => {
         delta: { type: "text_delta", text: "hello" },
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([{ _tag: "text-delta", text: "hello" }])
-    expect(events[0]).toBeInstanceOf(TextDelta)
+    const parts = mapSdkMessageToResponseParts(msg)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ type: "text-delta", id: "claude-text-0", delta: "hello" })
   })
 
   test("stream_event content_block_delta thinking_delta → reasoning-delta", () => {
@@ -47,9 +40,13 @@ describe("mapSdkMessage", () => {
         delta: { type: "thinking_delta", thinking: "ponder" },
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([{ _tag: "reasoning-delta", text: "ponder" }])
-    expect(events[0]).toBeInstanceOf(ReasoningDelta)
+    const parts = mapSdkMessageToResponseParts(msg)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "reasoning-delta",
+      id: "claude-reasoning-0",
+      delta: "ponder",
+    })
   })
 
   test("assistant text block does NOT emit (stream_event is the source)", () => {
@@ -61,7 +58,7 @@ describe("mapSdkMessage", () => {
         content: [{ type: "text", text: "hello" }],
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([])
+    expect(mapSdkMessageToResponseParts(msg)).toEqual([])
   })
 
   test("assistant tool_use block → tool-started", () => {
@@ -73,19 +70,30 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_use", id: "t-1", name: "read", input: { path: "/x" } }],
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([
-      {
-        _tag: "tool-started",
-        toolCallId: ToolCallId.make("t-1"),
-        toolName: "read",
-        input: { path: "/x" },
-      },
-    ])
-    expect(events[0]).toBeInstanceOf(ToolStarted)
+    const parts = mapSdkMessageToResponseParts(msg)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "tool-call",
+      id: "t-1",
+      name: "read",
+      params: { path: "/x" },
+      providerExecuted: false,
+    })
   })
 
   test("user tool_result success → tool-completed", () => {
+    const mapper = makeSdkResponsePartMapper()
+    mapSdkMessageToResponseParts(
+      {
+        type: "assistant",
+        ...stubBase,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t-1", name: "read", input: { path: "/x" } }],
+        },
+      } as unknown as SDKMessage,
+      mapper,
+    )
     const msg = {
       type: "user",
       ...stubBase,
@@ -94,11 +102,18 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_result", tool_use_id: "t-1", content: "ok" }],
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([
-      { _tag: "tool-completed", toolCallId: ToolCallId.make("t-1"), output: "ok" },
-    ])
-    expect(events[0]).toBeInstanceOf(ToolCompleted)
+    const parts = mapSdkMessageToResponseParts(msg, mapper)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "tool-result",
+      id: "t-1",
+      name: "read",
+      result: "ok",
+      encodedResult: "ok",
+      isFailure: false,
+      providerExecuted: false,
+      preliminary: false,
+    })
   })
 
   test("user tool_result with is_error → tool-failed", () => {
@@ -110,11 +125,16 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_result", tool_use_id: "t-2", is_error: true, content: "boom" }],
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([
-      { _tag: "tool-failed", toolCallId: ToolCallId.make("t-2"), error: "boom" },
-    ])
-    expect(events[0]).toBeInstanceOf(ToolFailed)
+    const parts = mapSdkMessageToResponseParts(msg)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "tool-result",
+      id: "t-2",
+      name: "external",
+      result: "boom",
+      encodedResult: { error: "boom" },
+      isFailure: true,
+    })
   })
 
   test("result success → finished with stop_reason", () => {
@@ -133,15 +153,16 @@ describe("mapSdkMessage", () => {
       modelUsage: {},
       permission_denials: [],
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([
-      {
-        _tag: "finished",
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 5 },
+    const parts = mapSdkMessageToResponseParts(msg)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "finish",
+      reason: "unknown",
+      usage: {
+        inputTokens: { total: 10 },
+        outputTokens: { total: 5 },
       },
-    ])
-    expect(events[0]).toBeInstanceOf(TurnFinished)
+    })
   })
 
   test("system / status messages map to nothing", () => {
@@ -150,6 +171,6 @@ describe("mapSdkMessage", () => {
       subtype: "init",
       ...stubBase,
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([])
+    expect(mapSdkMessageToResponseParts(msg)).toEqual([])
   })
 })

@@ -10,15 +10,16 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Stream } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import * as Response from "effect/unstable/ai/Response"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
+import { finishPart } from "@gent/core/providers/provider"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthInfo,
   ProviderResolution,
-  TurnEvent,
   TurnExecutor,
 } from "@gent/core/domain/driver"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
@@ -42,9 +43,9 @@ const makeCatalogModel = (id: string, keep = true): Model =>
   })
 const makeExecutor = (label: string): TurnExecutor => ({
   executeTurn: () =>
-    Stream.fromIterable<TurnEvent>([
-      { _tag: "text-delta", text: label },
-      { _tag: "finished", stopReason: "stop" },
+    Stream.fromIterable([
+      Response.makePart("text-delta", { id: "test-text", delta: label }),
+      finishPart({ finishReason: "stop" }),
     ]),
 })
 const makeExt = (

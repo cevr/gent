@@ -124,18 +124,8 @@ export {
   sectionPatternFor,
   withSectionMarkers,
 } from "../domain/prompt.js"
-export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
-export {
-  ProviderAuthError,
-  TurnError,
-  TextDelta,
-  ReasoningDelta,
-  ToolStarted,
-  ToolCompleted,
-  ToolFailed,
-  Finished as TurnFinished,
-  TurnEventUsage,
-} from "../domain/driver.js"
+export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
+export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export type {
   AnyDriverContribution,
   ExternalDriverContribution,

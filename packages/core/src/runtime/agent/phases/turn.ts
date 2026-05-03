@@ -47,7 +47,7 @@ import type { EventPublisherService } from "../../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../../domain/tool-output.js"
 import type { PermissionService } from "../../../domain/permission.js"
 import type { ExtensionHostContext } from "../../../domain/extension-host-context.js"
-import type { ProviderAuthError, TurnError, TurnEvent } from "../../../domain/driver.js"
+import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
 import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
 import {
   type ProviderError,
@@ -702,12 +702,12 @@ type ModelTurnSource = {
 type ExternalTurnSource = {
   readonly driverKind: "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<TurnEvent, TurnError>
+  readonly stream: Stream.Stream<Response.AnyPart, TurnError>
   readonly formatStreamError: (streamError: TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-export const resolveTurnEventStream = (params: {
+export const resolveTurnSource = (params: {
   resolved: ResolvedTurnContext
   provider: ProviderService
   driverRegistry: DriverRegistryService
@@ -887,7 +887,7 @@ export const runTurnStreamPhase = (params: {
         createdAt,
       })
 
-    const source = yield* resolveTurnEventStream({
+    const source = yield* resolveTurnSource({
       resolved: params.resolved,
       provider: params.provider,
       driverRegistry: params.driverRegistry,
@@ -899,7 +899,7 @@ export const runTurnStreamPhase = (params: {
     })
 
     if (source === undefined) {
-      // `resolveTurnEventStream` returns undefined only when the resolved
+      // `resolveTurnSource` returns undefined only when the resolved
       // driver is external and its executor is missing — classify the
       // failed turn by the requested driver kind so the outer loop's
       // `driverKind === "external"` break still fires if the stream-failed

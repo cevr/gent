@@ -1,7 +1,7 @@
 import { Deferred, Effect, Ref, Stream } from "effect"
-import * as Response from "effect/unstable/ai/Response"
+import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
-import type { TurnError, TurnEvent } from "../../../domain/driver.js"
+import type { TurnError } from "../../../domain/driver.js"
 import {
   ErrorOccurred,
   StreamChunk as EventStreamChunk,
@@ -264,8 +264,109 @@ export const collectFailedModelTurnResponse = (params: {
     })
   })
 
+const formatToolFailureOutput = (
+  part: Extract<Response.AnyPart, { readonly type: "tool-result" }>,
+): string => {
+  if (typeof part.encodedResult === "string") return part.encodedResult
+  if (typeof part.result === "string") return part.result
+  if (
+    typeof part.encodedResult === "object" &&
+    part.encodedResult !== null &&
+    "error" in part.encodedResult &&
+    typeof part.encodedResult.error === "string"
+  ) {
+    return part.encodedResult.error
+  }
+  return String(part.result)
+}
+
+const publishExternalStreamChunk = (params: {
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  chunk: string
+}) =>
+  params
+    .publishEvent(
+      new EventStreamChunk({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        chunk: params.chunk,
+      }),
+    )
+    .pipe(Effect.orDie)
+
+const publishExternalToolCallStarted = (params: {
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  part: Extract<Response.AnyPart, { readonly type: "tool-call" }>
+}) =>
+  params
+    .publishEvent(
+      ToolCallStarted.make({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        toolCallId: ToolCallId.make(params.part.id),
+        toolName: params.part.name,
+      }),
+    )
+    .pipe(Effect.orDie)
+
+const publishExternalToolResult = (params: {
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
+}) => {
+  const output = formatToolFailureOutput(params.part)
+  return params
+    .publishEvent(
+      params.part.isFailure
+        ? ToolCallFailed.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            toolCallId: ToolCallId.make(params.part.id),
+            toolName: params.part.name,
+            output,
+          })
+        : ToolCallSucceeded.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            toolCallId: ToolCallId.make(params.part.id),
+            toolName: params.part.name,
+          }),
+    )
+    .pipe(Effect.orDie)
+}
+
+const collectExternalResponsePart = (params: {
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  part: Response.AnyPart
+  publishedToolCallIds: Set<string>
+}) => {
+  switch (params.part.type) {
+    case "text":
+      return publishExternalStreamChunk({ ...params, chunk: params.part.text })
+    case "text-delta":
+      return publishExternalStreamChunk({ ...params, chunk: params.part.delta })
+    case "tool-call":
+      if (params.publishedToolCallIds.has(params.part.id)) return Effect.void
+      params.publishedToolCallIds.add(params.part.id)
+      return publishExternalToolCallStarted({ ...params, part: params.part })
+    case "tool-result":
+      return params.part.preliminary === true
+        ? Effect.void
+        : publishExternalToolResult({ ...params, part: params.part })
+    default:
+      return Effect.void
+  }
+}
+
 export const collectExternalTurnResponse = (params: {
-  turnStream: Stream.Stream<TurnEvent, TurnError>
+  turnStream: Stream.Stream<Response.AnyPart, TurnError>
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
@@ -274,144 +375,22 @@ export const collectExternalTurnResponse = (params: {
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
-    const toolNamesById = new Map<string, string>()
-    const toolCallIdsSeen = new Set<string>()
+    const publishedToolCallIds = new Set<string>()
 
     const streamFailed = yield* Stream.runForEach(
       params.turnStream.pipe(
         Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
       ),
-      (event) =>
+      (part) =>
         Effect.gen(function* () {
-          switch (event._tag) {
-            case "text-delta":
-              responseParts.push(Response.makePart("text", { text: event.text }))
-              yield* params
-                .publishEvent(
-                  new EventStreamChunk({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    chunk: event.text,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            case "reasoning-delta":
-              responseParts.push(Response.makePart("reasoning", { text: event.text }))
-              return
-            case "tool-call":
-              toolNamesById.set(event.toolCallId, event.toolName)
-              if (!toolCallIdsSeen.has(event.toolCallId)) {
-                toolCallIdsSeen.add(event.toolCallId)
-                responseParts.push(
-                  Response.makePart("tool-call", {
-                    id: event.toolCallId,
-                    name: event.toolName,
-                    params: event.input,
-                    providerExecuted: false,
-                  }),
-                )
-              }
-              return
-            case "tool-started":
-              toolNamesById.set(event.toolCallId, event.toolName)
-              if (!toolCallIdsSeen.has(event.toolCallId)) {
-                toolCallIdsSeen.add(event.toolCallId)
-                responseParts.push(
-                  Response.makePart("tool-call", {
-                    id: event.toolCallId,
-                    name: event.toolName,
-                    params: event.input ?? {},
-                    providerExecuted: false,
-                  }),
-                )
-              }
-              yield* params
-                .publishEvent(
-                  ToolCallStarted.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName: event.toolName,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            case "tool-completed": {
-              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
-              const output = event.output ?? null
-              responseParts.push(
-                Response.makePart("tool-result", {
-                  id: event.toolCallId,
-                  name: toolName,
-                  result: output,
-                  isFailure: false,
-                  providerExecuted: false,
-                  encodedResult: output,
-                  preliminary: false,
-                }),
-              )
-              yield* params
-                .publishEvent(
-                  ToolCallSucceeded.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            }
-            case "tool-failed": {
-              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
-              const failurePayload = { error: event.error }
-              responseParts.push(
-                Response.makePart("tool-result", {
-                  id: event.toolCallId,
-                  name: toolName,
-                  result: failurePayload,
-                  isFailure: true,
-                  providerExecuted: false,
-                  encodedResult: failurePayload,
-                  preliminary: false,
-                }),
-              )
-              yield* params
-                .publishEvent(
-                  ToolCallFailed.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName,
-                    output: event.error,
-                  }),
-                )
-                .pipe(Effect.orDie)
-              return
-            }
-            case "finished":
-              responseParts.push(
-                Response.makePart("finish", {
-                  reason: toResponseFinishReason(event.stopReason),
-                  usage: new Response.Usage({
-                    inputTokens: {
-                      uncached: undefined,
-                      total: event.usage?.inputTokens,
-                      cacheRead: undefined,
-                      cacheWrite: undefined,
-                    },
-                    outputTokens: {
-                      total: event.usage?.outputTokens,
-                      text: undefined,
-                      reasoning: undefined,
-                    },
-                  }),
-                  response: undefined,
-                }),
-              )
-              return
-          }
+          responseParts.push(part)
+          yield* collectExternalResponsePart({
+            publishEvent: params.publishEvent,
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            part,
+            publishedToolCallIds,
+          })
         }),
     ).pipe(
       Effect.as(false),
