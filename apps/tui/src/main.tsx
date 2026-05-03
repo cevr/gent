@@ -395,7 +395,7 @@ const sessions = Command.make(
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entries = listRegistryEntries(home)
+    const entries = yield* listRegistryEntries(home)
 
     if (entries.length === 0) {
       yield* Console.log("No registered servers.")
@@ -431,7 +431,7 @@ const serverStop = Command.make(
     Effect.gen(function* () {
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const thisHost = getLocalHostname()
-      const entries = listRegistryEntries(home)
+      const entries = yield* listRegistryEntries(home)
 
       if (entries.length === 0) {
         yield* Console.log("No registered servers.")
@@ -466,7 +466,7 @@ const serverStop = Command.make(
         if (isPidAlive(entry.pid)) {
           stillAlive++
         } else {
-          removeRegistryEntry(home, entry.dbPath, entry.serverId)
+          yield* removeRegistryEntry(home, entry.dbPath, entry.serverId)
         }
       }
 

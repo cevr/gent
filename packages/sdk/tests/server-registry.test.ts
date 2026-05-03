@@ -1,11 +1,7 @@
-import { afterEach, beforeEach, test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, FileSystem, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 // @effect-diagnostics nodeBuiltinImport:off
-import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
-// @effect-diagnostics nodeBuiltinImport:off
-import { join } from "node:path"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
 import {
@@ -26,11 +22,18 @@ import {
   withLock,
 } from "../src/server-registry"
 
-const makeTmpHome = () => {
-  const dir = join(tmpdir(), `gent-registry-test-${Bun.randomUUIDv7()}`)
-  mkdirSync(dir, { recursive: true })
+const provideFs = <A, E>(
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
+): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(BunServices.layer))
+
+const makeTmpHomeScoped = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const dir = path.join(tmpdir(), `gent-registry-test-${Bun.randomUUIDv7()}`)
+  yield* fs.makeDirectory(dir, { recursive: true })
+  yield* Effect.addFinalizer(() => fs.remove(dir, { recursive: true }).pipe(Effect.ignore))
   return dir
-}
+})
 
 const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
   new ServerRegistryEntry({
@@ -72,374 +75,460 @@ describe("Build Fingerprint", () => {
 })
 
 describe("Server Registry", () => {
-  let home: string
+  it.scopedLive("writeRegistryEntry + readRegistryEntry roundtrip", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry = makeEntry()
+        yield* writeRegistryEntry(home, entry)
+        const read = yield* readRegistryEntry(home, entry.dbPath)
+        expect(read).toBeDefined()
+        expect(read!.serverId).toBe(entry.serverId)
+        expect(read!.pid).toBe(entry.pid)
+        expect(read!.rpcUrl).toBe(entry.rpcUrl)
+        expect(read!.dbPath).toBe(entry.dbPath)
+        expect(read!.buildFingerprint).toBe(entry.buildFingerprint)
+      }),
+    ),
+  )
 
-  beforeEach(() => {
-    home = makeTmpHome()
-  })
+  it.scopedLive("readRegistryEntry returns undefined for missing entry", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const read = yield* readRegistryEntry(home, "/nonexistent.db")
+        expect(read).toBeUndefined()
+      }),
+    ),
+  )
 
-  afterEach(() => {
-    rmSync(home, { recursive: true, force: true })
-  })
+  it.scopedLive("readRegistryEntry returns undefined for corrupt file", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTmpHomeScoped
+        const dir = path.join(home, ".gent", "servers")
+        yield* fs.makeDirectory(dir, { recursive: true })
+        const entry = makeEntry()
+        yield* writeRegistryEntry(home, entry)
+        const files = (yield* fs.readDirectory(dir)).filter((f) => f.endsWith(".json"))
+        if (files.length > 0) {
+          yield* fs.writeFileString(path.join(dir, files[0]!), "not json")
+        }
+        const read = yield* readRegistryEntry(home, entry.dbPath)
+        expect(read).toBeUndefined()
+      }),
+    ),
+  )
 
-  test("writeRegistryEntry + readRegistryEntry roundtrip", () => {
-    const entry = makeEntry()
-    writeRegistryEntry(home, entry)
-    const read = readRegistryEntry(home, entry.dbPath)
-    expect(read).toBeDefined()
-    expect(read!.serverId).toBe(entry.serverId)
-    expect(read!.pid).toBe(entry.pid)
-    expect(read!.rpcUrl).toBe(entry.rpcUrl)
-    expect(read!.dbPath).toBe(entry.dbPath)
-    expect(read!.buildFingerprint).toBe(entry.buildFingerprint)
-  })
+  it.scopedLive("readRegistryEntry rejects entry from different host", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry = makeEntry({ hostname: "other-host.example.com" })
+        yield* writeRegistryEntry(home, entry)
+        const read = yield* readRegistryEntry(home, entry.dbPath)
+        expect(read).toBeUndefined()
+      }),
+    ),
+  )
 
-  test("readRegistryEntry returns undefined for missing entry", () => {
-    const read = readRegistryEntry(home, "/nonexistent.db")
-    expect(read).toBeUndefined()
-  })
+  it.scopedLive("removeRegistryEntry removes matching entry", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry = makeEntry()
+        yield* writeRegistryEntry(home, entry)
+        const removed = yield* removeRegistryEntry(home, entry.dbPath, entry.serverId)
+        expect(removed).toBe(true)
+        const after = yield* readRegistryEntry(home, entry.dbPath)
+        expect(after).toBeUndefined()
+      }),
+    ),
+  )
 
-  test("readRegistryEntry returns undefined for corrupt file", () => {
-    const dir = join(home, ".gent", "servers")
-    mkdirSync(dir, { recursive: true })
-    // Write a corrupt file with the right hash name
-    const entry = makeEntry()
-    writeRegistryEntry(home, entry)
-    // Corrupt the file
-    const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
-    if (files.length > 0) {
-      writeFileSync(join(dir, files[0]!), "not json")
-    }
-    const read = readRegistryEntry(home, entry.dbPath)
-    expect(read).toBeUndefined()
-  })
+  it.scopedLive("removeRegistryEntry rejects mismatched serverId", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry = makeEntry()
+        yield* writeRegistryEntry(home, entry)
+        const removed = yield* removeRegistryEntry(home, entry.dbPath, "wrong-id")
+        expect(removed).toBe(false)
+        const after = yield* readRegistryEntry(home, entry.dbPath)
+        expect(after).toBeDefined()
+      }),
+    ),
+  )
 
-  test("readRegistryEntry rejects entry from different host", () => {
-    const entry = makeEntry({ hostname: "other-host.example.com" })
-    writeRegistryEntry(home, entry)
-    const read = readRegistryEntry(home, entry.dbPath)
-    expect(read).toBeUndefined()
-  })
+  it.scopedLive("registry key is stable for same dbPath", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry1 = makeEntry({ serverId: "s1" })
+        yield* writeRegistryEntry(home, entry1)
+        const read1 = yield* readRegistryEntry(home, entry1.dbPath)
+        expect(read1?.serverId).toBe("s1")
 
-  test("removeRegistryEntry removes matching entry", () => {
-    const entry = makeEntry()
-    writeRegistryEntry(home, entry)
-    const removed = removeRegistryEntry(home, entry.dbPath, entry.serverId)
-    expect(removed).toBe(true)
-    expect(readRegistryEntry(home, entry.dbPath)).toBeUndefined()
-  })
+        const entry2 = makeEntry({ serverId: "s2" })
+        yield* writeRegistryEntry(home, entry2)
+        const read2 = yield* readRegistryEntry(home, entry2.dbPath)
+        expect(read2?.serverId).toBe("s2")
+      }),
+    ),
+  )
 
-  test("removeRegistryEntry rejects mismatched serverId", () => {
-    const entry = makeEntry()
-    writeRegistryEntry(home, entry)
-    const removed = removeRegistryEntry(home, entry.dbPath, "wrong-id")
-    expect(removed).toBe(false)
-    expect(readRegistryEntry(home, entry.dbPath)).toBeDefined()
-  })
+  it.scopedLive("different dbPaths get different registry files", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry1 = makeEntry({ dbPath: "/tmp/a.db", serverId: "s1" })
+        const entry2 = makeEntry({ dbPath: "/tmp/b.db", serverId: "s2" })
+        yield* writeRegistryEntry(home, entry1)
+        yield* writeRegistryEntry(home, entry2)
 
-  test("registry key is stable for same dbPath", () => {
-    const entry1 = makeEntry({ serverId: "s1" })
-    writeRegistryEntry(home, entry1)
-    const read1 = readRegistryEntry(home, entry1.dbPath)
-    expect(read1?.serverId).toBe("s1")
-
-    // Overwrite with different serverId, same dbPath
-    const entry2 = makeEntry({ serverId: "s2" })
-    writeRegistryEntry(home, entry2)
-    const read2 = readRegistryEntry(home, entry2.dbPath)
-    expect(read2?.serverId).toBe("s2")
-  })
-
-  test("different dbPaths get different registry files", () => {
-    const entry1 = makeEntry({ dbPath: "/tmp/a.db", serverId: "s1" })
-    const entry2 = makeEntry({ dbPath: "/tmp/b.db", serverId: "s2" })
-    writeRegistryEntry(home, entry1)
-    writeRegistryEntry(home, entry2)
-
-    expect(readRegistryEntry(home, "/tmp/a.db")?.serverId).toBe("s1")
-    expect(readRegistryEntry(home, "/tmp/b.db")?.serverId).toBe("s2")
-  })
+        const a = yield* readRegistryEntry(home, "/tmp/a.db")
+        const b = yield* readRegistryEntry(home, "/tmp/b.db")
+        expect(a?.serverId).toBe("s1")
+        expect(b?.serverId).toBe("s2")
+      }),
+    ),
+  )
 })
 
 describe("listRegistryEntries", () => {
-  let home: string
+  it.scopedLive("returns empty array when no registry dir exists", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entries = yield* listRegistryEntries(home)
+        expect(entries).toEqual([])
+      }),
+    ),
+  )
 
-  beforeEach(() => {
-    home = makeTmpHome()
-  })
+  it.scopedLive("returns all written entries", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const entry1 = makeEntry({ dbPath: "/tmp/a.db", serverId: "s1" })
+        const entry2 = makeEntry({ dbPath: "/tmp/b.db", serverId: "s2" })
+        yield* writeRegistryEntry(home, entry1)
+        yield* writeRegistryEntry(home, entry2)
 
-  afterEach(() => {
-    rmSync(home, { recursive: true, force: true })
-  })
+        const entries = yield* listRegistryEntries(home)
+        expect(entries.length).toBe(2)
+        const ids = entries.map((e) => e.serverId).sort()
+        expect(ids).toEqual(["s1", "s2"])
+      }),
+    ),
+  )
 
-  test("returns empty array when no registry dir exists", () => {
-    expect(listRegistryEntries(home)).toEqual([])
-  })
+  it.scopedLive("skips corrupt files", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTmpHomeScoped
+        const entry = makeEntry({ dbPath: "/tmp/good.db", serverId: "good" })
+        yield* writeRegistryEntry(home, entry)
 
-  test("returns all written entries", () => {
-    const entry1 = makeEntry({ dbPath: "/tmp/a.db", serverId: "s1" })
-    const entry2 = makeEntry({ dbPath: "/tmp/b.db", serverId: "s2" })
-    writeRegistryEntry(home, entry1)
-    writeRegistryEntry(home, entry2)
+        const dir = path.join(home, ".gent", "servers")
+        yield* fs.writeFileString(path.join(dir, "corrupt.json"), "not json at all")
 
-    const entries = listRegistryEntries(home)
-    expect(entries.length).toBe(2)
-    const ids = entries.map((e) => e.serverId).sort()
-    expect(ids).toEqual(["s1", "s2"])
-  })
+        const entries = yield* listRegistryEntries(home)
+        expect(entries.length).toBe(1)
+        expect(entries[0]!.serverId).toBe("good")
+      }),
+    ),
+  )
 
-  test("skips corrupt files", () => {
-    const entry = makeEntry({ dbPath: "/tmp/good.db", serverId: "good" })
-    writeRegistryEntry(home, entry)
+  it.scopedLive("includes entries from other hosts", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        // listRegistryEntries returns all entries — filtering is caller's job
+        const local = makeEntry({ dbPath: "/tmp/local.db", serverId: "local" })
+        const remote = makeEntry({
+          dbPath: "/tmp/remote.db",
+          serverId: "remote",
+          hostname: "other-host",
+        })
+        yield* writeRegistryEntry(home, local)
+        yield* writeRegistryEntry(home, remote)
 
-    // Write a corrupt file
-    const dir = join(home, ".gent", "servers")
-    writeFileSync(join(dir, "corrupt.json"), "not json at all")
-
-    const entries = listRegistryEntries(home)
-    expect(entries.length).toBe(1)
-    expect(entries[0]!.serverId).toBe("good")
-  })
-
-  test("includes entries from other hosts", () => {
-    // listRegistryEntries returns all entries — filtering is caller's job
-    const local = makeEntry({ dbPath: "/tmp/local.db", serverId: "local" })
-    const remote = makeEntry({
-      dbPath: "/tmp/remote.db",
-      serverId: "remote",
-      hostname: "other-host",
-    })
-    writeRegistryEntry(home, local)
-    writeRegistryEntry(home, remote)
-
-    const entries = listRegistryEntries(home)
-    expect(entries.length).toBe(2)
-  })
+        const entries = yield* listRegistryEntries(home)
+        expect(entries.length).toBe(2)
+      }),
+    ),
+  )
 })
 
 describe("Validate Registry Entry", () => {
-  test("validates entry with alive PID and correct host", () => {
-    const entry = makeEntry()
-    const result = validateRegistryEntry(entry)
-    expect(result.valid).toBe(true)
-  })
+  it.live("validates entry with alive PID and correct host", () =>
+    Effect.sync(() => {
+      const entry = makeEntry()
+      const result = validateRegistryEntry(entry)
+      expect(result.valid).toBe(true)
+    }),
+  )
 
-  test("rejects entry from different host", () => {
-    const entry = makeEntry({ hostname: "alien-host" })
-    const result = validateRegistryEntry(entry)
-    expect(result.valid).toBe(false)
-    expect(result.reason).toBe("different-host")
-  })
+  it.live("rejects entry from different host", () =>
+    Effect.sync(() => {
+      const entry = makeEntry({ hostname: "alien-host" })
+      const result = validateRegistryEntry(entry)
+      expect(result.valid).toBe(false)
+      expect(result.reason).toBe("different-host")
+    }),
+  )
 
-  test("rejects entry with dead PID", () => {
-    // PID 99999999 should not exist
-    const entry = makeEntry({ pid: 99999999 })
-    const result = validateRegistryEntry(entry)
-    expect(result.valid).toBe(false)
-    expect(result.reason).toBe("dead-pid")
-  })
+  it.live("rejects entry with dead PID", () =>
+    Effect.sync(() => {
+      // PID 99999999 should not exist
+      const entry = makeEntry({ pid: 99999999 })
+      const result = validateRegistryEntry(entry)
+      expect(result.valid).toBe(false)
+      expect(result.reason).toBe("dead-pid")
+    }),
+  )
 })
 
 describe("Registry Process Ownership", () => {
-  let home: string
-
-  beforeEach(() => {
-    home = makeTmpHome()
-  })
-
-  afterEach(() => {
-    rmSync(home, { recursive: true, force: true })
-  })
-
-  test("registryIdentityOf returns the owned identity tuple", () => {
-    const entry = makeEntry()
-    expect(registryIdentityOf(entry)).toEqual({
-      serverId: entry.serverId,
-      pid: entry.pid,
-      hostname: entry.hostname,
-      dbPath: entry.dbPath,
-      buildFingerprint: entry.buildFingerprint,
-    })
-  })
-
-  test("canSignalRegistryEntry requires same host and live PID", () => {
-    expect(canSignalRegistryEntry(makeEntry())).toBe(true)
-    expect(canSignalRegistryEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
-    expect(canSignalRegistryEntry(makeEntry({ pid: 99999999 }))).toBe(false)
-  })
-
-  it.scoped("PID-reused stale registry entries are removed without SIGTERM", () =>
-    Effect.gen(function* () {
-      const dbPath = join(home, "pid-reuse.db")
-      const entry = makeEntry({
-        pid: process.pid,
-        dbPath,
-        buildFingerprint: "stale-fingerprint",
+  it.live("registryIdentityOf returns the owned identity tuple", () =>
+    Effect.sync(() => {
+      const entry = makeEntry()
+      expect(registryIdentityOf(entry)).toEqual({
+        serverId: entry.serverId,
+        pid: entry.pid,
+        hostname: entry.hostname,
+        dbPath: entry.dbPath,
+        buildFingerprint: entry.buildFingerprint,
       })
-      const fakeOwner = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          Bun.serve({
-            port: 0,
-            fetch: (request) => {
-              if (new URL(request.url).pathname !== "/_gent/identity") {
-                return new Response("not found", { status: 404 })
-              }
-              return Response.json({
-                serverId: entry.serverId,
-                pid: 99999999,
-                hostname: entry.hostname,
-                dbPath: entry.dbPath,
-                buildFingerprint: entry.buildFingerprint,
-              })
-            },
-          }),
-        ),
-        (server) => Effect.promise(() => server.stop(true)),
-      )
-      const fakeOwnerUrl = new URL(fakeOwner.url)
-      const entryWithEndpoint = new ServerRegistryEntry({
-        ...entry,
-        rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
-      })
-      writeRegistryEntry(home, entryWithEndpoint)
-
-      const signals: Array<{ pid: number; signal: string | number | undefined }> = []
-      const originalKill = Reflect.get(process, "kill") as typeof process.kill
-      const replacement = ((pid: number, signal?: string | number) => {
-        if (signal === "SIGTERM") {
-          signals.push({ pid, signal })
-          return true
-        }
-        return originalKill(pid, signal)
-      }) as typeof process.kill
-
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          process.kill = replacement
-        }),
-        () =>
-          Effect.sync(() => {
-            process.kill = originalKill
-          }),
-      )
-      yield* Gent.server({
-        cwd: process.cwd(),
-        state: Gent.state.sqlite({ home, dbPath }),
-        provider: Gent.provider.mock(),
-      })
-
-      expect(signals).toEqual([])
-      expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entryWithEndpoint.serverId)
     }),
+  )
+
+  it.live("canSignalRegistryEntry requires same host and live PID", () =>
+    Effect.sync(() => {
+      expect(canSignalRegistryEntry(makeEntry())).toBe(true)
+      expect(canSignalRegistryEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
+      expect(canSignalRegistryEntry(makeEntry({ pid: 99999999 }))).toBe(false)
+    }),
+  )
+
+  it.scopedLive("PID-reused stale registry entries are removed without SIGTERM", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const home = yield* makeTmpHomeScoped
+        const dbPath = path.join(home, "pid-reuse.db")
+        const entry = makeEntry({
+          pid: process.pid,
+          dbPath,
+          buildFingerprint: "stale-fingerprint",
+        })
+        const fakeOwner = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.serve({
+              port: 0,
+              fetch: (request) => {
+                if (new URL(request.url).pathname !== "/_gent/identity") {
+                  return new Response("not found", { status: 404 })
+                }
+                return Response.json({
+                  serverId: entry.serverId,
+                  pid: 99999999,
+                  hostname: entry.hostname,
+                  dbPath: entry.dbPath,
+                  buildFingerprint: entry.buildFingerprint,
+                })
+              },
+            }),
+          ),
+          (server) => Effect.promise(() => server.stop(true)),
+        )
+        const fakeOwnerUrl = new URL(fakeOwner.url)
+        const entryWithEndpoint = new ServerRegistryEntry({
+          ...entry,
+          rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
+        })
+        yield* writeRegistryEntry(home, entryWithEndpoint)
+
+        const signals: Array<{ pid: number; signal: string | number | undefined }> = []
+        const originalKill = Reflect.get(process, "kill") as typeof process.kill
+        const replacement = ((pid: number, signal?: string | number) => {
+          if (signal === "SIGTERM") {
+            signals.push({ pid, signal })
+            return true
+          }
+          return originalKill(pid, signal)
+        }) as typeof process.kill
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            process.kill = replacement
+          }),
+          () =>
+            Effect.sync(() => {
+              process.kill = originalKill
+            }),
+        )
+        yield* Gent.server({
+          cwd: process.cwd(),
+          state: Gent.state.sqlite({ home, dbPath }),
+          provider: Gent.provider.mock(),
+        })
+
+        expect(signals).toEqual([])
+        const after = yield* readRegistryEntry(home, dbPath)
+        expect(after?.serverId).not.toBe(entryWithEndpoint.serverId)
+      }),
+    ),
   )
 })
 
 describe("isPidAlive", () => {
-  test("returns true for current process", () => {
-    expect(isPidAlive(process.pid)).toBe(true)
-  })
+  it.live("returns true for current process", () =>
+    Effect.sync(() => {
+      expect(isPidAlive(process.pid)).toBe(true)
+    }),
+  )
 
-  test("returns false for non-existent PID", () => {
-    expect(isPidAlive(99999999)).toBe(false)
-  })
+  it.live("returns false for non-existent PID", () =>
+    Effect.sync(() => {
+      expect(isPidAlive(99999999)).toBe(false)
+    }),
+  )
 })
 
 describe("Cross-Process Lock", () => {
-  let home: string
-
-  beforeEach(() => {
-    home = makeTmpHome()
-  })
-
-  afterEach(() => {
-    rmSync(home, { recursive: true, force: true })
-  })
-
-  test("acquireLock succeeds on first call", () => {
-    expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-  })
-
-  test("acquireLock fails on second call (already held)", () => {
-    acquireLock(home, "/tmp/test.db")
-    expect(acquireLock(home, "/tmp/test.db")).toBe(false)
-  })
-
-  test("releaseLock allows re-acquire", () => {
-    acquireLock(home, "/tmp/test.db")
-    releaseLock(home, "/tmp/test.db")
-    expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-  })
-
-  test("different dbPaths have independent locks", () => {
-    expect(acquireLock(home, "/tmp/a.db")).toBe(true)
-    expect(acquireLock(home, "/tmp/b.db")).toBe(true)
-  })
-
-  it.live("withLock acquires and releases", () =>
-    Effect.gen(function* () {
-      let inside = false
-      yield* withLock(
-        home,
-        "/tmp/test.db",
-        Effect.sync(() => {
-          inside = true
-          // Lock should be held during body
-          expect(acquireLock(home, "/tmp/test.db")).toBe(false)
-        }),
-      )
-      expect(inside).toBe(true)
-      // Lock should be released after body
-      expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-    }),
+  it.scopedLive("acquireLock succeeds on first call", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const acquired = yield* acquireLock(home, "/tmp/test.db")
+        expect(acquired).toBe(true)
+      }),
+    ),
   )
 
-  it.live("withLock releases on error", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.fail("boom")))
-      expect(result._tag).toBe("Failure")
-      // Lock should still be released
-      expect(acquireLock(home, "/tmp/test.db")).toBe(true)
-    }),
+  it.scopedLive("acquireLock fails on second call (already held)", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* acquireLock(home, "/tmp/test.db")
+        const second = yield* acquireLock(home, "/tmp/test.db")
+        expect(second).toBe(false)
+      }),
+    ),
   )
 
-  it.live("withLock fails with LockAcquireError when lock is held", () =>
-    Effect.gen(function* () {
-      acquireLock(home, "/tmp/test.db")
-      const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.succeed("ok")))
-      expect(result._tag).toBe("Failure")
-    }),
+  it.scopedLive("releaseLock allows re-acquire", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* acquireLock(home, "/tmp/test.db")
+        yield* releaseLock(home, "/tmp/test.db")
+        const reacquired = yield* acquireLock(home, "/tmp/test.db")
+        expect(reacquired).toBe(true)
+      }),
+    ),
   )
 
-  it.live("stale lock from dead PID is cleaned up", () =>
-    Effect.gen(function* () {
-      // Manually create a lock with a dead PID
-      const dir = join(home, ".gent", "servers")
-      mkdirSync(dir, { recursive: true })
-      // Use the same hash logic — acquire first, then tamper
-      acquireLock(home, "/tmp/stale.db")
-      // Find the lock dir and rewrite the info with a dead PID
-      const lockDirs = readdirSync(dir).filter((f) => f.endsWith(".lock"))
-      // Release first, then manually create stale lock
-      releaseLock(home, "/tmp/stale.db")
+  it.scopedLive("different dbPaths have independent locks", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const a = yield* acquireLock(home, "/tmp/a.db")
+        const b = yield* acquireLock(home, "/tmp/b.db")
+        expect(a).toBe(true)
+        expect(b).toBe(true)
+      }),
+    ),
+  )
 
-      // Now manually create a stale lock
-      const hash = lockDirs[0] ?? "fallback.lock"
-      const lockDir = join(dir, hash)
-      mkdirSync(lockDir, { recursive: true })
-      const createdAt = yield* Clock.currentTimeMillis
-      writeFileSync(
-        join(lockDir, "info.json"),
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.stringify({
-          pid: 99999999,
-          hostname: hostname(),
-          createdAt,
-        }),
-      )
+  it.scopedLive("withLock acquires and releases", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        let inside = false
+        yield* withLock(
+          home,
+          "/tmp/test.db",
+          Effect.gen(function* () {
+            inside = true
+            // Lock should be held during body
+            const blocked = yield* acquireLock(home, "/tmp/test.db")
+            expect(blocked).toBe(false)
+          }),
+        )
+        expect(inside).toBe(true)
+        // Lock should be released after body
+        const reacquired = yield* acquireLock(home, "/tmp/test.db")
+        expect(reacquired).toBe(true)
+      }),
+    ),
+  )
 
-      // Should succeed because the existing lock has a dead PID
-      expect(acquireLock(home, "/tmp/stale.db")).toBe(true)
-    }),
+  it.scopedLive("withLock releases on error", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.fail("boom")))
+        expect(result._tag).toBe("Failure")
+        // Lock should still be released
+        const reacquired = yield* acquireLock(home, "/tmp/test.db")
+        expect(reacquired).toBe(true)
+      }),
+    ),
+  )
+
+  it.scopedLive("withLock fails with LockAcquireError when lock is held", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* acquireLock(home, "/tmp/test.db")
+        const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.succeed("ok")))
+        expect(result._tag).toBe("Failure")
+      }),
+    ),
+  )
+
+  it.scopedLive("stale lock from dead PID is cleaned up", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTmpHomeScoped
+        const dir = path.join(home, ".gent", "servers")
+        yield* fs.makeDirectory(dir, { recursive: true })
+        // Use the same hash logic — acquire first, then tamper
+        yield* acquireLock(home, "/tmp/stale.db")
+        // Find the lock dir and rewrite the info with a dead PID
+        const lockDirs = (yield* fs.readDirectory(dir)).filter((f) => f.endsWith(".lock"))
+        // Release first, then manually create stale lock
+        yield* releaseLock(home, "/tmp/stale.db")
+
+        // Now manually create a stale lock
+        const hash = lockDirs[0] ?? "fallback.lock"
+        const lockDir = path.join(dir, hash)
+        yield* fs.makeDirectory(lockDir, { recursive: true })
+        const createdAt = yield* Clock.currentTimeMillis
+        yield* fs.writeFileString(
+          path.join(lockDir, "info.json"),
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          JSON.stringify({
+            pid: 99999999,
+            hostname: hostname(),
+            createdAt,
+          }),
+        )
+
+        // Should succeed because the existing lock has a dead PID
+        const acquired = yield* acquireLock(home, "/tmp/stale.db")
+        expect(acquired).toBe(true)
+      }),
+    ),
   )
 })
 
@@ -457,7 +546,7 @@ describe("signalIfIdentityOwned", () => {
     }),
   )
 
-  it.scoped("skips when probe says identity does not match", () =>
+  it.scopedLive("skips when probe says identity does not match", () =>
     Effect.gen(function* () {
       // Spawn a subprocess that outlives the test window so PID stays alive
       const proc = yield* Effect.acquireRelease(
@@ -485,7 +574,7 @@ describe("signalIfIdentityOwned", () => {
     }),
   )
 
-  it.scoped("signals when probe confirms identity", () =>
+  it.scopedLive("signals when probe confirms identity", () =>
     Effect.gen(function* () {
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
@@ -503,7 +592,7 @@ describe("signalIfIdentityOwned", () => {
     }),
   )
 
-  it.scoped("skips when probe fails (treated as no identity proof)", () =>
+  it.scopedLive("skips when probe fails (treated as no identity proof)", () =>
     Effect.gen(function* () {
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),

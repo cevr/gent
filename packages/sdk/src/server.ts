@@ -314,6 +314,16 @@ export const probeRegistryEntryIdentity = (entry: ServerRegistryEntry): Effect.E
 export const resolveServer = (
   options: GentServerOptions,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
+  // @effect-diagnostics-next-line strictEffectProvide:off
+  Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
+
+const resolveServerInternal = (
+  options: GentServerOptions,
+): Effect.Effect<
+  GentServer,
+  GentConnectionError,
+  Scope.Scope | LayerOutput<typeof LocalPlatformLayer>
+> =>
   Effect.gen(function* () {
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
@@ -330,7 +340,7 @@ export const resolveServer = (
     const fingerprint = yield* Effect.provide(computeLocalFingerprint, BunServices.layer)
 
     // Check existing registry entry
-    const existing = readRegistryEntry(home, dbPath)
+    const existing = yield* readRegistryEntry(home, dbPath)
     if (existing !== undefined) {
       const validation = validateRegistryEntry(existing)
       if (validation.valid && existing.buildFingerprint === fingerprint) {
@@ -350,7 +360,7 @@ export const resolveServer = (
       if (validation.valid) {
         yield* signalIfIdentityOwned(existing, probeRegistryEntryIdentity)
       }
-      removeRegistryEntry(home, dbPath, existing.serverId)
+      yield* removeRegistryEntry(home, dbPath, existing.serverId)
     }
 
     // Acquire lock, build owned server, write registry
@@ -361,7 +371,7 @@ export const resolveServer = (
         const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
         const internal = getOwnedInternal(server)
         if (internal !== undefined) {
-          writeRegistryEntry(
+          yield* writeRegistryEntry(
             home,
             new ServerRegistryEntry({
               serverId: internal.serverId,
@@ -375,39 +385,35 @@ export const resolveServer = (
           )
           // Clean up registry on scope close
           yield* Effect.addFinalizer(() =>
-            Effect.sync(() => removeRegistryEntry(home, dbPath, internal.serverId)),
+            removeRegistryEntry(home, dbPath, internal.serverId).pipe(Effect.ignore),
           )
         }
         return server
       }),
     ).pipe(
-      Effect.catchEager((lockErr) => {
+      Effect.catchTag("LockAcquireError", (lockErr) =>
         // Lock contention — another process started. Retry registry with probe.
-        const retryEntry = readRegistryEntry(home, dbPath)
-        if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
-          return probeServer(retryEntry.rpcUrl, {
-            serverId: retryEntry.serverId,
-            pid: retryEntry.pid,
-            hostname: retryEntry.hostname,
-            dbPath,
-            buildFingerprint: fingerprint,
-          }).pipe(
-            Effect.flatMap((alive) =>
-              alive
-                ? Effect.succeed({ _tag: "attached" as const, url: retryEntry.rpcUrl })
-                : Effect.fail(
-                    new GentConnectionError({
-                      message: "Lock contention: new server did not pass identity probe",
-                    }),
-                  ),
-            ),
-          )
-        }
-        return Effect.fail(
-          new GentConnectionError({
+        Effect.gen(function* () {
+          const retryEntry = yield* readRegistryEntry(home, dbPath)
+          if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
+            const alive = yield* probeServer(retryEntry.rpcUrl, {
+              serverId: retryEntry.serverId,
+              pid: retryEntry.pid,
+              hostname: retryEntry.hostname,
+              dbPath,
+              buildFingerprint: fingerprint,
+            })
+            if (alive) {
+              return { _tag: "attached" as const, url: retryEntry.rpcUrl }
+            }
+            return yield* new GentConnectionError({
+              message: "Lock contention: new server did not pass identity probe",
+            })
+          }
+          return yield* new GentConnectionError({
             message: `Failed to acquire server lock: ${String(lockErr)}`,
-          }),
-        )
-      }),
+          })
+        }),
+      ),
     )
   })
