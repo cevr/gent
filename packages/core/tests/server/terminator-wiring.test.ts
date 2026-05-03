@@ -55,7 +55,11 @@ import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 
 const sessionRuntimeProbe = (terminated: Array<SessionId>): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
-    dispatch: () => Effect.void,
+    sendUserMessage: () => Effect.void,
+    recordToolResult: () => Effect.void,
+    invokeTool: () => Effect.void,
+    steer: () => Effect.void,
+    respondInteraction: () => Effect.void,
     runPrompt: () => Effect.void,
     queueFollowUp: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),

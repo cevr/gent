@@ -15,8 +15,8 @@
 ## Runtime Boundary
 
 - Server-facing code uses `SessionRuntime` only. `AgentLoop` is a runtime-internal implementation detail.
-- Server-facing orchestration flows through `sessionRuntime.dispatch(command)`
-- `RuntimeCommand` constructors are the stable write surface: `sendUserMessageCommand`, `recordToolResultCommand`, `invokeToolCommand`, `applySteerCommand`, `respondInteractionCommand`
+- Server-facing orchestration flows through typed `SessionRuntime` methods: `sendUserMessage`, `recordToolResult`, `invokeTool`, `steer`, and `respondInteraction`.
+- Do not reintroduce a generic runtime command union or public dispatch bridge.
 
 ## Extension Boundary
 

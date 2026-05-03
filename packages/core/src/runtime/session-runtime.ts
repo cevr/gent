@@ -13,7 +13,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import {
   ActorCommandId,
   BranchId,
-  InteractionRequestId,
+  type InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
@@ -30,7 +30,7 @@ import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-conte
 import { ActorEngine } from "./extensions/actor-engine.js"
 import { Receptionist } from "./extensions/receptionist.js"
 import { SessionProfileCache } from "./session-profile.js"
-import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
+import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import {
   AllowAllPermission,
   resolveExistingSessionBranch,
@@ -123,70 +123,6 @@ export const InvokeToolPayload = Schema.Struct({
 })
 export type InvokeToolPayload = typeof InvokeToolPayload.Type
 
-const RuntimeCommandTargetFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-const RuntimeCommandIdField = {
-  commandId: Schema.optional(ActorCommandId),
-}
-
-const RuntimeTurnFields = {
-  ...RuntimeCommandTargetFields,
-  ...RuntimeCommandIdField,
-}
-
-const RuntimeTurnOptionFields = {
-  agentOverride: Schema.optional(AgentName),
-  interactive: Schema.optional(Schema.Boolean),
-  runSpec: Schema.optional(RunSpecSchema),
-}
-
-export const SendUserMessageCommand = Schema.TaggedStruct("SendUserMessage", {
-  ...RuntimeTurnFields,
-  content: Schema.String,
-  ...RuntimeTurnOptionFields,
-  requestId: Schema.optional(RequestIdSchema),
-})
-export type SendUserMessageCommand = typeof SendUserMessageCommand.Type
-
-export const RecordToolResultCommand = Schema.TaggedStruct("RecordToolResult", {
-  ...RuntimeTurnFields,
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  output: Schema.Unknown,
-  isError: Schema.optional(Schema.Boolean),
-})
-export type RecordToolResultCommand = typeof RecordToolResultCommand.Type
-
-export const InvokeToolCommand = Schema.TaggedStruct("InvokeTool", {
-  ...RuntimeTurnFields,
-  toolName: Schema.String,
-  input: Schema.Unknown,
-})
-export type InvokeToolCommand = typeof InvokeToolCommand.Type
-
-export const ApplySteerCommand = Schema.TaggedStruct("ApplySteer", {
-  command: SteerCommand,
-})
-export type ApplySteerCommand = typeof ApplySteerCommand.Type
-
-export const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
-  ...RuntimeCommandTargetFields,
-  requestId: InteractionRequestId,
-})
-export type RespondInteractionCommand = typeof RespondInteractionCommand.Type
-
-export const RuntimeCommand = Schema.Union([
-  SendUserMessageCommand,
-  RecordToolResultCommand,
-  InvokeToolCommand,
-  ApplySteerCommand,
-  RespondInteractionCommand,
-])
-export type RuntimeCommand = typeof RuntimeCommand.Type
-
 export const SessionRuntimeStateSchema = LoopRuntimeStateSchema
 export type SessionRuntimeState = LoopRuntimeState
 
@@ -211,7 +147,17 @@ export const SessionRuntimeMetrics = Schema.Struct({
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 export interface SessionRuntimeService {
-  readonly dispatch: (command: RuntimeCommand) => Effect.Effect<void, SessionRuntimeError>
+  readonly sendUserMessage: (
+    input: SendUserMessagePayload,
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly recordToolResult: (
+    input: SendToolResultPayload,
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly invokeTool: (input: InvokeToolPayload) => Effect.Effect<void, SessionRuntimeError>
+  readonly steer: (command: SteerCommandType) => Effect.Effect<void, SessionRuntimeError>
+  readonly respondInteraction: (
+    input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
+  ) => Effect.Effect<void, SessionRuntimeError>
   readonly runPrompt: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -257,21 +203,6 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
 
-export const sendUserMessageCommand = (input: SendUserMessagePayload): SendUserMessageCommand => ({
-  _tag: "SendUserMessage",
-  ...input,
-})
-
-export const recordToolResultCommand = (input: SendToolResultPayload): RecordToolResultCommand => ({
-  _tag: "RecordToolResult",
-  ...input,
-})
-
-export const invokeToolCommand = (input: InvokeToolPayload): InvokeToolCommand => ({
-  _tag: "InvokeTool",
-  ...input,
-})
-
 export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandType => {
   switch (input._tag) {
     case "Interject":
@@ -292,38 +223,6 @@ export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCo
         _tag: "Interrupt",
         sessionId: input.sessionId,
         branchId: input.branchId,
-      }
-  }
-}
-
-export const applySteerCommand = (command: SteerCommandType): ApplySteerCommand => ({
-  _tag: "ApplySteer",
-  command,
-})
-
-export const respondInteractionCommand = (
-  input: Pick<SessionRuntimeTarget, "sessionId" | "branchId"> & {
-    requestId: InteractionRequestId
-  },
-): RespondInteractionCommand => ({
-  _tag: "RespondInteraction",
-  ...input,
-})
-
-const runtimeCommandTarget = (command: RuntimeCommand): SessionRuntimeTarget => {
-  switch (command._tag) {
-    case "SendUserMessage":
-    case "RecordToolResult":
-    case "InvokeTool":
-    case "RespondInteraction":
-      return {
-        sessionId: command.sessionId,
-        branchId: command.branchId,
-      }
-    case "ApplySteer":
-      return {
-        sessionId: command.command.sessionId,
-        branchId: command.command.branchId,
       }
   }
 }
@@ -372,7 +271,7 @@ const makeLiveSessionRuntime: Effect.Effect<
     },
   })
 
-  // Every public session-scoped boundary (dispatch + reads) MUST validate the
+  // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
   // enough that session-only checks hide cross-session mistakes.
@@ -387,131 +286,131 @@ const makeLiveSessionRuntime: Effect.Effect<
       ),
     )
 
-  const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
-    command: RuntimeCommand,
+  const sendUserMessage = Effect.fn("SessionRuntime.sendUserMessage")(function* (
+    input: SendUserMessagePayload,
   ) {
-    const target = runtimeCommandTarget(command)
-    yield* requireSessionBranch(target)
+    yield* requireSessionBranch(input)
+    const commandId = input.commandId ?? makeCommandId()
+    const resolved = yield* resolveSessionEnvironmentOrFail({
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      storage,
+      hostDeps,
+      profileCache,
+      defaults: {
+        driverRegistry,
+        permission: defaultPermission,
+        baseSections: [],
+      },
+    }).pipe(
+      Effect.flatMap((result) =>
+        result._tag === "SessionFound"
+          ? Effect.succeed(result)
+          : Effect.fail(
+              new SessionRuntimeError({
+                message: `Session not found: ${input.sessionId}`,
+              }),
+            ),
+      ),
+    )
+    const { environment } = resolved
+    const content = yield* environment.extensionRegistry.extensionReactions.normalizeMessageInput(
+      {
+        content: input.content,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+      },
+      environment.hostCtx,
+    )
 
-    switch (command._tag) {
-      case "SendUserMessage": {
-        const commandId = command.commandId ?? makeCommandId()
-        const resolved = yield* resolveSessionEnvironmentOrFail({
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          storage,
-          hostDeps,
-          profileCache,
-          defaults: {
-            driverRegistry,
-            permission: defaultPermission,
-            baseSections: [],
-          },
-        }).pipe(
-          Effect.flatMap((result) =>
-            result._tag === "SessionFound"
-              ? Effect.succeed(result)
-              : Effect.fail(
-                  new SessionRuntimeError({
-                    message: `Session not found: ${command.sessionId}`,
-                  }),
-                ),
-          ),
-        )
-        const { environment } = resolved
-        const content =
-          yield* environment.extensionRegistry.extensionReactions.normalizeMessageInput(
-            {
-              content: command.content,
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-            },
-            environment.hostCtx,
-          )
+    const message = Message.Regular.make({
+      id: userMessageIdForCommand(commandId),
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      role: "user",
+      parts: [new TextPart({ type: "text", text: content })],
+      createdAt: yield* DateTime.nowAsDate,
+    })
 
-        const message = Message.Regular.make({
-          id: userMessageIdForCommand(commandId),
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          role: "user",
-          parts: [new TextPart({ type: "text", text: content })],
-          createdAt: yield* DateTime.nowAsDate,
-        })
-
-        yield* agentLoop
-          .submit(message, {
-            ...(command.agentOverride !== undefined
-              ? { agentOverride: command.agentOverride }
-              : {}),
-            ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
-            ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
-          })
-          .pipe(
-            Effect.tapCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.void
-              return Effect.gen(function* () {
-                if (Cause.hasDies(cause)) {
-                  yield* eventPublisher.publish(
-                    AgentRestarted.make({
-                      sessionId: command.sessionId,
-                      branchId: command.branchId,
-                      attempt: 0,
-                      error: Cause.pretty(cause),
-                    }),
-                  )
-                }
-                yield* eventPublisher.publish(
-                  ErrorOccurred.make({
-                    sessionId: command.sessionId,
-                    branchId: command.branchId,
-                    error: Cause.pretty(cause),
-                  }),
-                )
-                yield* Effect.logWarning("agent loop submission failed").pipe(
-                  Effect.annotateLogs({ error: Cause.pretty(cause) }),
-                )
-              }).pipe(
-                Effect.catchCause((diagnosticCause) =>
-                  Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
-                    Effect.annotateLogs({
-                      error: Cause.pretty(diagnosticCause),
-                      originalError: Cause.pretty(cause),
-                    }),
-                    Effect.catchEager(() => Effect.void),
-                  ),
-                ),
+    yield* agentLoop
+      .submit(message, {
+        ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+        ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
+        ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
+      })
+      .pipe(
+        Effect.tapCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.void
+          return Effect.gen(function* () {
+            if (Cause.hasDies(cause)) {
+              yield* eventPublisher.publish(
+                AgentRestarted.make({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  attempt: 0,
+                  error: Cause.pretty(cause),
+                }),
               )
-            }),
+            }
+            yield* eventPublisher.publish(
+              ErrorOccurred.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                error: Cause.pretty(cause),
+              }),
+            )
+            yield* Effect.logWarning("agent loop submission failed").pipe(
+              Effect.annotateLogs({ error: Cause.pretty(cause) }),
+            )
+          }).pipe(
+            Effect.catchCause((diagnosticCause) =>
+              Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
+                Effect.annotateLogs({
+                  error: Cause.pretty(diagnosticCause),
+                  originalError: Cause.pretty(cause),
+                }),
+                Effect.catchEager(() => Effect.void),
+              ),
+            ),
           )
-        yield* Effect.logInfo("session-runtime.message.submitted").pipe(
-          Effect.annotateLogs({
-            sessionId: command.sessionId,
-            branchId: command.branchId,
-          }),
-        )
-        return
-      }
-      case "RecordToolResult": {
-        yield* agentLoop.recordToolResult(command)
-        return
-      }
-      case "InvokeTool": {
-        yield* agentLoop.invokeTool(command)
-        return
-      }
-      case "ApplySteer":
-        yield* agentLoop.steer(command.command)
-        return
-      case "RespondInteraction":
-        yield* agentLoop.respondInteraction(command)
-        return
-    }
+        }),
+      )
+    yield* Effect.logInfo("session-runtime.message.submitted").pipe(
+      Effect.annotateLogs({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+      }),
+    )
   })
 
   return {
-    dispatch: (command) =>
-      dispatchCommand(command).pipe(
-        Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
+    sendUserMessage: (input) =>
+      sendUserMessage(input).pipe(
+        Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
+      ),
+
+    recordToolResult: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() => agentLoop.recordToolResult(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
+      ),
+
+    invokeTool: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() => agentLoop.invokeTool(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
+      ),
+
+    steer: (command) =>
+      requireSessionBranch(command).pipe(
+        Effect.flatMap(() => agentLoop.steer(command)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
+      ),
+
+    respondInteraction: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() => agentLoop.respondInteraction(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
       ),
 
     runPrompt: (input: RunPromptInput) =>
@@ -624,7 +523,11 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {
-      dispatch: () => Effect.void,
+      sendUserMessage: () => Effect.void,
+      recordToolResult: () => Effect.void,
+      invokeTool: () => Effect.void,
+      steer: () => Effect.void,
+      respondInteraction: () => Effect.void,
       runPrompt: () => Effect.void,
       queueFollowUp: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),

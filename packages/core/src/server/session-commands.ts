@@ -31,12 +31,7 @@ import { toPrompt } from "../providers/ai-transcript.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
-import {
-  SessionRuntime,
-  type SessionRuntimeService,
-  applySteerCommand,
-  sendUserMessageCommand,
-} from "../runtime/session-runtime.js"
+import { SessionRuntime, type SessionRuntimeService } from "../runtime/session-runtime.js"
 import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -636,12 +631,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       //
       // Note on initialPrompt: the cache only remembers the
       // createSession *outcome*. If createSession returns successfully and
-      // the follow-up `sessionRuntime.dispatch(sendUserMessageCommand)`
-      // fails asynchronously inside the runtime, a retried create with the
-      // same requestId short-circuits to the cached result and does NOT
-      // re-send the prompt. The TUI does not pass initialPrompt on create
-      // (it sends separately via a dedicated send with its own requestId),
-      // so this is an advisory, not an active failure mode.
+      // the follow-up `sessionRuntime.sendUserMessage` fails inside the
+      // runtime, a retried create with the same requestId short-circuits to
+      // the cached result and does NOT re-send the prompt. The TUI does not
+      // pass initialPrompt on create (it sends separately via a dedicated send
+      // with its own requestId), so this is an advisory, not an active failure
+      // mode.
       const createRequestCache = yield* Ref.make(
         new Map<string, Deferred.Deferred<CreateSessionResult, AppServiceError>>(),
       )
@@ -821,15 +816,13 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         // Optional initial prompt — sends immediately after creation
         if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
-          yield* sessionRuntime.dispatch(
-            sendUserMessageCommand({
-              sessionId,
-              branchId,
-              content: input.initialPrompt,
-              ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-              ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
-            }),
-          )
+          yield* sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: input.initialPrompt,
+            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+          })
         }
 
         const result: CreateSessionResult = { sessionId, branchId, name }
@@ -924,16 +917,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
         input: SendMessageInput,
       ) {
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            content: input.content,
-            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-            ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
-            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
-          }),
-        )
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: input.sessionId,
+          branchId: input.branchId,
+          content: input.content,
+          ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+          ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
+          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+        })
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({
             sessionId: input.sessionId,
@@ -954,7 +945,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         switchBranch,
         forkBranch,
         sendMessage,
-        steer: (command) => sessionRuntime.dispatch(applySteerCommand(command)),
+        steer: (command) => sessionRuntime.steer(command),
         drainQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId })

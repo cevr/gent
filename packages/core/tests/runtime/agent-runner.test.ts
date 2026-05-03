@@ -178,7 +178,11 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
         }),
       )
       return {
-        dispatch: () => Effect.void,
+        sendUserMessage: () => Effect.void,
+        recordToolResult: () => Effect.void,
+        invokeTool: () => Effect.void,
+        steer: () => Effect.void,
+        respondInteraction: () => Effect.void,
         runPrompt: (input) =>
           Effect.gen(function* () {
             yield* SubscriptionRef.set(

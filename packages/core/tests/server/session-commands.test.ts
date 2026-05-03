@@ -13,6 +13,7 @@ import {
   SessionRuntime,
   SessionRuntimeError,
   SessionRuntimeStateSchema,
+  type SessionRuntimeService,
 } from "../../src/runtime/session-runtime"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
@@ -48,6 +49,40 @@ const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
     return closed
   })
+
+const idleRuntimeState = SessionRuntimeStateSchema.Idle.make({
+  agent: "cowork" as const,
+  queue: emptyQueueSnapshot(),
+})
+
+const makeSessionRuntimeStub = (
+  overrides: Partial<SessionRuntimeService> = {},
+): SessionRuntimeService => ({
+  sendUserMessage: () => Effect.void,
+  recordToolResult: () => Effect.void,
+  invokeTool: () => Effect.void,
+  steer: () => Effect.void,
+  respondInteraction: () => Effect.void,
+  runPrompt: () => Effect.void,
+  queueFollowUp: () => Effect.void,
+  drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+  getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+  getState: () => Effect.succeed(idleRuntimeState),
+  getMetrics: () =>
+    Effect.succeed({
+      turns: 0,
+      tokens: 0,
+      toolCalls: 0,
+      retries: 0,
+      durationMs: 0,
+      costUsd: 0,
+      lastInputTokens: 0,
+    }),
+  watchState: () => Effect.succeed(Stream.empty),
+  terminateSession: () => Effect.void,
+  restoreSession: () => Effect.void,
+  ...overrides,
+})
 
 const failingPublisherLayer = Layer.succeed(EventPublisher, {
   append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
@@ -97,33 +132,12 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
 
 const sendFailingSessionCommandsLayer = () => {
   const storageLayer = Storage.MemoryWithSql()
-  const failingRuntimeLayer = Layer.succeed(SessionRuntime, {
-    dispatch: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
-    runPrompt: () => Effect.void,
-    queueFollowUp: () => Effect.void,
-    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getState: () =>
-      Effect.succeed(
-        SessionRuntimeStateSchema.Idle.make({
-          agent: "cowork" as const,
-          queue: emptyQueueSnapshot(),
-        }),
-      ),
-    getMetrics: () =>
-      Effect.succeed({
-        turns: 0,
-        tokens: 0,
-        toolCalls: 0,
-        retries: 0,
-        durationMs: 0,
-        costUsd: 0,
-        lastInputTokens: 0,
-      }),
-    watchState: () => Effect.succeed(Stream.empty),
-    terminateSession: () => Effect.void,
-    restoreSession: () => Effect.void,
-  })
+  const failingRuntimeLayer = Layer.succeed(
+    SessionRuntime,
+    makeSessionRuntimeStub({
+      sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
+    }),
+  )
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
@@ -161,39 +175,19 @@ const sessionCommandsLayer = () => {
 }
 
 const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array<SessionId>) =>
-  Layer.succeed(SessionRuntime, {
-    dispatch: () => Effect.void,
-    runPrompt: () => Effect.void,
-    queueFollowUp: () => Effect.void,
-    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getState: () =>
-      Effect.succeed(
-        SessionRuntimeStateSchema.Idle.make({
-          agent: "cowork" as const,
-          queue: emptyQueueSnapshot(),
+  Layer.succeed(
+    SessionRuntime,
+    makeSessionRuntimeStub({
+      terminateSession: (sessionId) =>
+        Effect.sync(() => {
+          terminated.push(sessionId)
         }),
-      ),
-    getMetrics: () =>
-      Effect.succeed({
-        turns: 0,
-        tokens: 0,
-        toolCalls: 0,
-        retries: 0,
-        durationMs: 0,
-        costUsd: 0,
-        lastInputTokens: 0,
-      }),
-    watchState: () => Effect.succeed(Stream.empty),
-    terminateSession: (sessionId) =>
-      Effect.sync(() => {
-        terminated.push(sessionId)
-      }),
-    restoreSession: (sessionId) =>
-      Effect.sync(() => {
-        restored?.push(sessionId)
-      }),
-  })
+      restoreSession: (sessionId) =>
+        Effect.sync(() => {
+          restored?.push(sessionId)
+        }),
+    }),
+  )
 
 const sessionCommandsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
@@ -1514,39 +1508,18 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
 
-  it.live("duplicate sendMessage requestId dispatches the runtime only once", () =>
+  it.live("duplicate sendMessage requestId sends to runtime only once", () =>
     Effect.gen(function* () {
       let dispatchCount = 0
-      const countingRuntime = Layer.succeed(SessionRuntime, {
-        dispatch: () =>
-          Effect.sync(() => {
-            dispatchCount++
-          }),
-        runPrompt: () => Effect.void,
-        queueFollowUp: () => Effect.void,
-        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getState: () =>
-          Effect.succeed(
-            SessionRuntimeStateSchema.Idle.make({
-              agent: "cowork" as const,
-              queue: emptyQueueSnapshot(),
+      const countingRuntime = Layer.succeed(
+        SessionRuntime,
+        makeSessionRuntimeStub({
+          sendUserMessage: () =>
+            Effect.sync(() => {
+              dispatchCount++
             }),
-          ),
-        getMetrics: () =>
-          Effect.succeed({
-            turns: 0,
-            tokens: 0,
-            toolCalls: 0,
-            retries: 0,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          }),
-        watchState: () => Effect.succeed(Stream.empty),
-        terminateSession: () => Effect.void,
-        restoreSession: () => Effect.void,
-      })
+        }),
+      )
       const storageLayer = Storage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
@@ -1594,36 +1567,15 @@ describe("requestId idempotency", () => {
   it.live("concurrent duplicate sendMessage requestIds dispatch only once", () =>
     Effect.gen(function* () {
       let dispatchCount = 0
-      const countingRuntime = Layer.succeed(SessionRuntime, {
-        dispatch: () =>
-          Effect.sync(() => {
-            dispatchCount++
-          }),
-        runPrompt: () => Effect.void,
-        queueFollowUp: () => Effect.void,
-        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getState: () =>
-          Effect.succeed(
-            SessionRuntimeStateSchema.Idle.make({
-              agent: "cowork" as const,
-              queue: emptyQueueSnapshot(),
+      const countingRuntime = Layer.succeed(
+        SessionRuntime,
+        makeSessionRuntimeStub({
+          sendUserMessage: () =>
+            Effect.sync(() => {
+              dispatchCount++
             }),
-          ),
-        getMetrics: () =>
-          Effect.succeed({
-            turns: 0,
-            tokens: 0,
-            toolCalls: 0,
-            retries: 0,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          }),
-        watchState: () => Effect.succeed(Stream.empty),
-        terminateSession: () => Effect.void,
-        restoreSession: () => Effect.void,
-      })
+        }),
+      )
       const storageLayer = Storage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,

@@ -8,7 +8,11 @@ Actor model as the organizing metaphor. Not as an excuse for extra public surfac
 
 Public write surface:
 
-- `dispatch(command: RuntimeCommand)`
+- `sendUserMessage(...)`
+- `recordToolResult(...)`
+- `invokeTool(...)`
+- `steer(...)`
+- `respondInteraction(...)`
 
 Public read surface:
 
@@ -20,24 +24,24 @@ Public read surface:
 
 `AgentLoop` is internal. `ActorProcess` is dead. RPC, SDK, and direct callers all converge on `SessionRuntime`.
 
-## Runtime Command Algebra
+## Runtime Protocol
 
-The runtime mailbox is explicit:
+The public runtime protocol is explicit:
 
-- `SendUserMessage`
-- `RecordToolResult`
-- `InvokeTool`
-- `ApplySteer`
-- `RespondInteraction`
+- user-message submission
+- external tool-result recording
+- direct tool invocation
+- steering
+- interaction response
 
-Those commands are schema-tagged values with `_tag`, not ambient method bags or stringly-typed payloads.
+Each operation owns its typed payload. There is no generic public dispatch bridge.
 
 ## Ownership
 
 `SessionRuntime` owns:
 
 - session + branch command ingress
-- validation of existing `(sessionId, branchId)` targets before dispatch
+- validation of existing `(sessionId, branchId)` targets before writes and reads
 - queue serialization
 - checkpoint / recovery
 - interaction parking + resume
