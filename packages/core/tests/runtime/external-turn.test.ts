@@ -28,6 +28,7 @@ import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -325,7 +326,7 @@ describe("external turn execution", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
+          const messages = yield* MessageStorage
           yield* runAgentLoop(agentLoop, message, {
             agentOverride: AgentName.make("test-external"),
           })
@@ -342,7 +343,7 @@ describe("external turn execution", () => {
               error: "External turn executor error: external response part failed",
             }),
           )
-          const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+          const assistant = yield* messages.getMessage(assistantMessageIdForTurn(message.id, 1))
           expect(assistant?.parts).toEqual([
             new TextPart({ type: "text", text: "partial external answer" }),
           ])
@@ -579,10 +580,10 @@ describe("ExternalDriverContribution end-to-end", () => {
             prompt: "trigger the external driver",
           })
           // Query the real Storage for the messages stored during the turn.
-          const storage = yield* Storage
-          const messages = yield* storage.listMessages(e2eBranchId)
+          const messages = yield* MessageStorage
+          const messagesResult = yield* messages.listMessages(e2eBranchId)
           // The assistant message should contain the text emitted by the executor.
-          const allText = messages.map((m) => messagePartsText(m.parts))
+          const allText = messagesResult.map((m) => messagePartsText(m.parts))
           const combined = allText.join("")
           expect(combined).toContain(expectedText)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
@@ -658,10 +659,12 @@ describe("ExternalDriverContribution end-to-end", () => {
             agentName: AgentName.make("tool-test-agent"),
             prompt: "do the tool",
           })
-          const storage = yield* Storage
-          const messages = yield* storage.listMessages(e2eBranchId)
-          const toolCallParts = messages.flatMap((m) => messagePartsToolCallParts(m.parts))
-          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
+          const messages = yield* MessageStorage
+          const messagesResult = yield* messages.listMessages(e2eBranchId)
+          const toolCallParts = messagesResult.flatMap((m) => messagePartsToolCallParts(m.parts))
+          const toolResultParts = messagesResult.flatMap((m) =>
+            messagePartsToolResultParts(m.parts),
+          )
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("read_file")
           expect(toolResultParts.length).toBe(1)
@@ -751,9 +754,11 @@ describe("ExternalDriverContribution end-to-end", () => {
             agentName: AgentName.make("tool-fail-agent"),
             prompt: "trigger a failure",
           })
-          const storage = yield* Storage
-          const messages = yield* storage.listMessages(e2eBranchId)
-          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
+          const messages = yield* MessageStorage
+          const messagesResult = yield* messages.listMessages(e2eBranchId)
+          const toolResultParts = messagesResult.flatMap((m) =>
+            messagePartsToolResultParts(m.parts),
+          )
           expect(toolResultParts.length).toBe(1)
           expect(toolResultParts[0]?.toolName).toBe("bash")
           expect(toolResultParts[0]?.output.type).toBe("error-json")
@@ -843,10 +848,12 @@ describe("ExternalDriverContribution end-to-end", () => {
             agentName: AgentName.make("tool-dup-agent"),
             prompt: "write a file",
           })
-          const storage = yield* Storage
-          const messages = yield* storage.listMessages(e2eBranchId)
-          const toolCallParts = messages.flatMap((m) => messagePartsToolCallParts(m.parts))
-          const toolResultParts = messages.flatMap((m) => messagePartsToolResultParts(m.parts))
+          const messages = yield* MessageStorage
+          const messagesResult = yield* messages.listMessages(e2eBranchId)
+          const toolCallParts = messagesResult.flatMap((m) => messagePartsToolCallParts(m.parts))
+          const toolResultParts = messagesResult.flatMap((m) =>
+            messagePartsToolResultParts(m.parts),
+          )
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("write_file")
           expect(toolResultParts.length).toBe(1)

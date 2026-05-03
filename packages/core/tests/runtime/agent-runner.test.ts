@@ -29,7 +29,11 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { ModelId } from "@gent/core/domain/model"
 import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
@@ -258,10 +262,11 @@ describe("RunSpec", () => {
       ])
       const layer = makeLiveAgentRunnerLayer(providerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-runspec"),
             name: "Parent",
@@ -269,7 +274,7 @@ describe("RunSpec", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("parent-runspec-branch"),
             sessionId: SessionId.make("parent-runspec"),
@@ -299,7 +304,10 @@ describe("RunSpec", () => {
           expect(result.text).toContain("child result")
         }
         yield* controls.assertDone()
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        Effect.provide(Layer.merge(layer, Storage.TestWithSql())),
+      )
     }),
   )
 })
@@ -325,7 +333,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const recorder = yield* SequenceRecorder
         const now = new Date()
@@ -340,8 +349,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "scan repo",
@@ -368,7 +377,7 @@ describe("AgentRunner", () => {
         const spawnEvent = Schema.decodeUnknownSync(AgentEvent)(spawnRecord?.args)
         expect(spawnEvent._tag).toBe("AgentRunSpawned")
         if (spawnEvent._tag === "AgentRunSpawned") {
-          const child = yield* storage.getSession(spawnEvent.childSessionId)
+          const child = yield* sessions.getSession(spawnEvent.childSessionId)
           expect(child?.activeBranchId).toBe(spawnEvent.childBranchId)
         }
         // Verify enriched AgentRunSucceeded payload fields (args is the event object directly)
@@ -412,7 +421,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -426,8 +436,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         const result = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "spawn rollback",
@@ -437,8 +447,10 @@ describe("AgentRunner", () => {
           runSpec: { persistence: "durable" },
         })
         expect(result._tag).toBe("error")
-        const sessions = yield* storage.listSessions()
-        expect(sessions.filter((candidate) => candidate.parentSessionId === session.id)).toEqual([])
+        const sessionsResult = yield* sessions.listSessions()
+        expect(
+          sessionsResult.filter((candidate) => candidate.parentSessionId === session.id),
+        ).toEqual([])
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -462,7 +474,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -476,8 +489,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         const result = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "fail test",
@@ -509,7 +522,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -523,8 +537,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         return yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "timeout test",
@@ -560,7 +574,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -574,8 +589,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "scan repo",
@@ -584,15 +599,15 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "ephemeral" },
         })
-        const sessions = yield* storage.listSessions()
-        return { runResult, sessions }
+        const sessionsResult = yield* sessions.listSessions()
+        return { runResult, sessionsResult }
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       if (result.runResult._tag === "success") {
         expect(result.runResult.persistence).toBe("ephemeral")
         expect(result.runResult.text).toContain("ephemeral response")
       }
-      expect(result.sessions.map((session) => session.id)).toEqual([
+      expect(result.sessionsResult.map((session) => session.id)).toEqual([
         SessionId.make("parent-session-ephemeral"),
       ])
     }),
@@ -626,7 +641,9 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const events = yield* EventStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -640,8 +657,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "run helper with one tool",
@@ -653,7 +670,7 @@ describe("AgentRunner", () => {
         if (runResult._tag !== "success") {
           return { runResult, childTags: [] as string[] }
         }
-        const childEvents = yield* storage.listEvents({ sessionId: session.id })
+        const childEvents = yield* events.listEvents({ sessionId: session.id })
         return {
           runResult,
           childTags: childEvents.map((event) => event.event._tag),
@@ -682,7 +699,8 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
         const session = new Session({
@@ -696,8 +714,8 @@ describe("AgentRunner", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "persist this child",
@@ -706,14 +724,14 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "durable" },
         })
-        const sessions = yield* storage.listSessions()
-        return { runResult, sessions }
+        const sessionsResult = yield* sessions.listSessions()
+        return { runResult, sessionsResult }
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       if (result.runResult._tag === "success") {
         expect(result.runResult.persistence).toBe("durable")
       }
-      expect(result.sessions).toHaveLength(2)
+      expect(result.sessionsResult).toHaveLength(2)
     }),
   )
   it.live("reasoning-only assistant response surfaces reasoning as text", () =>
@@ -724,9 +742,9 @@ describe("AgentRunner", () => {
       // Mock agent loop that writes a reasoning-only assistant message
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
-          const storage = yield* Storage
+          const messages = yield* MessageStorage
           const now = new Date()
-          yield* storage.createMessage(
+          yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
@@ -753,10 +771,11 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-reasoning"),
             name: "P",
@@ -764,7 +783,7 @@ describe("AgentRunner", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("branch-reasoning"),
             sessionId: SessionId.make("parent-reasoning"),
@@ -793,9 +812,9 @@ describe("AgentRunner", () => {
       const storageLayer = Storage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
-          const storage = yield* Storage
+          const messages = yield* MessageStorage
           const now = new Date()
-          yield* storage.createMessage(
+          yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
@@ -825,10 +844,11 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-mixed"),
             name: "P",
@@ -836,7 +856,7 @@ describe("AgentRunner", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("branch-mixed"),
             sessionId: SessionId.make("parent-mixed"),
@@ -865,9 +885,9 @@ describe("AgentRunner", () => {
       const storageLayer = Storage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
-          const storage = yield* Storage
+          const messages = yield* MessageStorage
           const now = new Date()
-          yield* storage.createMessage(
+          yield* messages.createMessage(
             Message.Regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
@@ -897,10 +917,11 @@ describe("AgentRunner", () => {
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const runner = yield* AgentRunnerService
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("parent-save"),
             name: "P",
@@ -908,7 +929,7 @@ describe("AgentRunner", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("branch-save"),
             sessionId: SessionId.make("parent-save"),
@@ -946,7 +967,9 @@ describe("AgentRunner", () => {
 // Session depth guard
 // ============================================================================
 describe("session depth guard", () => {
-  const run = <A, E>(effect: Effect.Effect<A, E, Storage | RelationshipStorage>) =>
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
+  ) =>
     Effect.runPromise(
       effect.pipe(Effect.timeout("4 seconds"), Effect.provide(Storage.TestWithSql())),
     )
@@ -966,13 +989,15 @@ describe("session depth guard", () => {
       sessionId: SessionId.make(sessionId),
       createdAt: new Date(),
     })
-  const buildSessionChain = (storage: StorageService, depth: number) =>
+  const buildSessionChain = (depth: number) =>
     Effect.gen(function* () {
-      yield* storage.createSession(makeSession("s0"))
-      yield* storage.createBranch(makeBranch("s0"))
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(makeSession("s0"))
+      yield* branches.createBranch(makeBranch("s0"))
       for (let i = 1; i <= depth; i++) {
-        yield* storage.createSession(makeSession(`s${i}`, `s${i - 1}`))
-        yield* storage.createBranch(makeBranch(`s${i}`))
+        yield* sessions.createSession(makeSession(`s${i}`, `s${i - 1}`))
+        yield* branches.createBranch(makeBranch(`s${i}`))
       }
     })
   it.live("root session has depth 0", () =>
@@ -980,10 +1005,11 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
+            const sessions = yield* SessionStorage
+            const branches = yield* BranchStorage
             const relationshipStorage = yield* RelationshipStorage
-            yield* storage.createSession(makeSession("root"))
-            yield* storage.createBranch(makeBranch("root"))
+            yield* sessions.createSession(makeSession("root"))
+            yield* branches.createBranch(makeBranch("root"))
             expect(yield* getSessionDepth(SessionId.make("root"), relationshipStorage)).toBe(0)
           }),
         ),
@@ -995,12 +1021,13 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
+            const sessions = yield* SessionStorage
+            const branches = yield* BranchStorage
             const relationshipStorage = yield* RelationshipStorage
-            yield* storage.createSession(makeSession("root"))
-            yield* storage.createBranch(makeBranch("root"))
-            yield* storage.createSession(makeSession("child", "root"))
-            yield* storage.createBranch(makeBranch("child"))
+            yield* sessions.createSession(makeSession("root"))
+            yield* branches.createBranch(makeBranch("root"))
+            yield* sessions.createSession(makeSession("child", "root"))
+            yield* branches.createBranch(makeBranch("child"))
             expect(yield* getSessionDepth(SessionId.make("child"), relationshipStorage)).toBe(1)
           }),
         ),
@@ -1012,14 +1039,15 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
+            const sessions = yield* SessionStorage
+            const branches = yield* BranchStorage
             const relationshipStorage = yield* RelationshipStorage
-            yield* storage.createSession(makeSession("root"))
-            yield* storage.createBranch(makeBranch("root"))
-            yield* storage.createSession(makeSession("child", "root"))
-            yield* storage.createBranch(makeBranch("child"))
-            yield* storage.createSession(makeSession("grandchild", "child"))
-            yield* storage.createBranch(makeBranch("grandchild"))
+            yield* sessions.createSession(makeSession("root"))
+            yield* branches.createBranch(makeBranch("root"))
+            yield* sessions.createSession(makeSession("child", "root"))
+            yield* branches.createBranch(makeBranch("child"))
+            yield* sessions.createSession(makeSession("grandchild", "child"))
+            yield* branches.createBranch(makeBranch("grandchild"))
             expect(yield* getSessionDepth(SessionId.make("grandchild"), relationshipStorage)).toBe(
               2,
             )
@@ -1033,9 +1061,8 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
             const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
+            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
             const deepest = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
             expect(yield* getSessionDepth(deepest, relationshipStorage)).toBe(
               DEFAULT_MAX_AGENT_RUN_DEPTH,
@@ -1050,9 +1077,8 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
             const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
+            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
             const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
             const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
             expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
@@ -1066,9 +1092,8 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
             const relationshipStorage = yield* RelationshipStorage
-            yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+            yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
             const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
             const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
             expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
@@ -1109,13 +1134,15 @@ describe("ephemeral service propagation", () => {
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     return Layer.mergeAll(deps, runnerLayer)
   }
-  const setupParentSession = (storage: StorageService, id: SessionId) =>
+  const setupParentSession = (id: SessionId) =>
     Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
       const now = new Date()
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({ id, name: "Parent", createdAt: now, updatedAt: now }),
       )
-      yield* storage.createBranch(
+      yield* branches.createBranch(
         new Branch({ id: BranchId.make(`${id}-branch`), sessionId: id, createdAt: now }),
       )
     })
@@ -1124,9 +1151,9 @@ describe("ephemeral service propagation", () => {
       const { layer: providerLayer } = yield* Provider.Sequence([textStep("ephemeral text output")])
       const layer = makeEphemeralLayer(providerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const runner = yield* AgentRunnerService
-        yield* setupParentSession(storage, SessionId.make("parent-svc-prop"))
+        yield* setupParentSession(SessionId.make("parent-svc-prop"))
         const result = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "test service propagation",
@@ -1140,8 +1167,8 @@ describe("ephemeral service propagation", () => {
           expect(result.text).toContain("ephemeral text output")
         }
         // Parent storage should only have the parent session
-        const sessions = yield* storage.listSessions()
-        expect(sessions.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
+        const sessionsResult = yield* sessions.listSessions()
+        expect(sessionsResult.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
   test("ephemeral agent auto-approves interactions", () =>
@@ -1190,9 +1217,8 @@ describe("ephemeral service propagation", () => {
       const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
         const runner = yield* AgentRunnerService
-        yield* setupParentSession(storage, SessionId.make("parent-approve"))
+        yield* setupParentSession(SessionId.make("parent-approve"))
         const result = yield* runner.run({
           agent: getBuiltinAgent("explore")!,
           prompt: "test auto-approve",

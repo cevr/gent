@@ -10,7 +10,9 @@ import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer"
 const cowork = AgentDefinition.make({
   name: "cowork" as never,
@@ -34,12 +36,13 @@ const makeLayer = (
   })
 const createSessionBranch = (modelIdLabel = "test/priced") =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const sessions = yield* SessionStorage
+    const branches = yield* BranchStorage
     const sessionId = SessionId.make("metrics-session")
     const branchId = BranchId.make("metrics-branch")
     const now = new Date()
     void modelIdLabel
-    yield* storage.createSession(
+    yield* sessions.createSession(
       new Session({
         id: sessionId,
         name: "Metrics Test",
@@ -47,7 +50,7 @@ const createSessionBranch = (modelIdLabel = "test/priced") =>
         updatedAt: now,
       }),
     )
-    yield* storage.createBranch(
+    yield* branches.createBranch(
       new Branch({
         id: branchId,
         sessionId,
@@ -66,7 +69,7 @@ describe("SessionRuntime metrics", () => {
       const result = yield* narrowR(
         Effect.gen(function* () {
           const runtime = yield* SessionRuntime
-          const storage = yield* Storage
+          const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
           yield* runtime.runPrompt({
             sessionId,
@@ -80,7 +83,7 @@ describe("SessionRuntime metrics", () => {
             agentName: AgentName.make("cowork") as never,
             prompt: "second",
           })
-          const envelopes = yield* storage.listEvents({ sessionId, branchId })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes
             .map((e) => e.event)
             .filter(
@@ -145,7 +148,7 @@ describe("SessionRuntime metrics", () => {
       const result = yield* narrowR(
         Effect.gen(function* () {
           const runtime = yield* SessionRuntime
-          const storage = yield* Storage
+          const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
           yield* runtime.runPrompt({
             sessionId,
@@ -153,7 +156,7 @@ describe("SessionRuntime metrics", () => {
             agentName: AgentName.make("cowork") as never,
             prompt: "one",
           })
-          const envelopes = yield* storage.listEvents({ sessionId, branchId })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes
             .map((e) => e.event)
             .filter(

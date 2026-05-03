@@ -2,6 +2,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
@@ -15,12 +19,13 @@ const nextId = () => `test-${++counter}` as string
 
 const createFixture = (opts?: { sessionName?: string }) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const sessions = yield* SessionStorage
+    const branches = yield* BranchStorage
     const sessionId = SessionId.make(nextId())
     const branchId = BranchId.make(nextId())
     const now = new Date()
 
-    const session = yield* storage.createSession(
+    const session = yield* sessions.createSession(
       new Session({
         id: sessionId,
         name: opts?.sessionName,
@@ -29,7 +34,7 @@ const createFixture = (opts?: { sessionName?: string }) =>
       }),
     )
 
-    const branch = yield* storage.createBranch(
+    const branch = yield* branches.createBranch(
       new Branch({
         id: branchId,
         sessionId,
@@ -49,8 +54,8 @@ const addMessage = (
   createdAt?: Date,
 ) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
-    return yield* storage.createMessage(
+    const messages = yield* MessageStorage
+    return yield* messages.createMessage(
       Message.Regular.make({
         id: MessageId.make(nextId()),
         sessionId,
@@ -269,14 +274,15 @@ describe("sanitizeFts5Query", () => {
 describe("getSessionDetail", () => {
   test("returns all branches with messages", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const branches = yield* BranchStorage
+      const relationships = yield* RelationshipStorage
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "hello")
       yield* addMessage(sessionId, branchId, "assistant", "world")
 
       // Add second branch
       const branchId2 = BranchId.make(nextId())
-      yield* storage.createBranch(
+      yield* branches.createBranch(
         new Branch({
           id: branchId2,
           sessionId,
@@ -287,7 +293,7 @@ describe("getSessionDetail", () => {
       )
       yield* addMessage(sessionId, branchId2, "user", "fix this")
 
-      const tree = yield* storage.getSessionDetail(sessionId)
+      const tree = yield* relationships.getSessionDetail(sessionId)
       expect(tree.branches.length).toBe(2)
       expect(tree.branches[0]!.messages.length).toBe(2)
       expect(tree.branches[1]!.messages.length).toBe(1)
@@ -300,8 +306,8 @@ describe("getSessionDetail", () => {
       yield* addMessage(sessionId, branchId, "assistant", "second", new Date(2000))
       yield* addMessage(sessionId, branchId, "user", "third", new Date(3000))
 
-      const storage = yield* Storage
-      const tree = yield* storage.getSessionDetail(sessionId)
+      const relationships = yield* RelationshipStorage
+      const tree = yield* relationships.getSessionDetail(sessionId)
       const msgs = tree.branches[0]!.messages
       expect(msgs[0]!.parts[0]!.type === "text" && msgs[0]!.parts[0]!.text).toBe("first")
       expect(msgs[2]!.parts[0]!.type === "text" && msgs[2]!.parts[0]!.text).toBe("third")
@@ -309,8 +315,10 @@ describe("getSessionDetail", () => {
 
   test("errors on missing session", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
-      const result = yield* Effect.result(storage.getSessionDetail(SessionId.make("nonexistent")))
+      const relationships = yield* RelationshipStorage
+      const result = yield* Effect.result(
+        relationships.getSessionDetail(SessionId.make("nonexistent")),
+      )
       expect(result._tag).toBe("Failure")
     }))
 })
@@ -318,7 +326,8 @@ describe("getSessionDetail", () => {
 describe("getChildSessions", () => {
   test("returns direct children of a parent session", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessions = yield* SessionStorage
+      const relationships = yield* RelationshipStorage
       const parent = yield* createFixture({ sessionName: "parent" })
 
       // Create two child sessions
@@ -326,7 +335,7 @@ describe("getChildSessions", () => {
       const child2Id = SessionId.make(nextId())
       const now = new Date()
 
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: child1Id,
           name: "child-1",
@@ -336,7 +345,7 @@ describe("getChildSessions", () => {
           updatedAt: now,
         }),
       )
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: child2Id,
           name: "child-2",
@@ -347,7 +356,7 @@ describe("getChildSessions", () => {
         }),
       )
 
-      const children = yield* storage.getChildSessions(parent.sessionId)
+      const children = yield* relationships.getChildSessions(parent.sessionId)
       expect(children.length).toBe(2)
       expect(children[0]!.id).toBe(child1Id)
       expect(children[1]!.id).toBe(child2Id)
@@ -356,21 +365,22 @@ describe("getChildSessions", () => {
 
   test("returns empty array when no children", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const relationships = yield* RelationshipStorage
       const parent = yield* createFixture()
-      const children = yield* storage.getChildSessions(parent.sessionId)
+      const children = yield* relationships.getChildSessions(parent.sessionId)
       expect(children.length).toBe(0)
     }))
 
   test("does not return grandchildren", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessions = yield* SessionStorage
+      const relationships = yield* RelationshipStorage
       const parent = yield* createFixture({ sessionName: "root" })
       const now = new Date()
 
       // Child
       const childId = SessionId.make(nextId())
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: childId,
           name: "child",
@@ -382,7 +392,7 @@ describe("getChildSessions", () => {
 
       // Grandchild
       const grandchildId = SessionId.make(nextId())
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: grandchildId,
           name: "grandchild",
@@ -392,7 +402,7 @@ describe("getChildSessions", () => {
         }),
       )
 
-      const children = yield* storage.getChildSessions(parent.sessionId)
+      const children = yield* relationships.getChildSessions(parent.sessionId)
       expect(children.length).toBe(1)
       expect(children[0]!.id).toBe(childId)
     }))
@@ -401,7 +411,8 @@ describe("getChildSessions", () => {
 describe("getSessionAncestors", () => {
   test("walks from child to root", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessions = yield* SessionStorage
+      const relationships = yield* RelationshipStorage
       const now = new Date()
 
       // Root -> Parent -> Child
@@ -409,10 +420,10 @@ describe("getSessionAncestors", () => {
       const parentId = SessionId.make(nextId())
       const childId = SessionId.make(nextId())
 
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({ id: rootId, name: "root", createdAt: now, updatedAt: now }),
       )
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: parentId,
           name: "parent",
@@ -421,7 +432,7 @@ describe("getSessionAncestors", () => {
           updatedAt: now,
         }),
       )
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({
           id: childId,
           name: "child",
@@ -431,7 +442,7 @@ describe("getSessionAncestors", () => {
         }),
       )
 
-      const ancestors = yield* storage.getSessionAncestors(childId)
+      const ancestors = yield* relationships.getSessionAncestors(childId)
       expect(ancestors.length).toBe(3)
       expect(ancestors[0]!.id).toBe(childId)
       expect(ancestors[1]!.id).toBe(parentId)
@@ -440,25 +451,26 @@ describe("getSessionAncestors", () => {
 
   test("returns single session for root", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const relationships = yield* RelationshipStorage
       const root = yield* createFixture({ sessionName: "lone-root" })
-      const ancestors = yield* storage.getSessionAncestors(root.sessionId)
+      const ancestors = yield* relationships.getSessionAncestors(root.sessionId)
       expect(ancestors.length).toBe(1)
       expect(ancestors[0]!.id).toBe(root.sessionId)
     }))
 
   test("session id with single-quote literal binds as parameter (no injection)", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessions = yield* SessionStorage
+      const relationships = yield* RelationshipStorage
       const now = new Date()
       // Quote-bearing id would have terminated the literal under the prior
       // hand-rolled `'${id.replace(...)}'` form. Parameter binding makes the
       // value opaque — the row simply doesn't exist, no SQL is forged.
       const hostileId = SessionId.make("o'brien")
-      yield* storage.createSession(
+      yield* sessions.createSession(
         new Session({ id: hostileId, name: "hostile", createdAt: now, updatedAt: now }),
       )
-      const ancestors = yield* storage.getSessionAncestors(hostileId)
+      const ancestors = yield* relationships.getSessionAncestors(hostileId)
       expect(ancestors.length).toBe(1)
       expect(ancestors[0]!.id).toBe(hostileId)
     }))

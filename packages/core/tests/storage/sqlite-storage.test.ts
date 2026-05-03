@@ -7,6 +7,11 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import {
   Session,
   Branch,
@@ -25,24 +30,24 @@ describe("Storage", () => {
   describe("Sessions", () => {
     it.live("creates and retrieves a session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const session = new Session({
           id: SessionId.make("test-session"),
           name: "Test Session",
           createdAt: new Date(),
           updatedAt: new Date(),
         })
-        yield* storage.createSession(session)
-        const retrieved = yield* storage.getSession(SessionId.make("test-session"))
+        yield* sessions.createSession(session)
+        const retrieved = yield* sessions.getSession(SessionId.make("test-session"))
         expect(retrieved).toBeDefined()
         expect(retrieved?.id).toBe(SessionId.make("test-session"))
         expect(retrieved?.name).toBe("Test Session")
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("lists sessions", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("s1"),
             name: "Session 1",
@@ -50,7 +55,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("s2"),
             name: "Session 2",
@@ -58,64 +63,64 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-        const sessions = yield* storage.listSessions()
-        expect(sessions.length).toBe(2)
-      }).pipe(Effect.provide(Storage.Test())),
+        const sessionsResult = yield* sessions.listSessions()
+        expect(sessionsResult.length).toBe(2)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("lists first branch per session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const now = Date.now()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("s1"),
             createdAt: new Date(now),
             updatedAt: new Date(now),
           }),
         )
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("s2"),
             createdAt: new Date(now + 1),
             updatedAt: new Date(now + 1),
           }),
         )
-        const sessions = yield* storage.listSessions()
-        expect(sessions.map((session) => session.id)).toEqual([
+        const sessionsResult = yield* sessions.listSessions()
+        expect(sessionsResult.map((session) => session.id)).toEqual([
           SessionId.make("s2"),
           SessionId.make("s1"),
         ])
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("updates a session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const session = new Session({
           id: SessionId.make("update-test"),
           name: "Original",
           createdAt: new Date(),
           updatedAt: new Date(),
         })
-        yield* storage.createSession(session)
-        yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
-        const retrieved = yield* storage.getSession(SessionId.make("update-test"))
+        yield* sessions.createSession(session)
+        yield* sessions.updateSession(new Session({ ...session, name: "Updated" }))
+        const retrieved = yield* sessions.getSession(SessionId.make("update-test"))
         expect(retrieved?.name).toBe("Updated")
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("deletes a session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("delete-test"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.deleteSession(SessionId.make("delete-test"))
-        const retrieved = yield* storage.getSession(SessionId.make("delete-test"))
+        yield* sessions.deleteSession(SessionId.make("delete-test"))
+        const retrieved = yield* sessions.getSession(SessionId.make("delete-test"))
         expect(retrieved).toBeUndefined()
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("enables sqlite foreign key enforcement", () =>
       Effect.gen(function* () {
@@ -264,7 +269,9 @@ describe("Storage", () => {
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
-          const storage = yield* Storage
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
           const sql = yield* SqlClient.SqlClient
           const columns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(messages)`)
           const tables = yield* sql<{ name: string }>`
@@ -289,21 +296,21 @@ describe("Storage", () => {
           expect(foreignKeys[0]?.foreign_keys).toBe(1)
           expect(coreVersion[0]?.value).toBe("1")
           expect(columns.map((column) => column.name)).not.toContain("parts")
-          yield* storage.createSession(
+          yield* sessions.createSession(
             new Session({
               id: SessionId.make("reset-session"),
               createdAt: new Date(),
               updatedAt: new Date(),
             }),
           )
-          yield* storage.createBranch(
+          yield* branches.createBranch(
             new Branch({
               id: BranchId.make("reset-branch"),
               sessionId: SessionId.make("reset-session"),
               createdAt: new Date(),
             }),
           )
-          yield* storage.createMessage(
+          yield* messages.createMessage(
             Message.Regular.make({
               id: "reset-message",
               sessionId: SessionId.make("reset-session"),
@@ -313,9 +320,11 @@ describe("Storage", () => {
               createdAt: new Date(),
             }),
           )
-          const messages = yield* storage.listMessages(BranchId.make("reset-branch"))
-          expect(messages).toHaveLength(1)
-          expect(messages[0]?.parts).toEqual([new TextPart({ type: "text", text: "fresh write" })])
+          const messagesResult = yield* messages.listMessages(BranchId.make("reset-branch"))
+          expect(messagesResult).toHaveLength(1)
+          expect(messagesResult[0]?.parts).toEqual([
+            new TextPart({ type: "text", text: "fresh write" }),
+          ])
         }).pipe(Effect.provide(layer))
       }),
     )
@@ -334,22 +343,24 @@ describe("Storage", () => {
         const branchId = BranchId.make("fts-version-branch")
         const messageId = MessageId.make("fts-version-message")
         yield* Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* storage.createSession(
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
+          yield* sessions.createSession(
             new Session({
               id: sessionId,
               createdAt: new Date(),
               updatedAt: new Date(),
             }),
           )
-          yield* storage.createBranch(
+          yield* branches.createBranch(
             new Branch({
               id: branchId,
               sessionId,
               createdAt: new Date(),
             }),
           )
-          yield* storage.createMessage(
+          yield* messages.createMessage(
             Message.Regular.make({
               id: messageId,
               sessionId,
@@ -385,14 +396,14 @@ describe("Storage", () => {
     )
     it.live("rejects orphan branch, message, and event rows", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const sql = yield* SqlClient.SqlClient
         const now = Date.now()
         const branchExit = yield* Effect.exit(
           sql`INSERT INTO branches (id, session_id, name, created_at) VALUES (${"orphan-branch"}, ${"missing-session"}, ${null}, ${now})`,
         )
         expect(branchExit._tag).toBe("Failure")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("fk-session"),
             createdAt: new Date(now),
@@ -411,23 +422,24 @@ describe("Storage", () => {
     )
     it.live("rejects invalid session parent and active branch relationships", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: SessionId.make("parent-a"), createdAt: now, updatedAt: now }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("parent-a-branch"),
             sessionId: SessionId.make("parent-a"),
             createdAt: now,
           }),
         )
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: SessionId.make("parent-b"), createdAt: now, updatedAt: now }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("parent-b-branch"),
             sessionId: SessionId.make("parent-b"),
@@ -458,10 +470,10 @@ describe("Storage", () => {
     )
     it.live("rejects parent branch without parent session through storage service", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const now = new Date()
         const exit = yield* Effect.exit(
-          storage.createSession(
+          sessions.createSession(
             new Session({
               id: SessionId.make("storage-dangling-parent-branch"),
               parentBranchId: BranchId.make("missing-parent-branch"),
@@ -472,22 +484,23 @@ describe("Storage", () => {
         )
         expect(exit._tag).toBe("Failure")
         expect(
-          yield* storage.getSession(SessionId.make("storage-dangling-parent-branch")),
+          yield* sessions.getSession(SessionId.make("storage-dangling-parent-branch")),
         ).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("rejects branch creation with a parent branch outside the same session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: SessionId.make("branch-parent-a"), createdAt: now, updatedAt: now }),
         )
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: SessionId.make("branch-parent-b"), createdAt: now, updatedAt: now }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("branch-parent-a-root"),
             sessionId: SessionId.make("branch-parent-a"),
@@ -495,7 +508,7 @@ describe("Storage", () => {
           }),
         )
         const exit = yield* Effect.exit(
-          storage.createBranch(
+          branches.createBranch(
             new Branch({
               id: BranchId.make("branch-parent-b-child"),
               sessionId: SessionId.make("branch-parent-b"),
@@ -505,7 +518,7 @@ describe("Storage", () => {
           ),
         )
         expect(exit._tag).toBe("Failure")
-        expect(yield* storage.getBranch(BranchId.make("branch-parent-b-child"))).toBeUndefined()
+        expect(yield* branches.getBranch(BranchId.make("branch-parent-b-child"))).toBeUndefined()
         const directInsertExit = yield* Effect.exit(
           sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
         )
@@ -514,24 +527,25 @@ describe("Storage", () => {
     )
     it.live("rejects deleting branches that own child branches or child sessions", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("delete-parent-session"),
             createdAt: now,
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("delete-parent-root"),
             sessionId: SessionId.make("delete-parent-session"),
             createdAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("delete-parent-child"),
             sessionId: SessionId.make("delete-parent-session"),
@@ -540,16 +554,16 @@ describe("Storage", () => {
           }),
         )
         const childBranchExit = yield* Effect.exit(
-          storage.deleteBranch(BranchId.make("delete-parent-root")),
+          branches.deleteBranch(BranchId.make("delete-parent-root")),
         )
         expect(childBranchExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
+        expect(yield* branches.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
         const directChildBranchExit = yield* Effect.exit(
           sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
         )
         expect(directChildBranchExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
-        yield* storage.createSession(
+        expect(yield* branches.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("delete-child-session"),
             parentSessionId: SessionId.make("delete-parent-session"),
@@ -558,7 +572,7 @@ describe("Storage", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("delete-child-session-branch"),
             sessionId: SessionId.make("delete-child-session"),
@@ -566,43 +580,46 @@ describe("Storage", () => {
           }),
         )
         const childSessionExit = yield* Effect.exit(
-          storage.deleteBranch(BranchId.make("delete-parent-child")),
+          branches.deleteBranch(BranchId.make("delete-parent-child")),
         )
         expect(childSessionExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
-        expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
+        expect(yield* branches.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
+        expect(yield* sessions.getSession(SessionId.make("delete-child-session"))).toBeDefined()
         const directChildSessionExit = yield* Effect.exit(
           sql`DELETE FROM branches WHERE id = ${"delete-parent-child"}`,
         )
         expect(directChildSessionExit._tag).toBe("Failure")
-        expect(yield* storage.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
-        expect(yield* storage.getSession(SessionId.make("delete-child-session"))).toBeDefined()
+        expect(yield* branches.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
+        expect(yield* sessions.getSession(SessionId.make("delete-child-session"))).toBeDefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("deletes session children and storage projections", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        const events = yield* EventStorage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
         const sessionId = SessionId.make("cascade-session")
         const branchId = BranchId.make("cascade-branch")
         const childSessionId = SessionId.make("cascade-child-session")
         const childBranchId = BranchId.make("cascade-child-branch")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: sessionId,
             createdAt: now,
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: branchId,
             sessionId,
             createdAt: now,
           }),
         )
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: childSessionId,
             parentSessionId: sessionId,
@@ -611,14 +628,14 @@ describe("Storage", () => {
             updatedAt: now,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: childBranchId,
             sessionId: childSessionId,
             createdAt: now,
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: MessageId.make("cascade-message"),
             sessionId,
@@ -628,7 +645,7 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: MessageId.make("cascade-child-message"),
             sessionId: childSessionId,
@@ -638,7 +655,7 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
-        yield* storage.appendEvent(
+        yield* events.appendEvent(
           AgentSwitched.make({
             sessionId,
             branchId,
@@ -646,17 +663,17 @@ describe("Storage", () => {
             toAgent: "deepwork",
           }),
         )
-        const cascadedIds = yield* storage.deleteSession(sessionId)
-        const sessions = yield* sql<{
+        const cascadedIds = yield* sessions.deleteSession(sessionId)
+        const sessionsResult = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM sessions`
-        const branches = yield* sql<{
+        const branchesResult = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM branches`
-        const messages = yield* sql<{
+        const messagesResult = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM messages`
-        const events = yield* sql<{
+        const eventsResult = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM events`
         const refs = yield* sql<{
@@ -668,10 +685,10 @@ describe("Storage", () => {
         const fts = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM messages_fts`
-        expect(sessions[0]?.count).toBe(0)
-        expect(branches[0]?.count).toBe(0)
-        expect(messages[0]?.count).toBe(0)
-        expect(events[0]?.count).toBe(0)
+        expect(sessionsResult[0]?.count).toBe(0)
+        expect(branchesResult[0]?.count).toBe(0)
+        expect(messagesResult[0]?.count).toBe(0)
+        expect(eventsResult[0]?.count).toBe(0)
         expect(refs[0]?.count).toBe(0)
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
@@ -680,8 +697,8 @@ describe("Storage", () => {
     )
     it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        const cascadedIds = yield* storage.deleteSession(SessionId.make("never-existed"))
+        const sessions = yield* SessionStorage
+        const cascadedIds = yield* sessions.deleteSession(SessionId.make("never-existed"))
         expect(cascadedIds).toEqual([])
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
@@ -705,13 +722,14 @@ describe("Storage", () => {
     // while still completing the delete would fail invariants 2, 4, or 5.
     it.live("deleteSession racing with concurrent child createSession leaves no orphan rows", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
         const sql = yield* SqlClient.SqlClient
         const now = new Date()
         const parentId = SessionId.make("race-parent")
         const parentBranchId = BranchId.make("race-parent-branch")
-        yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
-        yield* storage.createBranch(
+        yield* sessions.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
+        yield* branches.createBranch(
           new Branch({ id: parentBranchId, sessionId: parentId, createdAt: now }),
         )
         // Pre-create K children before the race so the cascade has a
@@ -722,7 +740,7 @@ describe("Storage", () => {
           SessionId.make(`race-pre-child-${i}`),
         )
         for (const id of preChildIds) {
-          yield* storage.createSession(
+          yield* sessions.createSession(
             new Session({
               id,
               parentSessionId: parentId,
@@ -744,7 +762,7 @@ describe("Storage", () => {
         // short-circuit the race; we'll inspect the durable state directly.
         const createChild = (id: SessionId) =>
           Effect.exit(
-            storage.createSession(
+            sessions.createSession(
               new Session({
                 id,
                 parentSessionId: parentId,
@@ -756,7 +774,7 @@ describe("Storage", () => {
           )
         const [cascadedIds, childExits] = yield* Effect.all(
           [
-            storage.deleteSession(parentId),
+            sessions.deleteSession(parentId),
             Effect.forEach(childIds, createChild, { concurrency: "unbounded" }),
           ],
           { concurrency: "unbounded" },
@@ -818,7 +836,9 @@ describe("Storage", () => {
   describe("Events", () => {
     it.live("getLatestEvent returns latest event by tag", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const events = yield* EventStorage
         const session = new Session({
           id: SessionId.make("event-session"),
           createdAt: new Date(),
@@ -829,9 +849,9 @@ describe("Storage", () => {
           sessionId: SessionId.make("event-session"),
           createdAt: new Date(),
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
-        yield* storage.appendEvent(
+        yield* sessions.createSession(session)
+        yield* branches.createBranch(branch)
+        yield* events.appendEvent(
           AgentSwitched.make({
             sessionId: session.id,
             branchId: branch.id,
@@ -839,7 +859,7 @@ describe("Storage", () => {
             toAgent: "deepwork",
           }),
         )
-        yield* storage.appendEvent(
+        yield* events.appendEvent(
           AgentSwitched.make({
             sessionId: session.id,
             branchId: branch.id,
@@ -847,7 +867,7 @@ describe("Storage", () => {
             toAgent: "cowork",
           }),
         )
-        const latest = yield* storage.getLatestEvent({
+        const latest = yield* events.getLatestEvent({
           sessionId: session.id,
           branchId: branch.id,
           tags: ["AgentSwitched"],
@@ -856,14 +876,15 @@ describe("Storage", () => {
         if (latest && latest._tag === "AgentSwitched") {
           expect(latest.toAgent).toBe(AgentName.make("cowork"))
         }
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
   })
   describe("Branches", () => {
     it.live("creates and retrieves a branch", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("branch-session"),
             createdAt: new Date(),
@@ -875,30 +896,31 @@ describe("Storage", () => {
           sessionId: SessionId.make("branch-session"),
           createdAt: new Date(),
         })
-        yield* storage.createBranch(branch)
-        const retrieved = yield* storage.getBranch(BranchId.make("test-branch"))
+        yield* branches.createBranch(branch)
+        const retrieved = yield* branches.getBranch(BranchId.make("test-branch"))
         expect(retrieved).toBeDefined()
         expect(retrieved?.sessionId).toBe(SessionId.make("branch-session"))
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("lists branches for a session", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("multi-branch"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("b1"),
             sessionId: SessionId.make("multi-branch"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("b2"),
             sessionId: SessionId.make("multi-branch"),
@@ -906,45 +928,48 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const branches = yield* storage.listBranches(SessionId.make("multi-branch"))
-        expect(branches.length).toBe(2)
-      }).pipe(Effect.provide(Storage.Test())),
+        const branchesResult = yield* branches.listBranches(SessionId.make("multi-branch"))
+        expect(branchesResult.length).toBe(2)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("updates branch summary", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("summary-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("summary-branch"),
             sessionId: SessionId.make("summary-session"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
-        const retrieved = yield* storage.getBranch(BranchId.make("summary-branch"))
+        yield* branches.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
+        const retrieved = yield* branches.getBranch(BranchId.make("summary-branch"))
         expect(retrieved?.summary).toBe("Short summary")
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
   })
   describe("Messages", () => {
     it.live("creates and retrieves messages", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("msg-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("msg-branch"),
             sessionId: SessionId.make("msg-session"),
@@ -959,32 +984,34 @@ describe("Storage", () => {
           parts: [new TextPart({ type: "text", text: "Hello" })],
           createdAt: new Date(),
         })
-        yield* storage.createMessage(message)
-        const retrieved = yield* storage.getMessage(MessageId.make("msg-1"))
+        yield* messages.createMessage(message)
+        const retrieved = yield* messages.getMessage(MessageId.make("msg-1"))
         expect(retrieved).toBeDefined()
         expect(retrieved?.role).toBe("user")
         expect(retrieved?.parts[0]?.type).toBe("text")
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("round-trips all persisted transcript part types", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const toolCallId = ToolCallId.make("all-parts-tc")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("all-parts-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("all-parts-branch"),
             sessionId: SessionId.make("all-parts-session"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "all-parts-msg",
             sessionId: SessionId.make("all-parts-session"),
@@ -1014,7 +1041,7 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const retrieved = yield* storage.getMessage(MessageId.make("all-parts-msg"))
+        const retrieved = yield* messages.getMessage(MessageId.make("all-parts-msg"))
         expect(retrieved?.parts.map((part) => part.type)).toEqual([
           "text",
           "reasoning",
@@ -1045,28 +1072,30 @@ describe("Storage", () => {
             output: { type: "json", value: { ok: true } },
           }),
         )
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("stores message parts in shared content chunks", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const sql = yield* SqlClient.SqlClient
         const sharedPart = new TextPart({ type: "text", text: "dedupe me" })
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("chunk-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("chunk-b"),
             sessionId: SessionId.make("chunk-s"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "chunk-a",
             sessionId: SessionId.make("chunk-s"),
@@ -1076,7 +1105,7 @@ describe("Storage", () => {
             createdAt: new Date(1000),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "chunk-b-msg",
             sessionId: SessionId.make("chunk-s"),
@@ -1092,30 +1121,32 @@ describe("Storage", () => {
         const refRows = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM message_chunks`
-        const messages = yield* storage.listMessages(BranchId.make("chunk-b"))
+        const messagesResult = yield* messages.listMessages(BranchId.make("chunk-b"))
         expect(chunkRows[0]?.count).toBe(1)
         expect(refRows[0]?.count).toBe(2)
-        expect(messages.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
+        expect(messagesResult.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("counts messages in a branch", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("count-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("count-branch"),
             sessionId: SessionId.make("count-session"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "count-msg-1",
             sessionId: SessionId.make("count-session"),
@@ -1125,7 +1156,7 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "count-msg-2",
             sessionId: SessionId.make("count-session"),
@@ -1135,28 +1166,30 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const count = yield* storage.countMessages(BranchId.make("count-branch"))
+        const count = yield* branches.countMessages(BranchId.make("count-branch"))
         expect(count).toBe(2)
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("lists messages for a branch", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("list-msg-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("list-msg-branch"),
             sessionId: SessionId.make("list-msg-session"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "lm1",
             sessionId: SessionId.make("list-msg-session"),
@@ -1166,7 +1199,7 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "lm2",
             sessionId: SessionId.make("list-msg-session"),
@@ -1176,31 +1209,33 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const messages = yield* storage.listMessages(BranchId.make("list-msg-branch"))
-        expect(messages.length).toBe(2)
-        expect(messages[0]?.role).toBe("user")
-        expect(messages[1]?.role).toBe("assistant")
-      }).pipe(Effect.provide(Storage.Test())),
+        const messagesResult = yield* messages.listMessages(BranchId.make("list-msg-branch"))
+        expect(messagesResult.length).toBe(2)
+        expect(messagesResult[0]?.role).toBe("user")
+        expect(messagesResult[1]?.role).toBe("assistant")
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("deletes message chunk refs and search projection rows", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const sql = yield* SqlClient.SqlClient
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("delete-projection-session"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("delete-projection-branch"),
             sessionId: SessionId.make("delete-projection-session"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "delete-projection-a",
             sessionId: SessionId.make("delete-projection-session"),
@@ -1210,7 +1245,7 @@ describe("Storage", () => {
             createdAt: new Date(1000),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "delete-projection-b",
             sessionId: SessionId.make("delete-projection-session"),
@@ -1220,8 +1255,8 @@ describe("Storage", () => {
             createdAt: new Date(2000),
           }),
         )
-        yield* storage.deleteMessages(BranchId.make("delete-projection-branch"))
-        const messages = yield* sql<{
+        yield* messages.deleteMessages(BranchId.make("delete-projection-branch"))
+        const messagesResult = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM messages`
         const refs = yield* sql<{
@@ -1233,7 +1268,7 @@ describe("Storage", () => {
         const fts = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM messages_fts`
-        expect(messages[0]?.count).toBe(0)
+        expect(messagesResult[0]?.count).toBe(0)
         expect(refs[0]?.count).toBe(0)
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
@@ -1241,24 +1276,26 @@ describe("Storage", () => {
     )
     it.live("updates session updatedAt when creating message", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const start = new Date(0)
         const messageTime = new Date(1000)
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("session-updated-at"),
             createdAt: start,
             updatedAt: start,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("branch-updated-at"),
             sessionId: SessionId.make("session-updated-at"),
             createdAt: start,
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "msg-updated-at",
             sessionId: SessionId.make("session-updated-at"),
@@ -1268,24 +1305,26 @@ describe("Storage", () => {
             createdAt: messageTime,
           }),
         )
-        const session = yield* storage.getSession(SessionId.make("session-updated-at"))
+        const session = yield* sessions.getSession(SessionId.make("session-updated-at"))
         expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("rolls back message insert when session timestamp update fails", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const sql = yield* SqlClient.SqlClient
         const start = new Date(0)
         const messageTime = new Date(1000)
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("tx-message-session"),
             createdAt: start,
             updatedAt: start,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("tx-message-branch"),
             sessionId: SessionId.make("tx-message-session"),
@@ -1301,7 +1340,7 @@ describe("Storage", () => {
           END
         `)
         const error = yield* Effect.flip(
-          storage.createMessage(
+          messages.createMessage(
             Message.Regular.make({
               id: "tx-message",
               sessionId: SessionId.make("tx-message-session"),
@@ -1313,32 +1352,34 @@ describe("Storage", () => {
           ),
         )
         expect(error._tag).toBe("StorageError")
-        expect(yield* storage.getMessage(MessageId.make("tx-message"))).toBeUndefined()
-        const session = yield* storage.getSession(SessionId.make("tx-message-session"))
+        expect(yield* messages.getMessage(MessageId.make("tx-message"))).toBeUndefined()
+        const session = yield* sessions.getSession(SessionId.make("tx-message-session"))
         expect(session?.updatedAt.getTime()).toBe(start.getTime())
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("createMessageIfAbsent leaves session timestamp unchanged when insert is ignored", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const start = new Date(0)
         const firstTime = new Date(1000)
         const duplicateTime = new Date(2000)
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("if-absent-session"),
             createdAt: start,
             updatedAt: start,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("if-absent-branch"),
             sessionId: SessionId.make("if-absent-session"),
             createdAt: start,
           }),
         )
-        yield* storage.createMessageIfAbsent(
+        yield* messages.createMessageIfAbsent(
           Message.Regular.make({
             id: "if-absent-message",
             sessionId: SessionId.make("if-absent-session"),
@@ -1348,7 +1389,7 @@ describe("Storage", () => {
             createdAt: firstTime,
           }),
         )
-        yield* storage.createMessageIfAbsent(
+        yield* messages.createMessageIfAbsent(
           Message.Regular.make({
             id: "if-absent-message",
             sessionId: SessionId.make("if-absent-session"),
@@ -1358,31 +1399,33 @@ describe("Storage", () => {
             createdAt: duplicateTime,
           }),
         )
-        const session = yield* storage.getSession(SessionId.make("if-absent-session"))
+        const session = yield* sessions.getSession(SessionId.make("if-absent-session"))
         expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
-        const message = yield* storage.getMessage(MessageId.make("if-absent-message"))
+        const message = yield* messages.getMessage(MessageId.make("if-absent-message"))
         expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("orders messages by createdAt then id", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const timestamp = new Date()
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("order-session"),
             createdAt: timestamp,
             updatedAt: timestamp,
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("order-branch"),
             sessionId: SessionId.make("order-session"),
             createdAt: timestamp,
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "b",
             sessionId: SessionId.make("order-session"),
@@ -1392,7 +1435,7 @@ describe("Storage", () => {
             createdAt: timestamp,
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "a",
             sessionId: SessionId.make("order-session"),
@@ -1402,24 +1445,26 @@ describe("Storage", () => {
             createdAt: timestamp,
           }),
         )
-        const messages = yield* storage.listMessages(BranchId.make("order-branch"))
-        expect(messages[0]?.id).toBe(MessageId.make("a"))
-        expect(messages[1]?.id).toBe(MessageId.make("b"))
-      }).pipe(Effect.provide(Storage.Test())),
+        const messagesResult = yield* messages.listMessages(BranchId.make("order-branch"))
+        expect(messagesResult[0]?.id).toBe(MessageId.make("a"))
+        expect(messagesResult[1]?.id).toBe(MessageId.make("b"))
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
   })
   describe("Message Metadata", () => {
     it.live("metadata round-trips through storage", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("meta-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("meta-b"),
             sessionId: SessionId.make("meta-s"),
@@ -1440,10 +1485,10 @@ describe("Storage", () => {
             details: { iteration: 3 },
           },
         })
-        yield* storage.createMessage(message)
-        const messages = yield* storage.listMessages(BranchId.make("meta-b"))
-        expect(messages.length).toBe(1)
-        const m = messages[0]!
+        yield* messages.createMessage(message)
+        const messagesResult = yield* messages.listMessages(BranchId.make("meta-b"))
+        expect(messagesResult.length).toBe(1)
+        const m = messagesResult[0]!
         expect(m.metadata).toBeDefined()
         expect(m.metadata!.customType).toBe("review-status")
         expect(m.metadata!.extensionId).toBe("review-loop")
@@ -1455,19 +1500,21 @@ describe("Storage", () => {
             }
           ).iteration,
         ).toBe(3)
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("createMessageIfAbsent preserves metadata", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("upsert-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("upsert-b"),
             sessionId: SessionId.make("upsert-s"),
@@ -1483,32 +1530,34 @@ describe("Storage", () => {
           createdAt: new Date(),
           metadata: { hidden: true, extensionId: ExtensionId.make("review-loop") },
         })
-        yield* storage.createMessageIfAbsent(message)
-        const messages = yield* storage.listMessages(BranchId.make("upsert-b"))
-        expect(messages.length).toBe(1)
-        expect(messages[0]!.metadata).toBeDefined()
-        expect(messages[0]!.metadata!.hidden).toBe(true)
-        expect(messages[0]!.metadata!.extensionId).toBe("review-loop")
-      }).pipe(Effect.provide(Storage.Test())),
+        yield* messages.createMessageIfAbsent(message)
+        const messagesResult = yield* messages.listMessages(BranchId.make("upsert-b"))
+        expect(messagesResult.length).toBe(1)
+        expect(messagesResult[0]!.metadata).toBeDefined()
+        expect(messagesResult[0]!.metadata!.hidden).toBe(true)
+        expect(messagesResult[0]!.metadata!.extensionId).toBe("review-loop")
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("messages without metadata have undefined metadata", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("no-meta-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("no-meta-b"),
             sessionId: SessionId.make("no-meta-s"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Regular.make({
             id: "no-meta-msg",
             sessionId: SessionId.make("no-meta-s"),
@@ -1518,22 +1567,25 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const messages = yield* storage.listMessages(BranchId.make("no-meta-b"))
-        expect(messages[0]!.metadata).toBeUndefined()
-      }).pipe(Effect.provide(Storage.Test())),
+        const messagesResult = yield* messages.listMessages(BranchId.make("no-meta-b"))
+        expect(messagesResult[0]!.metadata).toBeUndefined()
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     it.live("invalid stored metadata decodes to undefined across read surfaces", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        const relationships = yield* RelationshipStorage
         const sql = yield* SqlClient.SqlClient
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("bad-meta-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("bad-meta-b"),
             sessionId: SessionId.make("bad-meta-s"),
@@ -1541,12 +1593,12 @@ describe("Storage", () => {
           }),
         )
         yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${Date.now()}, ${null}, ${'{"customType":1}'})`
-        const messages = yield* storage.listMessages(BranchId.make("bad-meta-b"))
-        expect(messages).toHaveLength(1)
-        expect(messages[0]!.metadata).toBeUndefined()
-        const message = yield* storage.getMessage(MessageId.make("bad-meta-msg"))
+        const messagesResult = yield* messages.listMessages(BranchId.make("bad-meta-b"))
+        expect(messagesResult).toHaveLength(1)
+        expect(messagesResult[0]!.metadata).toBeUndefined()
+        const message = yield* messages.getMessage(MessageId.make("bad-meta-msg"))
         expect(message?.metadata).toBeUndefined()
-        const detail = yield* storage.getSessionDetail(SessionId.make("bad-meta-s"))
+        const detail = yield* relationships.getSessionDetail(SessionId.make("bad-meta-s"))
         expect(detail.branches).toHaveLength(1)
         expect(detail.branches[0]!.messages).toHaveLength(1)
         expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
@@ -1568,22 +1620,24 @@ describe("Storage", () => {
     })
     it.live("interjection messages round-trip as explicit variants", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
-        yield* storage.createSession(
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
           new Session({
             id: SessionId.make("interjection-s"),
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(
+        yield* branches.createBranch(
           new Branch({
             id: BranchId.make("interjection-b"),
             sessionId: SessionId.make("interjection-s"),
             createdAt: new Date(),
           }),
         )
-        yield* storage.createMessage(
+        yield* messages.createMessage(
           Message.Interjection.make({
             id: "interjection-msg",
             sessionId: SessionId.make("interjection-s"),
@@ -1593,11 +1647,11 @@ describe("Storage", () => {
             createdAt: new Date(),
           }),
         )
-        const stored = yield* storage.getMessage(MessageId.make("interjection-msg"))
+        const stored = yield* messages.getMessage(MessageId.make("interjection-msg"))
         if (stored === undefined) throw new Error("expected interjection message")
         expect(stored._tag).toBe("interjection")
         expect(stored.role).toBe("user")
-      }).pipe(Effect.provide(Storage.Test())),
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
     test("domain message omits metadata when absent", () => {
       const message = Message.Regular.make({
@@ -1615,11 +1669,13 @@ describe("Storage", () => {
     const layer = Storage.TestWithSql()
     it.live("listEvents skips events with unknown _tag instead of crashing", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const events = yield* EventStorage
         const sql = yield* SqlClient.SqlClient
         const sessionId = SessionId.make("unknown-event-session")
         const branchId = BranchId.make("unknown-event-branch")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: sessionId,
             name: "unknown-event",
@@ -1627,22 +1683,24 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
-        yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+        yield* events.appendEvent(SessionStarted.make({ sessionId, branchId }))
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, '__test_unknown__', ${JSON.stringify({ _tag: "__test_unknown__", sessionId, branchId, toolCallId: ToolCallId.make("tc-1"), toolName: "bash" })}, ${Date.now()})`
-        yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
-        const events = yield* storage.listEvents({ sessionId, branchId })
-        expect(events.length).toBe(2)
-        expect(events.every((e) => e.event._tag === "SessionStarted")).toBe(true)
+        yield* events.appendEvent(SessionStarted.make({ sessionId, branchId }))
+        const eventsResult = yield* events.listEvents({ sessionId, branchId })
+        expect(eventsResult.length).toBe(2)
+        expect(eventsResult.every((e) => e.event._tag === "SessionStarted")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
     it.live("getLatestEvent returns undefined for undecodable events", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const events = yield* EventStorage
         const sql = yield* SqlClient.SqlClient
         const sessionId = SessionId.make("unknown-event-latest")
         const branchId = BranchId.make("unknown-event-latest-b")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({
             id: sessionId,
             name: "unknown-event-latest",
@@ -1650,9 +1708,9 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
-        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${JSON.stringify({ _tag: "__test_unknown__", sessionId, branchId })}, ${Date.now()})`
-        const latest = yield* storage.getLatestEvent({
+        const latest = yield* events.getLatestEvent({
           sessionId,
           branchId,
           tags: ["SessionStarted"],
@@ -1694,7 +1752,7 @@ describe("Storage", () => {
       )
     it.live("createSession with N concurrent fibers produces N independent rows", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
         const N = 16
         const ids = Array.from({ length: N }, (_, i) => SessionId.make(`cs-${i}`))
         const active = yield* Ref.make(0)
@@ -1705,30 +1763,32 @@ describe("Storage", () => {
             trackedConcurrency(
               active,
               peak,
-              storage.createSession(
+              sessions.createSession(
                 new Session({ id, createdAt: new Date(), updatedAt: new Date() }),
               ),
             ),
           { concurrency: "unbounded" },
         )
-        const sessions = yield* storage.listSessions()
-        const seen = new Set(sessions.map((s) => s.id))
+        const sessionsResult = yield* sessions.listSessions()
+        const seen = new Set(sessionsResult.map((s) => s.id))
         for (const id of ids) {
           expect(seen.has(id)).toBe(true)
         }
         // Negative control: real interleaving, not accidental serialization.
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
     )
     it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const events = yield* EventStorage
         const sessionId = SessionId.make("ce-session")
         const branchId = BranchId.make("ce-branch")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
         )
-        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
         const N = 32
         const active = yield* Ref.make(0)
         const peak = yield* Ref.make(0)
@@ -1738,27 +1798,29 @@ describe("Storage", () => {
             trackedConcurrency(
               active,
               peak,
-              storage.appendEvent(SessionStarted.make({ sessionId, branchId })),
+              events.appendEvent(SessionStarted.make({ sessionId, branchId })),
             ),
           { concurrency: "unbounded" },
         )
         expect(envelopes.length).toBe(N)
         const idSet = new Set(envelopes.map((e) => e.id))
         expect(idSet.size).toBe(N)
-        const persisted = yield* storage.listEvents({ sessionId, branchId })
+        const persisted = yield* events.listEvents({ sessionId, branchId })
         expect(persisted.length).toBe(N)
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
     )
     it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
         const sessionId = SessionId.make("cm-session")
         const branchId = BranchId.make("cm-branch")
-        yield* storage.createSession(
+        yield* sessions.createSession(
           new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
         )
-        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
         const N = 24
         const ids = Array.from({ length: N }, (_, i) => MessageId.make(`cm-${i}`))
         const active = yield* Ref.make(0)
@@ -1769,7 +1831,7 @@ describe("Storage", () => {
             trackedConcurrency(
               active,
               peak,
-              storage.createMessage(
+              messages.createMessage(
                 Message.Regular.make({
                   id,
                   sessionId,
@@ -1782,14 +1844,14 @@ describe("Storage", () => {
             ),
           { concurrency: "unbounded" },
         )
-        const persisted = yield* storage.listMessages(branchId)
+        const persisted = yield* messages.listMessages(branchId)
         expect(persisted.length).toBe(N)
         const seen = new Set(persisted.map((m) => m.id))
         for (const id of ids) {
           expect(seen.has(id)).toBe(true)
         }
         expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
     )
   })
 })
