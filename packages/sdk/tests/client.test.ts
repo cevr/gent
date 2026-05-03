@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Effect } from "effect"
 import {
   Gent,
   extractText,
@@ -8,6 +9,8 @@ import {
   Message,
   type Message as DomainMessage,
 } from "../src/index"
+import { makeNamespacedClient } from "../src/namespaced-client"
+import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ToolResultPart } from "@gent/core/domain/message"
 
@@ -70,5 +73,33 @@ describe("sdk client helpers", () => {
     const map = buildToolResultMap(messages)
     expect(map.size).toBe(1)
     expect(map.get("tc1")?.output).toBe("file contents")
+  })
+
+  test("namespaced client exposes every RPC key from GentRpcs", () => {
+    const handlers = new Map<string, () => Effect.Effect<void>>(
+      [...GentRpcs.requests.keys()].map((key) => [key, () => Effect.void]),
+    )
+    const flat = new Proxy(Object.create(null) as GentRpcClient, {
+      get: (_target, property) =>
+        typeof property === "string" ? handlers.get(property) : undefined,
+    })
+    const namespaced = makeNamespacedClient(flat)
+    expect(namespaced.session).toBe(namespaced.session)
+
+    for (const key of GentRpcs.requests.keys()) {
+      const separator = key.indexOf(".")
+      if (separator === -1) {
+        throw new Error(`RPC key is not namespaced: ${key}`)
+      }
+      const namespace = key.slice(0, separator)
+      const method = key.slice(separator + 1)
+      const namespaceClient = namespaced[namespace as keyof typeof namespaced]
+      expect(namespaceClient).toBeDefined()
+      expect(namespace in namespaced).toBe(true)
+      expect(method in namespaceClient).toBe(true)
+      const methodClient = (namespaceClient as Readonly<Record<string, unknown>>)[method]
+      expect(methodClient).toBeDefined()
+      expect(methodClient).toBe(handlers.get(key))
+    }
   })
 })

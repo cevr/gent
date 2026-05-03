@@ -1,5 +1,5 @@
 import type { Effect, Fiber } from "effect"
-import type { GentRpcClient } from "@gent/core/server/rpcs.js"
+import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
 import type {
   GentConnectionError,
   GentLifecycle,
@@ -56,75 +56,61 @@ export type { GentConnectionError, GentLifecycle, ConnectionState }
 // Adapter factory — builds a GentNamespacedClient from the flat RPC transport
 // ---------------------------------------------------------------------------
 
-export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient =>
-  ({
-    actor: {
-      sendUserMessage: flat["actor.sendUserMessage"],
-      sendToolResult: flat["actor.sendToolResult"],
-      invokeTool: flat["actor.invokeTool"],
-      interrupt: flat["actor.interrupt"],
-      getState: flat["actor.getState"],
-      getMetrics: flat["actor.getMetrics"],
+const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
+
+const splitRpcKey = (key: string) => {
+  const separator = key.indexOf(".")
+  return separator === -1
+    ? { namespace: key, method: undefined }
+    : { namespace: key.slice(0, separator), method: key.slice(separator + 1) }
+}
+
+const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
+  rpcKeys().flatMap((key) => {
+    const parsed = splitRpcKey(key)
+    return parsed.namespace === namespace && parsed.method !== undefined ? [parsed.method] : []
+  })
+
+const makeNamespace = (flat: GentRpcClient, namespace: string) => {
+  const methods = namespaceMethods(namespace)
+  return new Proxy(Object.create(null), {
+    get: (_target, property) => {
+      if (typeof property !== "string") return undefined
+      return Reflect.get(flat, `${namespace}.${property}`)
     },
-    auth: {
-      listProviders: flat["auth.listProviders"],
-      setKey: flat["auth.setKey"],
-      deleteKey: flat["auth.deleteKey"],
-      listMethods: flat["auth.listMethods"],
-      authorize: flat["auth.authorize"],
-      callback: flat["auth.callback"],
+    has: (_target, property) => typeof property === "string" && methods.includes(property),
+    ownKeys: () => methods,
+    getOwnPropertyDescriptor: (_target, property) =>
+      typeof property === "string" && methods.includes(property)
+        ? { enumerable: true, configurable: true }
+        : undefined,
+  })
+}
+
+export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient => {
+  const namespaceCache = new Map<string, object>()
+  const namespaces = [
+    ...new Set(
+      rpcKeys().flatMap((key) => {
+        const { namespace } = splitRpcKey(key)
+        return namespace === "" ? [] : [namespace]
+      }),
+    ),
+  ]
+  return new Proxy(Object.create(null), {
+    get: (_target, property) => {
+      if (typeof property !== "string" || !namespaces.includes(property)) return undefined
+      const existing = namespaceCache.get(property)
+      if (existing !== undefined) return existing
+      const created = makeNamespace(flat, property)
+      namespaceCache.set(property, created)
+      return created
     },
-    branch: {
-      list: flat["branch.list"],
-      create: flat["branch.create"],
-      getTree: flat["branch.getTree"],
-      switch: flat["branch.switch"],
-      fork: flat["branch.fork"],
-    },
-    driver: {
-      list: flat["driver.list"],
-      set: flat["driver.set"],
-      clear: flat["driver.clear"],
-    },
-    extension: {
-      request: flat["extension.request"],
-      listStatus: flat["extension.listStatus"],
-      listSlashCommands: flat["extension.listSlashCommands"],
-    },
-    interaction: {
-      respondInteraction: flat["interaction.respondInteraction"],
-    },
-    message: {
-      send: flat["message.send"],
-      list: flat["message.list"],
-    },
-    model: {
-      list: flat["model.list"],
-    },
-    permission: {
-      listRules: flat["permission.listRules"],
-      deleteRule: flat["permission.deleteRule"],
-    },
-    queue: {
-      drain: flat["queue.drain"],
-      get: flat["queue.get"],
-    },
-    server: {
-      status: flat["server.status"],
-    },
-    session: {
-      create: flat["session.create"],
-      list: flat["session.list"],
-      get: flat["session.get"],
-      delete: flat["session.delete"],
-      getChildren: flat["session.getChildren"],
-      getTree: flat["session.getTree"],
-      getSnapshot: flat["session.getSnapshot"],
-      updateReasoningLevel: flat["session.updateReasoningLevel"],
-      events: flat["session.events"],
-      watchRuntime: flat["session.watchRuntime"],
-    },
-    steer: {
-      command: flat["steer.command"],
-    },
-  }) satisfies GentNamespacedClient
+    has: (_target, property) => typeof property === "string" && namespaces.includes(property),
+    ownKeys: () => namespaces,
+    getOwnPropertyDescriptor: (_target, property) =>
+      typeof property === "string" && namespaces.includes(property)
+        ? { enumerable: true, configurable: true }
+        : undefined,
+  })
+}
