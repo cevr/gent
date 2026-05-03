@@ -1,5 +1,5 @@
-import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
-import { ClusterSchema, Entity, type Sharding } from "effect/unstable/cluster"
+import { Cause, Context, DateTime, Effect, Layer, Schema, Semaphore, Stream } from "effect"
+import { Entity, type Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
 import {
@@ -176,34 +176,34 @@ export const SessionRuntimeEntity = Entity.make("SessionRuntime", [
   Rpc.make("sendUserMessage", {
     payload: SendUserMessagePayload.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("recordToolResult", {
     payload: SendToolResultPayload.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("invokeTool", {
     payload: InvokeToolPayload.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("steer", {
     payload: SteerCommandType,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("respondInteraction", {
     payload: {
       ...SessionRuntimeTarget.fields,
       requestId: InteractionRequestId,
     },
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("runPrompt", {
     payload: RunPromptPayload.fields,
     error: AgentRunError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("queueFollowUp", {
     payload: QueueFollowUpPayload.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("drainQueuedMessages", {
     payload: SessionRuntimeTarget.fields,
     success: QueueSnapshot,
@@ -233,11 +233,11 @@ export const SessionRuntimeEntity = Entity.make("SessionRuntime", [
   Rpc.make("terminateSession", {
     payload: SessionRuntimeSessionTarget.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
   Rpc.make("restoreSession", {
     payload: SessionRuntimeSessionTarget.fields,
     error: SessionRuntimeError,
-  }).annotate(ClusterSchema.Persisted, true),
+  }),
 ])
 
 export type SessionRuntimeEntityRpcs = RpcGroup.Rpcs<typeof SessionRuntimeEntity.protocol>
@@ -392,6 +392,9 @@ const makeLiveSessionRuntime: Effect.Effect<
   const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
   const actorEngine = yield* ActorEngine
   const receptionist = yield* Receptionist
+  const commandGate = yield* Semaphore.make(1)
+  const serializeCommand = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    commandGate.withPermits(1)(effect)
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({
     extensionRegistry,
     storage,
@@ -518,49 +521,63 @@ const makeLiveSessionRuntime: Effect.Effect<
 
   return {
     sendUserMessage: (input) =>
-      sendUserMessage(input).pipe(
-        Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
+      serializeCommand(
+        sendUserMessage(input).pipe(
+          Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
+        ),
       ),
 
     recordToolResult: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.recordToolResult(input)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
+      serializeCommand(
+        requireSessionBranch(input).pipe(
+          Effect.flatMap(() => agentLoop.recordToolResult(input)),
+          Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
+        ),
       ),
 
     invokeTool: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.invokeTool(input)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
+      serializeCommand(
+        requireSessionBranch(input).pipe(
+          Effect.flatMap(() => agentLoop.invokeTool(input)),
+          Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
+        ),
       ),
 
     steer: (command) =>
-      requireSessionBranch(command).pipe(
-        Effect.flatMap(() => agentLoop.steer(command)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
+      serializeCommand(
+        requireSessionBranch(command).pipe(
+          Effect.flatMap(() => agentLoop.steer(command)),
+          Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
+        ),
       ),
 
     respondInteraction: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.respondInteraction(input)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
+      serializeCommand(
+        requireSessionBranch(input).pipe(
+          Effect.flatMap(() => agentLoop.respondInteraction(input)),
+          Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
+        ),
       ),
 
     runPrompt: (input: RunPromptInput) =>
-      agentLoop.runOnce(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentRunError({
-              message: cause.message,
-              cause,
-            }),
+      serializeCommand(
+        agentLoop.runOnce(input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentRunError({
+                message: cause.message,
+                cause,
+              }),
+          ),
         ),
       ),
 
     queueFollowUp: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.queueFollowUp(input)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
+      serializeCommand(
+        requireSessionBranch(input).pipe(
+          Effect.flatMap(() => agentLoop.queueFollowUp(input)),
+          Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
+        ),
       ),
 
     drainQueuedMessages: (input) =>
@@ -640,9 +657,9 @@ const makeLiveSessionRuntime: Effect.Effect<
         return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
-    terminateSession: (sessionId) => agentLoop.terminateSession(sessionId),
+    terminateSession: (sessionId) => serializeCommand(agentLoop.terminateSession(sessionId)),
 
-    restoreSession: (sessionId) => agentLoop.restoreSession(sessionId),
+    restoreSession: (sessionId) => serializeCommand(agentLoop.restoreSession(sessionId)),
   } satisfies SessionRuntimeService
 })
 
@@ -734,8 +751,10 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     SessionRuntimeEntity.toLayer(
       makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
       {
+        // Long-lived read streams (watchState) must not occupy the entity
+        // server mailbox; mutating commands serialize through `commandGate`
+        // inside the per-entity SessionRuntime service.
         concurrency: "unbounded",
-        mailboxCapacity: "unbounded",
       },
     ).pipe(Layer.provideMerge(AgentLoop.Live(config)))
 

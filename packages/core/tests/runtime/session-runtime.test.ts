@@ -903,11 +903,15 @@ describe("SessionRuntime", () => {
           yield* controls.emitAll(0)
           const messages = yield* waitFor(
             storage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 2,
+            (current) => current.filter((message) => message.role === "assistant").length === 3,
             5000,
             "interjected turn completion",
           )
-          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+          expect(
+            messages
+              .filter((message) => message.role === "assistant")
+              .map((message) => message.parts.find((part) => part.type === "text")?.text),
+          ).toEqual(["first reply", "steer reply", "queued reply"])
           yield* controls.assertDone()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )

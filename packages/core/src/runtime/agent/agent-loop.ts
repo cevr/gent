@@ -1131,7 +1131,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 )
 
             const forkTurn = (startState: RunningState): Effect.Effect<void> =>
-              Effect.forkIn(runTurnFiber(startState), loopScope).pipe(Effect.asVoid)
+              Effect.forkIn(runTurnFiber(startState), loopScope, { startImmediately: true }).pipe(
+                Effect.asVoid,
+              )
 
             // Public dispatch surface — replaces `actor.call(Event)` /
             // `actor.send(Event)`. Most events serialize via
