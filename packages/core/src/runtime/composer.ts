@@ -10,6 +10,7 @@
 import { Layer, type Config, type Context, type FileSystem, type Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -98,6 +99,7 @@ type EphemeralExtensionRequires =
   | ModelRegistry
 
 const storageOverrideTags = [
+  Storage,
   SqlClient.SqlClient,
   SessionStorage,
   BranchStorage,
