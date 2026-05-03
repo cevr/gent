@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
@@ -72,7 +73,7 @@ describe("SessionProfileCache", () => {
       }).pipe(Effect.provide(sessionProfileCacheLive))
 
       expect(resolvedProfile).toBe(initialProfile)
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive))),
   )
 
   it.scopedLive("keeps permission rules scoped to the session cwd instead of the launch cwd", () =>
@@ -132,6 +133,6 @@ describe("SessionProfileCache", () => {
         expect(launchPermission).toBe("denied")
         expect(secondaryPermission).toBe("allowed")
       }).pipe(Effect.provide(sessionProfileCacheLive))
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive))),
   )
 })

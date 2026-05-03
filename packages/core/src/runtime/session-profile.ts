@@ -19,6 +19,7 @@ import {
   type Scope as ScopeType,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { GentPlatform } from "./gent-platform.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -83,7 +84,12 @@ export class SessionProfileCache extends Context.Service<
   ): Layer.Layer<
     SessionProfileCache,
     never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | ScopeType.Scope
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner
+    | ConfigService
+    | ScopeType.Scope
+    | GentPlatform
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -92,6 +98,7 @@ export class SessionProfileCache extends Context.Service<
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
+        const platform = yield* GentPlatform
         const initialCache = new Map<string, SessionProfile>(
           (config.initialProfiles ?? []).map((profile) => [pathSvc.resolve(profile.cwd), profile]),
         )
@@ -108,6 +115,7 @@ export class SessionProfileCache extends Context.Service<
           Layer.succeed(Path.Path, pathSvc),
           Layer.succeed(ChildProcessSpawner, spawner),
           Layer.succeed(ConfigService, configService),
+          Layer.succeed(GentPlatform, platform),
         )
 
         const initProfile = (cwd: string) =>

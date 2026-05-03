@@ -7,6 +7,7 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Context, Effect, Schema } from "effect"
 import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { ToolRunner } from "../../src/extensions/internal.js"
 import { ToolResultPart } from "../../src/domain/message.js"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
@@ -303,7 +304,7 @@ const callMcp = (
     body: encodeJsonUnknown(payload),
   })
 describe("codemode proxy", () => {
-  it.live("dispatches known tool to runTool", () =>
+  it.scopedLive("dispatches known tool to runTool", () =>
     Effect.gen(function* () {
       const calls: Array<{
         toolName: string
@@ -325,32 +326,25 @@ describe("codemode proxy", () => {
             }),
           ),
       })
-      yield* Effect.acquireUseRelease(
-        Effect.succeed(server),
-        (server) =>
-          Effect.gen(function* () {
-            const response = yield* Effect.promise(() =>
-              callMcp(server.url, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "tools/call",
-                params: {
-                  name: "execute",
-                  arguments: { code: 'return gent.echo({ text: "hello" })' },
-                },
-              }),
-            )
-            const result = yield* parseSseResult(response)
-            expect(calls.length).toBe(1)
-            expect(calls[0]!.toolName).toBe("echo")
-            expect(calls[0]!.args).toEqual({ text: "hello" })
-            expect(result).toBeDefined()
-          }),
-        (server) => Effect.sync(() => server.stop()),
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "hello" })' },
+          },
+        }),
       )
-    }),
+      const result = yield* parseSseResult(response)
+      expect(calls.length).toBe(1)
+      expect(calls[0]!.toolName).toBe("echo")
+      expect(calls[0]!.args).toEqual({ text: "hello" })
+      expect(result).toBeDefined()
+    }).pipe(Effect.provide(BunGentPlatformLive)),
   )
-  it.live("rejects unknown tool in proxy", () =>
+  it.scopedLive("rejects unknown tool in proxy", () =>
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({
         tools: [],
@@ -358,27 +352,20 @@ describe("codemode proxy", () => {
           throw new Error("should not be called")
         },
       })
-      yield* Effect.acquireUseRelease(
-        Effect.succeed(server),
-        (server) =>
-          Effect.gen(function* () {
-            const response = yield* Effect.promise(() =>
-              callMcp(server.url, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "tools/call",
-                params: {
-                  name: "execute",
-                  arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
-                },
-              }),
-            )
-            const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
-            expect(result?.["isError"]).toBe(true)
-          }),
-        (server) => Effect.sync(() => server.stop()),
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
+          },
+        }),
       )
-    }),
+      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
+      expect(result?.["isError"]).toBe(true)
+    }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })
 // ── Codemode proxy via real makeAcpRunTool boundary ──
@@ -399,7 +386,7 @@ const makeStubHostCtx = (): Omit<ToolCapabilityContext, "toolCallId"> => ({
   interaction: {} as ExtensionHostContext["interaction"],
 })
 describe("codemode proxy via makeAcpRunTool", () => {
-  it.live("runs through the boundary helper and reaches ToolRunner", () =>
+  it.scopedLive("runs through the boundary helper and reaches ToolRunner", () =>
     Effect.gen(function* () {
       const calls: Array<{
         toolCallId: ToolCallId
@@ -435,35 +422,28 @@ describe("codemode proxy via makeAcpRunTool", () => {
         execute: () => Effect.succeed({ echoed: true }),
       })
       const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
-      yield* Effect.acquireUseRelease(
-        Effect.succeed(server),
-        (server) =>
-          Effect.gen(function* () {
-            const response = yield* Effect.promise(() =>
-              callMcp(server.url, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "tools/call",
-                params: {
-                  name: "execute",
-                  arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
-                },
-              }),
-            )
-            const result = yield* parseSseResult(response)
-            expect(calls.length).toBe(1)
-            expect(calls[0]!.toolName).toBe("echo")
-            expect(calls[0]!.input).toEqual({ text: "via-boundary" })
-            // Each invocation generates a fresh toolCallId via crypto.randomUUID().
-            expect(typeof calls[0]!.toolCallId).toBe("string")
-            expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
-            expect(result).toBeDefined()
-          }),
-        (server) => Effect.sync(() => server.stop()),
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
+          },
+        }),
       )
-    }),
+      const result = yield* parseSseResult(response)
+      expect(calls.length).toBe(1)
+      expect(calls[0]!.toolName).toBe("echo")
+      expect(calls[0]!.input).toEqual({ text: "via-boundary" })
+      // Each invocation generates a fresh toolCallId via crypto.randomUUID().
+      expect(typeof calls[0]!.toolCallId).toBe("string")
+      expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
+      expect(result).toBeDefined()
+    }).pipe(Effect.provide(BunGentPlatformLive)),
   )
-  it.live("propagates ToolRunner errors back through the SDK boundary", () =>
+  it.scopedLive("propagates ToolRunner errors back through the SDK boundary", () =>
     Effect.gen(function* () {
       const failingToolRunner = ToolRunner.of({
         run: () => Effect.die("tool runner exploded"),
@@ -480,29 +460,22 @@ describe("codemode proxy via makeAcpRunTool", () => {
         execute: () => Effect.succeed({ echoed: true }),
       })
       const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
-      yield* Effect.acquireUseRelease(
-        Effect.succeed(server),
-        (server) =>
-          Effect.gen(function* () {
-            const response = yield* Effect.promise(() =>
-              callMcp(server.url, {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "tools/call",
-                params: {
-                  name: "execute",
-                  arguments: { code: 'return gent.echo({ text: "fail" })' },
-                },
-              }),
-            )
-            // Failure surfaces through the codemode SSE response as an error
-            // payload, not a thrown native Error — the boundary must not let
-            // the Effect die-cause crash the codemode server.
-            const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
-            expect(result?.["isError"]).toBe(true)
-          }),
-        (server) => Effect.sync(() => server.stop()),
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "fail" })' },
+          },
+        }),
       )
-    }),
+      // Failure surfaces through the codemode SSE response as an error
+      // payload, not a thrown native Error — the boundary must not let
+      // the Effect die-cause crash the codemode server.
+      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
+      expect(result?.["isError"]).toBe(true)
+    }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })

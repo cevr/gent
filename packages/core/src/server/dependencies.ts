@@ -164,13 +164,13 @@ export const createDependencies = (config: DependenciesConfig) => {
   // and ConfigService + RuntimePlatform + platform services for profile resolution.
   const extensionRegistryLive = Layer.provide(
     profileLayers,
-    Layer.mergeAll(storageLive, configServiceLive, runtimePlatformLive),
+    Layer.mergeAll(storageLive, configServiceLive, runtimePlatformLive, BunGentPlatformLive),
   )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
   )
-  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, BunGentPlatformLive)
+  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer

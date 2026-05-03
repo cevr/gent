@@ -4,7 +4,8 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, type Layer } from "effect"
+import { Effect, Layer } from "effect"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { ref } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { textStep } from "@gent/core/debug/provider"
@@ -64,7 +65,7 @@ const setupSkillsExtension = Effect.provide(
       },
     } satisfies LoadedExtension
   }),
-  BunServices.layer,
+  Layer.merge(BunServices.layer, BunGentPlatformLive),
 )
 
 describe("SkillsExtension via RPC", () => {

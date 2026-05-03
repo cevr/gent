@@ -282,7 +282,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         ),
       )
     }),
-  ).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)))
 }
 
 // ── Test helpers ──

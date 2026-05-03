@@ -1,6 +1,7 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { GentPlatform } from "../gent-platform.js"
 import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import { ExtensionId } from "../../domain/ids.js"
@@ -238,13 +239,14 @@ export const setupExtension = (
 ): Effect.Effect<
   LoadedExtension,
   ExtensionLoadError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 > =>
   Effect.gen(function* () {
     const { extension, scope, sourcePath } = discovered
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const spawner = yield* ChildProcessSpawner
+    const platform = yield* GentPlatform
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
       extensionId: extension.manifest.id,
       effect: () =>
@@ -255,6 +257,7 @@ export const setupExtension = (
           fs,
           path,
           spawner,
+          platform,
         }),
       failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
       defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,

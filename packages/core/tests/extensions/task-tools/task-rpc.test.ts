@@ -11,7 +11,8 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
@@ -32,7 +33,7 @@ const setupTaskExt = Effect.provide(
     "/test/cwd",
     "/test/home",
   ),
-  BunServices.layer,
+  Layer.merge(BunServices.layer, BunGentPlatformLive),
 )
 
 // Hoisted refs — every test reuses the same capability tokens.

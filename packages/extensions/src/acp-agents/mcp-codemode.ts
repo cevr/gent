@@ -9,13 +9,12 @@
  *
  * @module
  */
-import { Effect, Schema } from "effect"
+import { Effect, Schema, type Scope } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { getToolId, type ToolToken } from "@gent/core/extensions/api"
-import { inspectValue, startCodemodeListener } from "./mcp-codemode-adapter.js"
+import { GentPlatform, getToolId, type ToolToken } from "@gent/core/extensions/api"
 
 export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
@@ -33,7 +32,6 @@ export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCode
 export interface CodemodeServer {
   readonly url: string
   readonly port: number
-  readonly stop: () => void
 }
 
 export interface CodemodeConfig {
@@ -125,6 +123,7 @@ const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig[
 const createMcpServerForRequest = (
   proxy: ReturnType<typeof makeGentProxy>,
   toolDescription: string,
+  inspect: (value: unknown) => string,
 ) => {
   const server = new Server({ name: "gent", version: "0.0.0" }, { capabilities: { tools: {} } })
 
@@ -167,7 +166,7 @@ const createMcpServerForRequest = (
         let text: string
         if (value === undefined) text = "(no result)"
         else if (typeof value === "string") text = value
-        else text = inspectValue(value)
+        else text = inspect(value)
         return { content: [{ type: "text" as const, text }] }
       })
       .catch((err: unknown) => ({
@@ -186,8 +185,11 @@ const createMcpServerForRequest = (
 
 // ── Server startup ──
 
-export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<CodemodeServer> =>
-  Effect.sync(() => {
+export const startCodemodeServer = (
+  config: CodemodeConfig,
+): Effect.Effect<CodemodeServer, never, GentPlatform | Scope.Scope> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
     const { tools, runTool } = config
     const proxy = makeGentProxy(tools, runTool)
     const toolDescription = generateToolDescription(tools)
@@ -195,11 +197,11 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
     // Stateless: fresh Server+Transport per request. MCP SDK's Server.connect()
     // can only be called once per instance, so we create a new server for each
     // incoming request.
-    const listener = startCodemodeListener({
+    const listener = yield* platform.serve({
       fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/mcp" && req.method === "POST") {
-          const mcpServer = createMcpServerForRequest(proxy, toolDescription)
+          const mcpServer = createMcpServerForRequest(proxy, toolDescription, platform.inspect)
           const transport = new WebStandardStreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
           })
@@ -214,6 +216,5 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
     return {
       url,
       port: listener.port,
-      stop: listener.stop,
     } satisfies CodemodeServer
   })

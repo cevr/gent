@@ -22,10 +22,9 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
+import { GentPlatform, isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
-import { whichExecutor } from "./which-adapter.js"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,
@@ -124,6 +123,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -304,7 +304,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const resolveBinary = Effect.gen(function* () {
           // Try PATH first
-          const fromPath = yield* Effect.sync(whichExecutor)
+          const fromPath = yield* platform.which("executor")
           if (fromPath) return fromPath
 
           // Fallback: package resolution → bootstrap if needed

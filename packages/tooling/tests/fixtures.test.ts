@@ -120,8 +120,9 @@ const CASES: ReadonlyArray<RuleCase> = [
   {
     rule: "gent/no-bun-outside-adapter",
     invalid: "no-bun-outside-adapter.invalid.ts",
-    // valid file ends in `-adapter.ts` so the path-allowlist exempts it
-    valid: "no-bun-outside-adapter.valid-adapter.ts",
+    // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
+    // GentPlatform live impl. That path is the only allowlist entry.
+    valid: "runtime/gent-platform-bun.ts",
     // 5 distinct Bun.* member expressions in the invalid fixture
     expectedCount: 5,
   },

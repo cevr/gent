@@ -38,3 +38,13 @@ export const writeFileString = (path: string, content: string) =>
       return yield* fs.writeFileString(path, content)
     }),
   )
+
+export const readFileStringOrNull = (path: string): Promise<string | null> =>
+  runtime.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const exists = yield* fs.exists(path)
+      if (!exists) return null
+      return yield* fs.readFileString(path)
+    }).pipe(Effect.orElseSucceed(() => null)),
+  )

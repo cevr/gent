@@ -112,8 +112,6 @@
     "./runtime/prompt-presenter-live.js": "./src/runtime/prompt-presenter-live.ts",
     "./runtime/log-paths": "./src/runtime/log-paths.ts",
     "./runtime/log-paths.js": "./src/runtime/log-paths.ts",
-    "./runtime/id-service": "./src/runtime/id-service.ts",
-    "./runtime/id-service.js": "./src/runtime/id-service.ts",
     "./runtime/gent-platform": "./src/runtime/gent-platform.ts",
     "./runtime/gent-platform.js": "./src/runtime/gent-platform.ts",
     "./runtime/gent-platform-bun": "./src/runtime/gent-platform-bun.ts",

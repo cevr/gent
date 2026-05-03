@@ -25,10 +25,12 @@
  *
  * @module
  */
-import { Effect, Schema, Stream } from "effect"
+import { Context, Effect, Exit, Schema, Scope, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
+  GentPlatform,
   TurnError,
+  type GentPlatformShape,
   type TurnContext,
   type TurnExecutor,
   type TurnStreamPart,
@@ -266,6 +268,7 @@ const mapSdkMessageStream = (
 interface ClaudeCodeProcess {
   readonly session: ClaudeSdkSession
   readonly codemode?: CodemodeServer
+  readonly codemodeScope?: Scope.Closeable
   readonly fingerprint: string
 }
 
@@ -341,8 +344,10 @@ export type ClaudeCodeTokenReader = () => Effect.Effect<string, { readonly messa
 
 export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
+  platform: GentPlatformShape,
   tokenReader: ClaudeCodeTokenReader = readClaudeCodeOAuthToken,
 ): ClaudeCodeSessionManager => {
+  const platformContext = Context.make(GentPlatform, platform)
   const sessions = new Map<string, ClaudeCodeProcess>()
   // Parallel index from driverId → set of cache keys. Lets `invalidateDriver`
   // run in O(matched) rather than O(all sessions). Maintained alongside
@@ -352,7 +357,9 @@ export const createClaudeCodeSessionManager = (
   const tearDown = (entry: ClaudeCodeProcess): Effect.Effect<void> =>
     Effect.gen(function* () {
       yield* entry.session.close
-      entry.codemode?.stop()
+      if (entry.codemodeScope !== undefined) {
+        yield* Scope.close(entry.codemodeScope, Exit.void).pipe(Effect.ignore)
+      }
     })
 
   const removeFromDriverIndex = (driverId: string, k: string) => {
@@ -393,12 +400,18 @@ export const createClaudeCodeSessionManager = (
       )
 
       let codemode: CodemodeServer | undefined
+      let codemodeScope: Scope.Closeable | undefined
       let mcpServers: { gent: { type: "http"; url: string } } | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
-        codemode = yield* startCodemodeServer(codemodeConfig)
+        codemodeScope = yield* Scope.make()
+        codemode = yield* startCodemodeServer(codemodeConfig).pipe(
+          Scope.provide(codemodeScope),
+          Effect.provide(platformContext),
+        )
         mcpServers = { gent: { type: "http", url: `${codemode.url}/mcp` } }
       }
 
+      const codemodeScopeRef = codemodeScope
       const session = yield* sdk
         .createSession({
           cwd,
@@ -408,13 +421,18 @@ export const createClaudeCodeSessionManager = (
         })
         .pipe(
           Effect.tapError(() =>
-            Effect.sync(() => {
-              codemode?.stop()
-            }),
+            codemodeScopeRef === undefined
+              ? Effect.void
+              : Scope.close(codemodeScopeRef, Exit.void).pipe(Effect.ignore),
           ),
         )
 
-      sessions.set(k, { session, codemode, fingerprint })
+      sessions.set(k, {
+        session,
+        codemode,
+        ...(codemodeScope !== undefined ? { codemodeScope } : {}),
+        fingerprint,
+      })
       const driverSet = byDriver.get(key.driverId) ?? new Set<string>()
       driverSet.add(k)
       byDriver.set(key.driverId, driverSet)

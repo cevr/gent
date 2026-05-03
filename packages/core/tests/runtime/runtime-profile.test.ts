@@ -32,6 +32,7 @@ import {
   withReadOnly,
 } from "@gent/core/extensions/api"
 import { ConfigService } from "../../src/runtime/config-service"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   buildExtensionLayers,
@@ -45,6 +46,7 @@ const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
   Path.layer,
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  BunGentPlatformLive,
 )
 
 const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), SqliteStorage.TestWithSql())

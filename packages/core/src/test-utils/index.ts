@@ -1,6 +1,8 @@
 import { Clock, Context, DateTime, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
+import { GentPlatform } from "../runtime/gent-platform.js"
+import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
@@ -154,10 +156,13 @@ export const assertSequence = (
 
 // ── Test Extension Setup Context ──
 
-const _platformServices = Effect.runSync(Effect.scoped(Layer.build(BunServices.layer)))
+const _platformServices = Effect.runSync(
+  Effect.scoped(Layer.build(Layer.merge(BunServices.layer, BunGentPlatformLive))),
+)
 const _testFs = Context.get(_platformServices, FileSystem.FileSystem)
 const _testPath = Context.get(_platformServices, Path.Path)
 const _testSpawner = Context.get(_platformServices, ChildProcessSpawner)
+const _testPlatform = Context.get(_platformServices, GentPlatform)
 
 /** Pre-built ExtensionSetupContext for tests. Platform services are captured once at module load. */
 export const testSetupCtx = (
@@ -169,6 +174,7 @@ export const testSetupCtx = (
   fs: _testFs,
   path: _testPath,
   spawner: _testSpawner,
+  platform: _testPlatform,
 })
 
 // Mock Helpers

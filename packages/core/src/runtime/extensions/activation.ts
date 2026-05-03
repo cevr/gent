@@ -1,6 +1,7 @@
 import { Cause, Effect } from "effect"
 import type { FileSystem, Path, Scope } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { GentPlatform } from "../gent-platform.js"
 import type {
   FailedExtension,
   FailedExtensionPhase,
@@ -66,7 +67,7 @@ export const setupBuiltinExtensions = (params: {
 }): Effect.Effect<
   ExtensionActivationResult,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 > =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
@@ -127,7 +128,7 @@ export const setupDiscoveredExtensions = (params: {
 }): Effect.Effect<
   ExtensionActivationResult,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 > =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []

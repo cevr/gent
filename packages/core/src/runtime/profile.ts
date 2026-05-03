@@ -32,6 +32,7 @@ import {
   evaluatePermissionRules,
 } from "../domain/permission.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { GentPlatform } from "./gent-platform.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { buildResourceLayer } from "./extensions/resource-host/index.js"
@@ -166,7 +167,12 @@ export const resolveRuntimeProfile = (
 ): Effect.Effect<
   RuntimeProfile,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | Scope.Scope
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner
+  | ConfigService
+  | Scope.Scope
+  | GentPlatform
 > =>
   Effect.gen(function* () {
     const path = yield* Path.Path

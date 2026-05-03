@@ -1,4 +1,6 @@
-import { Config, Effect, Option } from "effect"
+import { Config, Effect, Layer, Option } from "effect"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 
 /**
  * Detect if terminal is using dark or light mode.
@@ -25,11 +27,15 @@ export function detectColorScheme(): "dark" | "light" {
 
   // Check macOS system appearance
   if (process.platform === "darwin") {
-    const proc = Bun.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    if (proc.exitCode === 0) {
+    const exitCode = Effect.runSync(
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const result = yield* platform.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"])
+        return result.exitCode
+        // @effect-diagnostics-next-line strictEffectProvide:off
+      }).pipe(Effect.provide(Layer.fresh(BunGentPlatformLive))),
+    )
+    if (exitCode === 0) {
       return "dark"
     }
     return "light"

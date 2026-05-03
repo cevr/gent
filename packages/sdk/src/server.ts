@@ -41,7 +41,8 @@ import {
   signalIfIdentityOwned,
 } from "./server-registry.js"
 import { findOpenPort } from "./supervisor.js"
-import { randomServerId } from "./random-id-adapter.js"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
@@ -169,6 +170,7 @@ const buildOwnedServer = (
   Effect.provide(
     Effect.gen(function* () {
       const scope = yield* Effect.scope
+      const platform = yield* GentPlatform
       const port = yield* Effect.promise(findOpenPort).pipe(
         Effect.mapError(
           (error) =>
@@ -177,7 +179,7 @@ const buildOwnedServer = (
       )
       const url = `http://127.0.0.1:${port}/rpc`
       const home = resolveHome(options, stateSpec)
-      const serverId = randomServerId()
+      const serverId = yield* platform.randomId
       const buildFingerprint = yield* resolveBuildFingerprint.pipe(
         // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(BunServices.layer),
@@ -281,7 +283,7 @@ const buildOwnedServer = (
 
       return server
     }),
-    BunFileSystem.layer,
+    Layer.merge(BunFileSystem.layer, BunGentPlatformLive),
   )
 
 // ── Probe an existing server via identity endpoint ──

@@ -19,6 +19,7 @@ import { ChildProcess } from "effect/unstable/process"
 // `ChildProcessSpawner` re-exported from `effect/unstable/process` is a
 // namespace — for the runtime tag value we need the deep module path.
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { GentPlatform, type GentPlatformShape } from "@gent/core/extensions/api"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import { AcpError, makeAcpConnection, type AcpClosedError, type AcpConnection } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
@@ -33,6 +34,7 @@ interface AcpProcess {
   readonly scope: Scope.Closeable
   readonly procScope: Scope.Closeable
   readonly codemode?: CodemodeServer
+  readonly codemodeScope?: Scope.Closeable
   readonly fingerprint: string
 }
 
@@ -76,8 +78,10 @@ const fingerprintSession = (
  */
 export const createAcpSessionManager = (
   spawner: ChildProcessSpawner["Service"],
+  platform: GentPlatformShape,
 ): AcpSessionManager => {
   const spawnerContext = Context.make(ChildProcessSpawner, spawner)
+  const platformContext = Context.make(GentPlatform, platform)
   const sessions = new Map<string, AcpProcess>()
   const byDriver = new Map<string, Set<string>>()
 
@@ -94,7 +98,9 @@ export const createAcpSessionManager = (
       yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
       yield* entry.killProc
       yield* Scope.close(entry.procScope, Exit.void).pipe(Effect.ignore)
-      entry.codemode?.stop()
+      if (entry.codemodeScope !== undefined) {
+        yield* Scope.close(entry.codemodeScope, Exit.void).pipe(Effect.ignore)
+      }
       sessions.delete(k)
     })
 
@@ -147,8 +153,12 @@ export const createAcpSessionManager = (
 
       // Start codemode MCP server if tools are available
       let codemode: CodemodeServer | undefined
+      let codemodeScope: Scope.Closeable | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
+        codemodeScope = yield* Scope.make()
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
+          Scope.provide(codemodeScope),
+          Effect.provide(platformContext),
           Effect.tapError(() =>
             killProc.pipe(Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore))),
           ),
@@ -157,14 +167,16 @@ export const createAcpSessionManager = (
 
       // Create a long-lived scope for the connection's fibers
       const scope = yield* Scope.make()
-      const codemodeRef = codemode
+      const codemodeScopeRef = codemodeScope
 
       // Cleanup helper — kill process + close scopes + stop codemode on failure
       const cleanup = Effect.gen(function* () {
         yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
         yield* killProc
         yield* Scope.close(procScope, Exit.void).pipe(Effect.ignore)
-        codemodeRef?.stop()
+        if (codemodeScopeRef !== undefined) {
+          yield* Scope.close(codemodeScopeRef, Exit.void).pipe(Effect.ignore)
+        }
       })
 
       // Create ACP connection over stdio (within the session scope)
@@ -210,6 +222,7 @@ export const createAcpSessionManager = (
         scope,
         procScope,
         codemode,
+        ...(codemodeScope !== undefined ? { codemodeScope } : {}),
         fingerprint,
       }
       sessions.set(k, entry)

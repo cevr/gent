@@ -135,7 +135,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
       return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
     }),
-  ).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)))
 }
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)

@@ -1,6 +1,7 @@
 import type { Context, Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { GentPlatformShape } from "../runtime/gent-platform.js"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { ToolToken } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
@@ -356,6 +357,8 @@ export interface ExtensionSetupContext {
   readonly path: Path.Path
   /** Platform ChildProcessSpawner service (captured from Effect context at setup time). */
   readonly spawner: ChildProcessSpawner["Service"]
+  /** GentPlatform service (captured from Effect context at setup time). */
+  readonly platform: GentPlatformShape
 }
 
 export interface GentExtension {

@@ -8,9 +8,12 @@
 import { createSignal } from "solid-js"
 import { isRecord } from "@gent/core/domain/guards.js"
 import { homedir } from "os"
-import { makeDirectory, writeFileString } from "../platform/fs-runtime-boundary"
+import {
+  makeDirectory,
+  readFileStringOrNull,
+  writeFileString,
+} from "../platform/fs-runtime-boundary"
 import { joinPath } from "../platform/path-runtime"
-import { readPromptHistoryFile } from "./prompt-history-adapter"
 
 const MAX_ENTRIES = 100
 const CACHE_DIR = joinPath(homedir(), ".cache", "gent")
@@ -86,7 +89,7 @@ export function usePromptHistory(): PromptHistory {
   const ensureLoaded = () => {
     if (store.loaded) return
     store.loaded = true
-    void readPromptHistoryFile(HISTORY_PATH)
+    void readFileStringOrNull(HISTORY_PATH)
       .then((raw) => {
         if (raw === null || raw.length === 0) return
         const data: unknown = JSON.parse(raw)

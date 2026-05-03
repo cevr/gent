@@ -4,11 +4,13 @@ import { Cause, Effect, Layer, Path } from "effect"
 import type { GentExtension } from "../../src/domain/extension.js"
 import { setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "@gent/core/domain/ids"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
   Path.layer,
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  BunGentPlatformLive,
 )
 
 describe("setupExtension", () => {

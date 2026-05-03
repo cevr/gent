@@ -19,6 +19,7 @@ import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -92,7 +93,7 @@ describe("extension command RPCs", () => {
       "/test/cwd",
       "/test/home",
     ),
-    BunServices.layer,
+    Layer.merge(BunServices.layer, BunGentPlatformLive),
   )
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
@@ -466,6 +467,7 @@ describe("extension command RPCs", () => {
             Layer.provide(
               Layer.mergeAll(
                 BunServices.layer,
+                BunGentPlatformLive,
                 ConfigService.Test(),
                 SqliteStorage.MemoryWithSql(),
               ),
@@ -492,7 +494,7 @@ describe("extension command RPCs", () => {
           expect(result).toBe(`live:${profileCwd}`)
         }).pipe(Effect.timeout("4 seconds")),
       )
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive))),
   )
   it.live("RPC listStatus returns structurally tagged extension health", () =>
     Effect.gen(function* () {

@@ -7,6 +7,7 @@ import type {
   GentExtension,
   LoadedExtension,
 } from "../../src/domain/extension.js"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -23,6 +24,7 @@ const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
   Path.layer,
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  BunGentPlatformLive,
 )
 
 const makeBuiltin = (

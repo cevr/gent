@@ -20,13 +20,18 @@
  *   6. `manager.disposeAll` closes every cached session.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Stream } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
 import { createClaudeCodeSessionManager } from "@gent/extensions/acp-agents/claude-code-executor"
 import type { ExternalSessionKey } from "@gent/extensions/acp-agents/executor"
 import type {
   ClaudeSdkServiceShape,
   ClaudeSdkSession,
 } from "@gent/extensions/acp-agents/claude-sdk"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { GentPlatform } from "@gent/core/runtime/gent-platform"
+
+const _platformContext = Effect.runSync(Effect.scoped(Layer.build(BunGentPlatformLive)))
+const _testPlatform = Context.get(_platformContext, GentPlatform)
 interface CountingSession extends ClaudeSdkSession {
   readonly id: string
   closeCalls: number
@@ -64,7 +69,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("returns the same session for matching fingerprint", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       const a = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
       const b = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
       expect(a.session).toBe(b.session)
@@ -76,7 +81,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("rebuilds the session when systemPrompt changes", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-A", undefined)
       const second = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-B", undefined)
       expect(sessions).toHaveLength(2)
@@ -87,7 +92,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("rebuilds the session when cwd changes", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(key("g1"), "/cwd-a", "PROMPT", undefined)
       yield* manager.getOrCreate(key("g1"), "/cwd-b", "PROMPT", undefined)
       expect(sessions).toHaveLength(2)
@@ -97,7 +102,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("two branches of the same gent session do not share remote state", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(key("g1", "branch-1"), "/cwd", "PROMPT", undefined)
       yield* manager.getOrCreate(key("g1", "branch-2"), "/cwd", "PROMPT", undefined)
       expect(sessions).toHaveLength(2)
@@ -109,7 +114,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("two drivers serving the same branch do not share remote state", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(
         key("g1", "branch-1", "acp-claude-code"),
         "/cwd",
@@ -125,7 +130,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("invalidate closes the cached session", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
       yield* manager.invalidate(key("g1"))
       expect(sessions[0]?.closeCalls).toBe(1)
@@ -134,7 +139,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("invalidate is a no-op for unknown key", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.invalidate(key("does-not-exist"))
       expect(sessions).toHaveLength(0)
     }),
@@ -142,7 +147,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("invalidateDriver closes every session under the given driverId", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(
         key("g1", "branch-1", "acp-claude-code"),
         "/cwd",
@@ -166,7 +171,7 @@ describe("ClaudeCodeSessionManager", () => {
   it.live("disposeAll closes every cached session", () =>
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
-      const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
+      const manager = createClaudeCodeSessionManager(sdk, _testPlatform, stubTokenReader)
       yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
       yield* manager.getOrCreate(key("g2"), "/cwd", "PROMPT", undefined)
       yield* manager.disposeAll
