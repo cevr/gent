@@ -4,7 +4,7 @@
  * execute: run TypeScript in Executor's sandboxed runtime.
  * resume: continue a paused execution (waiting_for_interaction).
  *
- * Both read the actor snapshot to get the baseUrl, then delegate to
+ * Both read the executor runtime snapshot to get the baseUrl, then delegate to
  * ExecutorMcpBridge. isError results become Effect.fail.
  */
 

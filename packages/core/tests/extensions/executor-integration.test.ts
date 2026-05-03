@@ -7,8 +7,9 @@ import { describe, expect, it } from "effect-bun-test"
  * durability" test is gone. Public commands exercise the typed Executor
  * RPC/controller services end-to-end.
  */
-import { Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
+import { testSetupCtx } from "@gent/core/test-utils"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -30,6 +31,7 @@ import {
   ExecutorWrite,
 } from "@gent/extensions/executor/controller"
 import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
+import { ExecutorExtension } from "@gent/extensions/executor"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
@@ -37,6 +39,10 @@ import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "./helpers/test-preset"
 import { getToolEffect } from "@gent/core/extensions/api"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { AgentName } from "@gent/core/domain/agent"
+import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
 const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, never> =>
@@ -188,7 +194,7 @@ describe("Executor tools", () => {
       expect(exit._tag).toBe("Failure")
     }),
   )
-  it.live("execute fails when actor not Ready", () =>
+  it.live("execute fails when executor runtime is not ready", () =>
     Effect.gen(function* () {
       const bridgeLayer = ExecutorMcpBridge.Test({
         execute: () => Effect.succeed(successResult),
@@ -264,7 +270,7 @@ describe("Executor tools", () => {
       expect(exit._tag).toBe("Failure")
     }),
   )
-  it.live("resume fails when actor not Ready", () =>
+  it.live("resume fails when executor runtime is not ready", () =>
     Effect.gen(function* () {
       const bridgeLayer = ExecutorMcpBridge.Test({
         resume: () => Effect.succeed(successResult),
@@ -561,6 +567,69 @@ describe("Executor runtime lifecycle", () => {
           .pipe(Effect.timeout("8 seconds")),
       )
     },
+    10000,
+  )
+  it.live(
+    "built-in extension turnProjection contributes ready prompt and tool policy",
+    () =>
+      narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const contributions = yield* ExecutorExtension.setup(
+              testSetupCtx({ cwd: "/test", home: "/test-home" }),
+            )
+            const { extension: runtimeExtension } = makeExecutorExtension({
+              settings: { autoStart: true },
+            })
+            const extension: LoadedExtension = {
+              ...runtimeExtension,
+              manifest: ExecutorExtension.manifest,
+              contributions: {
+                ...runtimeExtension.contributions,
+                reactions: contributions.reactions,
+              },
+            }
+            const layerContext = yield* Layer.build(
+              Layer.merge(makeRuntimeLayer(extension), ActorEngine.Live),
+            )
+            const compiled = compileExtensionReactions([extension])
+            yield* waitFor(
+              Context.get(layerContext, ExecutorRead)
+                .snapshot()
+                .pipe(
+                  Effect.catchEager(() =>
+                    Effect.succeed(undefined as ExecutorSnapshotReply | undefined),
+                  ),
+                ),
+              (snapshot) => snapshot?.status === "ready",
+              3000,
+              "built-in executor ready",
+            )
+
+            const projection = yield* compiled
+              .resolveTurnProjection({
+                sessionId: "executor-projection-session" as never,
+                branchId: "executor-projection-branch" as never,
+                cwd: "/test",
+                home: "/test-home",
+                capabilityContext: layerContext as Context.Context<never>,
+                turn: {
+                  sessionId: "executor-projection-session" as never,
+                  branchId: "executor-projection-branch" as never,
+                  agent: getBuiltinAgent("cowork")!,
+                  allTools: [],
+                  agentName: AgentName.make("cowork"),
+                },
+              })
+              .pipe(Effect.provideContext(layerContext))
+
+            expect(projection.promptSections.map((section) => section.id)).toContain(
+              "executor-guidance",
+            )
+            expect(projection.policyFragments).toEqual([{}])
+          }).pipe(Effect.timeout("8 seconds")),
+        ),
+      ),
     10000,
   )
 })
