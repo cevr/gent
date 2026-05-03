@@ -11,7 +11,7 @@
  * and `gent/no-scope-brand-cast`.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Exit, Layer, Context, Scope } from "effect"
+import { Effect, Exit, Layer, Context, Scope, type Config } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import {
   type CwdProfile,
@@ -41,10 +41,13 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { RuntimePlatform, type RuntimePlatformShape } from "../../src/runtime/runtime-platform"
 import { ConfigService, type ConfigServiceService } from "../../src/runtime/config-service"
+import type { StorageError } from "../../src/domain/storage-error"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
 ) {}
+
+type RuntimeBuildError = StorageError | Config.ConfigError
 
 describe("scope brand type fences", () => {
   const serverParent = {
@@ -151,7 +154,7 @@ describe("scope brand type fences", () => {
     // Type-only assertion: the resulting layer's `Provides` channel
     // includes focused storage. If the explicit runtime builder dropped the override
     // family type, this satisfaction check would fail to compile.
-    const _typed: Layer.Layer<SessionStorage, never, never> = composed.layer
+    const _typed: Layer.Layer<SessionStorage, RuntimeBuildError, never> = composed.layer
     void _typed
     const _overrides: EphemeralRuntimeOverrides = baseOverrides()
     void _overrides
@@ -414,7 +417,7 @@ describe("scope brand type fences", () => {
     const provided = consumer.pipe(Effect.provide(composed.layer))
 
     // Type-only: the resulting effect must still require OtherService.
-    const _typed: Effect.Effect<string, never, OtherService> = provided
+    const _typed: Effect.Effect<string, RuntimeBuildError, OtherService> = provided
     void _typed
 
     expect(composed.profile.cwd).toBe("/tmp")

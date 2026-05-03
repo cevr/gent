@@ -131,7 +131,7 @@ export const buildEphemeralRuntime = <Provides>(
   inputs: EphemeralRuntimeInputs<Provides>,
 ): {
   readonly profile: EphemeralProfile
-  readonly layer: Layer.Layer<Provides | EphemeralOverrideProvides, never, never>
+  readonly layer: Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never>
 } => {
   // Strip owned services and the parent's memo map. Owned-service omission
   // prevents already-resolved parent instances from bleeding into the child;
@@ -195,6 +195,8 @@ export const buildEphemeralRuntime = <Provides>(
   return {
     profile,
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — builder recovers Provides at this boundary
-    layer: restoreErasedLayer<Provides | EphemeralOverrideProvides>(Layer.fresh(merged)),
+    layer: restoreErasedLayer<Provides | EphemeralOverrideProvides, EphemeralOverrideError>(
+      Layer.fresh(merged),
+    ),
   }
 }
