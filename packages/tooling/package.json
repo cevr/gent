@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/blanket-eslint-disable.test.ts",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/blanket-eslint-disable.test.ts tests/platform-duplication-guards.test.ts",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/fixtures.test.ts"
   }
 }

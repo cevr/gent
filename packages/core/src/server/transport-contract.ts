@@ -244,8 +244,7 @@ export { QueueSnapshot }
  *
  *  `branchId` is required because extension RPCs execute against the
  *  live session runtime, not a transport-local stub. Callers must pass the
- *  active branch so the runtime can construct a complete
- *  `CapabilityCoreContext` for the handler.
+ *  active branch so the runtime can construct the full extension host context.
  */
 export const ExtensionRpcRequestInput = Schema.Struct({
   sessionId: SessionId,

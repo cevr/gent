@@ -141,8 +141,6 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       // Public write request handlers may ask for the wide host surface
       // (`session.*`, `agent.*`, storage, etc.). Build the full
       // ExtensionHostContext here so handlers use the same boundary as tools.
-      // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
-      // dispatch where handlers author against `CapabilityCoreContext`.
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionRegistry: registry,
         ...(capabilityContext !== undefined ? { capabilityContext } : {}),
