@@ -33,7 +33,7 @@ export {
 
 export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./logger"
 
-export { GentTracerLive, clearTraceLogIfRoot, makeGentTracer, clearTraceLog } from "./tracer"
+export { GentTracerLive } from "./tracer"
 
 export {
   WideEvent,
