@@ -3,7 +3,6 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
-  ref,
   tool,
   ToolNeeds,
   type AgentDefinition,
@@ -12,7 +11,7 @@ import {
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand } from "../workflow-helpers.js"
-import { ArtifactRpc } from "../artifacts-protocol.js"
+import { saveArtifactBestEffort } from "../artifacts/store.js"
 
 const AuditConcernSchema = Schema.Struct({
   name: Schema.String,
@@ -313,15 +312,12 @@ export const AuditTool = tool({
     })
 
     // Persist as artifact for prompt projection
-    yield* ctx.extension
-      .request(ref(ArtifactRpc.Save), {
-        label: `Audit: ${report.findings.length} findings`,
-        sourceTool: "audit",
-        content: report.raw,
-        metadata: { findingCount: report.findings.length, paths },
-        branchId: ctx.branchId,
-      })
-      .pipe(Effect.ignoreCause)
+    yield* saveArtifactBestEffort(ctx.sessionId, ctx.branchId, {
+      label: `Audit: ${report.findings.length} findings`,
+      sourceTool: "audit",
+      content: report.raw,
+      metadata: { findingCount: report.findings.length, paths },
+    })
 
     if (mode === "report") {
       yield* ctx.interaction.present({

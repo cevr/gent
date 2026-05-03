@@ -1,10 +1,8 @@
 /**
  * Artifacts extension — generic artifact store with typed request RPCs.
  *
- * Any tool/extension can store artifacts via
- * `ctx.extension.request(ref(ArtifactRpc.Save), ...)`. Artifacts are
- * branch-aware, persist within a session, and project compact summaries
- * into the system prompt.
+ * Agent tools use `ArtifactsRead` / `ArtifactsWrite` directly. `ArtifactRpc`
+ * remains the public/client transport surface.
  */
 
 import { Effect, Schema } from "effect"
@@ -12,13 +10,12 @@ import {
   ArtifactId,
   defineExtension,
   defineResource,
-  ref,
   tool,
   ToolNeeds,
   type ToolContext,
 } from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "../artifacts-protocol.js"
-import { ArtifactsStoreLive } from "./store.js"
+import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
 
 export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
 
@@ -40,10 +37,8 @@ const ArtifactSaveTool = tool({
     ),
   }),
   execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolContext) {
-    const artifact = yield* ctx.extension.request(ref(ArtifactRpc.Save), {
-      ...params,
-      branchId: ctx.branchId,
-    })
+    const artifacts = yield* ArtifactsWrite
+    const artifact = yield* artifacts.save(ctx.sessionId, ctx.branchId, params)
     return { id: artifact.id, label: artifact.label, sourceTool: artifact.sourceTool }
   }),
 })
@@ -62,7 +57,8 @@ const ArtifactReadTool = tool({
       params.id !== undefined
         ? { _tag: "ById" as const, id: ArtifactId.make(params.id) }
         : { _tag: "BySource" as const, sourceTool: params.sourceTool ?? "", branchId: ctx.branchId }
-    const artifact = yield* ctx.extension.request(ref(ArtifactRpc.Read), { query })
+    const artifacts = yield* ArtifactsRead
+    const artifact = yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
     if (artifact === null) return { found: false }
     return { found: true, ...artifact }
   }),
@@ -95,7 +91,8 @@ const ArtifactUpdateTool = tool({
       params.find !== undefined && params.replace !== undefined
         ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
         : undefined
-    const artifact = yield* ctx.extension.request(ref(ArtifactRpc.Update), {
+    const artifacts = yield* ArtifactsWrite
+    const artifact = yield* artifacts.update(ctx.sessionId, ctx.branchId, {
       id: ArtifactId.make(params.id),
       patch,
       status: params.status,
@@ -114,7 +111,8 @@ const ArtifactClearTool = tool({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),
   }),
   execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolContext) {
-    yield* ctx.extension.request(ref(ArtifactRpc.Clear), { id: ArtifactId.make(params.id) })
+    const artifacts = yield* ArtifactsWrite
+    yield* artifacts.clear(ctx.sessionId, ctx.branchId, ArtifactId.make(params.id))
     return { cleared: true }
   }),
 })

@@ -5,7 +5,6 @@ import {
   defineAgent,
   getDurableAgentRunSessionId,
   makeRunSpec,
-  ref,
   tool,
   ToolNeeds,
   type AgentDefinition,
@@ -14,7 +13,7 @@ import {
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
-import { ArtifactRpc } from "../artifacts-protocol.js"
+import { saveArtifactBestEffort } from "../artifacts/store.js"
 
 export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewError", {
   message: Schema.String,
@@ -330,15 +329,12 @@ export const ReviewTool = tool({
     const summary = summarizeComments(report.comments)
 
     // Persist as artifact for prompt projection
-    yield* ctx.extension
-      .request(ref(ArtifactRpc.Save), {
-        label: `Review: ${summary.critical + summary.high + summary.medium + summary.low} findings`,
-        sourceTool: "review",
-        content: report.raw,
-        metadata: { summary, commentCount: report.comments.length },
-        branchId: ctx.branchId,
-      })
-      .pipe(Effect.ignoreCause)
+    yield* saveArtifactBestEffort(ctx.sessionId, ctx.branchId, {
+      label: `Review: ${summary.critical + summary.high + summary.medium + summary.low} findings`,
+      sourceTool: "review",
+      content: report.raw,
+      metadata: { summary, commentCount: report.comments.length },
+    })
 
     if (mode === "report") {
       return {

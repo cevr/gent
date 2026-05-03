@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, Layer, Option, Ref } from "effect"
 import {
   ArtifactId,
   type BranchId,
@@ -190,3 +190,15 @@ export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite> = L
     return Layer.merge(Layer.succeed(ArtifactsWrite, write), Layer.succeed(ArtifactsRead, read))
   }),
 )
+
+export const saveArtifactBestEffort = Effect.fn("Artifacts.saveBestEffort")(function* (
+  sessionId: SessionId,
+  branchId: BranchId,
+  input: ArtifactSaveInput,
+) {
+  const artifacts = yield* Effect.serviceOption(ArtifactsWrite)
+  return yield* Option.match(artifacts, {
+    onNone: () => Effect.void,
+    onSome: (store) => store.save(sessionId, branchId, input).pipe(Effect.asVoid),
+  })
+})

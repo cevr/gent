@@ -3,7 +3,6 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
-  ref,
   tool,
   ToolNeeds,
   type AgentDefinition,
@@ -12,7 +11,7 @@ import {
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText } from "./workflow-helpers.js"
-import { ArtifactRpc } from "./artifacts-protocol.js"
+import { saveArtifactBestEffort } from "./artifacts/store.js"
 
 export const PlanParams = Schema.Struct({
   prompt: Schema.String.annotate({ description: "What to plan" }),
@@ -221,15 +220,12 @@ export const PlanTool = tool({
 
       // Only persist approved or edited plans — rejected plans should not pollute artifacts
       if (reviewResult.decision !== "no") {
-        yield* ctx.extension
-          .request(ref(ArtifactRpc.Save), {
-            label: `Plan: ${params.prompt.slice(0, 60)}`,
-            sourceTool: "plan",
-            content: finalPlan,
-            path: reviewResult.path,
-            branchId: ctx.branchId,
-          })
-          .pipe(Effect.ignoreCause)
+        yield* saveArtifactBestEffort(ctx.sessionId, ctx.branchId, {
+          label: `Plan: ${params.prompt.slice(0, 60)}`,
+          sourceTool: "plan",
+          content: finalPlan,
+          path: reviewResult.path,
+        })
       }
 
       return {
@@ -251,14 +247,11 @@ export const PlanTool = tool({
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
     // Persist plan artifact even in fix mode
-    yield* ctx.extension
-      .request(ref(ArtifactRpc.Save), {
-        label: `Plan: ${params.prompt.slice(0, 60)}`,
-        sourceTool: "plan",
-        content: synthesizedPlan,
-        branchId: ctx.branchId,
-      })
-      .pipe(Effect.ignoreCause)
+    yield* saveArtifactBestEffort(ctx.sessionId, ctx.branchId, {
+      label: `Plan: ${params.prompt.slice(0, 60)}`,
+      sourceTool: "plan",
+      content: synthesizedPlan,
+    })
 
     return { mode, plan: synthesizedPlan, output: execOutput }
   }),

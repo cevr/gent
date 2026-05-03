@@ -1,10 +1,10 @@
 /**
  * Integration tests verifying that plan/audit/review tools
- * persist artifacts via ArtifactRpc.Save.
+ * persist artifacts via ArtifactsWrite.
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 
 // PlanTool/AuditTool/ReviewTool execution signatures inherit their
 // dependency channels from Gent metadata. Tests run
@@ -15,24 +15,33 @@ const narrowR = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E, nev
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import type { AgentName } from "@gent/core/domain/agent"
-import { ArtifactId, SessionId } from "@gent/core/domain/ids"
+import {
+  ArtifactId,
+  BranchId,
+  type BranchId as BranchIdType,
+  SessionId,
+} from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
-import { ref, getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/extensions/api"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
-import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import {
+  ArtifactsWrite,
+  type ArtifactSaveInput,
+  type ArtifactUpdateInput,
+} from "../../../../extensions/src/artifacts/store"
 
 // ── Spy helpers ──
 
 interface RequestCall {
-  extensionId: string
-  capabilityId: string
-  input: Record<string, unknown>
+  sessionId: SessionId
+  branchId: BranchIdType
+  input: ArtifactSaveInput
 }
 
 const fakeArtifact = (sourceTool: string): Artifact => ({
@@ -45,22 +54,20 @@ const fakeArtifact = (sourceTool: string): Artifact => ({
   updatedAt: Date.now(),
 })
 
-const ArtifactSaveRef = ref(ArtifactRpc.Save)
-
-const createRequestSpy = () => {
+const createArtifactSpy = () => {
   const calls: RequestCall[] = []
-  const request = (
-    capability: typeof ArtifactSaveRef,
-    input: Record<string, unknown>,
-  ): Effect.Effect<Artifact> => {
-    calls.push({
-      extensionId: capability.extensionId,
-      capabilityId: capability.capabilityId,
-      input,
-    })
-    return Effect.succeed(fakeArtifact(input["sourceTool"] as string))
+  const service = {
+    read: () => Effect.succeed<Artifact | null>(null),
+    list: () => Effect.succeed<ReadonlyArray<Artifact>>([]),
+    save: (sessionId: SessionId, branchId: BranchId, input: ArtifactSaveInput) => {
+      calls.push({ sessionId, branchId, input })
+      return Effect.succeed(fakeArtifact(input.sourceTool))
+    },
+    update: (_sessionId: SessionId, _branchId: BranchId, _input: ArtifactUpdateInput) =>
+      Effect.succeed<Artifact | null>(null),
+    clear: () => Effect.void,
   }
-  return { calls, request }
+  return { calls, layer: Layer.succeed(ArtifactsWrite, service) }
 }
 
 // ── Shared agent run stub ──
@@ -99,11 +106,8 @@ const runtimePlatformLayer = RuntimePlatform.Test({
 
 describe("PlanTool artifact persistence", () => {
   it.live("saves artifact on approved plan (decision=yes)", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun(),
@@ -119,24 +123,20 @@ describe("PlanTool artifact persistence", () => {
     return narrowR(
       getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(1)
-          expect(saves[0]!.input["sourceTool"]).toBe("plan")
-          expect(saves[0]!.input["label"]).toContain("Plan:")
-          expect(saves[0]!.input["branchId"]).toBe("test-branch")
+          expect(saves[0]!.input.sourceTool).toBe("plan")
+          expect(saves[0]!.input.label).toContain("Plan:")
+          expect(saves[0]!.branchId).toBe(BranchId.make("test-branch"))
         }),
+        Effect.provide(spy.layer),
       ),
     )
   })
 
   it.live("saves artifact on edited plan (decision=edit)", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun(),
@@ -157,22 +157,18 @@ describe("PlanTool artifact persistence", () => {
     return narrowR(
       getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(1)
-          expect(saves[0]!.input["content"]).toBe("edited plan content")
+          expect(saves[0]!.input.content).toBe("edited plan content")
         }),
+        Effect.provide(spy.layer),
       ),
     )
   })
 
   it.live("does NOT save artifact on rejected plan (decision=no)", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun(),
@@ -188,21 +184,17 @@ describe("PlanTool artifact persistence", () => {
     return narrowR(
       getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(0)
         }),
+        Effect.provide(spy.layer),
       ),
     )
   })
 
   it.live("fix mode saves artifact after execution", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun(),
@@ -212,12 +204,11 @@ describe("PlanTool artifact persistence", () => {
     return narrowR(
       getToolEffect(PlanTool)({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(1)
-          expect(saves[0]!.input["sourceTool"]).toBe("plan")
+          expect(saves[0]!.input.sourceTool).toBe("plan")
         }),
+        Effect.provide(spy.layer),
       ),
     )
   })
@@ -225,11 +216,8 @@ describe("PlanTool artifact persistence", () => {
 
 describe("AuditTool artifact persistence", () => {
   it.live("saves audit findings as artifact after synthesis", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun((prompt) => {
@@ -249,14 +237,13 @@ describe("AuditTool artifact persistence", () => {
     return narrowR(
       getToolEffect(AuditTool)({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(1)
-          expect(saves[0]!.input["sourceTool"]).toBe("audit")
-          expect(saves[0]!.input["label"]).toContain("Audit:")
-          expect(saves[0]!.input["metadata"]).toBeDefined()
+          expect(saves[0]!.input.sourceTool).toBe("audit")
+          expect(saves[0]!.input.label).toContain("Audit:")
+          expect(saves[0]!.input.metadata).toBeDefined()
         }),
+        Effect.provide(spy.layer),
       ),
     )
   })
@@ -264,7 +251,7 @@ describe("AuditTool artifact persistence", () => {
 
 describe("ReviewTool artifact persistence", () => {
   it.live("saves review comments as artifact after synthesis", () => {
-    const spy = createRequestSpy()
+    const spy = createArtifactSpy()
     const reviewJson = JSON.stringify([
       {
         file: "src/auth.ts",
@@ -276,9 +263,6 @@ describe("ReviewTool artifact persistence", () => {
     ])
 
     const ctx = testToolContext({
-      extension: {
-        request: spy.request as never,
-      },
       agent: {
         ...agentLookup,
         run: stubAgentRun(() => reviewJson),
@@ -288,15 +272,14 @@ describe("ReviewTool artifact persistence", () => {
     return narrowR(
       getToolEffect(ReviewTool)({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
         Effect.map(() => {
-          const saves = spy.calls.filter(
-            (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.capabilityId === "artifact.save",
-          )
+          const saves = spy.calls
           expect(saves.length).toBe(1)
-          expect(saves[0]!.input["sourceTool"]).toBe("review")
-          expect(saves[0]!.input["label"]).toContain("Review:")
-          expect(saves[0]!.input["metadata"]).toBeDefined()
+          expect(saves[0]!.input.sourceTool).toBe("review")
+          expect(saves[0]!.input.label).toContain("Review:")
+          expect(saves[0]!.input.metadata).toBeDefined()
         }),
         Effect.provide(runtimePlatformLayer),
+        Effect.provide(spy.layer),
       ),
     )
   })
