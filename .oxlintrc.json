@@ -100,7 +100,11 @@
       }
     },
     {
-      "files": ["**/extensions/src/anthropic/oauth.ts"],
+      "files": [
+        "**/extensions/src/anthropic/oauth.ts",
+        "**/core/src/runtime/agent/agent-runner.ts",
+        "**/sdk/src/supervisor.ts"
+      ],
       "rules": {
         "node/no-process-env": "off",
         "gent/no-direct-env": "off"

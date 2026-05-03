@@ -1218,7 +1218,7 @@ export const SubprocessRunner = (
                 ]
 
                 const env: Record<string, string | undefined> = {
-                  ...Bun.env,
+                  ...process.env,
                   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
                   ...(config.sharedServerUrl !== undefined
                     ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }

@@ -400,7 +400,7 @@ const spawnWorkerProcess = (
     const mode = options.mode ?? "default"
     const launch = yield* Effect.promise(() => resolveWorkerLaunch())
     const env = {
-      ...Bun.env,
+      ...process.env,
       ...options.env,
       GENT_PORT: String(port),
       GENT_SERVER_MODE: "worker",

@@ -559,7 +559,7 @@ const spawnClaudeCli = (): Effect.Effect<
   ProviderAuthError,
   ChildProcessSpawner.ChildProcessSpawner
 > => {
-  const env = { ...Bun.env, TERM: "dumb" }
+  const env = { ...process.env, TERM: "dumb" }
   return runProcess("claude", ["-p", ".", "--model", "haiku"], {
     env,
     timeout: Duration.millis(60_000),
@@ -735,7 +735,8 @@ export const getUserAgent = (): string =>
  */
 export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
   version: getCliVersion(),
-  entrypoint: Bun.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
+  // @effect-diagnostics-next-line processEnv:off — adapter site reads parent-process env to form an upstream billing header; Config layer already feeds the rest of the auth surface, this single value is invariant per process.
+  entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
 })
 
 /**
