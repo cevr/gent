@@ -1,7 +1,6 @@
-import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { Effect } from "effect"
+import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { ref } from "@gent/core/extensions/api"
 import { ArtifactId, BranchId, type SessionId } from "@gent/core/domain/ids"
 import { textStep } from "@gent/core/debug/provider"
@@ -20,7 +19,7 @@ const setupArtifactsExt = Effect.provide(
     "/test/cwd",
     "/test/home",
   ),
-  Layer.mergeAll(BunServices.layer, BunGentPlatformLive),
+  BunPlatformLive,
 )
 
 const SaveRef = ref(ArtifactRpc.Save)

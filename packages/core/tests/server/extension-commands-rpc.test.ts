@@ -18,8 +18,7 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
-import { BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -93,7 +92,7 @@ describe("extension command RPCs", () => {
       "/test/cwd",
       "/test/home",
     ),
-    Layer.merge(BunServices.layer, BunGentPlatformLive),
+    BunPlatformLive,
   )
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
@@ -465,12 +464,7 @@ describe("extension command RPCs", () => {
             extensions: [ext],
           }).pipe(
             Layer.provide(
-              Layer.mergeAll(
-                BunServices.layer,
-                BunGentPlatformLive,
-                ConfigService.Test(),
-                SqliteStorage.MemoryWithSql(),
-              ),
+              Layer.mergeAll(BunPlatformLive, ConfigService.Test(), SqliteStorage.MemoryWithSql()),
             ),
           ) as Layer.Layer<SessionProfileCache>
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
@@ -494,7 +488,7 @@ describe("extension command RPCs", () => {
           expect(result).toBe(`live:${profileCwd}`)
         }).pipe(Effect.timeout("4 seconds")),
       )
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive))),
+    }).pipe(Effect.provide(BunPlatformLive)),
   )
   it.live("RPC listStatus returns structurally tagged extension health", () =>
     Effect.gen(function* () {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -115,7 +115,7 @@ describe("resolveSessionEnvironment", () => {
             "allowed",
           )
         }).pipe(Effect.provide(testLayer), Effect.scoped)
-      }).pipe(Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive))),
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
   it.live("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {

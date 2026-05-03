@@ -11,6 +11,7 @@
 import { Effect, Layer, Ref } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { BunServices } from "@effect/platform-bun"
+import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import {
   AgentName,
   AgentRunnerService,
@@ -38,7 +39,6 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
@@ -282,7 +282,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         ),
       )
     }),
-  ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)))
+  ).pipe(Layer.provide(BunPlatformLive))
 }
 
 // ── Test helpers ──

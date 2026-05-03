@@ -1,6 +1,5 @@
 /** Test helpers for extension tool execution. */
 
-import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import {
   AgentName,
@@ -22,7 +21,7 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
@@ -135,7 +134,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
       return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
     }),
-  ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)))
+  ).pipe(Layer.provide(BunPlatformLive))
 }
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
