@@ -15,7 +15,7 @@ import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { Provider } from "../providers/provider.js"
+import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ActorEngine } from "../runtime/extensions/actor-engine.js"
@@ -139,7 +139,9 @@ export const baseLocalLayer = (
   providerMode: HarnessProviderMode = "debug-scripted",
 ) =>
   buildLayer(
-    providerMode === "debug-slow" ? Provider.Debug({ delayMs: 10 }) : Provider.Debug(),
+    providerMode === "debug-slow"
+      ? Provider.Debug({ delayMs: DebugSlowProviderDelayMs })
+      : Provider.Debug(),
     config,
   )
 

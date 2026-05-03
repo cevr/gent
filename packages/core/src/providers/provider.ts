@@ -300,6 +300,8 @@ const _makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) =>
 // closures are only invoked at runtime (never during module init),
 // so `Provider` is fully defined by then.
 
+export const DebugSlowProviderDelayMs = 250
+
 const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
   Layer.effect(
     Provider,
