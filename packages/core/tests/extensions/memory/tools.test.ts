@@ -28,7 +28,8 @@ const memoryToolTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path
 const runMemoryTool = <A, E>(
   effect: Effect.Effect<A, E, MemoryVault>,
   tmpDir: string,
-): Effect.Effect<A, E, never> => effect.pipe(Effect.provide(MemoryVaultTest(tmpDir)))
+): Effect.Effect<A, E, FileSystem.FileSystem | Path.Path> =>
+  effect.pipe(Effect.provide(MemoryVaultTest(tmpDir)))
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const makeCtx = (cwd: string, home: string): ToolContext =>

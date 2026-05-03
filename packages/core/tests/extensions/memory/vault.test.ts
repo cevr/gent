@@ -25,7 +25,7 @@ describe("MemoryVault", () => {
   vaultTest("write + read roundtrip", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/test-topic.md", makeFm(), "# Test Topic\n\nSome content.")
       const content = yield* vault.read("global/test-topic.md")
@@ -37,7 +37,7 @@ describe("MemoryVault", () => {
   vaultTest("write creates parent directories", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.write(
         "project/my-proj-abc123/deep-topic.md",
         makeFm("project"),
@@ -51,7 +51,7 @@ describe("MemoryVault", () => {
   vaultTest("list returns entries with parsed frontmatter", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/alpha.md", makeFm(), "# Alpha\n\nFirst entry.")
       yield* vault.write("global/beta.md", makeFm(), "# Beta\n\nSecond entry.")
@@ -64,7 +64,7 @@ describe("MemoryVault", () => {
   vaultTest("list filters by scope", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs("test-proj-aaa111")
       yield* vault.write("global/g1.md", makeFm(), "# Global One\n\nG.")
       yield* vault.write("project/test-proj-aaa111/p1.md", makeFm("project"), "# Project One\n\nP.")
@@ -79,7 +79,7 @@ describe("MemoryVault", () => {
   vaultTest("remove deletes file and rebuilds index", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/ephemeral.md", makeFm(), "# Ephemeral\n\nGone soon.")
       let entries = yield* vault.list("global")
@@ -92,7 +92,7 @@ describe("MemoryVault", () => {
   vaultTest("search finds by title", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/typescript.md", makeFm(), "# TypeScript Patterns\n\nUse Effect.")
       yield* vault.write("global/rust.md", makeFm(), "# Rust Notes\n\nOwnership rules.")
@@ -104,7 +104,7 @@ describe("MemoryVault", () => {
   vaultTest("search finds by content", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/api.md", makeFm(), "# API Design\n\nAlways use snake_case.")
       const results = yield* vault.search("snake_case")
@@ -114,7 +114,7 @@ describe("MemoryVault", () => {
   vaultTest("rebuildIndex creates scope and root indexes", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const vault = makeMemoryVault(tmpDir)
+      const vault = yield* makeMemoryVault(tmpDir)
       yield* vault.ensureDirs()
       yield* vault.write("global/topic-a.md", makeFm(), "# Topic A\n\nContent A.")
       // Index should have been rebuilt by write

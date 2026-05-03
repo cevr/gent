@@ -2,8 +2,9 @@
  * Test preset — provides extension config for core integration tests.
  * Imports from @gent/extensions so test-utils don't need to.
  */
-import type { Layer } from "effect"
+import { Layer, Path } from "effect"
 import { tmpdir } from "node:os"
+import { BunFileSystem } from "@effect/platform-bun"
 import { BuiltinExtensions, AllBuiltinAgents } from "@gent/extensions"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Test as MemoryVaultTest } from "@gent/extensions/memory/vault.js"
@@ -13,7 +14,9 @@ import type { ToolTestLayerConfig } from "@gent/core/test-utils/extension-harnes
 let memoryVaultLayerIndex = 0
 
 const memoryVaultTestLayer = () =>
-  MemoryVaultTest(`${tmpdir()}/gent-e2e-${memoryVaultLayerIndex++}`) as Layer.Layer<never>
+  MemoryVaultTest(`${tmpdir()}/gent-e2e-${memoryVaultLayerIndex++}`).pipe(
+    Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+  ) as Layer.Layer<never>
 
 export const e2ePreset = {
   agents: AllBuiltinAgents,
