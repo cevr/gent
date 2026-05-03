@@ -361,7 +361,10 @@ export const RepoTool = tool({
           )
           return { info }
         }
-        return { message: "Info not implemented for this type" }
+        return yield* new RepoExplorerError({
+          message: `info action is only supported for github specs, not ${parsed.type}`,
+          spec: params.spec,
+        })
       }
     }
   }),
