@@ -89,6 +89,8 @@
     "./storage/search-storage.js": "./src/storage/search-storage.ts",
     "./storage/session-storage": "./src/storage/session-storage.ts",
     "./storage/session-storage.js": "./src/storage/session-storage.ts",
+    "./storage/storage-transaction": "./src/storage/storage-transaction.ts",
+    "./storage/storage-transaction.js": "./src/storage/storage-transaction.ts",
     "./storage/sqlite-storage": "./src/storage/sqlite-storage.ts",
     "./storage/sqlite-storage.js": "./src/storage/sqlite-storage.ts",
     "./providers/ai-transcript": "./src/providers/ai-transcript.ts",

@@ -22,6 +22,7 @@ import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
 import { Permission } from "@gent/core/domain/permission"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
@@ -86,7 +87,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
   return Layer.provideMerge(
     SessionCommands.Live,
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer, sessionRuntimeLayer),
-  ) as Layer.Layer<SessionCommands | Storage | SequenceRecorder>
+  ) as Layer.Layer<SessionCommands | MessageStorage | SequenceRecorder>
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
@@ -120,7 +121,7 @@ describe("agent override behavior", () => {
       ])
       yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const recorder = yield* SequenceRecorder
         const session = yield* commands.createSession({ name: "Agent Override Test" })
         yield* commands.sendMessage({
@@ -135,7 +136,7 @@ describe("agent override behavior", () => {
           content: "without override",
         })
         const messages = yield* waitFor(
-          storage.listMessages(session.branchId),
+          messageStorage.listMessages(session.branchId),
           (current) => current.filter((message) => message.role === "assistant").length === 2,
           5000,
           "two assistant replies",
@@ -166,7 +167,7 @@ describe("agent override behavior", () => {
         ])
         yield* Effect.gen(function* () {
           const commands = yield* SessionCommands
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const session = yield* commands.createSession({
             name: "Initial Prompt Override",
@@ -174,7 +175,7 @@ describe("agent override behavior", () => {
             agentOverride: AgentName.make("memory:reflect"),
           })
           const messages = yield* waitFor(
-            storage.listMessages(session.branchId),
+            messageStorage.listMessages(session.branchId),
             (current) => current.filter((message) => message.role === "assistant").length === 1,
             5000,
             "initial prompt assistant reply",
@@ -191,14 +192,14 @@ describe("agent override behavior", () => {
       const { layer: providerLayer, controls } = yield* Provider.Sequence([])
       yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const noPrompt = yield* commands.createSession({ name: "No Prompt Test" })
         const emptyPrompt = yield* commands.createSession({
           name: "Empty Prompt Test",
           initialPrompt: "",
         })
-        expect(yield* storage.listMessages(noPrompt.branchId)).toEqual([])
-        expect(yield* storage.listMessages(emptyPrompt.branchId)).toEqual([])
+        expect(yield* messageStorage.listMessages(noPrompt.branchId)).toEqual([])
+        expect(yield* messageStorage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone()
       }).pipe(Effect.provide(makeCommandsLayer(providerLayer)))
     }),

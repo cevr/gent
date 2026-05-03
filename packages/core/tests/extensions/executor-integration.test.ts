@@ -142,7 +142,7 @@ const makeExecutorExtension = (overrides?: {
   return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
-  const storage = Layer.orDie(Storage.Test())
+  const storage = Layer.orDie(Storage.TestWithSql())
   const extLayers = (extension.contributions.resources ?? [])
     .filter((r) => r.scope === "process")
     .map((r) => r.layer as Layer.Layer<any, never, any>)
@@ -569,7 +569,7 @@ describe("Executor runtime lifecycle", () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       const resolved = resolveExtensions([extension])
       const layer = buildExtensionLayers(resolved).pipe(
-        Layer.provideMerge(Storage.Test()),
+        Layer.provideMerge(Storage.TestWithSql()),
         Layer.provideMerge(EventStore.Memory),
         Layer.provideMerge(BunServices.layer),
       )

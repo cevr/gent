@@ -1,8 +1,5 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Schema, FileSystem, Path } from "effect"
-import type { Message, Session, Branch } from "../domain/message.js"
-import type { AgentEvent, AgentEventTag, EventEnvelope } from "../domain/event.js"
-import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import type { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { CheckpointStorage } from "./checkpoint-storage.js"
@@ -20,99 +17,7 @@ export { StorageError }
 
 import { initSchema, configureSqliteConnection } from "./schema.js"
 import { makeStorageImpl } from "./sqlite/impl.js"
-// Storage Service Interface
-
-export interface StorageService {
-  readonly withTransaction: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | StorageError, R>
-
-  // Sessions
-  readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
-  readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
-  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
-  readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
-  /**
-   * Deletes the session and every descendant. SELECT + DELETE execute inside
-   * the same transaction so a child created mid-delete is either picked up
-   * (commits before the tx) or rejected by the missing-parent FK (commits
-   * after). Returns the full set of session ids the cascade actually removed
-   * so in-memory cleanup uses the same snapshot.
-   */
-  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
-
-  // Branches
-  readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
-  readonly getBranch: (id: BranchId) => Effect.Effect<Branch | undefined, StorageError>
-  readonly listBranches: (
-    sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
-  readonly deleteBranch: (id: BranchId) => Effect.Effect<void, StorageError>
-  readonly updateBranchSummary: (
-    branchId: BranchId,
-    summary: string,
-  ) => Effect.Effect<void, StorageError>
-  readonly countMessages: (branchId: BranchId) => Effect.Effect<number, StorageError>
-  readonly countMessagesByBranches: (
-    branchIds: readonly BranchId[],
-  ) => Effect.Effect<ReadonlyMap<BranchId, number>, StorageError>
-
-  // Messages
-  readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
-  readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
-  readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
-  readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
-  readonly deleteMessages: (
-    branchId: BranchId,
-    afterMessageId?: MessageId,
-  ) => Effect.Effect<void, StorageError>
-  readonly updateMessageTurnDuration: (
-    messageId: MessageId,
-    durationMs: number,
-  ) => Effect.Effect<void, StorageError>
-
-  // Events
-  readonly appendEvent: (
-    event: AgentEvent,
-    options?: { traceId?: string },
-  ) => Effect.Effect<EventEnvelope, StorageError>
-  readonly listEvents: (params: {
-    sessionId: SessionId
-    branchId?: BranchId
-    afterId?: number
-  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, StorageError>
-  readonly getLatestEventId: (params: {
-    sessionId: SessionId
-    branchId?: BranchId
-  }) => Effect.Effect<number | undefined, StorageError>
-  readonly getLatestEvent: (params: {
-    sessionId: SessionId
-    branchId: BranchId
-    tags: ReadonlyArray<AgentEventTag>
-  }) => Effect.Effect<AgentEvent | undefined, StorageError>
-
-  // Session tree
-  readonly getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
-
-  readonly getSessionAncestors: (
-    sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
-
-  /** Returns branches + messages within a single session (not cross-session tree) */
-  readonly getSessionDetail: (sessionId: SessionId) => Effect.Effect<
-    {
-      session: Session
-      branches: ReadonlyArray<{
-        branch: Branch
-        messages: ReadonlyArray<Message>
-      }>
-    },
-    StorageError
-  >
-}
+import type { StorageService } from "./sqlite/impl.js"
 
 const mapStartupError = (error: unknown): StorageError =>
   Schema.is(StorageError)(error)
@@ -127,6 +32,84 @@ const makeStorage = Effect.gen(function* () {
 
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
+
+type FocusedStorage =
+  | SqlClient.SqlClient
+  | CheckpointStorage
+  | InteractionStorage
+  | SearchStorage
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | StorageTransaction
+  | InteractionPendingReader
+
+const provideFocusedRepositories = <E, R>(
+  base: Layer.Layer<SqlClient.SqlClient, E, R>,
+): Layer.Layer<FocusedStorage, E, R> => {
+  const interactionStorage = Layer.provide(InteractionStorage.Live, base)
+  return Layer.mergeAll(
+    base,
+    Layer.provide(SessionStorage.Live, base),
+    Layer.provide(BranchStorage.Live, base),
+    Layer.provide(MessageStorage.Live, base),
+    Layer.provide(EventStorage.Live, base),
+    Layer.provide(RelationshipStorage.Live, base),
+    Layer.provide(StorageTransaction.Live, base),
+    Layer.provide(CheckpointStorage.Live, base),
+    interactionStorage,
+    Layer.provide(InteractionPendingReader.Live, interactionStorage),
+    Layer.provide(SearchStorage.Live, base),
+  )
+}
+
+const makeLiveSqliteLayer = (
+  dbPath: string,
+): Layer.Layer<
+  SqlClient.SqlClient,
+  StorageError | PlatformError.PlatformError,
+  FileSystem.FileSystem | Path.Path
+> =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = path.dirname(dbPath)
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* configureSqliteConnection().pipe(Effect.mapError(mapStartupError))
+      yield* initSchema.pipe(Effect.mapError(mapStartupError))
+    }),
+  ).pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+
+const makeMemorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = Layer.effectDiscard(
+  Effect.gen(function* () {
+    yield* configureSqliteConnection().pipe(Effect.mapError(mapStartupError))
+    yield* initSchema.pipe(Effect.mapError(mapStartupError))
+  }),
+).pipe(Layer.provideMerge(memorySqliteClientLayer))
+
+export const SqliteStorage = {
+  // Load-bearing: `deleteSession`'s atomic SELECT+DELETE relies on @effect/sql-sqlite-bun's
+  // single-connection + Semaphore(1) serialization. If this layer is ever swapped for a
+  // pooled/multi-connection driver, the cascade tx must switch to BEGIN IMMEDIATE (or an
+  // equivalent write-lock) to preserve the invariant that no child row is committed between
+  // the recursive SELECT and the DELETE.
+  LiveWithSql: (
+    dbPath: string,
+  ): Layer.Layer<
+    FocusedStorage,
+    StorageError | PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath)),
+
+  MemoryWithSql: (): Layer.Layer<FocusedStorage, StorageError> =>
+    provideFocusedRepositories(makeMemorySqliteLayer),
+
+  TestWithSql: (): Layer.Layer<FocusedStorage, StorageError> =>
+    provideFocusedRepositories(makeMemorySqliteLayer),
+}
 
 export class Storage extends Context.Service<Storage, StorageService>()(
   "@gent/core/src/storage/sqlite-storage/Storage",
@@ -158,18 +141,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
   static LiveWithSql = (
     dbPath: string,
   ): Layer.Layer<
-    | Storage
-    | SqlClient.SqlClient
-    | CheckpointStorage
-    | InteractionStorage
-    | SearchStorage
-    | SessionStorage
-    | BranchStorage
-    | MessageStorage
-    | EventStorage
-    | RelationshipStorage
-    | StorageTransaction
-    | InteractionPendingReader,
+    Storage | FocusedStorage,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -203,21 +175,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     Layer.effect(Storage, makeStorage).pipe(Layer.provide(memorySqliteClientLayer))
 
   /** Memory layer that also exposes SqlClient and focused storage services */
-  static MemoryWithSql = (): Layer.Layer<
-    | Storage
-    | SqlClient.SqlClient
-    | CheckpointStorage
-    | InteractionStorage
-    | SearchStorage
-    | SessionStorage
-    | BranchStorage
-    | MessageStorage
-    | EventStorage
-    | RelationshipStorage
-    | StorageTransaction
-    | InteractionPendingReader,
-    StorageError
-  > => {
+  static MemoryWithSql = (): Layer.Layer<Storage | FocusedStorage, StorageError> => {
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(memorySqliteClientLayer),
     )
@@ -240,19 +198,6 @@ export class Storage extends Context.Service<Storage, StorageService>()(
   static Test = (): Layer.Layer<Storage, StorageError> => Storage.Memory()
 
   /** Test layer that also exposes SqlClient and focused storage services */
-  static TestWithSql = (): Layer.Layer<
-    | Storage
-    | SqlClient.SqlClient
-    | CheckpointStorage
-    | InteractionStorage
-    | SearchStorage
-    | SessionStorage
-    | BranchStorage
-    | MessageStorage
-    | EventStorage
-    | RelationshipStorage
-    | StorageTransaction
-    | InteractionPendingReader,
-    StorageError
-  > => Storage.MemoryWithSql()
+  static TestWithSql = (): Layer.Layer<Storage | FocusedStorage, StorageError> =>
+    Storage.MemoryWithSql()
 }

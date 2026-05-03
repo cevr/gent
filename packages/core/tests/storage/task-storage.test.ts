@@ -7,6 +7,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
@@ -21,7 +23,8 @@ const testLayer = Layer.merge(baseLayer, taskStorageLayer)
 const test = it.live.layer(testLayer)
 
 const setup = Effect.gen(function* () {
-  const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const taskStorage = yield* TaskStorage
   const now = new Date()
   const session = new Session({
@@ -35,8 +38,8 @@ const setup = Effect.gen(function* () {
     sessionId: session.id,
     createdAt: now,
   })
-  yield* storage.createSession(session)
-  yield* storage.createBranch(branch)
+  yield* sessionStorage.createSession(session)
+  yield* branchStorage.createBranch(branch)
   return { storage: taskStorage, session, branch }
 })
 
@@ -141,7 +144,7 @@ describe("Task Storage", () => {
 
     return Effect.gen(function* () {
       const { storage } = yield* setup
-      const hostStorage = yield* Storage
+      const branchStorage = yield* BranchStorage
       const sql = yield* SqlClient.SqlClient
 
       const taskColumns = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(tasks)`)
@@ -176,7 +179,7 @@ describe("Task Storage", () => {
       const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got?.cwd).toBe("/tmp")
       expect(got?.metadata).toEqual({ current: true })
-      yield* hostStorage.deleteBranch(BranchId.make("b1"))
+      yield* branchStorage.deleteBranch(BranchId.make("b1"))
       expect(yield* storage.listTasks(SessionId.make("s1"))).toEqual([])
 
       const rejected = yield* Effect.flip(
@@ -339,11 +342,11 @@ describe("Composite branch FK", () => {
   test("deleting the parent branch cascades its tasks", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
-      const hostStorage = yield* Storage
+      const branchStorage = yield* BranchStorage
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
 
-      yield* hostStorage.deleteBranch(BranchId.make("b1"))
+      yield* branchStorage.deleteBranch(BranchId.make("b1"))
 
       const remaining = yield* storage.listTasks(SessionId.make("s1"))
       expect(remaining.length).toBe(0)

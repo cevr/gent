@@ -60,6 +60,10 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import {
@@ -518,18 +522,19 @@ describe("streaming", () => {
         }
         return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       })
-      const delayedStorage = Layer.effect(
-        Storage,
+      const delayedEventStorage = Layer.effect(
+        EventStorage,
         Effect.gen(function* () {
-          const storage = yield* Storage
+          const eventStorage = yield* EventStorage
           return {
-            ...storage,
-            getLatestEvent: (input) => storage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
+            ...eventStorage,
+            getLatestEvent: (input) =>
+              eventStorage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
           }
         }),
       )
       const baseStorageLayer = Storage.TestWithSql()
-      const slowStorage = Layer.provideMerge(delayedStorage, baseStorageLayer)
+      const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(
         slowStorage,
         providerLayer,
@@ -638,7 +643,7 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const first = makeMessage("s1", "b1", "first")
           const second = makeMessage("s1", "b1", "second")
           const third = makeMessage("s1", "b1", "third")
@@ -648,7 +653,7 @@ describe("streaming", () => {
           yield* runAgentLoop(agentLoop, third)
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber)
-          const messages = yield* storage.listMessages(BranchId.make("b1"))
+          const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
           const userTexts = messages
             .filter((message) => message.role === "user")
             .map((message) =>
@@ -710,10 +715,10 @@ describe("streaming", () => {
       })
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
@@ -736,10 +741,10 @@ describe("streaming", () => {
       })
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
-        const user = yield* storage.getMessage(message.id)
+        const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
@@ -747,11 +752,11 @@ describe("streaming", () => {
   )
   test("persists assistant image parts from provider response streams", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const messageStorage = yield* MessageStorage
       const agentLoop = yield* AgentLoop
       const message = makeMessage("image-session", "image-branch", "show image")
       yield* runAgentLoop(agentLoop, message)
-      const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+      const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
       expect(assistant).toBeDefined()
       expect(assistant?.parts).toEqual([
         new ImagePart({
@@ -989,7 +994,7 @@ describe("streaming", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("stream-retry-session", "stream-retry-branch", "retry")
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
@@ -997,7 +1002,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
         expect(tags).toContain("ProviderRetrying")
         expect(tags).not.toContain("ErrorOccurred")
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "after retry" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
@@ -1030,7 +1035,7 @@ describe("streaming", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage(
           "stream-metadata-retry-session",
           "stream-metadata-retry-branch",
@@ -1042,7 +1047,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
         expect(tags).toContain("ProviderRetrying")
         expect(tags).not.toContain("ErrorOccurred")
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([
           new TextPart({ type: "text", text: "after metadata retry" }),
         ])
@@ -1060,7 +1065,7 @@ describe("streaming", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage(
           "stream-retry-exhausted-session",
           "stream-retry-exhausted-branch",
@@ -1074,7 +1079,7 @@ describe("streaming", () => {
         expect(tags).toContain("StreamEnded")
         expect(tags).toContain("ErrorOccurred")
         expect(tags).toContain("TurnCompleted")
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeUndefined()
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
@@ -1099,7 +1104,7 @@ describe("streaming", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("stream-no-retry-session", "stream-no-retry-branch", "retry")
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
@@ -1107,7 +1112,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(1)
         expect(tags).not.toContain("ProviderRetrying")
         expect(tags).toContain("ErrorOccurred")
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
@@ -1125,7 +1130,7 @@ describe("streaming", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("native-error-session", "native-error-branch", "fail natively")
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
@@ -1137,7 +1142,7 @@ describe("streaming", () => {
         expect(tags).toContain("TurnCompleted")
         const error = events.find((event) => event._tag === "ErrorOccurred")
         expect(error).toEqual(expect.objectContaining({ error: "native response part failed" }))
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
@@ -1188,7 +1193,8 @@ describe("concurrency", () => {
         [toolA, toolB],
       )
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
+        const sessionStorage = yield* SessionStorage
+        const branchStorage = yield* BranchStorage
         const loop = yield* AgentLoop
         const now = new Date()
         const session = new Session({
@@ -1202,8 +1208,8 @@ describe("concurrency", () => {
           sessionId: session.id,
           createdAt: now,
         })
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessionStorage.createSession(session)
+        yield* branchStorage.createBranch(branch)
         yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
@@ -1355,23 +1361,23 @@ describe("continuation", () => {
       ])
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const msg = makeContMessage("multi-hop persistence")
         yield* runAgentLoop(agentLoop, msg)
-        const a1 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 1))
-        const t1 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
+        const a1 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 1))
+        const t1 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
         expect(a1).toBeDefined()
         expect(t1).toBeDefined()
         expect(a1!.role).toBe("assistant")
         expect(t1!.role).toBe("tool")
-        const a2 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 2))
-        const t2 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 2))
+        const a2 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 2))
+        const t2 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 2))
         expect(a2).toBeDefined()
         expect(t2).toBeDefined()
         expect(a2!.role).toBe("assistant")
         expect(t2!.role).toBe("tool")
-        const a3 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 3))
-        const t3 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 3))
+        const a3 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 3))
+        const t3 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 3))
         expect(a3).toBeDefined()
         expect(a3!.role).toBe("assistant")
         expect(t3).toBeUndefined()
@@ -1449,10 +1455,10 @@ describe("turn stream parity", () => {
       const externalEventsRef = yield* Ref.make<AgentEvent[]>([])
       const modelDraft = yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("model-parity-session", "model-parity-branch", "hello")
         yield* runAgentLoop(agentLoop, message)
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         return assistantDraftFromMessage(assistant!)
       }).pipe(
@@ -1474,10 +1480,10 @@ describe("turn stream parity", () => {
       )
       const externalDraft = yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const storage = yield* Storage
+        const messageStorage = yield* MessageStorage
         const message = makeMessage("external-parity-session", "external-parity-branch", "hello")
         yield* runAgentLoop(agentLoop, message, { agentOverride: "test-external-parity" as never })
-        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         return assistantDraftFromMessage(assistant!)
       }).pipe(
@@ -2208,12 +2214,14 @@ describe("recovery", () => {
     checkpointRecord?: AgentLoopCheckpointRecord
   }) =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessionStorage = yield* SessionStorage
+      const branchStorage = yield* BranchStorage
+      const messageStorage = yield* MessageStorage
       const cs = yield* CheckpointStorage
       const { session, branch, message } = createSessionState()
-      yield* storage.createSession(session)
-      yield* storage.createBranch(branch)
-      yield* storage.createMessageIfAbsent(message)
+      yield* sessionStorage.createSession(session)
+      yield* branchStorage.createBranch(branch)
+      yield* messageStorage.createMessageIfAbsent(message)
       const record =
         params.checkpointRecord ??
         (yield* buildLoopCheckpointRecord({

@@ -11,7 +11,8 @@ import { Task, getToolEffect } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import { BranchId, SessionId, TaskId, ToolCallId } from "@gent/core/domain/ids"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
 import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
@@ -70,9 +71,10 @@ const layer = createToolTestLayer({
 })
 
 const setup = Effect.gen(function* () {
-  const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const now = new Date()
-  yield* storage.createSession(
+  yield* sessionStorage.createSession(
     new Session({
       id: SessionId.make("s1"),
       name: "Test",
@@ -80,7 +82,7 @@ const setup = Effect.gen(function* () {
       updatedAt: now,
     }),
   )
-  yield* storage.createBranch(
+  yield* branchStorage.createBranch(
     new Branch({
       id: BranchId.make("b1"),
       sessionId: SessionId.make("s1"),

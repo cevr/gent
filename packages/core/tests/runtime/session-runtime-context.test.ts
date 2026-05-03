@@ -76,13 +76,12 @@ describe("resolveSessionEnvironment", () => {
         () =>
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
-              const storage = yield* Storage
               const sessionStorage = yield* SessionStorage
               const extensionRegistry = yield* ExtensionRegistry
               const platform = yield* RuntimePlatform
               const profileCache = yield* SessionProfileCache
               const now = new Date()
-              yield* storage.createSession(
+              yield* sessionStorage.createSession(
                 new Session({
                   id: SessionId.make("session-runtime-context-profile"),
                   cwd: secondary,
@@ -291,7 +290,6 @@ describe("resolveSessionEnvironment", () => {
         runtimePlatformLayer,
       )
       yield* Effect.gen(function* () {
-        const storage = yield* Storage
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimePlatform
@@ -301,7 +299,7 @@ describe("resolveSessionEnvironment", () => {
           Effect.scoped,
         )
         const now = new Date()
-        yield* storage.createSession(
+        yield* sessionStorage.createSession(
           new Session({
             id: SessionId.make("session-runtime-context-driver"),
             cwd: "/tmp/profile-driver-scope",

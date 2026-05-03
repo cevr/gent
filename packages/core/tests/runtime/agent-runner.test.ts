@@ -158,7 +158,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
   return Layer.mergeAll(deps, runnerLayer) as Layer.Layer<
-    AgentRunnerService | Storage | EventStore | SequenceRecorder
+    AgentRunnerService | Storage | SessionStorage | BranchStorage | EventStore | SequenceRecorder
   >
 }
 // Extra services the parent context needs for ephemeral child runtime
@@ -304,10 +304,7 @@ describe("RunSpec", () => {
           expect(result.text).toContain("child result")
         }
         yield* controls.assertDone()
-      }).pipe(
-        Effect.timeout("4 seconds"),
-        Effect.provide(Layer.merge(layer, Storage.TestWithSql())),
-      )
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
 })

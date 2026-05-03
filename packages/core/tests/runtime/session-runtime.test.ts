@@ -44,6 +44,10 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 import {
   SessionRuntime,
   SessionRuntimeError,
@@ -123,7 +127,7 @@ const makeRuntimeLayer = (
 }
 const makeRuntimeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
-  eventPublisherLayer: Layer.Layer<EventPublisher, never, Storage>,
+  eventPublisherLayer: Layer.Layer<EventPublisher, never, EventStorage>,
 ) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
@@ -257,11 +261,12 @@ const makeLiveToolRuntimeLayer = (
   )
 }
 const createSessionBranch = Effect.gen(function* () {
-  const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const sessionId = SessionId.make("runtime-session")
   const branchId = BranchId.make("runtime-branch")
   const now = new Date()
-  yield* storage.createSession(
+  yield* sessionStorage.createSession(
     new Session({
       id: sessionId,
       name: "Runtime Test",
@@ -269,15 +274,16 @@ const createSessionBranch = Effect.gen(function* () {
       updatedAt: now,
     }),
   )
-  yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+  yield* branchStorage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
 const createCwdSessionBranch = Effect.gen(function* () {
-  const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const sessionId = SessionId.make("runtime-session-with-cwd")
   const branchId = BranchId.make("runtime-branch-with-cwd")
   const now = new Date()
-  yield* storage.createSession(
+  yield* sessionStorage.createSession(
     new Session({
       id: sessionId,
       name: "Runtime Test With Cwd",
@@ -286,7 +292,7 @@ const createCwdSessionBranch = Effect.gen(function* () {
       updatedAt: now,
     }),
   )
-  yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+  yield* branchStorage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
 const createSessionBranchWithIds = (input: {
@@ -294,9 +300,10 @@ const createSessionBranchWithIds = (input: {
   readonly branchId: BranchId
 }) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
     const now = new Date()
-    yield* storage.createSession(
+    yield* sessionStorage.createSession(
       new Session({
         id: input.sessionId,
         name: `Runtime Test ${input.sessionId}`,
@@ -304,7 +311,7 @@ const createSessionBranchWithIds = (input: {
         updatedAt: now,
       }),
     )
-    yield* storage.createBranch(
+    yield* branchStorage.createBranch(
       new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: now }),
     )
     return input
@@ -563,7 +570,7 @@ describe("SessionRuntime", () => {
         yield* narrowR(
           Effect.gen(function* () {
             const sessionRuntime = yield* SessionRuntime
-            const storage = yield* Storage
+            const messageStorage = yield* MessageStorage
             const recorder = yield* SequenceRecorder
             const { sessionId, branchId } = yield* createSessionBranch
             yield* sessionRuntime.sendUserMessage({
@@ -578,7 +585,7 @@ describe("SessionRuntime", () => {
               content: "second",
             })
             const messages = yield* waitFor(
-              storage.listMessages(branchId),
+              messageStorage.listMessages(branchId),
               (current) => current.filter((message) => message.role === "assistant").length === 2,
               5000,
               "two assistant replies",
@@ -610,7 +617,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
           yield* sessionRuntime.invokeTool({
@@ -620,7 +627,7 @@ describe("SessionRuntime", () => {
             input: {},
           })
           const messages = yield* waitFor(
-            storage.listMessages(branchId),
+            messageStorage.listMessages(branchId),
             (current) => current.length === 2,
             5000,
             "invokeTool messages",
@@ -654,7 +661,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           const commandId = ActorCommandId.make("record-tool-atomicity")
           const exit = yield* Effect.exit(
@@ -667,7 +674,9 @@ describe("SessionRuntime", () => {
               output: { ok: true },
             }),
           )
-          const message = yield* storage.getMessage(MessageId.make(`${commandId}:tool-result`))
+          const message = yield* messageStorage.getMessage(
+            MessageId.make(`${commandId}:tool-result`),
+          )
           expect(exit._tag).toBe("Failure")
           expect(message).toBeUndefined()
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
@@ -681,7 +690,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
           const commandId = ActorCommandId.make("record-tool-idempotent")
@@ -695,7 +704,7 @@ describe("SessionRuntime", () => {
           }
           yield* sessionRuntime.recordToolResult(command)
           yield* sessionRuntime.recordToolResult(command)
-          const messages = yield* storage.listMessages(branchId)
+          const messages = yield* messageStorage.listMessages(branchId)
           const calls = yield* recorder.getCalls()
           const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
           expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
@@ -713,9 +722,9 @@ describe("SessionRuntime", () => {
       const eventPublisherLayer = Layer.effect(
         EventPublisher,
         Effect.gen(function* () {
-          const storage = yield* Storage
+          const eventStorage = yield* EventStorage
           const append = (event: AgentEvent) =>
-            storage
+            eventStorage
               .appendEvent(event)
               .pipe(
                 Effect.mapError(
@@ -797,7 +806,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           const submitFiber = yield* Effect.forkChild(
             sessionRuntime.sendUserMessage({
@@ -820,14 +829,14 @@ describe("SessionRuntime", () => {
           const earlyRecord = yield* Fiber.join(recordFiber).pipe(
             Effect.timeoutOption("200 millis"),
           )
-          const messagesBeforeRelease = yield* storage.listMessages(branchId)
+          const messagesBeforeRelease = yield* messageStorage.listMessages(branchId)
           expect(earlyRecord._tag).toBe("None")
           expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
           yield* Deferred.succeed(streamReleased, undefined)
           yield* Fiber.join(submitFiber)
           yield* Fiber.join(recordFiber)
           const messagesAfterRelease = yield* waitFor(
-            storage.listMessages(branchId),
+            messageStorage.listMessages(branchId),
             (messages) => messages.some((message) => message.role === "tool"),
             5000,
             "tool result after active turn releases ownership",
@@ -925,7 +934,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
           yield* controls.waitForCall(0)
@@ -947,7 +956,7 @@ describe("SessionRuntime", () => {
           ])
           yield* controls.emitAll(0)
           const messages = yield* waitFor(
-            storage.listMessages(branchId),
+            messageStorage.listMessages(branchId),
             (current) => current.filter((message) => message.role === "assistant").length === 3,
             5000,
             "interjected turn completion",
@@ -983,7 +992,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
           yield* controls.waitForCall(0)
@@ -994,7 +1003,7 @@ describe("SessionRuntime", () => {
           yield* Fiber.join(emitFiber)
           yield* Fiber.join(followUpFiber)
           const messages = yield* waitFor(
-            storage.listMessages(branchId),
+            messageStorage.listMessages(branchId),
             (current) => current.filter((message) => message.role === "assistant").length === 2,
             5000,
             "concurrent follow-up completion",
@@ -1023,7 +1032,7 @@ describe("SessionRuntime", () => {
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const storage = yield* Storage
+          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
           yield* controls.waitForCall(0)
@@ -1045,7 +1054,9 @@ describe("SessionRuntime", () => {
           )
           expect(yield* controls.callCount).toBe(1)
           expect(
-            (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
+            (yield* messageStorage.listMessages(branchId)).filter(
+              (message) => message.role === "user",
+            ),
           ).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )

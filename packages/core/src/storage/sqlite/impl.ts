@@ -1,10 +1,10 @@
 import { Clock, Effect } from "effect"
-import type { Message } from "../../domain/message.js"
+import type { Branch, Message, Session } from "../../domain/message.js"
 import { EventEnvelope, EventId, getEventBranchId, getEventSessionId } from "../../domain/event.js"
+import type { AgentEvent, AgentEventTag } from "../../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { SqlClient, SqlError } from "effect/unstable/sql"
 import { StorageError } from "../../domain/storage-error.js"
-import type { StorageService } from "../sqlite-storage.js"
 import { configureSqliteConnection } from "../schema.js"
 import {
   decodeEvent,
@@ -23,6 +23,83 @@ import {
 } from "./rows.js"
 
 export const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
+
+export interface StorageService {
+  readonly withTransaction: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | StorageError, R>
+
+  readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
+  readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
+  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
+  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
+  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+
+  readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
+  readonly getBranch: (id: BranchId) => Effect.Effect<Branch | undefined, StorageError>
+  readonly listBranches: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+  readonly deleteBranch: (id: BranchId) => Effect.Effect<void, StorageError>
+  readonly updateBranchSummary: (
+    branchId: BranchId,
+    summary: string,
+  ) => Effect.Effect<void, StorageError>
+  readonly countMessages: (branchId: BranchId) => Effect.Effect<number, StorageError>
+  readonly countMessagesByBranches: (
+    branchIds: readonly BranchId[],
+  ) => Effect.Effect<ReadonlyMap<BranchId, number>, StorageError>
+
+  readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
+  readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
+  readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
+  readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+  readonly deleteMessages: (
+    branchId: BranchId,
+    afterMessageId?: MessageId,
+  ) => Effect.Effect<void, StorageError>
+  readonly updateMessageTurnDuration: (
+    messageId: MessageId,
+    durationMs: number,
+  ) => Effect.Effect<void, StorageError>
+
+  readonly appendEvent: (
+    event: AgentEvent,
+    options?: { traceId?: string },
+  ) => Effect.Effect<EventEnvelope, StorageError>
+  readonly listEvents: (params: {
+    sessionId: SessionId
+    branchId?: BranchId
+    afterId?: number
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, StorageError>
+  readonly getLatestEventId: (params: {
+    sessionId: SessionId
+    branchId?: BranchId
+  }) => Effect.Effect<number | undefined, StorageError>
+  readonly getLatestEvent: (params: {
+    sessionId: SessionId
+    branchId: BranchId
+    tags: ReadonlyArray<AgentEventTag>
+  }) => Effect.Effect<AgentEvent | undefined, StorageError>
+
+  readonly getChildSessions: (
+    parentSessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly getSessionAncestors: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly getSessionDetail: (sessionId: SessionId) => Effect.Effect<
+    {
+      session: Session
+      branches: ReadonlyArray<{
+        branch: Branch
+        messages: ReadonlyArray<Message>
+      }>
+    },
+    StorageError
+  >
+}
 
 export const makeStorageImpl: Effect.Effect<StorageService, StorageError, SqlClient.SqlClient> =
   Effect.gen(function* () {

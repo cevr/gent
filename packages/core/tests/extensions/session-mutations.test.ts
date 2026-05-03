@@ -8,85 +8,105 @@ import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
 import { InvalidStateError, NotFoundError } from "../../src/domain/business-errors"
 import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
-import type { StorageService } from "@gent/core/storage/sqlite-storage"
+import type { BranchStorageService } from "@gent/core/storage/branch-storage"
+import type { MessageStorageService } from "@gent/core/storage/message-storage"
+import type { RelationshipStorageService } from "@gent/core/storage/relationship-storage"
+import type { SessionStorageService } from "@gent/core/storage/session-storage"
+import type { StorageTransactionService } from "../../src/storage/storage-transaction"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
   const sessions = new Map<string, Session>()
   const branches = new Map<string, Branch>()
   const messages = new Map<string, Message[]>()
   const die = (label: string) => () => Effect.die(`${label} not implemented in test`)
+  const transaction: StorageTransactionService = {
+    withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const sessionsSnapshot = new Map(sessions)
+        const branchesSnapshot = new Map(branches)
+        const messagesSnapshot = new Map(messages)
+        return yield* effect.pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              sessions.clear()
+              for (const [key, value] of sessionsSnapshot) sessions.set(key, value)
+              branches.clear()
+              for (const [key, value] of branchesSnapshot) branches.set(key, value)
+              messages.clear()
+              for (const [key, value] of messagesSnapshot) messages.set(key, value)
+            }),
+          ),
+        )
+      }),
+  }
+  const sessionStorage: SessionStorageService = {
+    getSession: (id: SessionId) => Effect.succeed(sessions.get(id)),
+    updateSession: (session: Session) => {
+      sessions.set(session.id, session)
+      return Effect.succeed(session)
+    },
+    createSession: (session: Session) => {
+      sessions.set(session.id, session)
+      return Effect.succeed(session)
+    },
+    deleteSession: (id: SessionId) => {
+      sessions.delete(id)
+      return Effect.succeed([id])
+    },
+    getLastSessionByCwd: die("getLastSessionByCwd"),
+    listSessions: die("listSessions"),
+  }
+  const branchStorage: BranchStorageService = {
+    listBranches: (sessionId: SessionId) =>
+      Effect.succeed([...branches.values()].filter((b) => b.sessionId === sessionId)),
+    createBranch: (branch: Branch) => {
+      branches.set(branch.id, branch)
+      return Effect.succeed(branch)
+    },
+    getBranch: (id: BranchId) => Effect.succeed(branches.get(id)),
+    deleteBranch: (id: BranchId) => {
+      branches.delete(id)
+      messages.delete(id)
+      return Effect.void
+    },
+    updateBranchSummary: die("updateBranchSummary"),
+    countMessages: die("countMessages"),
+    countMessagesByBranches: die("countMessagesByBranches"),
+  }
+  const messageStorage: MessageStorageService = {
+    listMessages: (branchId: BranchId) => Effect.succeed(messages.get(branchId) ?? []),
+    createMessage: (msg: Message) => {
+      const list = messages.get(msg.branchId) ?? []
+      list.push(msg)
+      messages.set(msg.branchId, list)
+      return Effect.succeed(msg)
+    },
+    createMessageIfAbsent: die("createMessageIfAbsent"),
+    getMessage: die("getMessage"),
+    deleteMessages: (branchId: BranchId, afterMessageId?: MessageId) => {
+      if (afterMessageId === undefined) {
+        messages.delete(branchId)
+      } else {
+        const list = messages.get(branchId) ?? []
+        const idx = list.findIndex((m) => m.id === afterMessageId)
+        if (idx !== -1) messages.set(branchId, list.slice(0, idx + 1))
+      }
+      return Effect.void
+    },
+    updateMessageTurnDuration: die("updateMessageTurnDuration"),
+  }
+  const relationshipStorage: RelationshipStorageService = {
+    getChildSessions: (parentSessionId: SessionId) =>
+      Effect.succeed([...sessions.values()].filter((s) => s.parentSessionId === parentSessionId)),
+    getSessionAncestors: die("getSessionAncestors"),
+    getSessionDetail: die("getSessionDetail"),
+  }
   return {
-    storage: {
-      withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.gen(function* () {
-          const sessionsSnapshot = new Map(sessions)
-          const branchesSnapshot = new Map(branches)
-          const messagesSnapshot = new Map(messages)
-          return yield* effect.pipe(
-            Effect.onError(() =>
-              Effect.sync(() => {
-                sessions.clear()
-                for (const [key, value] of sessionsSnapshot) sessions.set(key, value)
-                branches.clear()
-                for (const [key, value] of branchesSnapshot) branches.set(key, value)
-                messages.clear()
-                for (const [key, value] of messagesSnapshot) messages.set(key, value)
-              }),
-            ),
-          )
-        }),
-      listMessages: (branchId: BranchId) => Effect.succeed(messages.get(branchId) ?? []),
-      getSession: (id: SessionId) => Effect.succeed(sessions.get(id)),
-      getSessionDetail: die("getSessionDetail"),
-      updateSession: (session: Session) => {
-        sessions.set(session.id, session)
-        return Effect.succeed(session)
-      },
-      createSession: (session: Session) => {
-        sessions.set(session.id, session)
-        return Effect.succeed(session)
-      },
-      deleteSession: (id: SessionId) => {
-        sessions.delete(id)
-        return Effect.void
-      },
-      listBranches: (sessionId: SessionId) =>
-        Effect.succeed([...branches.values()].filter((b) => b.sessionId === sessionId)),
-      createBranch: (branch: Branch) => {
-        branches.set(branch.id, branch)
-        return Effect.succeed(branch)
-      },
-      getBranch: (id: BranchId) => Effect.succeed(branches.get(id)),
-      deleteBranch: (id: BranchId) => {
-        branches.delete(id)
-        messages.delete(id)
-        return Effect.void
-      },
-      createMessage: (msg: Message) => {
-        const list = messages.get(msg.branchId) ?? []
-        list.push(msg)
-        messages.set(msg.branchId, list)
-        return Effect.succeed(msg)
-      },
-      createMessageIfAbsent: die("createMessageIfAbsent"),
-      deleteMessages: (branchId: BranchId, afterMessageId?: MessageId) => {
-        if (afterMessageId === undefined) {
-          messages.delete(branchId)
-        } else {
-          const list = messages.get(branchId) ?? []
-          const idx = list.findIndex((m) => m.id === afterMessageId)
-          if (idx !== -1) messages.set(branchId, list.slice(0, idx + 1))
-        }
-        return Effect.void
-      },
-      getChildSessions: (parentSessionId: SessionId) =>
-        Effect.succeed([...sessions.values()].filter((s) => s.parentSessionId === parentSessionId)),
-      updateBranchSummary: die("updateBranchSummary"),
-      countMessages: die("countMessages"),
-      countMessagesByBranches: die("countMessagesByBranches"),
-      updateMessageTurnDuration: die("updateMessageTurnDuration"),
-      listSessions: die("listSessions"),
-    } as unknown as StorageService,
+    transaction,
+    sessionStorage,
+    branchStorage,
+    messageStorage,
+    relationshipStorage,
     sessions,
     branches,
     messages,
@@ -127,7 +147,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
         return { branchId: branch.id }
       }),
     forkSessionBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
-      testStorage.storage.withTransaction(
+      testStorage.transaction.withTransaction(
         Effect.gen(function* () {
           const messages = testStorage.messages.get(fromBranchId) ?? []
           const targetIndex = messages.findIndex((message) => message.id === atMessageId)
@@ -142,7 +162,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
           })
           testStorage.branches.set(branch.id, branch)
           for (const message of messages.slice(0, targetIndex + 1)) {
-            yield* testStorage.storage.createMessage(
+            yield* testStorage.messageStorage.createMessage(
               copyMessageToBranch(message, {
                 id: MessageId.make(Bun.randomUUIDv7()),
                 branchId: branch.id,
@@ -167,7 +187,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
         yield* publish({ _tag: "BranchSwitched" })
       }),
     createChildSession: ({ parentSessionId, parentBranchId, name, cwd }) =>
-      testStorage.storage.withTransaction(
+      testStorage.transaction.withTransaction(
         Effect.gen(function* () {
           const sessionId = SessionId.make(Bun.randomUUIDv7())
           const branchId = BranchId.make(Bun.randomUUIDv7())
@@ -190,7 +210,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
           return { sessionId, branchId }
         }),
       ),
-    deleteSession: (sessionId) => testStorage.storage.deleteSession(sessionId),
+    deleteSession: (sessionId) => testStorage.sessionStorage.deleteSession(sessionId),
     deleteBranch: ({ sessionId, currentBranchId, branchId }) =>
       Effect.gen(function* () {
         if (branchId === currentBranchId)
@@ -205,7 +225,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
             entity: "branch",
           })
         }
-        yield* testStorage.storage.deleteBranch(branchId)
+        yield* testStorage.branchStorage.deleteBranch(branchId)
       }),
     deleteMessages: ({ sessionId, branchId, afterMessageId }) =>
       Effect.gen(function* () {
@@ -216,7 +236,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
             entity: "branch",
           })
         }
-        yield* testStorage.storage.deleteMessages(branchId, afterMessageId)
+        yield* testStorage.messageStorage.deleteMessages(branchId, afterMessageId)
       }),
     updateReasoningLevel: ({ reasoningLevel }) => Effect.succeed({ reasoningLevel }),
   }
@@ -242,10 +262,10 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       getAgent: die("ExtensionRegistry"),
       resolveDualModelPair: die("ExtensionRegistry"),
     } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
-    sessionStorage: testStorage.storage,
-    branchStorage: testStorage.storage,
-    messageStorage: testStorage.storage,
-    relationshipStorage: testStorage.storage,
+    sessionStorage: testStorage.sessionStorage,
+    branchStorage: testStorage.branchStorage,
+    messageStorage: testStorage.messageStorage,
+    relationshipStorage: testStorage.relationshipStorage,
     searchStorage: {
       searchMessages: () => Effect.succeed([]),
     } as MakeExtensionHostContextDeps["searchStorage"],
