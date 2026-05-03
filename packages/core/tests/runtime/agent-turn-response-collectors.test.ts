@@ -136,10 +136,17 @@ describe("agent turn response collectors", () => {
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["tool-call"])
       expect(collected.messageProjection.tool.map((part) => part.toolName)).toEqual(["probe"])
       expect(collected.messageProjection.usage).toEqual({ inputTokens: 7, outputTokens: 11 })
-      expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual([
-        "ToolCallStarted",
-        "ToolCallSucceeded",
-      ])
+      const published = yield* Ref.get(events)
+      expect(published.map((event) => event._tag)).toEqual(["ToolCallStarted", "ToolCallSucceeded"])
+      const started = published.find((event) => event._tag === "ToolCallStarted")
+      expect(started).toEqual(expect.objectContaining({ input: { value: "x" } }))
+      const succeeded = published.find((event) => event._tag === "ToolCallSucceeded")
+      expect(succeeded).toEqual(
+        expect.objectContaining({
+          summary: '{"ok":true}',
+          output: '{\n  "ok": true\n}',
+        }),
+      )
     }).pipe(Effect.runPromise))
 
   test("external collector de-duplicates durable tool-start events by response part id", () =>
@@ -164,6 +171,33 @@ describe("agent turn response collectors", () => {
       })
 
       expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
+    }).pipe(Effect.runPromise))
+
+  test("external collector de-duplicates final tool-result events by response part id", () =>
+    Effect.gen(function* () {
+      const activeStream = yield* makeActiveStream(false)
+      const { events, publish } = yield* captureEvents()
+      const toolCallId = ToolCallId.make("collector-result-dup")
+      const toolResultPart = Response.makePart("tool-result", {
+        id: toolCallId,
+        name: "probe",
+        result: { ok: true },
+        encodedResult: { ok: true },
+        isFailure: false,
+        providerExecuted: false,
+        preliminary: false,
+      })
+
+      yield* collectExternalTurnResponse({
+        turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
+        publishEvent: publish,
+        sessionId,
+        branchId,
+        activeStream,
+        formatStreamError: (error: TurnError) => error.message,
+      })
+
+      expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
     }).pipe(Effect.runPromise))
 
   test("model collector keeps partial output when post-output stream fails", () =>

@@ -263,6 +263,15 @@ describe("external turn execution", () => {
           const tags = events.map((e) => e._tag)
           expect(tags).toContain("ToolCallStarted")
           expect(tags).toContain("ToolCallSucceeded")
+          const started = events.find((e) => e._tag === "ToolCallStarted")
+          expect(started).toEqual(expect.objectContaining({ input: {} }))
+          const succeeded = events.find((e) => e._tag === "ToolCallSucceeded")
+          expect(succeeded).toEqual(
+            expect.objectContaining({
+              summary: "null",
+              output: "null",
+            }),
+          )
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -679,6 +688,14 @@ describe("ExternalDriverContribution end-to-end", () => {
           if (succeeded !== undefined && "toolName" in succeeded) {
             expect(succeeded.toolName).toBe("read_file")
           }
+          const started = events.find((e) => e._tag === "ToolCallStarted")
+          expect(started).toEqual(expect.objectContaining({ input: toolInput }))
+          expect(succeeded).toEqual(
+            expect.objectContaining({
+              summary: '{"contents":"hello"}',
+              output: '{\n  "contents": "hello"\n}',
+            }),
+          )
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -765,6 +782,12 @@ describe("ExternalDriverContribution end-to-end", () => {
           if (failed !== undefined && "toolName" in failed) {
             expect(failed.toolName).toBe("bash")
           }
+          expect(failed).toEqual(
+            expect.objectContaining({
+              summary: '{"error":"permission denied"}',
+              output: '{\n  "error": "permission denied"\n}',
+            }),
+          )
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

@@ -26,6 +26,7 @@ import {
   projectResponsePartsToMessageParts,
 } from "../../../providers/ai-transcript.js"
 import { ProviderError, type ProviderStreamPart } from "../../../providers/provider.js"
+import { summarizeOutput, stringifyOutput } from "../../../domain/tool-output.js"
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 
@@ -264,21 +265,12 @@ export const collectFailedModelTurnResponse = (params: {
     })
   })
 
-const formatToolFailureOutput = (
+const externalToolOutput = (
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>,
-): string => {
-  if (typeof part.encodedResult === "string") return part.encodedResult
-  if (typeof part.result === "string") return part.result
-  if (
-    typeof part.encodedResult === "object" &&
-    part.encodedResult !== null &&
-    "error" in part.encodedResult &&
-    typeof part.encodedResult.error === "string"
-  ) {
-    return part.encodedResult.error
-  }
-  return String(part.result)
-}
+): ToolResultPart["output"] => ({
+  type: part.isFailure ? "error-json" : "json",
+  value: part.encodedResult,
+})
 
 const publishExternalStreamChunk = (params: {
   publishEvent: PublishEvent
@@ -309,6 +301,7 @@ const publishExternalToolCallStarted = (params: {
         branchId: params.branchId,
         toolCallId: ToolCallId.make(params.part.id),
         toolName: params.part.name,
+        input: params.part.params,
       }),
     )
     .pipe(Effect.orDie)
@@ -319,23 +312,18 @@ const publishExternalToolResult = (params: {
   branchId: BranchId
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
 }) => {
-  const output = formatToolFailureOutput(params.part)
+  const output = externalToolOutput(params.part)
+  const fields = {
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    toolCallId: ToolCallId.make(params.part.id),
+    toolName: params.part.name,
+    summary: summarizeOutput(output),
+    output: stringifyOutput(output.value),
+  }
   return params
     .publishEvent(
-      params.part.isFailure
-        ? ToolCallFailed.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            toolCallId: ToolCallId.make(params.part.id),
-            toolName: params.part.name,
-            output,
-          })
-        : ToolCallSucceeded.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            toolCallId: ToolCallId.make(params.part.id),
-            toolName: params.part.name,
-          }),
+      params.part.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
     )
     .pipe(Effect.orDie)
 }
@@ -346,6 +334,7 @@ const collectExternalResponsePart = (params: {
   branchId: BranchId
   part: Response.AnyPart
   publishedToolCallIds: Set<string>
+  publishedToolResultIds: Set<string>
 }) => {
   switch (params.part.type) {
     case "text":
@@ -357,9 +346,10 @@ const collectExternalResponsePart = (params: {
       params.publishedToolCallIds.add(params.part.id)
       return publishExternalToolCallStarted({ ...params, part: params.part })
     case "tool-result":
-      return params.part.preliminary === true
-        ? Effect.void
-        : publishExternalToolResult({ ...params, part: params.part })
+      if (params.part.preliminary === true) return Effect.void
+      if (params.publishedToolResultIds.has(params.part.id)) return Effect.void
+      params.publishedToolResultIds.add(params.part.id)
+      return publishExternalToolResult({ ...params, part: params.part })
     default:
       return Effect.void
   }
@@ -376,6 +366,7 @@ export const collectExternalTurnResponse = (params: {
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
     const publishedToolCallIds = new Set<string>()
+    const publishedToolResultIds = new Set<string>()
 
     const streamFailed = yield* Stream.runForEach(
       params.turnStream.pipe(
@@ -396,6 +387,7 @@ export const collectExternalTurnResponse = (params: {
             branchId: params.branchId,
             part,
             publishedToolCallIds,
+            publishedToolResultIds,
           })
         }),
     ).pipe(
