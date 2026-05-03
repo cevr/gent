@@ -1,32 +1,85 @@
-import { Context, Effect, Layer, Schema } from "effect"
-import { getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
+import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
+import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
 import { type ToolContext } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { formatSchemaError } from "../format-schema-error"
-import {
-  withWideEvent,
-  WideEvent,
-  toolBoundary,
-  ToolError,
-  ToolWarning,
-} from "../wide-event-boundary"
+import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
+import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
+import type { ResourceManagerService } from "../resource-manager.js"
+import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { ToolCallId } from "../../domain/ids.js"
 import type { Option } from "effect"
+import type * as AiTool from "effect/unstable/ai/Tool"
+import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import * as AiError from "effect/unstable/ai/AiError"
+
+export type ProviderToolMap = Record<string, AiTool.Any>
+
+export function convertTools(
+  tools: ReadonlyArray<ToolToken>,
+): AiToolkit.WithHandler<ProviderToolMap> {
+  const toolsRecord: ProviderToolMap = {}
+
+  for (const capability of tools) {
+    toolsRecord[String(getToolId(capability))] = capability
+  }
+
+  return {
+    tools: toolsRecord,
+    handle: (name) =>
+      Effect.fail(
+        AiError.make({
+          module: "ToolRunner",
+          method: "convertTools.handle",
+          reason: new AiError.ToolConfigurationError({
+            toolName: String(name),
+            description:
+              "toolkit execution requires a ToolRunner context; model streaming disables automatic resolution",
+          }),
+        }),
+      ),
+  }
+}
+
+type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
+
+type ToolLifecycleEvent = ToolCallStarted | ToolCallSucceeded | ToolCallFailed
+
+type PublishToolEvent = (event: ToolLifecycleEvent) => Effect.Effect<unknown>
+
+interface ToolExecutionProfile {
+  readonly registry: ExtensionRegistryService
+  readonly permission?: PermissionService
+  readonly resourceManager?: ResourceManagerService
+  readonly publishEvent?: PublishToolEvent
+}
+
+interface ToolHandlerResult {
+  readonly result: unknown
+  readonly encodedResult: unknown
+  readonly isFailure: boolean
+  readonly preliminary: boolean
+}
+
+type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
+
+interface ToolExecutionToolkit {
+  readonly tools: ProviderToolMap
+  readonly handle: (
+    name: string,
+    input: unknown,
+  ) => Effect.Effect<Stream.Stream<ToolHandlerResult>, ToolExecutionError>
+}
 
 export interface ToolRunnerService {
   readonly run: (
-    toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
+    toolCall: ToolCall,
     ctx: ToolContext,
-    /** Per-session profile override. When provided, tool lookup and permission
-     *  use this instead of the server-wide services. */
-    profileOverride?: {
-      readonly registry: ExtensionRegistryService
-      readonly permission?: PermissionService
-    },
+    profileOverride?: ToolExecutionProfile,
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
 
@@ -72,6 +125,196 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     },
   })
 
+const publishStarted = (params: {
+  publishEvent?: PublishToolEvent
+  ctx: ToolContext
+  toolCall: ToolCall
+}) =>
+  params.publishEvent?.(
+    ToolCallStarted.make({
+      sessionId: params.ctx.sessionId,
+      branchId: params.ctx.branchId,
+      toolCallId: params.toolCall.toolCallId,
+      toolName: params.toolCall.toolName,
+      input: params.toolCall.input,
+    }),
+  ) ?? Effect.void
+
+const publishCompleted = (params: {
+  publishEvent?: PublishToolEvent
+  ctx: ToolContext
+  result: ToolResultPart
+}) =>
+  Effect.gen(function* () {
+    if (params.publishEvent === undefined) return
+    const outputSummary = summarizeToolOutput(params.result)
+    const isError = params.result.output.type === "error-json"
+    const fields = {
+      sessionId: params.ctx.sessionId,
+      branchId: params.ctx.branchId,
+      toolCallId: params.result.toolCallId,
+      toolName: params.result.toolName,
+      summary: outputSummary,
+      output: stringifyOutput(params.result.output.value),
+    }
+    yield* params.publishEvent(
+      isError ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
+    )
+  })
+
+const makeExecutionToolkit = (params: {
+  tool: ToolToken
+  toolCall: ToolCall
+  ctx: ToolContext
+  registry: ExtensionRegistryService
+}): ToolExecutionToolkit => {
+  const metadata = getToolMetadata(params.tool)
+  const tools = { [String(getToolId(params.tool))]: params.tool }
+
+  return {
+    tools,
+    handle: (name, input) =>
+      Effect.gen(function* () {
+        if (String(name) !== params.toolCall.toolName) {
+          return yield* AiError.make({
+            module: "ToolRunner",
+            method: "makeExecutionToolkit.handle",
+            reason: new AiError.ToolNotFoundError({
+              toolName: String(name),
+              availableTools: Object.keys(tools),
+            }),
+          })
+        }
+
+        const decodedInput = yield* Schema.decodeUnknownEffect(metadata.input)(input).pipe(
+          Effect.mapError((cause) =>
+            AiError.make({
+              module: "ToolRunner",
+              method: `${String(name)}.handle`,
+              reason: new AiError.ToolParameterValidationError({
+                toolName: String(name),
+                toolParams: input,
+                description: schemaErrorDescription(String(name), cause),
+              }),
+            }),
+          ),
+        )
+
+        const executeResult = yield* params.registry.extensionReactions.executeTool(
+          {
+            toolCallId: params.toolCall.toolCallId,
+            toolName: params.toolCall.toolName,
+            input: decodedInput,
+            sessionId: params.ctx.sessionId,
+            branchId: params.ctx.branchId,
+          },
+          () => {
+            const wrapped = Effect.gen(function* () {
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off — erased heterogeneous tool boundary; failures normalize immediately.
+              const output = yield* metadata
+                .effect(
+                  decodedInput,
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+                  params.ctx as Parameters<typeof metadata.effect>[1],
+                )
+                .pipe(Effect.mapError(normalizeToolExecutionError))
+              return output
+            })
+            return wrapped
+          },
+          params.ctx,
+        )
+
+        const enrichedResult = yield* params.registry.extensionReactions
+          .transformToolResult(
+            {
+              toolCallId: params.toolCall.toolCallId,
+              toolName: params.toolCall.toolName,
+              input: decodedInput,
+              result: executeResult,
+              agentName: params.ctx.agentName,
+              sessionId: params.ctx.sessionId,
+              branchId: params.ctx.branchId,
+            },
+            params.ctx,
+          )
+          .pipe(
+            Effect.catchEager((e) =>
+              Effect.logWarning("extension.reaction.tool-result.failed").pipe(
+                Effect.annotateLogs({ error: String(e) }),
+                Effect.as(executeResult),
+              ),
+            ),
+          )
+
+        const encodedResult = yield* Schema.encodeUnknownEffect(metadata.output)(
+          enrichedResult,
+        ).pipe(
+          Effect.mapError((cause) =>
+            AiError.make({
+              module: "ToolRunner",
+              method: `${String(name)}.handle`,
+              reason: new AiError.ToolResultEncodingError({
+                toolName: String(name),
+                toolResult: enrichedResult,
+                description: schemaErrorDescription(String(name), cause),
+              }),
+            }),
+          ),
+        )
+
+        return Stream.succeed({
+          result: enrichedResult,
+          encodedResult,
+          isFailure: false,
+          preliminary: false,
+        })
+      }),
+  }
+}
+
+const terminalToolResult = (toolkit: ToolExecutionToolkit, toolCall: ToolCall) =>
+  Effect.gen(function* () {
+    const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input)
+    const terminal = yield* resultStream.pipe(
+      Stream.filter((result) => result.preliminary === false),
+      Stream.run(Sink.last()),
+    )
+    if (terminal._tag === "None") {
+      return yield* Effect.die("Tool handler did not produce a final result")
+    }
+    return new ToolResultPart({
+      type: "tool-result",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.toolName,
+      output: {
+        type: terminal.value.isFailure ? "error-json" : "json",
+        value: terminal.value.encodedResult,
+      },
+    })
+  })
+
+const errorMessageFromAiError = (toolName: string, failure: unknown) => {
+  if (AiError.isAiError(failure)) {
+    if (failure.reason._tag === "ToolParameterValidationError") {
+      return failure.reason.description
+    }
+    if (failure.reason._tag === "ToolResultEncodingError") {
+      return `Tool '${toolName}' failed: ${failure.reason.description}`
+    }
+  }
+  return `Tool '${toolName}' failed: ${String(failure)}`
+}
+
+const normalizeToolExecutionError = (failure: unknown): InteractionPendingError | Error => {
+  if (Schema.is(InteractionPendingError)(failure)) return failure
+  if (failure instanceof Error) return failure
+  return new Error(String(failure))
+}
+
+const schemaErrorDescription = (toolName: string, cause: unknown): string =>
+  Schema.isSchemaError(cause) ? formatSchemaError(toolName, cause) : String(cause)
+
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
@@ -86,6 +329,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
         Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
+            yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
 
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
@@ -93,6 +337,24 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const tool: ToolToken | undefined = yield* activeRegistry.getModelCapability(
               toolCall.toolName,
             )
+
+            const finish = (result: ToolResultPart) =>
+              Effect.gen(function* () {
+                yield* publishCompleted({
+                  publishEvent: profileOverride?.publishEvent,
+                  ctx,
+                  result,
+                })
+                yield* Effect.logInfo("tool.completed").pipe(
+                  Effect.annotateLogs({
+                    toolName: toolCall.toolName,
+                    toolCallId: toolCall.toolCallId,
+                    isError: result.output.type === "error-json",
+                  }),
+                )
+                return result
+              })
+
             if (tool === undefined) {
               yield* WideEvent.set({ toolError: ToolError.Unknown })
               yield* Effect.logInfo("tool.unknown").pipe(
@@ -101,98 +363,64 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   toolCallId: toolCall.toolCallId,
                 }),
               )
-              return errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`)
+              return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
             }
             const metadata = getToolMetadata(tool)
 
-            // Run permission.check interceptor, falling back to base Permission service
-            const permCheckResult = yield* runPermissionCheck({
-              toolCall,
-              ctx,
-              extensionReactions: activeRegistry.extensionReactions,
-              permission: activePermission,
-            }).pipe(
-              Effect.catchEager((e) =>
-                WideEvent.set({
-                  toolError: ToolError.PermissionCheckFailed,
-                  errorMessage: String(e),
-                }).pipe(Effect.as("interceptor_failed" as const)),
-              ),
-            )
-
-            if (permCheckResult === "interceptor_failed") {
-              yield* Effect.logWarning("tool.permission.check.failed").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                }),
-              )
-              return errorResult(toolCall, "Permission check failed")
-            }
-
-            if (permCheckResult === "denied") {
-              yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
-              yield* Effect.logInfo("tool.permission.denied").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                }),
-              )
-              return errorResult(toolCall, "Permission denied")
-            }
-
-            const decodedInput = yield* Schema.decodeUnknownEffect(metadata.input)(
-              toolCall.input,
-            ).pipe(Effect.result)
-            if (decodedInput._tag === "Failure") {
-              const failure = decodedInput.failure
-              const message = Schema.isSchemaError(failure)
-                ? formatSchemaError(toolCall.toolName, failure)
-                : `Invalid tool input: ${String(failure)}`
-              yield* WideEvent.set({ toolError: ToolError.SchemaDecode, errorMessage: message })
-              yield* Effect.logWarning("tool.schema.failed").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                }),
-              )
-              return errorResult(toolCall, message)
-            }
-
-            // Run extension tool wrappers, falling back to direct tool execution.
-            const executeResult = yield* activeRegistry.extensionReactions
-              .executeTool(
-                {
-                  toolCallId: toolCall.toolCallId,
-                  toolName: toolCall.toolName,
-                  input: decodedInput.success,
-                  sessionId: ctx.sessionId,
-                  branchId: ctx.branchId,
-                },
-                () => {
-                  const wrapped = Effect.gen(function* () {
-                    const output = yield* metadata.effect(
-                      decodedInput.success,
-                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                      ctx as Parameters<typeof metadata.effect>[1],
-                    )
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                    yield* Schema.encodeUnknownEffect(metadata.output as Schema.Any)(output).pipe(
-                      Effect.orDie,
-                    )
-                    return output
-                  })
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                  return wrapped as Effect.Effect<unknown>
-                },
+            const executeKnownTool = Effect.gen(function* () {
+              const permCheckResult = yield* runPermissionCheck({
+                toolCall,
                 ctx,
+                extensionReactions: activeRegistry.extensionReactions,
+                permission: activePermission,
+              }).pipe(
+                Effect.catchEager((e) =>
+                  WideEvent.set({
+                    toolError: ToolError.PermissionCheckFailed,
+                    errorMessage: String(e),
+                  }).pipe(Effect.as("interceptor_failed" as const)),
+                ),
               )
-              .pipe(Effect.result)
+
+              if (permCheckResult === "interceptor_failed") {
+                yield* Effect.logWarning("tool.permission.check.failed").pipe(
+                  Effect.annotateLogs({
+                    toolName: toolCall.toolName,
+                    toolCallId: toolCall.toolCallId,
+                  }),
+                )
+                return errorResult(toolCall, "Permission check failed")
+              }
+
+              if (permCheckResult === "denied") {
+                yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
+                yield* Effect.logInfo("tool.permission.denied").pipe(
+                  Effect.annotateLogs({
+                    toolName: toolCall.toolName,
+                    toolCallId: toolCall.toolCallId,
+                  }),
+                )
+                return errorResult(toolCall, "Permission denied")
+              }
+
+              return yield* terminalToolResult(
+                makeExecutionToolkit({
+                  tool,
+                  toolCall,
+                  ctx,
+                  registry: activeRegistry,
+                }),
+                toolCall,
+              )
+            })
+
+            const scopedExecute =
+              profileOverride?.resourceManager?.withNeeds(metadata.needs ?? [], executeKnownTool) ??
+              executeKnownTool
+
+            const executeResult = yield* scopedExecute.pipe(Effect.result)
 
             if (executeResult._tag === "Failure") {
-              // InteractionPendingError must escape the tool runner so the machine
-              // transitions to WaitingForInteraction. The interceptor type system erases
-              // the error to `never`, but the error exists at runtime.
               const failure = executeResult.failure as unknown
               if (Schema.is(InteractionPendingError)(failure)) {
                 return yield* failure
@@ -200,49 +428,29 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
               const message = Schema.isSchemaError(failure)
                 ? formatSchemaError(toolCall.toolName, failure)
-                : `Tool '${toolCall.toolName}' failed: ${String(failure)}`
+                : errorMessageFromAiError(toolCall.toolName, failure)
               yield* WideEvent.set({
-                toolError: ToolError.ExecutionFailed,
+                toolError:
+                  AiError.isAiError(failure) &&
+                  failure.reason._tag === "ToolParameterValidationError"
+                    ? ToolError.SchemaDecode
+                    : ToolError.ExecutionFailed,
                 errorMessage: message,
               })
-              yield* Effect.logWarning("tool.execute.failed").pipe(
+              yield* Effect.logWarning(
+                AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
+                  ? "tool.schema.failed"
+                  : "tool.execute.failed",
+              ).pipe(
                 Effect.annotateLogs({
                   toolName: toolCall.toolName,
                   toolCallId: toolCall.toolCallId,
                 }),
               )
-              return errorResult(toolCall, message)
+              return yield* finish(errorResult(toolCall, message))
             }
 
-            // Run explicit tool-result slots — extensions can enrich/append to tool results
-            const enrichedResult = yield* activeRegistry.extensionReactions
-              .transformToolResult(
-                {
-                  toolCallId: toolCall.toolCallId,
-                  toolName: toolCall.toolName,
-                  input: decodedInput.success,
-                  result: executeResult.success,
-                  agentName: ctx.agentName,
-                  sessionId: ctx.sessionId,
-                  branchId: ctx.branchId,
-                },
-                ctx,
-              )
-              .pipe(
-                Effect.catchEager((e) =>
-                  WideEvent.set({
-                    toolWarning: ToolWarning.ResultEnrichmentFailed,
-                    errorMessage: String(e),
-                  }).pipe(Effect.as(executeResult.success)),
-                ),
-              )
-
-            return new ToolResultPart({
-              type: "tool-result",
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              output: { type: "json", value: enrichedResult },
-            })
+            return yield* finish(executeResult.success)
           }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
         }) as ToolRunnerService["run"]
 
@@ -252,14 +460,17 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
   static Test = (): Layer.Layer<ToolRunner> =>
     Layer.succeed(ToolRunner, {
-      run: (toolCall) =>
-        Effect.succeed(
-          new ToolResultPart({
+      run: (toolCall, ctx, profileOverride) =>
+        Effect.gen(function* () {
+          yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
+          const result = new ToolResultPart({
             type: "tool-result",
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
             output: { type: "json", value: null },
-          }),
-        ),
+          })
+          yield* publishCompleted({ publishEvent: profileOverride?.publishEvent, ctx, result })
+          return result
+        }),
     })
 }

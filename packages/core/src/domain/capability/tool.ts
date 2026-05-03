@@ -29,8 +29,8 @@ declare const ToolTokenType: unique symbol
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
   readonly intent: "read" | "write"
-  readonly input: Schema.Schema<Input>
-  readonly output: Schema.Schema<unknown>
+  readonly input: Schema.Decoder<Input, never>
+  readonly output: Schema.Encoder<unknown, never>
   readonly needs?: ReadonlyArray<ToolNeed>
   readonly promptSnippet?: string
   readonly promptGuidelines?: ReadonlyArray<string>
@@ -172,7 +172,7 @@ export const tool = <
   const metadata: GentToolMetadata<Schema.Schema.Type<Params>, Result, Error> = {
     id,
     intent: input.intent ?? "write",
-    input: params,
+    input: input.params,
     output: Schema.Unknown,
     ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),

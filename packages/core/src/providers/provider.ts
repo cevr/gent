@@ -1,5 +1,4 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import { getToolId, type ToolToken } from "../domain/capability/tool.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
 import {
@@ -182,9 +181,9 @@ export interface ProviderService {
   ) => Effect.Effect<ProviderResolution, ProviderError | ProviderAuthError>
 }
 
-// ── Tool Conversion (Capability → advertise-only Toolkit) ──
+// ── Response Encoding Toolkit ──
 
-const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
+const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(
   tools: Tools,
 ): AiToolkit.WithHandler<Tools> => ({
   tools,
@@ -192,27 +191,14 @@ const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
     Effect.fail(
       AiError.make({
         module: "Provider",
-        method: "makeAdvertiseOnlyToolkit.handle",
+        method: "makeEncodingToolkit.handle",
         reason: new AiError.ToolConfigurationError({
           toolName: String(name),
-          description:
-            "gent advertises capabilities to the model with disableToolCallResolution enabled; tool execution stays in SessionRuntime",
+          description: "provider response encoding does not execute tool handlers",
         }),
       }),
     ),
 })
-
-export function convertTools(
-  tools: ReadonlyArray<ToolToken>,
-): AiToolkit.WithHandler<ProviderToolMap> {
-  const toolsRecord: ProviderToolMap = {}
-
-  for (const capability of tools) {
-    toolsRecord[String(getToolId(capability))] = capability
-  }
-
-  return makeAdvertiseOnlyToolkit(toolsRecord)
-}
 
 // ── Debug providers ──
 
@@ -316,7 +302,7 @@ const _toolkitFromProviderOptions = (
   for (const tool of options.tools) {
     toolsRecord[tool.name] = tool
   }
-  return makeAdvertiseOnlyToolkit(toolsRecord)
+  return makeEncodingToolkit(toolsRecord)
 }
 
 // Forward-reference Provider class below via late binding — these

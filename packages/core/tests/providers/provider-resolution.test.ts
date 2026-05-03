@@ -12,7 +12,6 @@ import {
   type AuthStoreService,
 } from "@gent/core/domain/auth-store"
 import {
-  convertTools,
   Provider,
   type ProviderError,
   type ModelRequest,
@@ -20,6 +19,7 @@ import {
   finishPart,
   toolCallPart,
 } from "@gent/core/providers/provider"
+import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"

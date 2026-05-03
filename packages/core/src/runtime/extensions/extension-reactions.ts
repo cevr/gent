@@ -22,6 +22,7 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ActorEngine } from "./actor-engine.js"
 import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 import { Receptionist } from "./receptionist.js"
@@ -54,9 +55,9 @@ export interface CompiledExtensionReactions {
   ) => Effect.Effect<ExtensionTurnProjection, never, ActorEngine | Receptionist>
   readonly executeTool: (
     input: ToolExecuteInput,
-    base: (input: ToolExecuteInput) => Effect.Effect<unknown>,
+    base: (input: ToolExecuteInput) => Effect.Effect<unknown, Error | InteractionPendingError>,
     ctx: ExtensionHostContext,
-  ) => Effect.Effect<unknown>
+  ) => Effect.Effect<unknown, Error | InteractionPendingError>
   readonly transformToolResult: (
     input: ToolResultInput,
     ctx: ExtensionHostContext,
@@ -485,7 +486,7 @@ export const compileExtensionReactions = (
           )
         }
         return current
-      }) as Effect.Effect<unknown>,
+      }),
 
     transformToolResult: (input, ctx) =>
       Effect.gen(function* () {

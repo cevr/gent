@@ -8,7 +8,7 @@ import {
   type AgentName as AgentNameType,
   type RunSpec,
 } from "../../../domain/agent.js"
-import { getToolMetadata, type ToolToken } from "../../../domain/capability/tool.js"
+import { type ToolToken } from "../../../domain/capability/tool.js"
 import { calculateCost, type ModelId } from "../../../domain/model.js"
 import { ConfigService } from "../../config-service.js"
 import type { InteractionPendingError } from "../../../domain/interaction-request.js"
@@ -38,7 +38,6 @@ import {
   StreamEnded,
   StreamStarted,
   ToolCallFailed,
-  ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
   type EventEnvelope,
@@ -50,7 +49,6 @@ import type { ExtensionHostContext } from "../../../domain/extension-host-contex
 import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
 import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
 import {
-  convertTools,
   ProviderError,
   type ProviderService,
   type ProviderStreamPart,
@@ -66,7 +64,7 @@ import type { Receptionist } from "../../extensions/receptionist.js"
 import type { DriverRegistryService } from "../../extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "../../extensions/registry.js"
 import type { ResourceManagerService } from "../../resource-manager.js"
-import type { ToolRunnerService } from "../tool-runner"
+import { convertTools, type ToolRunnerService } from "../tool-runner"
 import {
   assistantMessageIdForTurn,
   buildTurnPromptSections,
@@ -576,16 +574,6 @@ export const executeToolCalls = (params: {
     params.toolCalls,
     (toolCall) =>
       Effect.gen(function* () {
-        yield* params.publishEvent(
-          ToolCallStarted.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            input: toolCall.input,
-          }),
-        )
-
         const ctx = makeToolContext(
           {
             ...params.hostCtx,
@@ -597,36 +585,11 @@ export const executeToolCalls = (params: {
           .run(toolCall, ctx, {
             registry: params.extensionRegistry,
             ...(params.permission !== undefined ? { permission: params.permission } : {}),
+            resourceManager: params.resourceManager,
+            publishEvent: params.publishEvent,
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
-        const tool = yield* params.extensionRegistry.getModelCapability(toolCall.toolName)
-        const result = yield* params.resourceManager.withNeeds(
-          tool !== undefined ? (getToolMetadata(tool).needs ?? []) : [],
-          run,
-        )
-
-        const outputSummary = summarizeToolOutput(result)
-        const isError = result.output.type === "error-json"
-        const toolCallFields = {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          toolCallId: toolCall.toolCallId,
-          toolName: toolCall.toolName,
-          summary: outputSummary,
-          output: stringifyOutput(result.output.value),
-        }
-        yield* params.publishEvent(
-          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
-        )
-        yield* Effect.logInfo("tool.completed").pipe(
-          Effect.annotateLogs({
-            toolName: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-            isError,
-          }),
-        )
-
-        return result
+        return yield* run
       }),
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
   )

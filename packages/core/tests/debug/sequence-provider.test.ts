@@ -6,12 +6,8 @@ import {
   textThenToolCallStep,
   multiToolCallStep,
 } from "@gent/core/debug/provider"
-import {
-  convertTools,
-  Provider,
-  type ModelRequest,
-  type SequenceStep,
-} from "@gent/core/providers/provider"
+import { Provider, type ModelRequest, type SequenceStep } from "@gent/core/providers/provider"
+import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import { tool } from "@gent/core/extensions/api"
