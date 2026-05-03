@@ -8,6 +8,7 @@ import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../runtime/extensions/driver-registry.js"
+import { IdService } from "../runtime/id-service.js"
 
 export { ProviderAuthError } from "../domain/driver.js"
 
@@ -30,20 +31,22 @@ export interface ProviderAuthService {
 export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry> = Layer.effect(
-    ProviderAuth,
-    Effect.gen(function* () {
-      const driverRegistry = yield* DriverRegistry
-      return yield* makeProviderAuth(driverRegistry)
-    }),
-  )
+  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry | IdService> =
+    Layer.effect(
+      ProviderAuth,
+      Effect.gen(function* () {
+        const driverRegistry = yield* DriverRegistry
+        return yield* makeProviderAuth(driverRegistry)
+      }),
+    )
 }
 
 const makeProviderAuth = (
   driverRegistry: DriverRegistryService,
-): Effect.Effect<ProviderAuthService, never, AuthStore> =>
+): Effect.Effect<ProviderAuthService, never, AuthStore | IdService> =>
   Effect.gen(function* () {
     const authStore = yield* AuthStore
+    const idService = yield* IdService
 
     /** Build a PersistAuth callback for a provider — writes credentials to AuthStore */
     const makePersist =
@@ -104,7 +107,7 @@ const makeProviderAuth = (
           message: `Provider "${provider}" does not support authorize`,
         })
       }
-      const authorizationId = Bun.randomUUIDv7()
+      const authorizationId = yield* idService.next
       const extResult = yield* extProvider.auth
         .authorize({
           sessionId,

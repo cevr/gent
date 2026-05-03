@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Effect, Schema } from "effect"
+import { Cause, Clock, Effect, Layer, Schema } from "effect"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import {
   InteractionStorage,
@@ -15,6 +15,7 @@ import {
   type InteractionStorageConfig,
 } from "@gent/core/domain/interaction-request"
 import { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
+import { IdService } from "../../src/runtime/id-service"
 
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(
@@ -31,7 +32,7 @@ const persistInteraction = (is: InteractionStorageService, record: InteractionRe
 // Interaction Request — cold interaction mechanics
 // ============================================================================
 describe("Interaction Request", () => {
-  const storageLive = SqliteStorage.MemoryWithSql()
+  const storageLive = Layer.merge(SqliteStorage.MemoryWithSql(), IdService.Test())
   it.live("present persists request to storage and throws InteractionPendingError", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
@@ -228,7 +229,7 @@ describe("Interaction Request", () => {
       // Second present — finds stored resolution, returns it
       const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
       expect(result.approved).toBe(true)
-    }),
+    }).pipe(Effect.provide(IdService.Test())),
   )
   it.live("rehydrate + storeResolution + present returns stored value (restart-resume)", () =>
     Effect.gen(function* () {
@@ -247,7 +248,7 @@ describe("Interaction Request", () => {
       const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
       expect(result.approved).toBe(true)
       expect(result.notes).toBe("yes")
-    }),
+    }).pipe(Effect.provide(IdService.Test())),
   )
   it.live("cold-resume with InteractionStorage: persist → new service → rehydrate → resolve", () =>
     Effect.gen(function* () {

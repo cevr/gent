@@ -14,6 +14,7 @@
  */
 
 import { Clock, Effect, Ref, Schema } from "effect"
+import { IdService } from "../runtime/id-service.js"
 import { EventStoreError } from "./event"
 import { BranchId, InteractionRequestId, SessionId } from "./ids"
 
@@ -166,8 +167,9 @@ interface InteractionState {
 
 export const makeInteractionService = (
   config: InteractionServiceConfig,
-): Effect.Effect<InteractionService> =>
+): Effect.Effect<InteractionService, never, IdService> =>
   Effect.gen(function* () {
+    const idService = yield* IdService
     const state = yield* Ref.make<InteractionState>({
       storedResolutions: new Map(),
       pendingByContext: new Map(),
@@ -232,7 +234,7 @@ export const makeInteractionService = (
           return stored.decision
         }
 
-        const requestId = InteractionRequestId.make(Bun.randomUUIDv7())
+        const requestId = InteractionRequestId.make(yield* idService.next)
 
         // Persist to storage before publishing event (crash-safe)
         if (config.storage !== undefined) {

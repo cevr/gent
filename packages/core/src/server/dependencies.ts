@@ -170,7 +170,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
   )
-  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, IdService.Live)
   const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer

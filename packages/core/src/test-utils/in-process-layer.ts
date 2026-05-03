@@ -47,7 +47,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
     },
   ])
 
-  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, IdService.Live)
   const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 

@@ -6,6 +6,7 @@ import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { IdService } from "../../src/runtime/id-service"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ensureStorageParents } from "@gent/core/test-utils"
@@ -21,6 +22,7 @@ const makeLayer = () => {
     EventStore.Memory,
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    IdService.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const taskExtensionLayer = Layer.provide(

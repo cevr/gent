@@ -65,7 +65,7 @@ export interface E2ELayerConfig {
   /** AgentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Approval service override. Default auto-approves for E2E tests. */
-  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher>
+  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | IdService>
   /** Optional per-cwd profile cache for shared-server routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
@@ -206,7 +206,12 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         modelDrivers: resolved.modelDrivers,
         externalDrivers: resolved.externalDrivers,
       })
-      const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
+      const authDeps = Layer.mergeAll(
+        authStoreLive,
+        extensionRegistryLive,
+        driverRegistryLive,
+        IdService.Live,
+      )
       const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       // Base services — everything that doesn't depend on reducing event store
@@ -246,7 +251,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const approvalLayer =
         config.approvalLayer === undefined
           ? ApprovalService.Test()
-          : Layer.provide(config.approvalLayer, eventPublisherLive)
+          : Layer.provide(config.approvalLayer, Layer.merge(eventPublisherLive, IdService.Live))
       const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
       const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(

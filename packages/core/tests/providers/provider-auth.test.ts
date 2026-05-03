@@ -11,6 +11,7 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { IdService } from "../../src/runtime/id-service"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 const pendingCallbacks = new Map<string, (code?: string) => string>()
 const stubModel = AiModel.make(
@@ -103,7 +104,7 @@ describe("ProviderAuth", () => {
       const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry, IdService.Test()),
       )
       const result = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -130,7 +131,7 @@ describe("ProviderAuth", () => {
       const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry, IdService.Test()),
       )
       const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -146,7 +147,7 @@ describe("ProviderAuth", () => {
     Effect.gen(function* () {
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry, IdService.Test()),
       )
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -163,7 +164,7 @@ describe("ProviderAuth", () => {
       pendingCallbacks.clear()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry, IdService.Test()),
       )
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth

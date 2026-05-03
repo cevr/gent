@@ -7,6 +7,7 @@
 
 export { BuiltinEventSink, type BuiltinEventSinkService } from "../domain/event-publisher.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
+export { IdService, type IdServiceShape } from "../runtime/id-service.js"
 export {
   InteractionPendingReader,
   type InteractionPendingReaderService,
