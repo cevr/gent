@@ -47,8 +47,11 @@ import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
+import type { StorageError } from "../../domain/storage-error.js"
 import { SessionStorage } from "../../storage/session-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { EventStorage } from "../../storage/event-storage.js"
+import { StorageTransaction } from "../../storage/storage-transaction.js"
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
@@ -122,17 +125,18 @@ import {
   runTurnStreamPhase,
   toolCallsFromResponseParts,
   type PricingLookup,
+  type TurnStorage,
 } from "./phases/turn.js"
 
 // Agent Loop Context
 
 const resolveStoredAgent = (params: {
-  storage: StorageService
+  storage: Pick<TurnStorage, "events">
   sessionId: SessionId
   branchId: BranchId
 }): Effect.Effect<AgentNameType, never> =>
   Effect.gen(function* () {
-    const latestAgentEvent = yield* params.storage
+    const latestAgentEvent = yield* params.storage.events
       .getLatestEvent({
         sessionId: params.sessionId,
         branchId: params.branchId,
@@ -309,7 +313,6 @@ const makeRecoveryDecision = (params: {
     state: LoopState
     queue: LoopQueueState
   }
-  storage: StorageService
   extensionRegistry: ExtensionRegistryService
   currentAgent: AgentNameType
   publishEvent: (event: AgentEvent) => Effect.Effect<void, never>
@@ -460,8 +463,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
   }): Layer.Layer<
     AgentLoop,
     never,
-    | Storage
     | SessionStorage
+    | MessageStorage
+    | EventStorage
+    | StorageTransaction
     | CheckpointStorage
     | Provider
     | ExtensionRegistry
@@ -475,8 +480,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
-        const storage = yield* Storage
         const sessionStorage = yield* SessionStorage
+        const messageStorage = yield* MessageStorage
+        const eventStorage = yield* EventStorage
+        const storageTransaction = yield* StorageTransaction
+        const turnStorage: TurnStorage = {
+          transaction: storageTransaction,
+          events: eventStorage,
+          messages: messageStorage,
+          sessions: sessionStorage,
+        }
         const checkpointStorage = yield* CheckpointStorage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
@@ -630,7 +643,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
             const interruptedRef = yield* Ref.make(false)
-            const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
+            const currentAgent = yield* resolveStoredAgent({
+              storage: turnStorage,
+              sessionId,
+              branchId,
+            })
             const initialLoopState = buildIdleState({ currentAgent })
             const loopRef = yield* SubscriptionRef.make<AgentLoopState>(
               buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
@@ -803,13 +820,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               // we're resuming from WaitingForInteraction or crash. Execute tools first.
               // Resume always targets step 1 — interactions/crashes happen during the first tool execution.
               const resumeStep = 1
-              const existingAssistant = yield* storage
+              const existingAssistant = yield* messageStorage
                 .getMessage(assistantMessageIdForTurn(state.message.id, resumeStep))
                 .pipe(Effect.orElseSucceed(() => undefined))
               if (existingAssistant !== undefined && !interrupted) {
                 const toolCalls = assistantDraftFromMessage(existingAssistant).toolCalls
                 if (toolCalls.length > 0) {
-                  const existingResults = yield* storage
+                  const existingResults = yield* messageStorage
                     .getMessage(toolResultMessageIdForTurn(state.message.id, resumeStep))
                     .pipe(Effect.orElseSucceed(() => undefined))
                   if (existingResults === undefined) {
@@ -829,7 +846,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       extensionRegistry: turnExtensionRegistry,
                       permission: turnPermission,
                       resourceManager,
-                      storage,
+                      storage: turnStorage,
                     }).pipe(
                       Effect.as(undefined as ToolInteractionPending | undefined),
                       Effect.catchIf(
@@ -877,7 +894,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   agentOverride: state.agentOverride,
                   runSpec: state.runSpec,
                   currentAgent: state.currentAgent,
-                  storage,
+                  storage: turnStorage,
                   branchId,
                   extensionRegistry: turnExtensionRegistry,
                   driverRegistry: turnDriverRegistry,
@@ -931,7 +948,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   hostCtx: turnHostCtx,
                   publishEvent: publishEventOrDie,
                   eventPublisher,
-                  storage,
+                  storage: turnStorage,
                   sessionId,
                   branchId,
                   activeStream,
@@ -971,7 +988,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   extensionRegistry: turnExtensionRegistry,
                   permission: turnPermission,
                   resourceManager,
-                  storage,
+                  storage: turnStorage,
                 }).pipe(
                   Effect.as(undefined as ToolInteractionPending | undefined),
                   Effect.catchIf(
@@ -994,7 +1011,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
               // Finalize — TurnCompleted fires once per turn
               yield* finalizeTurnPhase({
-                storage,
+                storage: turnStorage,
                 eventPublisher,
                 sessionId,
                 branchId,
@@ -1337,7 +1354,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               }
               const recovered = yield* makeRecoveryDecision({
                 checkpoint: decoded.value,
-                storage,
                 extensionRegistry,
                 currentAgent,
                 publishEvent: publishEventOrDie,
@@ -1819,7 +1835,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.gen(function* () {
                 yield* getLoop(command.sessionId, command.branchId)
                 yield* recordToolResultPhase({
-                  storage,
+                  storage: turnStorage,
                   eventPublisher,
                   commandId: command.commandId ?? makeCommandId(),
                   sessionId: command.sessionId,
@@ -1863,7 +1879,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   permission: environment.turnPermission,
                   hostCtx: environment.turnHostCtx,
                   resourceManager,
-                  storage,
+                  storage: turnStorage,
                 })
               }),
             )
@@ -1969,7 +1985,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             })
 
             yield* persistMessageReceived({
-              storage,
+              storage: turnStorage,
               eventPublisher,
               message: userMessage,
             }).pipe(
@@ -2129,7 +2145,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               return runtimeStateFromLoopState(
                 buildIdleState({
                   currentAgent: yield* resolveStoredAgent({
-                    storage,
+                    storage: turnStorage,
                     sessionId: input.sessionId,
                     branchId: input.branchId,
                   }),

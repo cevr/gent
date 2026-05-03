@@ -14,6 +14,7 @@ import { BranchStorage } from "./branch-storage.js"
 import { MessageStorage } from "./message-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
+import { StorageTransaction } from "./storage-transaction.js"
 import { StorageError } from "../domain/storage-error.js"
 export { StorageError }
 
@@ -224,7 +225,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage,
+    | RelationshipStorage
+    | StorageTransaction,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -242,6 +244,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     return Layer.mergeAll(
       base,
       Layer.provide(subTagsFromContext, base),
+      Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
@@ -263,7 +266,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage,
+    | RelationshipStorage
+    | StorageTransaction,
     StorageError
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
@@ -273,6 +277,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     return Layer.mergeAll(
       base,
       Layer.provide(subTagsFromContext, base),
+      Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
@@ -293,7 +298,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | BranchStorage
     | MessageStorage
     | EventStorage
-    | RelationshipStorage,
+    | RelationshipStorage
+    | StorageTransaction,
     StorageError
   > => Storage.MemoryWithSql()
 }

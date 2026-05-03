@@ -16,6 +16,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
+import { StorageTransaction } from "../storage/storage-transaction.js"
 import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
@@ -60,6 +61,7 @@ type EphemeralOverrideProvides =
   | MessageStorage
   | EventStorage
   | RelationshipStorage
+  | StorageTransaction
   | CheckpointStorage
   | InteractionStorage
   | InteractionPendingReader
@@ -80,6 +82,7 @@ const storageOverrideTags = [
   MessageStorage,
   EventStorage,
   RelationshipStorage,
+  StorageTransaction,
   CheckpointStorage,
   InteractionStorage,
   InteractionPendingReader,

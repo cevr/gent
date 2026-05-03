@@ -47,7 +47,11 @@ import { summarizeToolOutput, stringifyOutput } from "../../../domain/tool-outpu
 import type { PermissionService } from "../../../domain/permission.js"
 import type { ExtensionHostContext } from "../../../domain/extension-host-context.js"
 import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
-import type { StorageError, StorageService } from "../../../storage/sqlite-storage.js"
+import type { StorageError } from "../../../domain/storage-error.js"
+import type { EventStorageService } from "../../../storage/event-storage.js"
+import type { MessageStorageService } from "../../../storage/message-storage.js"
+import type { SessionStorageService } from "../../../storage/session-storage.js"
+import type { StorageTransactionService } from "../../../storage/storage-transaction.js"
 import {
   ProviderError,
   type ProviderService,
@@ -86,23 +90,30 @@ type CommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
   | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
 
+export interface TurnStorage {
+  readonly transaction: StorageTransactionService
+  readonly events: EventStorageService
+  readonly messages: MessageStorageService
+  readonly sessions: SessionStorageService
+}
+
 export const findPersistedEvent = (params: {
-  storage: StorageService
+  storage: Pick<TurnStorage, "events">
   sessionId: SessionId
   branchId: BranchId
   match: (envelope: EventEnvelope) => boolean
 }) =>
-  params.storage
+  params.storage.events
     .listEvents({ sessionId: params.sessionId, branchId: params.branchId })
     .pipe(Effect.map((events) => [...events].reverse().find(params.match)))
 
 export const commitWithEvent = <A, E, R>(params: {
-  storage: StorageService
+  storage: Pick<TurnStorage, "transaction">
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   mutation: Effect.Effect<CommittedEvent<A>, E, R>
 }) =>
   Effect.gen(function* () {
-    const committed = yield* params.storage.withTransaction(params.mutation)
+    const committed = yield* params.storage.transaction.withTransaction(params.mutation)
     if (committed.envelope !== undefined) {
       yield* params.eventPublisher.deliver(committed.envelope)
     }
@@ -110,7 +121,7 @@ export const commitWithEvent = <A, E, R>(params: {
   })
 
 export const persistMessageReceived = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   message: Message
 }) =>
@@ -118,7 +129,7 @@ export const persistMessageReceived = (params: {
     storage: params.storage,
     eventPublisher: params.eventPublisher,
     mutation: Effect.gen(function* () {
-      const existing = yield* params.storage.getMessage(params.message.id)
+      const existing = yield* params.storage.messages.getMessage(params.message.id)
       if (existing !== undefined) {
         const envelope = yield* findPersistedEvent({
           storage: params.storage,
@@ -135,7 +146,7 @@ export const persistMessageReceived = (params: {
         }
       }
 
-      yield* params.storage.createMessageIfAbsent(params.message)
+      yield* params.storage.messages.createMessageIfAbsent(params.message)
       const envelope = yield* params.eventPublisher.append(
         MessageReceived.make({
           message: params.message,
@@ -146,7 +157,7 @@ export const persistMessageReceived = (params: {
   })
 
 export const recordToolResultPhase = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   commandId: ActorCommandId
   sessionId: SessionId
@@ -188,7 +199,7 @@ export const recordToolResultPhase = (params: {
       storage: params.storage,
       eventPublisher: params.eventPublisher,
       mutation: Effect.gen(function* () {
-        const existing = yield* params.storage.getMessage(message.id)
+        const existing = yield* params.storage.messages.getMessage(message.id)
         if (existing !== undefined) {
           const envelope = yield* findPersistedEvent({
             storage: params.storage,
@@ -206,7 +217,7 @@ export const recordToolResultPhase = (params: {
           }
         }
 
-        const result = yield* params.storage.createMessageIfAbsent(message)
+        const result = yield* params.storage.messages.createMessageIfAbsent(message)
         const envelope = yield* params.eventPublisher.append(
           isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
         )
@@ -240,7 +251,7 @@ export const toolCallsFromResponseParts = (
   )
 
 export const persistMessageParts = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
@@ -261,7 +272,7 @@ export const persistMessageParts = (params: {
       createdAt: params.createdAt ?? (yield* DateTime.nowAsDate),
     })
 
-    const existing = yield* params.storage.getMessage(message.id)
+    const existing = yield* params.storage.messages.getMessage(message.id)
     if (existing !== undefined) return existing
 
     return yield* persistMessageReceived({
@@ -272,7 +283,7 @@ export const persistMessageParts = (params: {
   })
 
 export const persistAssistantParts = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
@@ -313,7 +324,7 @@ export const persistAssistantParts = (params: {
   })
 
 export const persistToolParts = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
@@ -391,7 +402,7 @@ export const resolveTurnContext = (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
   currentAgent?: AgentNameType
-  storage: StorageService
+  storage: TurnStorage
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
   driverRegistry: DriverRegistryService
@@ -403,7 +414,7 @@ export const resolveTurnContext = (params: {
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
-    const rawMessages = yield* params.storage
+    const rawMessages = yield* params.storage.messages
       .listMessages(params.branchId)
       .pipe(Effect.map((items) => [...items]))
     const agent = yield* params.extensionRegistry.getAgent(currentAgent)
@@ -528,7 +539,7 @@ export const resolveTurnContext = (params: {
       },
       { projection: projectionCtx, host: params.hostCtx },
     )
-    const session = yield* params.storage
+    const session = yield* params.storage.sessions
       .getSession(params.sessionId)
       .pipe(Effect.catchEager(() => Effect.void))
 
@@ -596,7 +607,7 @@ export const resolveTurnPhase = (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
   currentAgent?: AgentNameType
-  storage: StorageService
+  storage: TurnStorage
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
   driverRegistry: DriverRegistryService
@@ -831,7 +842,7 @@ export const runTurnStreamPhase = (params: {
   activeStream: ActiveStreamHandle
   extensionRegistry: ExtensionRegistryService
   driverRegistry: DriverRegistryService
-  storage: StorageService
+  storage: TurnStorage
   hostCtx: ExtensionHostContext
   turnMetrics?: Ref.Ref<TurnMetrics>
   getPricing: PricingLookup
@@ -1007,13 +1018,13 @@ export const executeToolsPhase = (params: {
   extensionRegistry: ExtensionRegistryService
   permission?: PermissionService
   resourceManager: ResourceManagerService
-  storage: StorageService
+  storage: TurnStorage
 }) =>
   Effect.gen(function* () {
     if (params.toolCalls.length === 0) return
 
     const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
-    const existing = yield* params.storage.getMessage(toolResultMessageId)
+    const existing = yield* params.storage.messages.getMessage(toolResultMessageId)
     if (existing !== undefined) return
 
     const toolResults = yield* executeToolCalls(params)
@@ -1043,7 +1054,7 @@ export const invokeToolPhase = (params: {
   permission?: PermissionService
   hostCtx: ExtensionHostContext
   resourceManager: ResourceManagerService
-  storage: StorageService
+  storage: TurnStorage
 }) =>
   Effect.gen(function* () {
     const toolCalls = [
@@ -1067,7 +1078,7 @@ export const invokeToolPhase = (params: {
       hostCtx: params.hostCtx,
     })
 
-    const existing = yield* params.storage.getMessage(params.toolResultMessageId)
+    const existing = yield* params.storage.messages.getMessage(params.toolResultMessageId)
     if (existing !== undefined) return
 
     const toolResults = yield* executeToolCalls({
@@ -1093,7 +1104,7 @@ export const invokeToolPhase = (params: {
   })
 
 export const finalizeTurnPhase = (params: {
-  storage: StorageService
+  storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
@@ -1107,7 +1118,7 @@ export const finalizeTurnPhase = (params: {
   hostCtx: ExtensionHostContext
 }) =>
   Effect.gen(function* () {
-    const existingMessage = yield* params.storage.getMessage(params.messageId)
+    const existingMessage = yield* params.storage.messages.getMessage(params.messageId)
     if (existingMessage?.turnDurationMs !== undefined) {
       const envelope = yield* findPersistedEvent({
         storage: params.storage,
@@ -1126,9 +1137,9 @@ export const finalizeTurnPhase = (params: {
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-    const envelope = yield* params.storage.withTransaction(
+    const envelope = yield* params.storage.transaction.withTransaction(
       Effect.gen(function* () {
-        yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
+        yield* params.storage.messages.updateMessageTurnDuration(params.messageId, turnDurationMs)
         return yield* params.eventPublisher.append(
           TurnCompleted.make({
             sessionId: params.sessionId,
