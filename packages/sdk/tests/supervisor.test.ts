@@ -1,6 +1,6 @@
 import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Fiber } from "effect"
+import { Deferred, Effect, Exit, Fiber } from "effect"
 import {
   WorkerSupervisorError,
   WorkerSupervisorInternal,
@@ -11,21 +11,32 @@ import {
 
 /**
  * Minimal fake supervisor for testing waitForWorkerRunning.
- * Only implements getState + subscribe.
+ * Only implements getState + subscribe. Exposes a Deferred resolved
+ * when the first subscriber registers so tests can deterministically
+ * wait for the forked fiber to wire its listener instead of timing it.
  */
 function fakeSupervisor(initial: WorkerLifecycleState): Pick<
   WorkerSupervisor,
   "getState" | "subscribe"
 > & {
   emit: (state: WorkerLifecycleState) => void
+  awaitSubscribed: Effect.Effect<void>
 } {
   let current = initial
   const listeners = new Set<(state: WorkerLifecycleState) => void>()
+  const subscribed = Deferred.makeUnsafe<void>()
   return {
     getState: () => current,
     subscribe: (listener) => {
       listeners.add(listener)
       listener(current)
+      // Defer the Deferred resolution to a microtask so the awaiting
+      // fiber resumes AFTER subscribe() has returned. Resolving inline
+      // re-enters the test fiber while production code is still inside
+      // the subscribe call (before `unsubscribe` is initialized).
+      queueMicrotask(() => {
+        Deferred.doneUnsafe(subscribed, Effect.void)
+      })
       return () => {
         listeners.delete(listener)
       }
@@ -34,6 +45,7 @@ function fakeSupervisor(initial: WorkerLifecycleState): Pick<
       current = state
       for (const listener of listeners) listener(state)
     },
+    awaitSubscribed: Deferred.await(subscribed),
   }
 }
 
@@ -58,7 +70,7 @@ describe("waitForWorkerRunning", () => {
     Effect.gen(function* () {
       const sup = fakeSupervisor(starting)
       const fiber = yield* Effect.forkChild(waitForWorkerRunning(sup))
-      yield* Effect.promise(() => Bun.sleep(10))
+      yield* sup.awaitSubscribed
       sup.emit(running)
       const exit = yield* Effect.exit(Fiber.join(fiber))
       expect(Exit.isSuccess(exit)).toBe(true)
@@ -85,7 +97,7 @@ describe("waitForWorkerRunning", () => {
     Effect.gen(function* () {
       const sup = fakeSupervisor(starting)
       const fiber = yield* Effect.forkChild(waitForWorkerRunning(sup))
-      yield* Effect.promise(() => Bun.sleep(10))
+      yield* sup.awaitSubscribed
       sup.emit(stopped)
       const exit = yield* Effect.exit(Fiber.join(fiber))
       expect(Exit.isFailure(exit)).toBe(true)
@@ -96,7 +108,7 @@ describe("waitForWorkerRunning", () => {
     Effect.gen(function* () {
       const sup = fakeSupervisor(starting)
       const fiber = yield* Effect.forkChild(waitForWorkerRunning(sup))
-      yield* Effect.promise(() => Bun.sleep(10))
+      yield* sup.awaitSubscribed
       sup.emit(failed)
       const exit = yield* Effect.exit(Fiber.join(fiber))
       expect(Exit.isFailure(exit)).toBe(true)
@@ -107,7 +119,7 @@ describe("waitForWorkerRunning", () => {
     Effect.gen(function* () {
       const sup = fakeSupervisor(starting)
       const fiber = yield* Effect.forkChild(waitForWorkerRunning(sup))
-      yield* Effect.promise(() => Bun.sleep(10))
+      yield* sup.awaitSubscribed
       yield* Fiber.interrupt(fiber)
       // After interrupt, emitting should not throw (listener was removed)
       sup.emit(running)

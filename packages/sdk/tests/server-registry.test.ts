@@ -586,8 +586,12 @@ describe("signalIfIdentityOwned", () => {
       const entry = makeEntry({ pid: proc.pid })
       const result = yield* signalIfIdentityOwned(entry, () => Effect.succeed(true))
       expect(result).toBe("signaled")
-      // Wait briefly for SIGTERM to propagate
-      yield* Effect.promise(() => Bun.sleep(200))
+      // Poll for SIGTERM propagation instead of fixed-time sleep so the
+      // test passes immediately once the kernel delivers the signal.
+      const deadline = (yield* Clock.currentTimeMillis) + 2000
+      while (isPidAlive(proc.pid) && (yield* Clock.currentTimeMillis) < deadline) {
+        yield* Effect.sleep("10 millis")
+      }
       expect(isPidAlive(proc.pid)).toBe(false)
     }),
   )
