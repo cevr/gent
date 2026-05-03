@@ -220,7 +220,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | StorageTransaction,
+    | StorageTransaction
+    | InteractionPendingReader,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -261,7 +262,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | StorageTransaction,
+    | StorageTransaction
+    | InteractionPendingReader,
     StorageError
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
@@ -293,7 +295,8 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     | MessageStorage
     | EventStorage
     | RelationshipStorage
-    | StorageTransaction,
+    | StorageTransaction
+    | InteractionPendingReader,
     StorageError
   > => Storage.MemoryWithSql()
 }

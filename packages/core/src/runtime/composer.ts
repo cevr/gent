@@ -9,7 +9,7 @@
 
 import { Layer } from "effect"
 import type { Context } from "effect"
-import type { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/unstable/sql"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -24,6 +24,7 @@ import { InteractionPendingReader } from "../storage/interaction-pending-reader.
 import { SearchStorage } from "../storage/search-storage.js"
 import { EventStore } from "../domain/event.js"
 import { BuiltinEventSink, EventPublisher } from "../domain/event-publisher.js"
+import type { StorageError } from "../domain/storage-error.js"
 import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
@@ -35,7 +36,6 @@ import {
   mergeErasedLayers,
   omitErasedContext,
   restoreErasedLayer,
-  type ErasedLayer,
 } from "./extensions/effect-membrane.js"
 
 export interface EphemeralRuntimeInputs<Provides> {
@@ -46,7 +46,7 @@ export interface EphemeralRuntimeInputs<Provides> {
 }
 
 export interface EphemeralRuntimeOverrides {
-  readonly storage: ErasedLayer
+  readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
   readonly eventStore: Layer.Layer<EventStore, unknown, unknown>
   readonly eventPublisher: Layer.Layer<EventPublisher | BuiltinEventSink, unknown, unknown>
   readonly approval: Layer.Layer<ApprovalService, unknown, unknown>
@@ -81,6 +81,7 @@ type EphemeralOverrideProvides =
   | SessionRuntime
 
 const storageOverrideTags = [
+  SqlClient.SqlClient,
   Storage,
   SessionStorage,
   BranchStorage,
@@ -125,16 +126,29 @@ export const buildEphemeralRuntime = <Provides>(
     ]),
   )
 
-  // Merge order is parent → extension layers → child overrides. Last writer wins.
+  const typedExtensionLayer =
+    inputs.extensionLayers === undefined
+      ? undefined
+      : restoreErasedLayer<Provides, never, EphemeralStorageProvides>(
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — extension layer membrane owns heterogeneous extension requirements
+          eraseLayer(inputs.extensionLayers),
+        )
+
+  const extensionLayer =
+    typedExtensionLayer === undefined
+      ? undefined
+      : Layer.provideMerge(typedExtensionLayer, inputs.overrides.storage)
+
+  // Merge order is parent → extension layers fed by child storage → child overrides. Last writer wins.
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
   const merged = mergeErasedLayers([
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
     eraseLayer(parentLayer),
-    ...(inputs.extensionLayers === undefined
+    ...(extensionLayer === undefined
       ? []
       : [
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-          eraseLayer(inputs.extensionLayers),
+          eraseLayer(extensionLayer),
         ]),
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
     eraseLayer(inputs.overrides.storage),

@@ -155,6 +155,54 @@ describe("scope brand type fences", () => {
     expect(composed.profile.cwd).toBe("/tmp")
   })
 
+  test("ephemeral storage override rejects layers missing focused storage services", () => {
+    const _badOverrides: EphemeralRuntimeOverrides = {
+      ...baseOverrides(),
+      // @ts-expect-error — storage override must provide the full child-owned storage family
+      storage: Layer.empty,
+    }
+    void _badOverrides
+  })
+
+  test("ephemeral extension layers receive child-owned SqlClient", () => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        class ExtensionSqlProbe extends Context.Service<
+          ExtensionSqlProbe,
+          { readonly sql: unknown }
+        >()("@gent/core/tests/scope-brands/ExtensionSqlProbe") {}
+
+        const parentSql = { sentinel: "parent-sql" } as never
+        const parentServicesWithSql = Context.add(
+          parentServices,
+          SqlClient.SqlClient,
+          parentSql,
+        ) as Context.Context<never>
+
+        const extensionLayer = Layer.effect(
+          ExtensionSqlProbe,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            return { sql }
+          }),
+        )
+
+        const composed = buildEphemeralRuntime({
+          parent: serverParent,
+          parentServices: parentServicesWithSql,
+          overrides: baseOverrides(),
+          extensionLayers: extensionLayer,
+        })
+
+        const probe = yield* Effect.gen(function* () {
+          return yield* ExtensionSqlProbe
+        }).pipe(Effect.provide(composed.layer))
+
+        expect((probe.sql as { sentinel: string }).sentinel).toBe("child-sql")
+      }),
+    )
+  })
+
   test("runWithBuiltLayer satisfies the built layer's services and leaves only scope", () => {
     const fakeLayer = Layer.succeed(FakeService, { value: 42 })
     const consumer = Effect.gen(function* () {
