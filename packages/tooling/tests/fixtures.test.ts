@@ -117,6 +117,14 @@ const CASES: ReadonlyArray<RuleCase> = [
     // 3 forms × 1 write each = 3 reports
     expectedCount: 3,
   },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "no-bun-outside-adapter.invalid.ts",
+    // valid file ends in `-adapter.ts` so the path-allowlist exempts it
+    valid: "no-bun-outside-adapter.valid-adapter.ts",
+    // 5 distinct Bun.* member expressions in the invalid fixture
+    expectedCount: 5,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
@@ -131,13 +139,28 @@ const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
 }
 
 effectDescribe("custom lint rules", () => {
-  const loadRuns = Effect.all(
-    [
-      Effect.promise(() => runOxlint(CASES.map((c) => c.invalid))),
-      Effect.promise(() => runOxlint(CASES.map((c) => c.valid))),
-    ],
-    { concurrency: "unbounded" },
-  )
+  // Memoize the two oxlint invocations so each `it.live` test reuses the
+  // result instead of re-spawning oxlint per assertion. Without this,
+  // adding a CASES entry adds 2× per-test runs and pushes the suite
+  // toward the test budget. `Effect.cached` produces a `Effect<Effect<...>>`
+  // — yield once at module init, then reuse the inner effect across tests.
+  const loadRunsRef: { current: Effect.Effect<readonly [OxlintRun, OxlintRun]> | undefined } = {
+    current: undefined,
+  }
+  const loadRuns = Effect.gen(function* () {
+    if (loadRunsRef.current === undefined) {
+      loadRunsRef.current = yield* Effect.cached(
+        Effect.all(
+          [
+            Effect.promise(() => runOxlint(CASES.map((c) => c.invalid))),
+            Effect.promise(() => runOxlint(CASES.map((c) => c.valid))),
+          ],
+          { concurrency: "unbounded" },
+        ),
+      )
+    }
+    return yield* loadRunsRef.current
+  })
 
   for (const c of CASES) {
     it.live(`${c.rule} fires on invalid fixture`, () =>

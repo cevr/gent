@@ -1177,6 +1177,69 @@ const plugin: Plugin = {
      * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
      * already vanishingly rare in this codebase.
      */
+    /**
+     * Bans `Bun.*` references outside platform adapters, scripts, tooling,
+     * and tests. The `Bun` global is a platform-specific runtime API; product
+     * code should route through Effect platform services (`IdService`,
+     * `FileSystem`, `ChildProcess`, `KeyValueStore`, `Config`) so the runtime
+     * is portable and the I/O boundary is explicit.
+     *
+     * Exempt by filename:
+     *   - `*-adapter.ts` (the convention for platform boundaries)
+     *   - `**\/scripts/**` (build/dev entrypoints)
+     *   - `**\/packages/tooling/**` (CI helpers)
+     *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
+     *   - `**\/main.ts` (process entrypoints)
+     *   - `**\/runtime/id-service.ts` (the canonical IdService.Live adapter)
+     *   - `**\/lint/**` (this plugin file)
+     *   - `*.test.ts` and files under `tests/`
+     *
+     * Note: this is the "broad" allowlist landed in C32.1; subsequent commits
+     * shrink it as call sites migrate to platform services or move into named
+     * `*-adapter.ts` files.
+     */
+    "no-bun-outside-adapter": {
+      create(context) {
+        const filename = context.filename
+        // Fixtures must run through the rule even though they sit under
+        // `packages/tooling/fixtures/` — they exist precisely to verify rule
+        // behavior. Exclude that subtree from the tooling allowlist below.
+        const inFixtures = /\/packages\/tooling\/fixtures\//.test(filename)
+        if (!inFixtures) {
+          if (/-adapter\.ts$/.test(filename)) return {}
+          if (/\/scripts\//.test(filename)) return {}
+          if (/\/packages\/tooling\//.test(filename)) return {}
+          if (/\/packages\/e2e\//.test(filename)) return {}
+          if (/\/main\.ts$/.test(filename)) return {}
+          if (/\/runtime\/id-service\.ts$/.test(filename)) return {}
+          if (/\/lint\/[^/]+\.ts$/.test(filename)) return {}
+          if (/\/tests\//.test(filename)) return {}
+          if (/\.test\.tsx?$/.test(filename)) return {}
+        } else {
+          // Inside fixtures: the `-adapter.ts` filename suffix is the only
+          // exemption that applies (so the valid-adapter fixture passes).
+          if (/-adapter\.ts$/.test(filename)) return {}
+        }
+        return {
+          MemberExpression(node) {
+            if (!isAstNode(node)) return
+            const object = getNodeField(node, "object")
+            if (object?.type !== "Identifier") return
+            if (getStringField(object, "name") !== "Bun") return
+            const prop = getNodeField(node, "property")
+            let propName: string | undefined
+            if (prop?.type === "Identifier") propName = getStringField(prop, "name")
+            else if (prop?.type === "StringLiteral") propName = getStringField(prop, "value")
+            const suffix = propName !== undefined ? `.${propName}` : ""
+            context.report({
+              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`IdService\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`) or move the call into a \`*-adapter.ts\` file.`,
+              node,
+            })
+          },
+        }
+      },
+    },
+
     "no-hand-rolled-tagged-union": {
       create(context) {
         const isReportableTagLiteral = (member: AstNode): boolean => {
