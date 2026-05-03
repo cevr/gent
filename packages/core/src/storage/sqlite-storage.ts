@@ -131,11 +131,8 @@ const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient
 /** Build focused sub-Tag layers from a StorageService value (no extra scope). */
 const subTagLayersFromService = (
   s: StorageService,
-): Layer.Layer<
-  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage
-> =>
+): Layer.Layer<BranchStorage | MessageStorage | EventStorage | RelationshipStorage> =>
   Layer.mergeAll(
-    SessionStorage.fromStorage(s),
     BranchStorage.fromStorage(s),
     MessageStorage.fromStorage(s),
     EventStorage.fromStorage(s),
@@ -148,7 +145,7 @@ const subTagLayersFromService = (
  * avoids double-instantiating the base layer (no `base` argument needed).
  */
 const subTagsFromContext: Layer.Layer<
-  SessionStorage | BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
+  BranchStorage | MessageStorage | EventStorage | RelationshipStorage,
   never,
   Storage
 > = Layer.unwrap(
@@ -216,6 +213,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
+      Layer.provide(SessionStorage.Live, base),
       Layer.provide(subTagsFromContext, base),
       Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
@@ -250,6 +248,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
+      Layer.provide(SessionStorage.Live, base),
       Layer.provide(subTagsFromContext, base),
       Layer.provide(StorageTransaction.Live, base),
       Layer.provide(CheckpointStorage.Live, base),
