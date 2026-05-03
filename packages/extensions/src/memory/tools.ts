@@ -60,8 +60,7 @@ export const MemoryRememberTool = tool({
       params["project_key"] ?? (scope === "project" ? projectKeyOf(ctx.cwd) : undefined)
 
     if (scope === "session") {
-      // Session memories are handled by the extension actor state, not vault.
-      // Return a marker so the extension can pick it up via event observation.
+      // Session memories are ephemeral; return a marker for event observation.
       return {
         stored: true,
         scope: "session" as const,

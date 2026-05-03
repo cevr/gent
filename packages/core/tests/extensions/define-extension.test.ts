@@ -340,6 +340,20 @@ describe("defineExtension", () => {
     }),
   )
 
+  it.live("unknown defineExtension buckets fail activation before normalization", () =>
+    Effect.gen(function* () {
+      const ext = defineExtension({ id: "legacy-actors", actors: [] } as never)
+      const exit = yield* Effect.exit(setupOf(ext))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = JSON.stringify(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("unknown contribution bucket")
+        expect(rendered).toContain("actors")
+      }
+    }),
+  )
+
   it.live("progressive helpers compile into normal contribution buckets", () =>
     Effect.gen(function* () {
       const readSnapshot = request({

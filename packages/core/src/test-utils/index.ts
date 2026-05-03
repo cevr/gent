@@ -247,13 +247,9 @@ export {
   trackingApprovalService,
 } from "./e2e-layer.js"
 
-// Extension test harnesses
+// Extension tool test helpers
 export {
-  createActorHarness,
   createToolTestLayer,
   testToolContext,
-  type ActorHarnessOptions,
-  type ActorHarnessConfig,
-  type ActorHarnessResult,
   type ToolTestLayerConfig,
 } from "./extension-harness.js"

@@ -324,7 +324,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?, actors?, reactions?, modelDrivers?, externalDrivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `commands`, or `rpc` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?, reactions?, modelDrivers?, externalDrivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `commands`, or `rpc` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
@@ -513,7 +513,7 @@ Builtin extension (`@gent/memory`). Persistent memory across sessions via flat `
         └── <topic>.md
 ```
 
-Session-local memories are volatile (actor state only). Promotion to disk is explicit via tools.
+Session-local memories are volatile and stay in the in-process extension service. Promotion to disk is explicit via tools.
 
 Project key: `<basename>-<sha256_6>` of canonical repo root — collision-safe across same-named repos.
 

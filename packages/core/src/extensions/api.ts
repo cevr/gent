@@ -499,12 +499,26 @@ const allowedContributionBuckets = new Set([
   "externalDrivers",
 ])
 
+const allowedExtensionInputKeys = new Set(["id", "client", ...allowedContributionBuckets])
+
+const unknownBucketMessage = (key: string) =>
+  `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
+    allowedContributionBuckets,
+  ).join(", ")}`
+
 const validateKnownBuckets = (contribs: ExtensionContributions): string | undefined => {
   for (const key of Object.keys(contribs)) {
     if (!allowedContributionBuckets.has(key)) {
-      return `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
-        allowedContributionBuckets,
-      ).join(", ")}`
+      return unknownBucketMessage(key)
+    }
+  }
+  return undefined
+}
+
+const validateKnownInputBuckets = (params: object): string | undefined => {
+  for (const key of Object.keys(params)) {
+    if (!allowedExtensionInputKeys.has(key)) {
+      return unknownBucketMessage(key)
     }
   }
   return undefined
@@ -566,6 +580,10 @@ export function defineExtension(
     ...(params.client !== undefined ? { client: params.client } : {}),
     setup: (ctx) =>
       Effect.gen(function* () {
+        const inputMessage = validateKnownInputBuckets(params)
+        if (inputMessage !== undefined) {
+          return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
+        }
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
         const commands = yield* resolveField(manifest, "commands", params.commands, ctx)

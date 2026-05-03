@@ -3,7 +3,7 @@
  *
  * The bash tool calls `ctx.session.queueFollowUp` directly from its
  * `Effect.forkDetach` watcher (`bash.ts`). Background command completion is
- * modeled as a direct session follow-up, with no extension actor state.
+ * modeled as a direct session follow-up, with no extension-owned state machine.
  */
 
 import { defineExtension } from "@gent/core/extensions/api"

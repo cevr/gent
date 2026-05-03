@@ -1,34 +1,16 @@
-/**
- * Test harness for extension actors and lifecycle.
- *
- * Import from @gent/core/test-utils/extension-harness
- */
+/** Test helpers for extension tool execution. */
 
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import {
-  AgentDefinition,
   AgentName,
   AgentRunnerService,
   AgentRunResult,
+  type AgentDefinition,
   type AgentRunner,
 } from "../domain/agent.js"
-import {
-  EventStore,
-  StreamStarted,
-  TurnCompleted,
-  ToolCallSucceeded,
-  ToolCallFailed,
-  type AgentEvent,
-} from "../domain/event.js"
-import type {
-  ExtensionTurnContext,
-  ExtensionReduceContext,
-  GentExtension,
-  LoadedExtension,
-  ReduceResult,
-  TurnProjection,
-} from "../domain/extension.js"
+import { EventStore } from "../domain/event.js"
+import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { ToolToken } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
@@ -44,155 +26,6 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { Storage } from "../storage/sqlite-storage.js"
-
-// ── Options ──
-
-export interface ActorHarnessOptions {
-  readonly sessionId?: SessionId
-  readonly branchId?: BranchId
-  readonly agent?: AgentDefinition
-  readonly allTools?: ReadonlyArray<ToolToken>
-}
-
-// ── Event Factories ──
-
-export interface EventFactoryContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export const createEventFactories = (ctx: EventFactoryContext) => ({
-  streamStarted: (overrides?: Partial<ConstructorParameters<typeof StreamStarted>[0]>) =>
-    StreamStarted.make({ sessionId: ctx.sessionId, branchId: ctx.branchId, ...overrides }),
-
-  turnCompleted: (overrides?: Partial<ConstructorParameters<typeof TurnCompleted>[0]>) =>
-    TurnCompleted.make({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      durationMs: 0,
-      ...overrides,
-    }),
-
-  toolCallSucceeded: (overrides?: Partial<ConstructorParameters<typeof ToolCallSucceeded>[0]>) =>
-    ToolCallSucceeded.make({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      toolCallId: ToolCallId.make("tc-test"),
-      toolName: "test",
-      ...overrides,
-    }),
-
-  toolCallFailed: (overrides?: Partial<ConstructorParameters<typeof ToolCallFailed>[0]>) =>
-    ToolCallFailed.make({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      toolCallId: ToolCallId.make("tc-test"),
-      toolName: "test",
-      ...overrides,
-    }),
-})
-
-export type EventFactories = ReturnType<typeof createEventFactories>
-
-// ── Actor Harness ──
-
-/**
- * Create a pure synchronous harness for testing extension actor projections.
- *
- * Wraps the reduce/derive/receive functions so tests can call them
- * without Effect runtime — useful for pure state transition testing.
- */
-export interface ActorHarnessResult<State, Message = void> {
-  readonly reduce: (
-    state: State,
-    event: AgentEvent,
-    ctx?: ExtensionReduceContext,
-  ) => ReduceResult<State>
-  readonly derive: (state: State) => TurnProjection & { readonly uiModel?: unknown }
-  readonly receive: Message extends void
-    ? undefined
-    : (state: State, message: Message) => ReduceResult<State>
-  readonly ctx: ExtensionReduceContext
-  readonly deriveCtx: ExtensionTurnContext
-  readonly events: EventFactories
-  readonly initial: State
-}
-
-export interface ActorHarnessConfig<State, Message = void> {
-  readonly id: string
-  readonly initial: NoInfer<State>
-  readonly reduce: (
-    state: State,
-    event: AgentEvent,
-    ctx: ExtensionReduceContext,
-  ) => ReduceResult<State>
-  readonly derive?: (
-    state: State,
-    ctx: ExtensionTurnContext,
-  ) => TurnProjection & { readonly uiModel?: unknown }
-  readonly receive?: (state: State, message: Message) => ReduceResult<State>
-}
-
-export function createActorHarness<State, Message>(
-  config: ActorHarnessConfig<State, Message>,
-  options?: ActorHarnessOptions,
-): ActorHarnessResult<State, Message>
-export function createActorHarness<State>(
-  config: ActorHarnessConfig<State>,
-  options?: ActorHarnessOptions,
-): ActorHarnessResult<State>
-export function createActorHarness<State, Message = void>(
-  config: ActorHarnessConfig<State, Message>,
-  options?: ActorHarnessOptions,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
-): ActorHarnessResult<State, any> {
-  const ctx: ExtensionReduceContext = {
-    sessionId: SessionId.make(options?.sessionId ?? "test-session"),
-    branchId: BranchId.make(options?.branchId ?? "test-branch"),
-  }
-
-  const deriveCtx: ExtensionTurnContext = {
-    sessionId: ctx.sessionId,
-    branchId: BranchId.make(ctx.branchId ?? "test-branch"),
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-    agent: options?.agent ?? AgentDefinition.make({ name: "test" as never }),
-    allTools: options?.allTools ?? [],
-    interactive: true,
-  }
-
-  const branchId = BranchId.make(options?.branchId ?? "test-branch")
-  const events = createEventFactories({ sessionId: ctx.sessionId, branchId })
-
-  const reduce = (
-    state: State,
-    event: AgentEvent,
-    reduceCtx?: ExtensionReduceContext,
-  ): ReduceResult<State> => config.reduce(state, event, reduceCtx ?? ctx)
-
-  const derive = (state: State): TurnProjection & { readonly uiModel?: unknown } =>
-    config.derive !== undefined ? config.derive(state, deriveCtx) : {}
-
-  const receiveHandler = config.receive
-  const receive =
-    receiveHandler !== undefined
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
-        (state: State, message: any): ReduceResult<State> => receiveHandler(state, message)
-      : undefined
-
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  return {
-    reduce,
-    derive,
-    receive,
-    ctx,
-    deriveCtx,
-    events,
-    initial: config.initial,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
-  } as any
-}
-
-// ── Tool Test Layer ──
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
