@@ -30,6 +30,7 @@ import { ModelId } from "@gent/core/domain/model"
 import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
+import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
@@ -309,7 +310,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.Test(),
+        Storage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -447,7 +448,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.Test(),
+        Storage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -495,7 +496,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.Test(),
+        Storage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -668,7 +669,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        Storage.Test(),
+        Storage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
         ToolRunner.Test(),
@@ -719,7 +720,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.Test()
+      const storageLayer = Storage.TestWithSql()
       // Mock agent loop that writes a reasoning-only assistant message
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
@@ -789,7 +790,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.Test()
+      const storageLayer = Storage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const storage = yield* Storage
@@ -861,7 +862,7 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = Storage.Test()
+      const storageLayer = Storage.TestWithSql()
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
           const storage = yield* Storage
@@ -945,8 +946,10 @@ describe("AgentRunner", () => {
 // Session depth guard
 // ============================================================================
 describe("session depth guard", () => {
-  const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
-    Effect.runPromise(effect.pipe(Effect.timeout("4 seconds"), Effect.provide(Storage.Test())))
+  const run = <A, E>(effect: Effect.Effect<A, E, Storage | RelationshipStorage>) =>
+    Effect.runPromise(
+      effect.pipe(Effect.timeout("4 seconds"), Effect.provide(Storage.TestWithSql())),
+    )
   const makeSession = (id: string, parentSessionId?: string) =>
     new Session({
       id: SessionId.make(id),
@@ -978,9 +981,10 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* storage.createSession(makeSession("root"))
             yield* storage.createBranch(makeBranch("root"))
-            expect(yield* getSessionDepth(SessionId.make("root"), storage)).toBe(0)
+            expect(yield* getSessionDepth(SessionId.make("root"), relationshipStorage)).toBe(0)
           }),
         ),
       )
@@ -992,11 +996,12 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* storage.createSession(makeSession("root"))
             yield* storage.createBranch(makeBranch("root"))
             yield* storage.createSession(makeSession("child", "root"))
             yield* storage.createBranch(makeBranch("child"))
-            expect(yield* getSessionDepth(SessionId.make("child"), storage)).toBe(1)
+            expect(yield* getSessionDepth(SessionId.make("child"), relationshipStorage)).toBe(1)
           }),
         ),
       )
@@ -1008,13 +1013,16 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* storage.createSession(makeSession("root"))
             yield* storage.createBranch(makeBranch("root"))
             yield* storage.createSession(makeSession("child", "root"))
             yield* storage.createBranch(makeBranch("child"))
             yield* storage.createSession(makeSession("grandchild", "child"))
             yield* storage.createBranch(makeBranch("grandchild"))
-            expect(yield* getSessionDepth(SessionId.make("grandchild"), storage)).toBe(2)
+            expect(yield* getSessionDepth(SessionId.make("grandchild"), relationshipStorage)).toBe(
+              2,
+            )
           }),
         ),
       )
@@ -1026,9 +1034,12 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
             const deepest = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-            expect(yield* getSessionDepth(deepest, storage)).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH)
+            expect(yield* getSessionDepth(deepest, relationshipStorage)).toBe(
+              DEFAULT_MAX_AGENT_RUN_DEPTH,
+            )
           }),
         ),
       )
@@ -1040,9 +1051,10 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
             const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-            const parentDepth = yield* getSessionDepth(parentId, storage)
+            const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
             expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
           }),
         ),
@@ -1055,9 +1067,10 @@ describe("session depth guard", () => {
         run(
           Effect.gen(function* () {
             const storage = yield* Storage
+            const relationshipStorage = yield* RelationshipStorage
             yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
             const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
-            const parentDepth = yield* getSessionDepth(parentId, storage)
+            const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
             expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
           }),
         ),
@@ -1069,8 +1082,10 @@ describe("session depth guard", () => {
       yield* Effect.promise(() =>
         run(
           Effect.gen(function* () {
-            const storage = yield* Storage
-            expect(yield* getSessionDepth(SessionId.make("nonexistent"), storage)).toBe(0)
+            const relationshipStorage = yield* RelationshipStorage
+            expect(yield* getSessionDepth(SessionId.make("nonexistent"), relationshipStorage)).toBe(
+              0,
+            )
           }),
         ),
       )
