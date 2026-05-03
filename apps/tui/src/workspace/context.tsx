@@ -2,12 +2,8 @@ import { createContext, useContext, onMount, onCleanup, createSignal } from "sol
 import type { JSX } from "solid-js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ChildProcess } from "effect/unstable/process"
-import { Effect, Fiber, Context, Stream } from "effect"
-// Solid `onMount` runs outside an Effect scope; the watcher is fire-and-forget
-// with manual cleanup via `onCleanup`. `FileSystem` from effect would require
-// restructuring the workspace context as an Effect provider.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { watch } from "node:fs"
+import { Effect, Fiber, FileSystem, Context, Stream } from "effect"
+import { BunFileSystem } from "@effect/platform-bun"
 
 export interface GitStatus {
   branch: string
@@ -150,27 +146,14 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       )
     }
 
-    const fsWatchers: { close: () => void }[] = []
+    let watchFiber: Fiber.Fiber<void, never> | null = null
     let fallbackFiber: Fiber.Fiber<void, never> | null = null
 
-    try {
-      const gitDir = `${props.cwd}/.git`
-      // Watch .git directory for index/HEAD changes
-      const watcher = watch(
-        gitDir,
-        { persistent: false },
-        (_eventType: string, filename: string | null) => {
-          if (filename === "index" || filename === "HEAD" || filename === "MERGE_HEAD") {
-            debouncedRefresh()
-          }
-        },
-      )
-      fsWatchers.push(watcher)
-    } catch (e) {
-      // Fallback to polling if watch fails (not a git repo, etc.)
+    const gitDir = `${props.cwd}/.git`
+    const startPollingFallback = (reason: unknown) => {
       Effect.runFork(
         Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
-          Effect.annotateLogs({ error: String(e) }),
+          Effect.annotateLogs({ error: String(reason) }),
         ),
       )
       fallbackFiber = Effect.runFork(
@@ -178,12 +161,35 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       )
     }
 
+    const watchProgram = Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.watch(gitDir).pipe(
+        Stream.runForEach((event) => {
+          const name = event.path.split("/").pop() ?? ""
+          if (name === "index" || name === "HEAD" || name === "MERGE_HEAD") {
+            debouncedRefresh()
+          }
+          return Effect.void
+        }),
+      )
+    }).pipe(
+      // @effect-diagnostics-next-line strictEffectProvide:off solid mount edge — isolated FS effect
+      Effect.provide(BunFileSystem.layer),
+      Effect.catchCause((cause) =>
+        Effect.sync(() => {
+          startPollingFallback(cause)
+        }),
+      ),
+    )
+
+    watchFiber = Effect.runFork(watchProgram)
+
     onCleanup(() => {
       if (currentFiber !== null) {
         Effect.runFork(Fiber.interrupt(currentFiber))
       }
       if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber))
-      for (const w of fsWatchers) w.close()
+      if (watchFiber !== null) Effect.runFork(Fiber.interrupt(watchFiber))
       if (fallbackFiber !== null) Effect.runFork(Fiber.interrupt(fallbackFiber))
     })
   })
