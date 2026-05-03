@@ -1,7 +1,7 @@
 import { Deferred, Effect, Ref, Stream } from "effect"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
-import type { TurnError } from "../../../domain/driver.js"
+import { TurnError } from "../../../domain/driver.js"
 import {
   ErrorOccurred,
   StreamChunk as EventStreamChunk,
@@ -383,6 +383,12 @@ export const collectExternalTurnResponse = (params: {
       ),
       (part) =>
         Effect.gen(function* () {
+          if (part.type === "error") {
+            return yield* new TurnError({
+              message: formatStreamErrorMessage(part.error),
+              cause: part.error,
+            })
+          }
           responseParts.push(part)
           yield* collectExternalResponsePart({
             publishEvent: params.publishEvent,

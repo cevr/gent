@@ -9,6 +9,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
+import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ActorEngine } from "../../src/runtime/extensions/actor-engine"
@@ -302,6 +303,44 @@ describe("external turn execution", () => {
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
           expect(tags).toContain("ErrorOccurred")
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("native external response error parts fail the stream and preserve partial output", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const executor = makeMockExecutor([
+        textDelta("partial external answer"),
+        Response.makePart("error", { error: new Error("external response part failed") }),
+        textDelta("unreachable"),
+      ])
+      const layer = makeLayerWithEvents(executor, eventsRef)
+      const message = makeMessage("external native error")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const storage = yield* Storage
+          yield* runAgentLoop(agentLoop, message, {
+            agentOverride: AgentName.make("test-external"),
+          })
+          const events = yield* Ref.get(eventsRef)
+          const tags = events.map((e) => e._tag)
+          expect(tags).toContain("StreamStarted")
+          expect(tags).toContain("StreamChunk")
+          expect(tags).toContain("StreamEnded")
+          expect(tags).toContain("ErrorOccurred")
+          expect(tags).toContain("TurnCompleted")
+          const error = events.find((event) => event._tag === "ErrorOccurred")
+          expect(error).toEqual(
+            expect.objectContaining({
+              error: "External turn executor error: external response part failed",
+            }),
+          )
+          const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+          expect(assistant?.parts).toEqual([
+            new TextPart({ type: "text", text: "partial external answer" }),
+          ])
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
