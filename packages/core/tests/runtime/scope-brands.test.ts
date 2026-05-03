@@ -48,6 +48,9 @@ class FakeService extends Context.Service<FakeService, { readonly value: number 
 ) {}
 
 type RuntimeBuildError = StorageError | Config.ConfigError
+type LayerError<L> = L extends Layer.Layer<unknown, infer E, unknown> ? E : never
+type IsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type ExpectTrue<T extends true> = T
 
 describe("scope brand type fences", () => {
   const serverParent = {
@@ -156,6 +159,9 @@ describe("scope brand type fences", () => {
     // family type, this satisfaction check would fail to compile.
     const _typed: Layer.Layer<SessionStorage, RuntimeBuildError, never> = composed.layer
     void _typed
+    const _errorChannel: ExpectTrue<IsEqual<LayerError<typeof composed.layer>, RuntimeBuildError>> =
+      true
+    void _errorChannel
     const _overrides: EphemeralRuntimeOverrides = baseOverrides()
     void _overrides
     expect(composed.profile.cwd).toBe("/tmp")
