@@ -24,7 +24,7 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { IdService } from "../runtime/id-service.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { EventPublisherLive } from "../server/event-publisher.js"
+import { EventPublisherLive } from "../domain/event-publisher.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 
 export interface ToolTestLayerConfig {

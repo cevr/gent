@@ -27,7 +27,7 @@ import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
-import { EventPublisherLive } from "./event-publisher.js"
+import { EventPublisherLive } from "../domain/event-publisher.js"
 import { SessionCommands } from "./session-commands.js"
 import {
   SessionProfileCache,

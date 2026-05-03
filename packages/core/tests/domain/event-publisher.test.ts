@@ -3,8 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis } from "@gent/core/domain/message"
-import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { EventPublisherLive } from "../../src/server/event-publisher"
+import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 

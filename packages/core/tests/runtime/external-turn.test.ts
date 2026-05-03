@@ -26,7 +26,7 @@ import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core/domai
 import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { EventPublisherLive } from "../../src/server/event-publisher"
+import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
