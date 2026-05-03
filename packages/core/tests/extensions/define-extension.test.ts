@@ -13,8 +13,6 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
-  defineToolExtension,
-  defineUiExtension,
   GentToolMetadataTag,
   getToolId,
   getToolMetadata,
@@ -354,7 +352,7 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("progressive helpers compile into normal contribution buckets", () =>
+  it.live("defineExtension preserves contribution buckets and client facets", () =>
     Effect.gen(function* () {
       const readSnapshot = request({
         id: "read-snapshot",
@@ -364,7 +362,7 @@ describe("defineExtension", () => {
         output: Schema.Number,
         execute: () => Effect.succeed(1),
       })
-      const toolExt = defineToolExtension({
+      const toolExt = defineExtension({
         id: "helper-tool",
         tools: [
           tool({
@@ -380,7 +378,7 @@ describe("defineExtension", () => {
         rpc: [readSnapshot],
       })
       const uiClient = { setup: Effect.succeed([]) }
-      const uiExt = defineUiExtension({
+      const uiExt = defineExtension({
         id: "helper-ui",
         client: uiClient,
       })

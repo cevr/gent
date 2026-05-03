@@ -326,15 +326,6 @@ export interface DefineExtensionInput<Client = unknown> {
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
 }
 
-export type DefineToolExtensionInput<Client = unknown> = Pick<
-  DefineExtensionInput<Client>,
-  "id" | "client" | "tools" | "commands" | "rpc" | "reactions" | "resources" | "agents"
->
-
-export type DefineUiExtensionInput<Client> = DefineToolExtensionInput<Client> & {
-  readonly client: Client
-}
-
 /**
  * Resolve a single bucket field — accepts literal array, sync factory, or
  * Effect-returning factory. Errors are annotated with the bucket name so
@@ -609,25 +600,3 @@ export function defineExtension(
       }),
   }
 }
-
-/** Define an extension whose primary surface is tools/commands/RPC. */
-export function defineToolExtension(
-  params: DefineToolExtensionInput & { readonly client?: undefined },
-): GentExtension
-export function defineToolExtension<Client>(
-  params: DefineToolExtensionInput<Client> & { readonly client: Client },
-): GentExtension & { readonly client: Client }
-export function defineToolExtension<Client>(
-  params: DefineToolExtensionInput<Client>,
-): GentExtension & { readonly client?: Client }
-export function defineToolExtension(
-  params: DefineToolExtensionInput,
-): GentExtension & { readonly client?: unknown } {
-  return defineExtension(params)
-}
-
-/** Define an extension whose primary surface is a client facet. */
-export const defineUiExtension = <Client>(
-  params: DefineUiExtensionInput<Client>,
-): GentExtension & { readonly client: Client } =>
-  defineExtension(params) as GentExtension & { readonly client: Client }

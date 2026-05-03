@@ -9,15 +9,7 @@
  * @module
  */
 
-export {
-  defineExtension,
-  defineToolExtension,
-  defineUiExtension,
-  type DefineExtensionInput,
-  type DefineToolExtensionInput,
-  type DefineUiExtensionInput,
-  type FieldSpec,
-} from "./api.js"
+export { defineExtension, type DefineExtensionInput, type FieldSpec } from "./api.js"
 
 export {
   defineAgent,
