@@ -93,7 +93,6 @@ const failingSessionCommandsLayer = () => {
   const storageLayer = Storage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     SessionRuntime.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
@@ -138,7 +137,6 @@ const sendFailingSessionCommandsLayer = () => {
   )
   const deps = Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     failingRuntimeLayer,
     SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
@@ -156,7 +154,6 @@ const sessionCommandsLayer = () => {
   const storageLayer = Storage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     SessionRuntime.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
@@ -192,7 +189,6 @@ const sessionCommandsLayerWithMachineProbe = (
   const storageLayer = Storage.MemoryWithSql()
   const deps = Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     runtimeTerminated === undefined
       ? SessionRuntime.Test()
       : sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
@@ -217,7 +213,6 @@ const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionI
   )
   const deps = Layer.mergeAll(
     storageLayer,
-    subTagLayers(storageLayer),
     runtimeLayer,
     SessionCommands.SessionRuntimeTerminatorLive,
     terminatorRegistrationLayer,
@@ -1510,7 +1505,6 @@ describe("requestId idempotency", () => {
       const storageLayer = Storage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
-        subTagLayers(storageLayer),
         countingRuntime,
         SessionCommands.SessionRuntimeTerminatorLive,
         EventStore.Memory,
@@ -1565,7 +1559,6 @@ describe("requestId idempotency", () => {
       const storageLayer = Storage.MemoryWithSql()
       const deps = Layer.mergeAll(
         storageLayer,
-        subTagLayers(storageLayer),
         countingRuntime,
         SessionCommands.SessionRuntimeTerminatorLive,
         EventStore.Memory,
