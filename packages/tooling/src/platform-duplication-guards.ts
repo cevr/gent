@@ -54,6 +54,11 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     pattern: /\bLiveFile\b/,
     message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFile",
   },
+  {
+    pattern: /\bEventStore\.Live\s*=\s*EventStore\.Memory\b/,
+    message:
+      "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
+  },
 ]
 
 const bannedPathPatterns: ReadonlyArray<BannedPattern> = [

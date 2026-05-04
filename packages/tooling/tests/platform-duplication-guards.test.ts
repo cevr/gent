@@ -190,4 +190,29 @@ describe("platform duplication guards", () => {
       },
     ])
   })
+
+  test("flags reintroduced EventStore.Live = EventStore.Memory alias", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/example.ts",
+        "EventStore.Live = EventStore.Memory",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/server/example.ts",
+        line: 1,
+        message:
+          "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
+      },
+    ])
+
+    // Direct EventStore.Memory references are legitimate (memory persistence
+    // mode, test harness) and must not trip the guard.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/dependencies.ts",
+        "persistenceMode === 'memory' ? EventStore.Memory : Layer.provide(EventStoreLive, ...)",
+      ),
+    ).toEqual([])
+  })
 })
