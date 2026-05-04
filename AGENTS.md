@@ -6,8 +6,8 @@ Building gent - minimal, opinionated agent harness (built with Effect).
 
 ```bash
 bun install
-bun run typecheck  # Must pass clean (no errors, no suggestions)
-bun run lint       # ESLint: no any, no floating promises
+bun run typecheck  # tsgo + @effect/language-service, must pass clean
+bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
 bun run clean      # Remove dist and tsbuildinfo files
@@ -72,9 +72,8 @@ Use `effect` skill. Key patterns:
 ## Code Style
 
 - Telegraph style, minimal tokens
-- Every service: `Live` + `Test` layers
-- Schema validation everywhere
-- Discriminated unions via `Schema.TaggedClass`
+- Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag (e.g. `Provider.Sequence` / `Provider.Debug`)
+- Schema validation at boundaries
 - **Tagged/discriminated unions ALWAYS use `TaggedEnumClass`** (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Never hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions, even for internal driver/state events. Construct via `Variant.make({...})`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
 - **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
 

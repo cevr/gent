@@ -11,89 +11,101 @@ bun install
 ## Commands
 
 ```bash
-bun run typecheck  # Must pass clean (no errors, no suggestions)
-bun run test       # Run product behavior tests
+bun run typecheck  # tsgo + @effect/language-service, must pass clean
+bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
+bun run test       # product behavior tests, ~2-4s
+bun run gate       # typecheck + lint + fmt + build + test
 ```
 
 ## Code Style
 
 - Telegraph style, minimal tokens
-- Every service needs `Live` + `Test` layers
-- Schema validation everywhere
-- Use `Effect.fn` for all service methods (required for tracing)
-- Use `Schema.TaggedClass` for discriminated unions
-- Use `export type` for interface re-exports
+- Every service exposes a `Live` layer; `Test` layers only when there is a real
+  alternative implementation worth a Tag (e.g. `Provider.Sequence`, `Provider.Debug`)
+- Schema validation at boundaries
+- Use `Effect.fn(name)` for service methods on hot paths (tracing); plain
+  `Effect.gen` is fine elsewhere
+- Discriminated unions go through `TaggedEnumClass` — never hand-roll
+  `{ _tag: "X" } | { _tag: "Y" }` literals
 
 ## Effect Patterns
 
 ```typescript
 // Service definition
-export class MyService extends Context.Tag("MyService")<
-  MyService,
-  MyServiceImpl
->() {
+export class MyService extends Context.Tag("MyService")<MyService, MyServiceImpl>() {
   static Live: Layer.Layer<MyService> = Layer.succeed(MyService, { ... })
-  static Test = (): Layer.Layer<MyService> => Layer.succeed(MyService, { ... })
 }
 
-// Errors
+// Tagged errors
 export class MyError extends Schema.TaggedError<MyError>()("MyError", {
   message: Schema.String,
 }) {}
 
-// Data classes
+// Discriminated union (TaggedEnumClass, not literal _tag union)
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+
+export const MyEvent = TaggedEnumClass("MyEvent", {
+  Started: { sessionId: SessionId },
+  Completed: { sessionId: SessionId, durationMs: Schema.Number },
+})
+export type MyEvent = Schema.Schema.Type<typeof MyEvent>
+
+const event = MyEvent.Started.make({ sessionId })
+
+// Domain values
 export class MyData extends Schema.Class<MyData>("MyData")({
   id: Schema.String,
   name: Schema.String,
 }) {}
 ```
 
-## Gotchas
-
-See [AGENTS.md](./AGENTS.md) for known gotchas:
-
-- `bun:sqlite` - Can't use vitest, use `bun test`
-- `Schema.Class` JSON roundtrip needs `Schema.decodeUnknownSync`
-- `exactOptionalPropertyTypes` - be explicit with interface types
-- Effect LSP suggestions (TS41) must be fixed
-
 ## Testing
 
+Tests use `effect-bun-test`'s `it.live` / `it.scopedLive`. **No `async`/`await`,
+no Promise chains, no hook cleanup patterns** — these are blocked by
+`gent/no-promise-control-flow-in-tests`. Scoped resources go through
+`Effect.scoped` / `it.scopedLive` so finalizers run under the test runtime.
+
 ```typescript
-import { describe, test, expect } from "bun:test"
+import { it, describe, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { createTestLayer, createRecordingTestLayer } from "@gent/test-utils"
+import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
+import { Provider } from "@gent/core/providers/provider"
+import { textStep, toolCallStep } from "@gent/core/debug/provider"
 
-// Simple test
-test("my test", async () => {
-  await Effect.runPromise(
+describe("session runtime", () => {
+  it.live("emits a TurnCompleted on a single text response", () =>
     Effect.gen(function* () {
-      // test code
-    }).pipe(Effect.provide(createTestLayer())),
-  )
-})
-
-// With sequence recording
-test("records calls", async () => {
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const recorder = yield* SequenceRecorder
-      // do work
-      const calls = yield* recorder.getCalls()
-      assertSequence(calls, [{ service: "Provider", method: "stream" }])
-    }).pipe(Effect.provide(createRecordingTestLayer())),
+      const { layer: providerLayer } = yield* Provider.Sequence([textStep("hi")])
+      const runtime = yield* SessionRuntime
+      yield* runtime.sendUserMessage({ text: "hello" })
+      // assertions on session events…
+    }).pipe(Effect.provide(baseLocalLayer({ providerLayer }))),
   )
 })
 ```
+
+Sequence assertions for event ordering:
+
+```typescript
+import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+
+assertSequence(calls, [
+  { service: "EventStore", method: "publish", match: { _tag: "TurnCompleted" } },
+])
+```
+
+For RPC acceptance (real per-request scopes), use `createRpcHarness` from the
+test helpers next to the test file.
 
 ## Pull Requests
 
 1. Fork the repo
 2. Create a feature branch
-3. Make changes
-4. Run `bun run typecheck && bun run test`
-5. Submit PR
+3. Make changes; run `bun run gate`
+4. Submit PR — small, reviewable commits preferred over one mega-PR
 
 ## Architecture
 
-Read [ARCHITECTURE.md](./ARCHITECTURE.md) before making significant changes. Update it when diverging from the documented design.
+Read [ARCHITECTURE.md](./ARCHITECTURE.md) before making significant changes.
+Update it when diverging from the documented design.
