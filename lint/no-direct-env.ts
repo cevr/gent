@@ -1160,24 +1160,6 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags hand-rolled `_tag` discriminated unions written as type
-     * literals — a union of two-or-more `{ _tag: "X"; ... }` shapes.
-     *
-     * Use `TaggedEnumClass` (`@gent/core/domain/schema-tagged-enum-class`),
-     * `Schema.TaggedStruct`, or `Schema.TaggedErrorClass` instead. Those
-     * give per-variant `.make({...})` constructors, structural
-     * `_tag` discrimination, and Schema-encode/decode for free.
-     *
-     * Detected: any `TSUnionType` with ≥2 `TSTypeLiteral` members each
-     * having a `_tag: "Pascal"` property.
-     *
-     * Limitations: AST-only. Does not flag types defined via interface
-     * heritage or hand-rolled union of named type aliases — only the
-     * inline-type-literal form. Construction-site form
-     * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
-     * already vanishingly rare in this codebase.
-     */
-    /**
      * Bans `Bun.*` references everywhere except the single canonical
      * platform implementation file `runtime/gent-platform-bun.ts`. The
      * `Bun` global is a platform-specific runtime API; product code must
@@ -1236,6 +1218,24 @@ const plugin: Plugin = {
       },
     },
 
+    /**
+     * Flags hand-rolled `_tag` discriminated unions written as type
+     * literals — a union of two-or-more `{ _tag: "X"; ... }` shapes.
+     *
+     * Use `TaggedEnumClass` (`@gent/core/domain/schema-tagged-enum-class`),
+     * `Schema.TaggedStruct`, or `Schema.TaggedErrorClass` instead. Those
+     * give per-variant `.make({...})` constructors, structural
+     * `_tag` discrimination, and Schema-encode/decode for free.
+     *
+     * Detected: any `TSUnionType` with ≥2 `TSTypeLiteral` members each
+     * having a `_tag: "Pascal"` property.
+     *
+     * Limitations: AST-only. Does not flag types defined via interface
+     * heritage or hand-rolled union of named type aliases — only the
+     * inline-type-literal form. Construction-site form
+     * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
+     * already vanishingly rare in this codebase.
+     */
     "no-hand-rolled-tagged-union": {
       create(context) {
         const isReportableTagLiteral = (member: AstNode): boolean => {
