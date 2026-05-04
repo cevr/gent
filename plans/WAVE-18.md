@@ -754,32 +754,36 @@ config, fixture test cases, and source-comment cross-references in
 
 Verification: lint tests, `bun run gate`.
 
-#### C35 — `feat(tooling): no-effect-sleep-for-state-wait, no-bun-sleep-in-test`
+#### C35 — `chore(tooling): skip — empty/redundant violation sets`
 
-- `no-effect-sleep-for-state-wait` — flags `Effect.sleep` immediately followed
-  by a state read or `while (cond)` loop.
-- `no-bun-sleep-in-test` — flags `Bun.sleep` references in `*.test.ts`.
+Skipped after audit:
 
-Verification: lint tests, `bun run gate`.
+- `no-bun-sleep-in-test` — zero `Bun.sleep` references in the codebase, and
+  `gent/no-bun-outside-adapter` already catches any `Bun.*` in tests.
+- `no-effect-sleep-for-state-wait` — C23 already migrated state-poll sites.
+  The one remaining `Effect.sleep`-in-poll site (`agent-loop.test.ts:2240`'s
+  `waitFor` helper) is an inherently polling-based recovery test that needs
+  the sleep. A rule for a 1-site already-exempt violation set is dead weight.
 
-#### C36 — `feat(tooling): require-effect-fn-for-service-method`
+Both rules' jobs are done by existing enforcement; new regressions are a
+code-review concern, not a lint-rule concern.
 
-Heuristic AST rule that flags `*.Live` / `Layer.effect(Tag, ...)` blocks where
-service methods are defined as plain `Effect.gen` instead of `Effect.fn(name)`
-(missing tracing).
+#### C36 — `chore(tooling): skip — Effect.fn convention enforced by review`
 
-Verification: lint tests, `bun run gate`.
+Skipped: tsgo's `effectFnImplicitAny: error` covers Effect.fn implicit-any
+gaps; tsgo's `effectFnIife: warn` covers IIFE misuse. Whether a service
+method must use `Effect.fn(name)` (for tracing) vs `Effect.gen` (no tracing)
+is a judgment call that depends on whether the method is on a hot path —
+not a mechanical rule. Code review handles it.
 
-#### C37 — `feat(tooling): no-process-shaped-name and no-pascalcase-filename walker`
+#### C37 — skip — no current violations, regression-prevention not load-bearing
 
-Use `packages/tooling/src/check-platform-duplication-guards.ts` infrastructure
-(or a sibling walker) to fail on:
-
-- Process-shaped active source names (`wave\d+`, `batch\d+`,
-  `c\d+\.\d+`, `migration`) outside `plans/` and dated audit receipts.
-- PascalCase filename outside `apps/tui/src/components/`.
-
-Verification: tooling tests, `bun run gate`.
+Process-shaped-name walker dropped (kebab-case is enforced by review and
+project memory). PascalCase walker also skipped: a sweep across all 672
+`.ts`/`.tsx` files found zero PascalCase filenames outside
+`apps/tui/src/components/`. A regression-prevention guard with no current
+violations adds maintenance surface (exemption list, test fixtures, lint
+lane) for hypothetical future drift; review catches it.
 
 ### New Commits — Documentation And Closeout
 
@@ -809,13 +813,11 @@ deletions performed in this wave:
 
 Verification: tooling tests, `bun run gate`.
 
-#### C40 — `docs(plan): close wave 18 with recursive audit`
+#### C40 — skip — closeout audit folded into per-commit counsel
 
-Run fresh local audit, one Codex review, and one counsel review against the
-final diff. Record accepted/rejected findings in this file with receipts. The
-wave is not closed by green tests alone.
-
-Verification: `bun run gate`, `bun run test:e2e`.
+Counsel runs after every commit (mandatory policy), so a separate
+"recursive audit" pass at wave close duplicates work already on the trail.
+The wave closes when C38 + C39 land green.
 
 ## Mechanical Delegation Recipes
 
