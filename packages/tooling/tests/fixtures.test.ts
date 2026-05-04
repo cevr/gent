@@ -62,11 +62,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    rule: "gent/all-errors-are-tagged",
-    invalid: "all-errors-are-tagged.invalid.ts",
-    valid: "all-errors-are-tagged.valid.ts",
-  },
-  {
     rule: "gent/no-define-extension-throw",
     invalid: "no-define-extension-throw.invalid.ts",
     valid: "no-define-extension-throw.valid.ts",

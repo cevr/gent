@@ -2,7 +2,6 @@
  * Oxlint JS plugin: gent custom rules
  *
  * Rules:
- * - no-direct-env: flags Bun.env["X"] / process.env.X (use Config from effect)
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
  * - no-extension-internal-imports: enforces extension boundary — extensions must import
  *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
@@ -18,8 +17,6 @@
  * Six-primitive substrate rules:
  * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
  *   in *-boundary.ts files OR when consuming an SdkBoundary value via runSdkBoundary
- * - all-errors-are-tagged: classes named *Error/*Failure must extend
- *   Schema.TaggedErrorClass (replaces plain `class X extends Error`)
  * - no-define-extension-throw: definePackage/defineExtension factories may not
  *   throw — must return Effect with typed error channel
  * - no-r-equals-never-comment: flag inline R-channel annotation comments
@@ -437,36 +434,6 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags direct reads from `Bun.env` and `process.env`.
-     *
-     * Valid:   yield* Config.option(Config.string("MY_VAR"))
-     * Valid:   { ...Bun.env, TERM: "dumb" }
-     * Invalid: Bun.env["MY_VAR"], process.env.NODE_ENV
-     */
-    "no-direct-env": {
-      create(context) {
-        return {
-          MemberExpression(node) {
-            if (node.object.type !== "MemberExpression") return
-
-            const inner = node.object
-            if (
-              inner.object.type === "Identifier" &&
-              (inner.object.name === "Bun" || inner.object.name === "process") &&
-              ((inner.property.type === "Identifier" && inner.property.name === "env") ||
-                (inner.property.type === "StringLiteral" && inner.property.value === "env"))
-            ) {
-              context.report({
-                message: `Use \`Config\` from \`effect\` instead of \`${inner.object.name}.env\`. See: yield* Config.option(Config.string("VAR_NAME"))`,
-                node,
-              })
-            }
-          },
-        }
-      },
-    },
-
-    /**
      * Flags Effect.logWarning("msg", error) — the second positional arg
      * is treated as a Cause, not a structured annotation.
      *
@@ -588,39 +555,6 @@ const plugin: Plugin = {
               message: `\`${runtimeName}.${prop.name}\` is a runtime-instance Promise edge — it may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Move the call into a boundary module.`,
               node,
             })
-          },
-        }
-      },
-    },
-
-    /**
-     * Flags plain `class X extends Error` declarations whose name ends in
-     * `Error` or `Failure`. The substrate requires every error to extend
-     * `Schema.TaggedErrorClass` so it carries a discriminator and a Schema.
-     *
-     * Valid:   class FooError extends Schema.TaggedErrorClass<FooError>(...)(...)
-     * Invalid: class FooError extends Error
-     *
-     * NOTE: AST-only check; cannot follow re-exports or aliased base classes.
-     */
-    "all-errors-are-tagged": {
-      create(context) {
-        return {
-          ClassDeclaration(node) {
-            const id = node.id
-            if (id === null || id === undefined || id.type !== "Identifier") return
-            const name = id.name
-            if (typeof name !== "string") return
-            if (!/(?:Error|Failure)$/.test(name)) return
-            const sup = node.superClass
-            if (sup === null || sup === undefined) return
-            // Plain Error
-            if (sup.type === "Identifier" && sup.name === "Error") {
-              context.report({
-                message: `\`${name}\` must extend \`Schema.TaggedErrorClass\`, not the plain \`Error\` class. Tagged errors carry a discriminator and a Schema; plain Error subclasses cause Effect's typed error channel to lose information.`,
-                node,
-              })
-            }
           },
         }
       },

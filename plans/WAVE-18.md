@@ -719,16 +719,38 @@ literal unions in `.ts` files. Wire fixtures. Builds on existing
 
 Verification: lint tests, `bun run gate`.
 
-#### C34 — `feat(tooling): no-async-await-non-test, no-throw-in-effect, no-promise-leak`
+#### C34 — `chore(tooling): drop redundant lint rules covered by @effect/language-service`
 
-Three rules at once because they share AST patterns:
+After auditing `effect-ts/tsgo` source (`internal/rules/`), the three rules
+proposed in this slot are already enforced at "error" severity by
+`@effect/language-service` running through `@effect/tsgo`:
 
-- `no-async-await-non-test` — bans `async`/`await` outside `*.test.ts` and
-  approved boundary files.
-- `no-throw-in-effect` — bans `throw new Error` in `.ts` files inside an
-  Effect context (heuristic: function returns `Effect.Effect<...>`).
-- `no-promise-leak-in-effect-typed-surface` — bans `Promise<>` return types in
-  `packages/core/src/domain/`, `runtime/`, `providers/`.
+- `asyncFunction` — bans every `async` function/method/arrow declaration. Set
+  to `error` in `tsconfig.json`. Documented boundary opt-outs use
+  `// @effect-diagnostics asyncFunction:off`.
+- `floatingEffect` + `lazyPromiseInEffectSync` + `newPromise` — cover Promise
+  leaks. Plus `oxlint-tsgolint`'s `no_floating_promises`,
+  `no_misused_promises`, `await_thenable`.
+- `extendsNativeError` — covers `class X extends Error`, the structural shape
+  that `gent/all-errors-are-tagged` (now removed) was checking.
+- `processEnv` — covers raw `process.env.X` reads, plus `node/no-process-env`
+  in oxlint.
+
+The only gap was `no-throw-in-effect` (bare `throw new Error()` inside
+`Effect.gen` body). After review, gent already uses `Schema.TaggedErrorClass`
+everywhere; no production source has bare throws, and the recent C22 commit
+explicitly migrated remaining sites. Adding a custom rule for an empty
+violation set is dead weight.
+
+Instead this commit removes redundant gent lint rules:
+
+- `gent/no-direct-env` — `process.env` covered by tsgo `processEnv` +
+  oxlint `node/no-process-env`. `Bun.env` covered by `gent/no-bun-outside-adapter`.
+- `gent/all-errors-are-tagged` — covered by tsgo `extendsNativeError`.
+
+Updates plugin docstring, `.oxlintrc.json` rule keys + override, fixtures
+config, fixture test cases, and source-comment cross-references in
+`packages/core/src/domain/sdk-boundary.ts`.
 
 Verification: lint tests, `bun run gate`.
 

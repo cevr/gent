@@ -19,8 +19,8 @@
  * The `E` parameter is structurally constrained as `TaggedErrorLike` (carries
  * a `_tag` discriminator and extends `Error`) — the structural shape that
  * every `Schema.TaggedErrorClass` instance satisfies. Pairing this constraint
- * with `gent/all-errors-are-tagged` gives both type-level and source-level
- * enforcement. The `R` channel must be `never` (closed-over dependencies —
+ * with `@effect/language-service`'s `extendsNativeError` rule gives both
+ * type-level and source-level enforcement. The `R` channel must be `never` (closed-over dependencies —
  * the boundary is not a way to launder ambient services).
  *
  * NOTE: this module is **type-only** scaffolding for boundary APIs that must
@@ -41,8 +41,8 @@ declare const BoundaryBrand: unique symbol
  *
  * The constraint is structural rather than nominal because `Schema` does not
  * export a public `TaggedError` interface, only the `TaggedErrorClass` factory.
- * Pairing this constraint with the `gent/all-errors-are-tagged` lint rule
- * gives both type-level and source-level enforcement.
+ * Pairing this constraint with `@effect/language-service`'s
+ * `extendsNativeError` rule gives both type-level and source-level enforcement.
  */
 export type TaggedErrorLike = Error & { readonly _tag: string }
 
