@@ -43,6 +43,7 @@ export class MyError extends Schema.TaggedError<MyError>()("MyError", {
 
 // Discriminated union (TaggedEnumClass, not literal _tag union)
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { SessionId } from "@gent/core/domain/ids"
 
 export const MyEvent = TaggedEnumClass("MyEvent", {
   Started: { sessionId: SessionId },
@@ -68,8 +69,8 @@ no Promise chains, no hook cleanup patterns** — these are blocked by
 
 ```typescript
 import { it, describe, expect } from "effect-bun-test"
-import { Effect } from "effect"
-import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
+import { Effect, Layer } from "effect"
+import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer"
 import { Provider } from "@gent/core/providers/provider"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 
@@ -77,13 +78,18 @@ describe("session runtime", () => {
   it.live("emits a TurnCompleted on a single text response", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([textStep("hi")])
-      const runtime = yield* SessionRuntime
-      yield* runtime.sendUserMessage({ text: "hello" })
-      // assertions on session events…
-    }).pipe(Effect.provide(baseLocalLayer({ providerLayer }))),
+      const layer = baseLocalLayerWithProvider(providerLayer, { agents: [] })
+      yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        yield* runtime.sendUserMessage({ text: "hello" })
+        // assertions on session events…
+      }).pipe(Effect.provide(layer))
+    }),
   )
 })
 ```
+
+For the default debug provider (no scripted responses), use `baseLocalLayer({ agents: [] })`.
 
 Sequence assertions for event ordering:
 
