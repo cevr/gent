@@ -227,6 +227,12 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        // Required for resource layers below: extension Resource layers
+        // are fed via `Layer.provideMerge(extensionResourceLayer,
+        // baseDepsCore)` (further down). Many of those layers yield
+        // `GentPlatform`. Outer `Layer.provide(BunPlatformLive)` only
+        // reaches outer requirements, not the requirements satisfied
+        // INSIDE `provideMerge`.
         BunGentPlatformLive,
         subagentRunnerLayer,
         authStoreLive,

@@ -103,6 +103,11 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         Permission.Test(),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        // Required for resource layers below: `Layer.provideMerge(r.layer,
+        // baseLayerAny)` (line 123) feeds extension Resource layers from
+        // `baseLayerAny`, and many of them yield `GentPlatform`. Outer
+        // `Layer.provide(BunPlatformLive)` only reaches outer requirements,
+        // not the requirements satisfied INSIDE `provideMerge`.
         BunGentPlatformLive,
         ...(config.extraLayers ?? []),
       )
