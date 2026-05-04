@@ -145,4 +145,49 @@ describe("platform duplication guards", () => {
       },
     ])
   })
+
+  test("flags reintroduced GentSpan tracer", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "const span = GentSpan.start()",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message: "GentSpan tracer is deleted; use @effect/opentelemetry via Tracer service",
+      },
+    ])
+  })
+
+  test("flags destructive storage schema reset", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/storage/example.ts",
+        "yield* resetIncompatibleStorageSchema()",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/storage/example.ts",
+        line: 1,
+        message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
+      },
+    ])
+  })
+
+  test("flags LiveFile JSON KV pattern", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "const layer = AuthStorage.LiveFile(path)",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFile",
+      },
+    ])
+  })
 })

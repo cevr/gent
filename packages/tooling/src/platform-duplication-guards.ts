@@ -42,6 +42,18 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     pattern: /\btyped RPC helpers\b/,
     message: "Host contexts no longer expose typed RPC helpers",
   },
+  {
+    pattern: /\bGentSpan\b/,
+    message: "GentSpan tracer is deleted; use @effect/opentelemetry via Tracer service",
+  },
+  {
+    pattern: /\bresetIncompatibleStorageSchema\b/,
+    message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
+  },
+  {
+    pattern: /\bLiveFile\b/,
+    message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFile",
+  },
 ]
 
 const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
