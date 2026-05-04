@@ -18,6 +18,7 @@
     "gent/no-dynamic-imports": "error",
     "gent/no-promise-control-flow-in-tests": "error",
     "gent/no-projection-writes": "error",
-    "gent/no-bun-outside-adapter": "error"
+    "gent/no-bun-outside-adapter": "error",
+    "gent/no-hand-rolled-tagged-union": "error"
   }
 }

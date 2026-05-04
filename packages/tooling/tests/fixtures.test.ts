@@ -126,6 +126,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     // 5 distinct Bun.* member expressions in the invalid fixture
     expectedCount: 5,
   },
+  {
+    rule: "gent/no-hand-rolled-tagged-union",
+    invalid: "no-hand-rolled-tagged-union.invalid.ts",
+    valid: "no-hand-rolled-tagged-union.valid.ts",
+    // 4 hand-rolled `_tag` unions in the invalid fixture
+    expectedCount: 4,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
