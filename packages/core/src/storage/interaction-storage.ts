@@ -71,6 +71,13 @@ export interface InteractionStorageService {
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<void, StorageError>
+  /**
+   * Delete pending interaction_requests rows whose (session_id, branch_id)
+   * has no matching agent_loop_checkpoints row. Returns the number of rows
+   * deleted. Used by startup recovery to drop unresumable orphans (typical
+   * cause: schema reset, or crash between persist-row and write-checkpoint).
+   */
+  readonly reconcileOrphansAgainstCheckpoints: () => Effect.Effect<number, StorageError>
 }
 
 export class InteractionStorage extends Context.Service<
@@ -114,6 +121,18 @@ export class InteractionStorage extends Context.Service<
             yield* sql`DELETE FROM interaction_requests WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND status = 'pending'`
           },
           Effect.mapError(mapError("Failed to delete pending interaction requests")),
+        ),
+
+        reconcileOrphansAgainstCheckpoints: Effect.fn(
+          "InteractionStorage.reconcileOrphansAgainstCheckpoints",
+        )(
+          function* () {
+            const result = yield* sql<{
+              request_id: string
+            }>`DELETE FROM interaction_requests WHERE status = 'pending' AND NOT EXISTS (SELECT 1 FROM agent_loop_checkpoints c WHERE c.session_id = interaction_requests.session_id AND c.branch_id = interaction_requests.branch_id) RETURNING request_id`
+            return result.length
+          },
+          Effect.mapError(mapError("Failed to reconcile orphan interaction requests")),
         ),
       }
     }),

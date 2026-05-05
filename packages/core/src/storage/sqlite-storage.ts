@@ -2,6 +2,9 @@ import type { PlatformError } from "effect"
 import { Effect, Layer, FileSystem, Path } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
+import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
+import type { EncoreMessageStorageShape } from "effect-encore"
+import { EncoreMessageStorageLive } from "../runtime/agent/encore-storage.js"
 import { CheckpointStorage } from "./checkpoint-storage.js"
 import { InteractionStorage } from "./interaction-storage.js"
 import { InteractionPendingReader } from "./interaction-pending-reader.js"
@@ -32,6 +35,8 @@ type FocusedStorage =
   | RelationshipStorage
   | StorageTransaction
   | InteractionPendingReader
+  | ClusterMessageStorage.MessageStorage
+  | EncoreMessageStorageShape
 
 const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
@@ -46,6 +51,7 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(StorageTransaction.Live, base),
     Layer.provide(CheckpointStorage.Live, base),
+    Layer.provide(EncoreMessageStorageLive, base),
     interactionStorage,
     Layer.provide(InteractionPendingReader.Live, interactionStorage),
     Layer.provide(SearchStorage.Live, base),

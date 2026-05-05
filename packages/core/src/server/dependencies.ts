@@ -248,12 +248,28 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   // Recover pending interaction requests from storage.
-  // Iterates persisted pending records and calls approvalService.rehydrate()
-  // generically — no per-handler dispatch needed.
+  //
+  // Step 1 (orphan reconciliation): delete pending interaction_requests rows
+  // whose (session_id, branch_id) has no matching agent_loop_checkpoints row.
+  // Such rows are unresumable — the actor checkpoint that owns the
+  // cold-pattern state is gone (typical cause: schema reset, or crash between
+  // persist-row and write-checkpoint). Must run before rehydrate() so it
+  // doesn't seed approval state for an orphan that's about to be dropped.
+  //
+  // Step 2 (rehydrate): iterate the surviving persisted pending records and
+  // call approvalService.rehydrate() generically — no per-handler dispatch
+  // needed.
   const interactionRecoveryLive = Layer.effectDiscard(
     Effect.gen(function* () {
       const interactionStore = yield* InteractionStorage
       const approvalService = yield* ApprovalService
+
+      const orphans = yield* interactionStore.reconcileOrphansAgainstCheckpoints()
+      if (orphans > 0) {
+        yield* Effect.log(
+          `Reconciled ${orphans} orphan pending interaction request(s) (no matching checkpoint)`,
+        )
+      }
 
       const pending = yield* interactionStore.listPending()
       if (pending.length === 0) return
