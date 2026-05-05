@@ -1,7 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.actor"
-import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import {
+  ActorCommandId,
+  BranchId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/domain/ids"
 import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
 import { SteerCommand } from "@gent/core/domain/steer"
 
@@ -151,6 +158,98 @@ describe("AgentLoop actor identity", () => {
         interruptPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
       )
       expect(steerExec).not.toBe(interruptExec)
+    }),
+  )
+
+  it.effect("RespondInteraction dedup keys by requestId", () =>
+    Effect.gen(function* () {
+      const reqOne = InteractionRequestId.make("req-one")
+      const reqTwo = InteractionRequestId.make("req-two")
+      const execOne = yield* AgentLoop.RespondInteraction.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        requestId: reqOne,
+      })
+      const execOneAgain = yield* AgentLoop.RespondInteraction.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        requestId: reqOne,
+      })
+      const execTwo = yield* AgentLoop.RespondInteraction.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        requestId: reqTwo,
+      })
+
+      expect(execOne).toBe(execOneAgain)
+      expect(execOne).not.toBe(execTwo)
+      expect(String(execOne)).toBe(`session-a:branch-main\x00RespondInteraction\x00req-one`)
+    }),
+  )
+
+  it.effect("RecordToolResult dedup keys by toolCallId", () =>
+    Effect.gen(function* () {
+      const callA = ToolCallId.make("tool-call-a")
+      const callB = ToolCallId.make("tool-call-b")
+      const recordPayload = (toolCallId: ToolCallId) => ({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: undefined,
+        toolCallId,
+        toolName: "echo",
+        output: { ok: true },
+        isError: undefined,
+      })
+      const execA = yield* AgentLoop.RecordToolResult.executionId(recordPayload(callA))
+      const execAAgain = yield* AgentLoop.RecordToolResult.executionId(recordPayload(callA))
+      const execB = yield* AgentLoop.RecordToolResult.executionId(recordPayload(callB))
+      expect(execA).toBe(execAAgain)
+      expect(execA).not.toBe(execB)
+      expect(String(execA)).toBe(`session-a:branch-main\x00RecordToolResult\x00tool-call-a`)
+    }),
+  )
+
+  it.effect("InvokeTool dedup keys by commandId", () =>
+    Effect.gen(function* () {
+      const execAlpha = yield* AgentLoop.InvokeTool.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdAlpha,
+        toolName: "echo",
+        input: { text: "hi" },
+      })
+      const execAlphaAgain = yield* AgentLoop.InvokeTool.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdAlpha,
+        toolName: "echo",
+        input: { text: "different input still dedups by cmd" },
+      })
+      const execBeta = yield* AgentLoop.InvokeTool.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdBeta,
+        toolName: "echo",
+        input: { text: "hi" },
+      })
+      expect(execAlpha).toBe(execAlphaAgain)
+      expect(execAlpha).not.toBe(execBeta)
+      expect(String(execAlpha)).toBe(`session-a:branch-main\x00InvokeTool\x00cmd-alpha`)
+    }),
+  )
+
+  it.effect("RespondInteraction and Steer with related ids do not collide (different tags)", () =>
+    Effect.gen(function* () {
+      const respondExec = yield* AgentLoop.RespondInteraction.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        requestId: InteractionRequestId.make("cmd-alpha"),
+      })
+      const steerExec = yield* AgentLoop.Steer.executionId(
+        steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
+      )
+      // Same primaryKey string but different tags → different ExecIds.
+      expect(respondExec).not.toBe(steerExec)
     }),
   )
 })

@@ -38,7 +38,13 @@ import { Schema } from "effect"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
-import { ActorCommandId, BranchId, SessionId } from "../../domain/ids.js"
+import {
+  ActorCommandId,
+  BranchId,
+  InteractionRequestId,
+  SessionId,
+  ToolCallId,
+} from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { AgentLoopError } from "./agent-loop.commands.js"
 
@@ -62,12 +68,51 @@ const InterruptFields = {
   commandId: ActorCommandId,
 }
 
+const RespondInteractionFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: InteractionRequestId,
+}
+
+const RecordToolResultFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: Schema.optional(ActorCommandId),
+  toolCallId: ToolCallId,
+  toolName: Schema.String,
+  output: Schema.Unknown,
+  isError: Schema.optional(Schema.Boolean),
+}
+
+const InvokeToolFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
+  toolName: Schema.String,
+  input: Schema.Unknown,
+}
+
 type MessageType = Schema.Schema.Type<typeof Message>
 type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 
 type TurnSubmissionInput = { readonly message: MessageType }
 type SteerInput = { readonly commandId: ActorCommandId; readonly command: SteerCommandType }
 type InterruptInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
+}
+type RespondInteractionInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly requestId: InteractionRequestId
+}
+type RecordToolResultInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly toolCallId: ToolCallId
+}
+type InvokeToolInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
@@ -102,6 +147,36 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: InterruptFields,
     error: AgentLoopError,
     id: (p: InterruptInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: p.commandId,
+    }),
+  },
+  RespondInteraction: {
+    payload: RespondInteractionFields,
+    error: AgentLoopError,
+    id: (p: RespondInteractionInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: p.requestId,
+    }),
+  },
+  // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
+  // call must collapse to one effect.
+  RecordToolResult: {
+    payload: RecordToolResultFields,
+    error: AgentLoopError,
+    id: (p: RecordToolResultInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: p.toolCallId,
+    }),
+  },
+  // Programmatic tool invocation (server-driven). commandId is required
+  // here (vs optional in the legacy command schema) because actor dedup
+  // needs a deterministic primary key — callers that previously elided
+  // commandId now generate one before sending.
+  InvokeTool: {
+    payload: InvokeToolFields,
+    error: AgentLoopError,
+    id: (p: InvokeToolInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.commandId,
     }),
