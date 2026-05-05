@@ -2,9 +2,11 @@
  * Explicit runtime composition roots.
  *
  * Ephemeral child runs need a narrow, auditable builder: forward the parent
- * context, omit the services owned by the child, merge extension layers, then
- * merge child-owned layers last. The override families below are the single
- * source of truth for parent service omission.
+ * context, merge child-owned override families on top so child Tags occlude
+ * the parent's via `Layer.provideMerge` last-writer-wins, and wrap in
+ * `Layer.fresh` so module-level layer constants (e.g. the in-memory
+ * SqliteClient layer) are not aliased from the parent's memo map. The
+ * override families below are the typed call-site contract.
  */
 
 import { Layer, type Config, type Context, type FileSystem, type Path } from "effect"

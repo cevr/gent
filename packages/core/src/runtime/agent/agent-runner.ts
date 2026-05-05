@@ -679,8 +679,8 @@ const runEphemeralAgent = (params: {
 }) => {
   const { sessionId, branchId } = params
   const normalizedRunSpec = params.runSpec
-  // The ephemeral runtime builder owns the parent-omit set; adding a new
-  // child-owned service requires editing one composition root.
+  // The ephemeral runtime builder centralizes the override-family map;
+  // adding a new child-owned service requires editing one composition root.
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
     parentServices: params.parentServices,
