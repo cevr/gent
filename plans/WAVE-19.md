@@ -624,16 +624,59 @@ Sub-commits:
   - (b) Persisted via Cluster `MessageStorage` mailbox replay — the Submit
     op stays unacked, mailbox redelivers on shard rebalance.
 
-  Choose (a) — gent's existing `interaction_requests` table + the
-  cold-state read path already match this shape; Cluster mailbox replay is
-  not durable across server restart in the way `interaction_requests` is.
-  This is a no-code commit: write the design into the plan, identify
-  exactly which call sites in `agent-loop.state.ts:248-261` and
-  `agent-loop.ts:377-380` (the `restore-cold` branch) move into the
-  encore handler, and confirm `interaction_requests` table schema does
-  not need a reset (the table is independent of `agent_loop_checkpoints`).
-  This commit is the preserve-features gate for the wave: if (a) doesn't
-  fit, stop and reconsider C5 entirely.
+  **Decision: (a).** Gent's existing `interaction_requests` table + the
+  cold-state read path already match this shape; Cluster mailbox replay
+  is not durable across server restart in the way `interaction_requests`
+  is. This is a no-code commit.
+
+  **Schema posture (verified `packages/core/src/storage/schema.ts:124-149`):**
+  - `agent_loop_checkpoints` PK `(session_id, branch_id)` with
+    `state_tag` / `state_json` / `version` columns. Encore's actor
+    persistence layout will replace this table's role; the table itself
+    will be reshaped in **C5.3** (reset acceptable per plan).
+  - `interaction_requests` PK `request_id` with type/params/status. **Not
+    foreign-keyed to `agent_loop_checkpoints`** — fully independent.
+    No reset needed; the table survives the encore migration untouched.
+
+  **Call sites that move into the encore handler:**
+  - `packages/core/src/runtime/agent/agent-loop.state.ts:242-254` —
+    `LoopState` `TaggedEnumClass`, specifically the
+    `WaitingForInteraction` variant carrying `pendingRequestId:
+InteractionRequestId` + `pendingToolCallId: Schema.String` on top of
+    `RunningTurnFields`. This becomes encore actor handler state; the
+    `(sessionId, branchId)` PK on the actor's checkpoint replaces the
+    `agent_loop_checkpoints` PK.
+  - `packages/core/src/runtime/agent/agent-loop.ts:377-381` — the
+    `restore-cold` recovery branch (`if (state._tag ===
+"WaitingForInteraction") { … publishRecovery({ phase:
+"WaitingForInteraction", action: "restore-cold" }) … }`). In encore
+    this becomes an actor wake-up read of the checkpoint; the
+    `publishRecovery` call still fires from the encore handler so the
+    transport boundary (`SessionRuntimeState`) sees the same projection.
+  - `packages/core/src/runtime/agent/agent-loop.ts:370-375` (the
+    `Running` branch's `replay-running` path) is in the same surface
+    — it stays in the encore handler and re-derives loop position from
+    storage exactly as today.
+
+  **Restoration ordering at server startup:**
+  1. Encore actor host wakes the `(sessionId, branchId)` actor on first
+     op (or on a startup-sweep pass — see C5.4 for the wiring choice).
+  2. Actor reads its own checkpoint (`agent_loop_checkpoints` reshaped
+     in C5.3) → deserializes `WaitingForInteraction` state including
+     `pendingRequestId` / `pendingToolCallId`.
+  3. **Independently**, server startup reads
+     `InteractionStorage.listPending()` to re-publish pending interaction
+     requests over the transport. The actor's
+     `pendingRequestId` is the cross-reference back into that table — no
+     coupling beyond the foreign-key-by-value `InteractionRequestId`.
+
+  This is the **preserve-features gate** for the wave: human-in-the-loop
+  approval durability is the load-bearing product behavior. If (a)
+  doesn't fit during C5.3-C5.5 implementation, stop and reconsider C5
+  entirely. The two-table separation (encore-owned actor checkpoint vs
+  gent-owned `interaction_requests`) is what makes this clean: encore
+  doesn't need to know about pending interactions, and gent doesn't need
+  to ask encore where the cold state lives.
 
 - **C5.1** — Add `effect-encore` dependency to `packages/core`. Verify the
   v4 entrypoint targets `effect@4.0.0-beta.47` (current pinned version).
