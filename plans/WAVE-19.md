@@ -624,59 +624,150 @@ Sub-commits:
   - (b) Persisted via Cluster `MessageStorage` mailbox replay — the Submit
     op stays unacked, mailbox redelivers on shard rebalance.
 
-  **Decision: (a).** Gent's existing `interaction_requests` table + the
-  cold-state read path already match this shape; Cluster mailbox replay
-  is not durable across server restart in the way `interaction_requests`
-  is. This is a no-code commit.
+  **Decision: (a) for cold-state recovery; (b) still owns ingress
+  delivery + dedup.** Gent's existing `interaction_requests` table +
+  the cold-state read path match (a); Cluster mailbox replay is not
+  durable for cold approval state in the way `interaction_requests`
+  is. (a) is **not** a strict superset of (b): encore's
+  `MessageStorage` still owns per-op delivery/dedup/redelivery for
+  Submit/Steer/etc., specifically pre-handler-checkpoint windows
+  where an op is accepted into the actor mailbox but the handler
+  hasn't yet written checkpoint state. C5.1's `EncoreMessageStorage`
+  adapter carries that ingress contract. This is a no-code commit.
 
   **Schema posture (verified `packages/core/src/storage/schema.ts:124-149`):**
   - `agent_loop_checkpoints` PK `(session_id, branch_id)` with
     `state_tag` / `state_json` / `version` columns. Encore's actor
-    persistence layout will replace this table's role; the table itself
-    will be reshaped in **C5.3** (reset acceptable per plan).
-  - `interaction_requests` PK `request_id` with type/params/status. **Not
-    foreign-keyed to `agent_loop_checkpoints`** — fully independent.
-    No reset needed; the table survives the encore migration untouched.
+    persistence layout will replace this table's role; the table
+    itself will be reshaped in **C5.3** (reset acceptable per plan).
+  - `interaction_requests` PK `request_id` with type/params/status,
+    plus unique partial index
+    `idx_interaction_requests_pending_singleton` on `(session_id,
+branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
+    `agent_loop_checkpoints`** — schema-independent.
+  - **Runtime independence is NOT total.** Today's
+    persist-then-checkpoint ordering already has a crash window:
+    `packages/core/src/domain/interaction-request.ts:239-257` writes
+    the `interaction_requests` row before the loop writes
+    `WaitingForInteraction` at
+    `packages/core/src/runtime/agent/agent-loop.ts:1100-1108`.
+    Crashing between those two writes leaves a pending interaction
+    row whose actor checkpoint never recorded the cold state. C5.3
+    must reconcile.
 
-  **Call sites that move into the encore handler:**
-  - `packages/core/src/runtime/agent/agent-loop.state.ts:242-254` —
-    `LoopState` `TaggedEnumClass`, specifically the
-    `WaitingForInteraction` variant carrying `pendingRequestId:
-InteractionRequestId` + `pendingToolCallId: Schema.String` on top of
-    `RunningTurnFields`. This becomes encore actor handler state; the
-    `(sessionId, branchId)` PK on the actor's checkpoint replaces the
-    `agent_loop_checkpoints` PK.
-  - `packages/core/src/runtime/agent/agent-loop.ts:377-381` — the
-    `restore-cold` recovery branch (`if (state._tag ===
-"WaitingForInteraction") { … publishRecovery({ phase:
-"WaitingForInteraction", action: "restore-cold" }) … }`). In encore
-    this becomes an actor wake-up read of the checkpoint; the
-    `publishRecovery` call still fires from the encore handler so the
-    transport boundary (`SessionRuntimeState`) sees the same projection.
-  - `packages/core/src/runtime/agent/agent-loop.ts:370-375` (the
-    `Running` branch's `replay-running` path) is in the same surface
-    — it stays in the encore handler and re-derives loop position from
-    storage exactly as today.
+  **Migration surfaces moving into the encore handler (full list):**
+  - State variant —
+    `packages/core/src/runtime/agent/agent-loop.state.ts:242-254`:
+    `LoopState` `TaggedEnumClass`, `WaitingForInteraction` variant
+    carrying `pendingRequestId: InteractionRequestId` +
+    `pendingToolCallId: Schema.String` on top of `RunningTurnFields`.
+    Becomes encore actor handler state.
+  - Read/recovery branches —
+    `packages/core/src/runtime/agent/agent-loop.ts:370-381`
+    (`replay-running` + `restore-cold` `publishRecovery` calls).
+    `publishRecovery` still fires from the encore handler so the
+    transport boundary (`SessionRuntimeState`) sees the same
+    projection.
+  - Checkpoint write/upsert/remove —
+    `packages/core/src/runtime/agent/agent-loop.ts:670-758`
+    (Idle/Running checkpoint persist) and
+    `packages/core/src/storage/checkpoint-storage.ts:47-105`
+    (`upsert` / `get` / `list` / `remove` SQL). Encore's actor
+    storage replaces the SQL surface; the gent `CheckpointStorage`
+    Tag is deleted in C5.3.
+  - Cold transition write —
+    `packages/core/src/runtime/agent/agent-loop.ts:1100-1108`
+    (the explicit `WaitingForInteraction` checkpoint write at the
+    point a tool requests human approval).
+  - Interrupt-from-cold resume —
+    `packages/core/src/runtime/agent/agent-loop.ts:1181-1208`.
+  - Interaction response resume —
+    `packages/core/src/runtime/agent/agent-loop.ts:1237-1272`
+    (the `respondInteraction` path that re-enters the suspended
+    fiber from the cold state).
+  - `findOrRestoreLoop` —
+    `packages/core/src/runtime/agent/agent-loop.ts:1536-1568`
+    (the path `respondInteraction` calls when the loop fiber is
+    cold; in encore terms this becomes the actor wake-up flow).
+  - Startup interaction rehydrate —
+    `packages/core/src/server/dependencies.ts:250-279`
+    (`interactionRecoveryLive` `Layer.effectDiscard` calling
+    `InteractionStorage.listPending()` →
+    `ApprovalService.rehydrate()`). Stays gent-owned but C5.0
+    constrains its ordering relative to RPC acceptance — see below.
 
-  **Restoration ordering at server startup:**
-  1. Encore actor host wakes the `(sessionId, branchId)` actor on first
-     op (or on a startup-sweep pass — see C5.4 for the wiring choice).
-  2. Actor reads its own checkpoint (`agent_loop_checkpoints` reshaped
-     in C5.3) → deserializes `WaitingForInteraction` state including
-     `pendingRequestId` / `pendingToolCallId`.
-  3. **Independently**, server startup reads
-     `InteractionStorage.listPending()` to re-publish pending interaction
-     requests over the transport. The actor's
-     `pendingRequestId` is the cross-reference back into that table — no
-     coupling beyond the foreign-key-by-value `InteractionRequestId`.
+  **Restoration ordering — explicit gate (counsel finding 1).** The
+  pre-encore design has a startup-ordering hazard the migration must
+  NOT inherit:
+  `packages/core/src/server/interaction-commands.ts:39-90`'s
+  `respond` rejects with `InteractionRequestMismatchError` unless
+  `ApprovalService.pendingRequestId()` has already been seeded
+  in-memory by `rehydrate()`
+  (`packages/core/src/domain/interaction-request.ts:217-290`). If a
+  client replies before `interactionRecoveryLive` finishes seeding,
+  the response is dropped. Two acceptable resolutions for C5.4:
+  - **(g1) Gate the RPC server on recovery completion.** Treat
+    `interactionRecoveryLive` as a startup barrier — RPC routes do
+    not accept connections until rehydrate signals completion.
+    Simplest; cost is a startup latency window.
+  - **(g2) Make `respond` fall back to durable storage.** When
+    `approvalService.pendingRequestId()` returns `undefined`,
+    `respond` re-checks `InteractionStorage.listPending()` for the
+    `(sessionId, branchId)` key; if the row exists, accept the
+    response and seed the approval service inline. Avoids the
+    barrier; cost is one extra storage read on the cold path.
+
+  C5.4 picks one. Wave defaults to (g1) unless a test surfaces a
+  startup-latency regression — (g2) is the escape hatch. Either way
+  C5.0 locks the constraint: **a client response from before the
+  restart must not be silently dropped.**
+
+  **Orphan reconciliation in C5.3 (counsel finding 2).** Resetting
+  `agent_loop_checkpoints` while leaving pending
+  `interaction_requests` rows in place creates a class of orphans
+  whose `pendingRequestId` cannot resume any loop. C5.3 must
+  reconcile in one of two shapes:
+  - **(r1) Delete orphans during reset.** Inside the same migration
+    that reshapes `agent_loop_checkpoints`, delete any
+    `interaction_requests` rows whose `(session_id, branch_id)` no
+    longer maps to a (post-reset) checkpoint. Loses the pending
+    prompt visibly; the user has to retrigger the action.
+  - **(r2) Mark abandoned + emit recovery event.** Add an
+    `'abandoned'` status to `interaction_requests` (or use a
+    dedicated marker), set orphans to that status during the
+    migration, and emit an `InteractionAbandoned` event the TUI can
+    render so the user knows why the prompt vanished.
+
+  Wave defaults to **(r1)** for simplicity; (r2) is reachable if the
+  TUI needs the visible event. The choice is C5.3-local; C5.0 just
+  locks the constraint: **C5.3 cannot leave orphan pending
+  interactions whose actor checkpoint is absent.**
+
+  **Required regression tests for C5.4 / C5.5 (counsel finding 5).**
+  Public-interface RPC acceptance tests via `createRpcHarness`, not
+  direct-service tests:
+  1. **Restart with pending approval, single re-presentation.**
+     Persist `WaitingForInteraction` checkpoint + matching pending
+     `interaction_requests` row. Restart the runtime. Assert exactly
+     one `InteractionPresented` event lands on the transport (not
+     duplicated by both `restore-cold` and `rehydrate`).
+  2. **Respond before explicit actor wake.** With (1)'s state, send
+     `respond` over RPC before any other op forces actor wake.
+     Assert the turn resumes (not dropped with
+     `InteractionRequestMismatchError`). Validates the (g1) barrier
+     or (g2) fallback chosen in C5.4.
+  3. **Orphan reconciliation.** Persist a pending
+     `interaction_requests` row with no matching checkpoint. Run
+     C5.3's migration. Assert orphan handled per chosen shape: (r1)
+     row deleted; (r2) row marked abandoned + event emitted.
+
+  These three tests are blocking deliverables for C5.5 — without
+  them the preserve-features gate isn't actually validated.
 
   This is the **preserve-features gate** for the wave: human-in-the-loop
   approval durability is the load-bearing product behavior. If (a)
   doesn't fit during C5.3-C5.5 implementation, stop and reconsider C5
-  entirely. The two-table separation (encore-owned actor checkpoint vs
-  gent-owned `interaction_requests`) is what makes this clean: encore
-  doesn't need to know about pending interactions, and gent doesn't need
-  to ask encore where the cold state lives.
+  entirely.
 
 - **C5.1** — Add `effect-encore` dependency to `packages/core`. Verify the
   v4 entrypoint targets `effect@4.0.0-beta.47` (current pinned version).
