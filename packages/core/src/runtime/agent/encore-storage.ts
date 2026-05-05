@@ -24,7 +24,12 @@
 
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { MessageStorage, ShardingConfig, SqlMessageStorage } from "effect/unstable/cluster"
+import {
+  ClusterError,
+  MessageStorage,
+  ShardingConfig,
+  SqlMessageStorage,
+} from "effect/unstable/cluster"
 import { EncoreMessageStorage, fromMessageStorage } from "effect-encore"
 
 const PREFIX = "cluster"
@@ -44,16 +49,15 @@ const encoreTagLayer = Layer.effect(
     const upstream = yield* MessageStorage.MessageStorage
     const sql = yield* SqlClient.SqlClient
     return fromMessageStorage(upstream, {
-      deleteEnvelope: (requestId) =>
-        Effect.gen(function* () {
-          const id = String(requestId)
-          yield* sql`DELETE FROM ${sql(repliesTable)} WHERE request_id = ${id}`
-          yield* sql`DELETE FROM ${sql(messagesTable)} WHERE request_id = ${id} OR id = ${id}`
-        }).pipe(
-          Effect.catchTag("SqlError", (cause) =>
-            Effect.die(new Error(`EncoreMessageStorage.deleteEnvelope failed: ${String(cause)}`)),
-          ),
-        ),
+      deleteEnvelope: (requestId) => {
+        const id = String(requestId)
+        return sql`DELETE FROM ${sql(repliesTable)} WHERE request_id = ${id}`.pipe(
+          Effect.andThen(sql`DELETE FROM ${sql(messagesTable)} WHERE request_id = ${id}`),
+          sql.withTransaction,
+          Effect.asVoid,
+          (effect) => ClusterError.PersistenceError.refail(effect),
+        )
+      },
     })
   }),
 )
