@@ -48,8 +48,7 @@ import {
 import { SteerCommand } from "../../domain/steer.js"
 import { AgentLoop as AgentLoopService } from "./agent-loop.js"
 import { AgentLoopError, commandIdForToolCall } from "./agent-loop.commands.js"
-
-const entityIdOf = (sessionId: SessionId, branchId: BranchId): string => `${sessionId}:${branchId}`
+import { entityIdOf } from "./agent-loop.entity-id.js"
 
 const TurnSubmissionFields = {
   message: Message,
