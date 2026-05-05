@@ -5,13 +5,18 @@
  * everywhere else (modulo a small set of structural exemptions: scripts,
  * tooling, e2e harnesses, `main.ts` entrypoints, and tests).
  *
- * Every method here is a thin Effect wrapper over the underlying Bun API.
- * Surrounding runtime code yields `GentPlatform` and stays portable.
+ * It is also the sole sanctioned home for raw `process.*` access (pid,
+ * execPath, kill, exit) and Node `os` info — every other source file routes
+ * through `GentPlatform` so the runtime stays portable.
+ *
+ * Every method here is a thin Effect wrapper over the underlying Bun/Node
+ * API. Surrounding runtime code yields `GentPlatform` and stays portable.
  */
 
+import * as os from "node:os"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { GentPlatform } from "./gent-platform.js"
+import { GentPlatform, SignalError } from "./gent-platform.js"
 
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
@@ -47,6 +52,41 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
         })
         return { exitCode: result.exitCode }
       }),
+
+    osInfo: Effect.sync(() => ({
+      platform: os.platform(),
+      arch: os.arch(),
+      release: os.release(),
+      hostname: os.hostname(),
+      type: os.type(),
+    })),
+
+    pid: Effect.sync(() => process.pid),
+
+    execPath: Effect.sync(() => process.execPath),
+
+    signal: (pid, signal) =>
+      Effect.try({
+        try: () => {
+          process.kill(pid, signal)
+        },
+        catch: (cause) =>
+          new SignalError({
+            pid,
+            signal,
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      }),
+
+    // `process.exit` does not return; the cast to `Effect<never>` reflects
+    // that the host process is going down. Callers should sequence this as
+    // the final step of a scope so Effect finalizers run before exit.
+    exit: (code) =>
+      Effect.sync(() => {
+        process.exit(code)
+      }) as Effect.Effect<never>,
+
+    now: Effect.sync(() => performance.now()),
   }),
 )
 

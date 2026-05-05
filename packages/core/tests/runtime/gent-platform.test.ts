@@ -7,9 +7,9 @@
  * downstream tests can rely on it without re-checking each method.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Exit, Scope } from "effect"
+import { Deferred, Effect, Exit, Layer, Scope } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import { GentPlatform, SignalError } from "../../src/runtime/gent-platform"
 
 describe("GentPlatform", () => {
   describe("BunGentPlatformLive", () => {
@@ -106,6 +106,70 @@ describe("GentPlatform", () => {
         expect(out).toContain("x")
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
+
+    it.live("osInfo reports the live host shape", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const info = yield* platform.osInfo
+        // Spot-check shape — values are runtime-dependent. Each field must be
+        // a non-empty string. `platform` is one of the documented Node values.
+        expect(typeof info.platform).toBe("string")
+        expect(info.platform.length).toBeGreaterThan(0)
+        expect(typeof info.arch).toBe("string")
+        expect(info.arch.length).toBeGreaterThan(0)
+        expect(typeof info.release).toBe("string")
+        expect(typeof info.hostname).toBe("string")
+        expect(typeof info.type).toBe("string")
+      }).pipe(Effect.provide(BunGentPlatformLive)),
+    )
+
+    it.live("pid and execPath match the live host process", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const pid = yield* platform.pid
+        const execPath = yield* platform.execPath
+        expect(pid).toBe(process.pid)
+        expect(typeof pid).toBe("number")
+        expect(pid).toBeGreaterThan(0)
+        expect(execPath).toBe(process.execPath)
+        expect(execPath.length).toBeGreaterThan(0)
+      }).pipe(Effect.provide(BunGentPlatformLive)),
+    )
+
+    it.live("signal(pid, 0) succeeds for self-pid (liveness probe)", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const pid = yield* platform.pid
+        // Probe own process — must succeed without delivering a signal.
+        yield* platform.signal(pid, 0)
+      }).pipe(Effect.provide(BunGentPlatformLive)),
+    )
+
+    it.live("signal returns a SignalError for a non-numeric / unreachable target", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        // `process.kill` with a clearly unreachable pid (out of pid_max
+        // territory) raises ESRCH on every POSIX host. We assert the typed
+        // `SignalError` is on the failure channel, not the defect channel.
+        const failure = yield* Effect.flip(platform.signal(2 ** 31 - 1, 0))
+        expect(failure).toBeInstanceOf(SignalError)
+        expect(failure.pid).toBe(2 ** 31 - 1)
+        expect(failure.signal).toBe(0)
+        expect(typeof failure.reason).toBe("string")
+        expect(failure.reason.length).toBeGreaterThan(0)
+      }).pipe(Effect.provide(BunGentPlatformLive)),
+    )
+
+    it.live("now returns monotonically non-decreasing milliseconds", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const a = yield* platform.now
+        const b = yield* platform.now
+        expect(typeof a).toBe("number")
+        expect(typeof b).toBe("number")
+        expect(b).toBeGreaterThanOrEqual(a)
+      }).pipe(Effect.provide(BunGentPlatformLive)),
+    )
   })
 
   describe("GentPlatform.Test", () => {
@@ -141,6 +205,56 @@ describe("GentPlatform", () => {
         expect(listener.port).toBe(0)
         yield* Scope.close(scope, Exit.void)
       }).pipe(Effect.provide(GentPlatform.Test())),
+    )
+
+    it.live("osInfo / pid / execPath / now return Test stub values", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const info = yield* platform.osInfo
+        expect(info.platform).toBe("linux")
+        expect(info.arch).toBe("x64")
+        expect(info.release).toBe("test-release")
+        expect(info.hostname).toBe("test-host")
+        expect(info.type).toBe("Linux")
+        expect(yield* platform.pid).toBe(1)
+        expect(yield* platform.execPath).toBe("/usr/bin/node")
+        // `now` increments on each call in the Test layer, starting at 1.
+        expect(yield* platform.now).toBe(1)
+        expect(yield* platform.now).toBe(2)
+      }).pipe(Effect.provide(GentPlatform.Test())),
+    )
+
+    it.live("signal is a Test no-op (succeeds with void)", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        yield* platform.signal(123, "SIGTERM")
+        yield* platform.signal(123, 0)
+      }).pipe(Effect.provide(GentPlatform.Test())),
+    )
+
+    // The Test layer's default `exit` returns `Effect.never` — calling it
+    // would hang. Tests that need to assert "exit was called with code N"
+    // override the layer with a `Deferred` recorder. This locks that
+    // pattern as the documented usage.
+    it.live("exit captures intended code via a Deferred recorder layer", () =>
+      Effect.gen(function* () {
+        const captured = yield* Deferred.make<number>()
+        const recorder = Layer.effect(
+          GentPlatform,
+          Effect.gen(function* () {
+            const base = yield* GentPlatform
+            return GentPlatform.of({
+              ...base,
+              exit: (code) => Deferred.succeed(captured, code).pipe(Effect.andThen(Effect.never)),
+            })
+          }).pipe(Effect.provide(GentPlatform.Test())),
+        )
+        yield* Effect.gen(function* () {
+          const platform = yield* GentPlatform
+          yield* Effect.race(platform.exit(7), Deferred.await(captured))
+        }).pipe(Effect.provide(recorder))
+        expect(yield* Deferred.await(captured)).toBe(7)
+      }),
     )
   })
 })
