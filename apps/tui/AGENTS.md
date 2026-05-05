@@ -78,7 +78,7 @@ State ownership rules:
 - One workflow, one owner. If a flow has modes/transitions, give it one reducer or machine.
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
-- Auth and permissions are session overlays, not routes. Auth gate lives in session-controller.
+- Auth is a route (`routes/auth.tsx`); the route is mounted as an overlay above the session view when the session controller's auth gate detects missing required providers.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.
 - Composer reads from `SessionControllerContext`, not props.
 

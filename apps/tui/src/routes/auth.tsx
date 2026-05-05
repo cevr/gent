@@ -263,7 +263,7 @@ export function Auth(props: AuthProps) {
                 return
               }
               if (authorization.method === "done") {
-                flashSuccess(`Authenticated ${provider.provider} via keychain`)
+                flashSuccess(`Authenticated ${provider.provider}`)
                 send(AuthEvent.ActionSucceeded.make({}))
                 loadAuth(currentRouteVersion)
                 return
