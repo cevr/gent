@@ -213,14 +213,33 @@ export const AgentLoopLiveActor = Actor.toLayer(
           ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
           ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
         }),
-      QueueFollowUp: ({ operation }) =>
-        svc.run(operation.message, {
-          ...(operation.agentOverride !== undefined
-            ? { agentOverride: operation.agentOverride }
-            : {}),
-          ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
-          ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
-        }),
+      QueueFollowUp: ({ operation }) => {
+        // Legacy `svc.queueFollowUp` builds the message internally from
+        // `{sessionId, branchId, content, metadata}` then enqueues. The actor
+        // payload carries an already-constructed `Message`, so we extract the
+        // text content and metadata back out to drive the legacy enqueue
+        // path until C5.4.4 collapses the body.
+        const text = operation.message.parts
+          .filter((part) => part.type === "text")
+          .map((part) => (part as { readonly text: string }).text)
+          .join("")
+        return svc
+          .queueFollowUp({
+            sessionId: operation.message.sessionId,
+            branchId: operation.message.branchId,
+            content: text,
+            ...(operation.message.metadata !== undefined
+              ? { metadata: operation.message.metadata }
+              : {}),
+          })
+          .pipe(
+            Effect.catchTag("StorageError", (cause) =>
+              Effect.fail(
+                new AgentLoopError({ message: `queueFollowUp storage failed: ${cause.message}` }),
+              ),
+            ),
+          )
+      },
       Steer: ({ operation }) => svc.steer(operation.command),
       Interrupt: ({ operation }) =>
         svc.steer(

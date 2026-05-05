@@ -28,6 +28,7 @@ import { EventStorage } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
+import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
@@ -367,20 +368,15 @@ interface RunPromptInput {
   readonly runSpec?: RunSpec
 }
 
-const makeLiveSessionRuntime: Effect.Effect<
-  SessionRuntimeService,
-  never,
-  | AgentLoop
-  | SessionStorage
-  | BranchStorage
-  | EventStorage
-  | EventPublisher
-  | ExtensionRegistry
-  | DriverRegistry
-  | ModelRegistry
-  | GentPlatform
-> = Effect.gen(function* () {
+const makeLiveSessionRuntime = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
+  // Resolve the actor client factory once at construction time. Per-method
+  // dispatch uses `ActorRef.execute(op)`, which carries no requirement,
+  // instead of the `OperationHandle.execute(payload)` form (which would
+  // re-introduce the actor client requirement at each call site).
+  const actorClientFactory = yield* AgentLoopActor.Context
+  const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
+    actorClientFactory(`${sessionId}:${branchId}`)
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const eventStorage = yield* EventStorage
@@ -399,7 +395,27 @@ const makeLiveSessionRuntime: Effect.Effect<
     extensionRegistry,
     overrides: {
       sessionControl: {
-        queueFollowUp: (input) => agentLoop.queueFollowUp(input),
+        queueFollowUp: (input) =>
+          Effect.gen(function* () {
+            const message = Message.Regular.make({
+              id: MessageId.make(yield* platform.randomId),
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              role: "user",
+              parts: [new TextPart({ type: "text", text: input.content })],
+              createdAt: yield* DateTime.nowAsDate,
+              ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+            })
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.QueueFollowUp.make({
+                message,
+                agentOverride: undefined,
+                runSpec: undefined,
+                interactive: undefined,
+              }),
+            )
+          }),
       },
     },
   })
@@ -465,12 +481,16 @@ const makeLiveSessionRuntime: Effect.Effect<
       createdAt: yield* DateTime.nowAsDate,
     })
 
-    yield* agentLoop
-      .submit(message, {
-        ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-        ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
-        ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
-      })
+    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+    yield* ref
+      .execute(
+        AgentLoopActor.Submit.make({
+          message,
+          agentOverride: input.agentOverride,
+          interactive: input.interactive,
+          runSpec: input.runSpec,
+        }),
+      )
       .pipe(
         Effect.tapCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) return Effect.void
@@ -527,7 +547,22 @@ const makeLiveSessionRuntime: Effect.Effect<
     recordToolResult: (input) =>
       serializeCommand(
         requireSessionBranch(input).pipe(
-          Effect.flatMap(() => agentLoop.recordToolResult(input)),
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+              yield* ref.execute(
+                AgentLoopActor.RecordToolResult.make({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  toolCallId: input.toolCallId,
+                  toolName: input.toolName,
+                  output: input.output,
+                  commandId: input.commandId,
+                  isError: input.isError,
+                }),
+              )
+            }),
+          ),
           Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
         ),
       ),
@@ -535,7 +570,21 @@ const makeLiveSessionRuntime: Effect.Effect<
     invokeTool: (input) =>
       serializeCommand(
         requireSessionBranch(input).pipe(
-          Effect.flatMap(() => agentLoop.invokeTool(input)),
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const commandId = input.commandId ?? ActorCommandId.make(yield* platform.randomId)
+              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+              yield* ref.execute(
+                AgentLoopActor.InvokeTool.make({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  commandId,
+                  toolName: input.toolName,
+                  input: input.input,
+                }),
+              )
+            }),
+          ),
           Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
         ),
       ),
@@ -543,7 +592,13 @@ const makeLiveSessionRuntime: Effect.Effect<
     steer: (command) =>
       serializeCommand(
         requireSessionBranch(command).pipe(
-          Effect.flatMap(() => agentLoop.steer(command)),
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const commandId = ActorCommandId.make(yield* platform.randomId)
+              const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
+              yield* ref.execute(AgentLoopActor.Steer.make({ commandId, command }))
+            }),
+          ),
           Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
         ),
       ),
@@ -551,7 +606,12 @@ const makeLiveSessionRuntime: Effect.Effect<
     respondInteraction: (input) =>
       serializeCommand(
         requireSessionBranch(input).pipe(
-          Effect.flatMap(() => agentLoop.respondInteraction(input)),
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+              yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+            }),
+          ),
           Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
         ),
       ),
@@ -572,7 +632,28 @@ const makeLiveSessionRuntime: Effect.Effect<
     queueFollowUp: (input) =>
       serializeCommand(
         requireSessionBranch(input).pipe(
-          Effect.flatMap(() => agentLoop.queueFollowUp(input)),
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const message = Message.Regular.make({
+                id: MessageId.make(yield* platform.randomId),
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text: input.content })],
+                createdAt: yield* DateTime.nowAsDate,
+                ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+              })
+              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+              yield* ref.execute(
+                AgentLoopActor.QueueFollowUp.make({
+                  message,
+                  agentOverride: undefined,
+                  runSpec: undefined,
+                  interactive: undefined,
+                }),
+              )
+            }),
+          ),
           Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
         ),
       ),
@@ -753,7 +834,16 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         // inside the per-entity SessionRuntime service.
         concurrency: "unbounded",
       },
-    ).pipe(Layer.provideMerge(AgentLoop.Live(config)))
+    ).pipe(
+      // `AgentLoopLiveActor` provides the `AgentLoop` actor client (consumed
+      // by `makeLiveSessionRuntime` through `AgentLoopActor.<Op>.execute`)
+      // and depends on the legacy `AgentLoop` Tag (consumed by handler
+      // delegation). Both stay live until C5.4.4 collapses the imperative
+      // loop into the actor body. Using `provide` (not `provideMerge`) so the
+      // actor client is consumed but not re-exported.
+      Layer.provide(AgentLoopLiveActor),
+      Layer.provideMerge(AgentLoop.Live(config)),
+    )
 
   static LiveWithEntity = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
