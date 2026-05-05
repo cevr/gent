@@ -100,6 +100,8 @@
     "./runtime/agent/agent-loop": null,
     "./runtime/agent/agent-loop.js": null,
     "./runtime/agent/agent-loop.ts": null,
+    "./runtime/agent/encore-storage": "./src/runtime/agent/encore-storage.ts",
+    "./runtime/agent/encore-storage.js": "./src/runtime/agent/encore-storage.ts",
     "./runtime/prompt-presenter-live": "./src/runtime/prompt-presenter-live.ts",
     "./runtime/prompt-presenter-live.js": "./src/runtime/prompt-presenter-live.ts",
     "./runtime/log-paths": "./src/runtime/log-paths.ts",
@@ -157,6 +159,7 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" -print0 | xargs -0 -n 8 -P 6 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots'"
   },
   "dependencies": {
+    "effect-encore": "catalog:",
     "effect-wide-event": "catalog:"
   },
   "peerDependencies": {

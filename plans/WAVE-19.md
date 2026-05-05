@@ -769,11 +769,16 @@ branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
   doesn't fit during C5.3-C5.5 implementation, stop and reconsider C5
   entirely.
 
-- **C5.1** — Add `effect-encore` dependency to `packages/core`. Verify the
-  v4 entrypoint targets `effect@4.0.0-beta.47` (current pinned version).
-  Wire `EncoreMessageStorage` adapter against gent's existing SQLite
-  storage so `Actor.rerun` works (per the encore AGENTS.md gotcha:
+- **C5.1** — Add `effect-encore` dependency to `packages/core`. The
+  v4 entrypoint targets `effect@>=4.0.0-beta.46`; gent is on
+  `4.0.0-beta.59`. Wire `EncoreMessageStorage` adapter against gent's
+  existing SQLite storage so `Actor.rerun` works: compose
+  `effect/unstable/cluster/SqlMessageStorage.layer` (provides upstream
+  `MessageStorage`) with `encoreMessageStorageLayer(...)` adding a
+  `deleteEnvelope` that surgically removes the row from the cluster
+  `messages` + `replies` tables (per the encore AGENTS.md gotcha:
   adapters MUST implement `deleteEnvelope` or `.rerun` dies loudly).
+  No callers yet — C5.2/C5.4 consume it.
 - **C5.2** — Define `AgentLoop = Actor.fromEntity("AgentLoop", { Submit:
 {...}, Steer: {...}, QueueFollowUp: {...}, Interrupt: {...}, Snapshot:
 {...}, Subscribe: {...} })`. `id(payload)` returns
