@@ -55,6 +55,8 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { StorageTransaction } from "../../storage/storage-transaction.js"
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
+import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
+import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
@@ -503,6 +505,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
         const platform = yield* GentPlatform
+        const stateRegistry = yield* AgentLoopStateRegistry
+        const sessionGovernance = yield* AgentLoopSessionGovernance
         // Yield ConfigService at setup so the captured service shape is
         // available to inner closures without leaking the requirement
         // into Stream/Machine task signatures.
@@ -523,7 +527,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           )
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
-        const terminatedSessionsRef = yield* Ref.make<Set<SessionId>>(new Set())
         const loopsSemaphore = yield* Semaphore.make(1)
         const loopWatcherScope = yield* Scope.make()
         let service: AgentLoopService
@@ -566,6 +569,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 const next = new Map(loops)
                 next.delete(key)
                 return next
+              })
+              yield* stateRegistry.deregister(sessionId, branchId, {
+                loopRef: handle.loopRef,
+                queueMutationSemaphore: handle.queueMutationSemaphore,
               })
             }),
           )
@@ -1443,7 +1450,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const created = yield* Effect.withSpan("AgentLoop.getLoop.semaphore")(
             loopsSemaphore.withPermits(1)(
               Effect.gen(function* () {
-                if ((yield* Ref.get(terminatedSessionsRef)).has(sessionId)) {
+                if (yield* sessionGovernance.isTerminated(sessionId)) {
                   return yield* new AgentLoopError({
                     message: `Session runtime terminated: ${sessionId}`,
                   })
@@ -1455,6 +1462,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   const next = new Map(loops)
                   next.set(key, handle)
                   return next
+                })
+                yield* stateRegistry.register(sessionId, branchId, {
+                  loopRef: handle.loopRef,
+                  queueMutationSemaphore: handle.queueMutationSemaphore,
                 })
                 return handle
               }),
@@ -1537,7 +1548,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           sessionId: SessionId,
           branchId: BranchId,
         ) {
-          if ((yield* Ref.get(terminatedSessionsRef)).has(sessionId)) return undefined
+          if (yield* sessionGovernance.isTerminated(sessionId)) return undefined
           const existing = yield* findLoop(sessionId, branchId)
           if (existing !== undefined) return existing
 
@@ -1586,11 +1597,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const prefix = `${sessionId}:`
           const loopsToClose = yield* loopsSemaphore.withPermits(1)(
             Effect.gen(function* () {
-              yield* Ref.update(terminatedSessionsRef, (terminated) => {
-                const next = new Set(terminated)
-                next.add(sessionId)
-                return next
-              })
+              yield* sessionGovernance.markTerminated(sessionId)
 
               const selected = Array.from((yield* Ref.get(loopsRef)).entries()).filter(([key]) =>
                 key.startsWith(prefix),
@@ -1622,14 +1629,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const restoreSession = Effect.fn("AgentLoop.restoreSession")(function* (
           sessionId: SessionId,
         ) {
-          yield* loopsSemaphore.withPermits(1)(
-            Ref.update(terminatedSessionsRef, (terminated) => {
-              if (!terminated.has(sessionId)) return terminated
-              const next = new Set(terminated)
-              next.delete(sessionId)
-              return next
-            }),
-          )
+          yield* loopsSemaphore.withPermits(1)(sessionGovernance.clearTerminated(sessionId))
         })
 
         const submitTurn = Effect.fn("AgentLoop.submitTurn")(function* (
@@ -2094,8 +2094,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
-                const terminated = yield* Ref.get(terminatedSessionsRef)
-                if (terminated.has(input.sessionId)) {
+                if (yield* sessionGovernance.isTerminated(input.sessionId)) {
                   return yield* new AgentLoopError({
                     message: `Session terminated: ${input.sessionId}`,
                   })
@@ -2119,8 +2118,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
-                const terminated = yield* Ref.get(terminatedSessionsRef)
-                if (terminated.has(input.sessionId)) {
+                if (yield* sessionGovernance.isTerminated(input.sessionId)) {
                   return yield* new AgentLoopError({
                     message: `Session terminated: ${input.sessionId}`,
                   })
@@ -2157,8 +2155,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               // terminated set outlives `closeLoopHandle` and catches the
               // check-then-use race where delete lands between the caller's
               // `requireSessionExists` gate and this fallback.
-              const terminated = yield* Ref.get(terminatedSessionsRef)
-              if (terminated.has(input.sessionId)) {
+              if (yield* sessionGovernance.isTerminated(input.sessionId)) {
                 return yield* new AgentLoopError({
                   message: `Session terminated: ${input.sessionId}`,
                 })
@@ -2200,6 +2197,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         return service
       }),
+    ).pipe(
+      // `AgentLoopStateRegistry` and `AgentLoopSessionGovernance` back the
+      // per-entity read-side state and cross-entity session lifecycle
+      // (introduced in C5.4.4.a). They are runtime-internal — provided here so
+      // they don't appear in the layer requirements at the call site.
+      Layer.provide(AgentLoopStateRegistry.Live),
+      Layer.provide(AgentLoopSessionGovernance.Live),
     )
 
   static Test = (overrides: Partial<AgentLoopService> = {}): Layer.Layer<AgentLoop> =>
