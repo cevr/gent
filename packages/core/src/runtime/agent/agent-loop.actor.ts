@@ -34,7 +34,7 @@
  * @module
  */
 
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
@@ -46,7 +46,8 @@ import {
   ToolCallId,
 } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
-import { AgentLoopError } from "./agent-loop.commands.js"
+import { AgentLoop as AgentLoopService } from "./agent-loop.js"
+import { AgentLoopError, commandIdForToolCall } from "./agent-loop.commands.js"
 
 const entityIdOf = (sessionId: SessionId, branchId: BranchId): string => `${sessionId}:${branchId}`
 
@@ -182,3 +183,84 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     }),
   },
 })
+
+/**
+ * `Actor.toLayer` handler layer for `AgentLoop`. Each handler delegates to
+ * the legacy `AgentLoopService` Tag (the per-(sessionId, branchId)
+ * imperative implementation). C5.4.4 will collapse the legacy
+ * implementation into the actor body; until then this is a pass-through
+ * that stages the architectural change without rewriting recovery flow.
+ *
+ * **`RecordToolResult` commandId fallback** (C5.4.1 counsel forward-note):
+ * legacy `recordToolResultPhase` derives the persisted tool-result message
+ * id from `commandId` via `toolResultMessageIdForCommand`. If the actor
+ * payload's `commandId` is absent, generating a fresh random id per call
+ * would produce a different message id on retry — breaking the actor's
+ * dedup contract (same `toolCallId` must resolve to the same persisted
+ * effect). The handler derives a deterministic fallback from `toolCallId`
+ * via `commandIdForToolCall`, so retries collapse to the same message id.
+ */
+export const AgentLoopLiveActor = Actor.toLayer(
+  AgentLoop,
+  Effect.gen(function* () {
+    const svc = yield* AgentLoopService
+    return {
+      Submit: ({ operation }) =>
+        svc.submit(operation.message, {
+          ...(operation.agentOverride !== undefined
+            ? { agentOverride: operation.agentOverride }
+            : {}),
+          ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
+          ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
+        }),
+      QueueFollowUp: ({ operation }) =>
+        svc.run(operation.message, {
+          ...(operation.agentOverride !== undefined
+            ? { agentOverride: operation.agentOverride }
+            : {}),
+          ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
+          ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
+        }),
+      Steer: ({ operation }) => svc.steer(operation.command),
+      Interrupt: ({ operation }) =>
+        svc.steer(
+          Schema.decodeSync(SteerCommand)({
+            _tag: "Cancel",
+            sessionId: operation.sessionId,
+            branchId: operation.branchId,
+          }),
+        ),
+      RespondInteraction: ({ operation }) =>
+        svc.respondInteraction({
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+          requestId: operation.requestId,
+        }),
+      RecordToolResult: ({ operation }) =>
+        svc.recordToolResult({
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+          commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
+          toolCallId: operation.toolCallId,
+          toolName: operation.toolName,
+          output: operation.output,
+          ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+        }),
+      InvokeTool: ({ operation }) =>
+        svc.invokeTool({
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+          commandId: operation.commandId,
+          toolName: operation.toolName,
+          input: operation.input,
+        }),
+    }
+  }),
+  {
+    // Long-lived ops (Submit/RunTurn) park inside the loop body via
+    // commandGate. `concurrency: "unbounded"` keeps short ops
+    // (RecordToolResult, RespondInteraction, Steer) from blocking the
+    // mailbox behind a slow Submit.
+    concurrency: "unbounded",
+  },
+)

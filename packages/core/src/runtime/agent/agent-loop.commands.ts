@@ -85,3 +85,10 @@ export const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:assistant`)
 export const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:tool-result`)
+
+// Deterministic fallback for `RecordToolResult` when no commandId is supplied.
+// Keyed by toolCallId so retries collapse to the same persisted tool-result
+// message id (idempotent write); deriving from a fresh random commandId would
+// produce a different message id on retry and break the actor's dedup contract.
+export const commandIdForToolCall = (toolCallId: ToolCallId) =>
+  ActorCommandId.make(`tool-call:${toolCallId}`)
