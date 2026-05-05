@@ -24,33 +24,6 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
-    it.live("which returns absolute path for known binary, null for missing", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const sh = yield* platform.which("sh")
-        expect(typeof sh).toBe("string")
-        expect(sh).toMatch(/\/sh$/)
-        const missing = yield* platform.which("definitely-not-a-real-binary-xyz")
-        expect(missing).toBeNull()
-      }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
-
-    it.live("spawnSync surfaces the child exit code", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const ok = yield* platform.spawnSync(["sh", "-c", "exit 0"], {
-          stdout: "ignore",
-          stderr: "ignore",
-        })
-        expect(ok.exitCode).toBe(0)
-        const fail = yield* platform.spawnSync(["sh", "-c", "exit 7"], {
-          stdout: "ignore",
-          stderr: "ignore",
-        })
-        expect(fail.exitCode).toBe(7)
-      }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
-
     it.live("osInfo reports the live host shape", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
@@ -131,15 +104,6 @@ describe("GentPlatform", () => {
         expect(b).toBe("t-00000002")
         expect(c).toBe("t-00000003")
       }).pipe(Effect.provide(GentPlatform.Test("t"))),
-    )
-
-    it.live("which returns null and spawnSync returns 0 by default", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        expect(yield* platform.which("anything")).toBeNull()
-        const r = yield* platform.spawnSync(["true"])
-        expect(r.exitCode).toBe(0)
-      }).pipe(Effect.provide(GentPlatform.Test())),
     )
 
     it.live("osInfo / pid / execPath / now return Test stub values", () =>

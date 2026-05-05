@@ -5,7 +5,6 @@ import { useRenderer } from "@opentui/solid"
 import type { Theme, ThemeJson, ThemeMode } from "./types"
 import { resolveTheme, generateSystemTheme } from "./resolve"
 import { DEFAULT_THEMES } from "./default-themes"
-import { detectColorScheme } from "./detect"
 
 interface ThemeContextValue {
   theme: Theme
@@ -198,10 +197,12 @@ const createThemeView = (values: () => Theme): Theme => ({
 export function ThemeProvider(props: ThemeProviderProps) {
   const renderer = useRenderer()
 
-  // Determine initial mode
+  // Mode is resolved by the host (main.tsx) before render so theme detection
+  // never runs in the synchronous render path. Fall back to "dark" if absent
+  // (e.g. debug harnesses that don't set it).
   const initialMode = (): "dark" | "light" => {
     if (props.mode === "dark" || props.mode === "light") return props.mode
-    return detectColorScheme()
+    return "dark"
   }
 
   const [store, setStore] = createStore({

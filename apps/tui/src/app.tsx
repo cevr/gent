@@ -13,6 +13,7 @@ type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
 export interface AppProps {
   missingAuthProviders?: readonly string[]
   debugMode?: boolean
+  initialThemeMode?: "dark" | "light"
 }
 
 function AppContent(props: AppProps) {
@@ -74,7 +75,7 @@ export function App(props: AppProps) {
         </box>
       )}
     >
-      <ThemeProvider mode={undefined}>
+      <ThemeProvider mode={props.initialThemeMode}>
         <KeyboardScopeProvider>
           <CommandProvider>
             <AppContent {...props} />

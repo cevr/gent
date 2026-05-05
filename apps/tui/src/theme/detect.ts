@@ -1,38 +1,34 @@
-import { Config, Effect, Layer, Option } from "effect"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
+import { Config, Effect, Option } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
-const readColorFgBg = (): string | undefined =>
-  Effect.runSync(
-    Effect.gen(function* () {
-      const opt = yield* Config.option(Config.string("COLORFGBG"))
-      return Option.getOrUndefined(opt)
-    }),
-  )
+const readColorFgBg = Effect.gen(function* () {
+  const opt = yield* Config.option(Config.string("COLORFGBG"))
+    .asEffect()
+    .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())))
+  return Option.getOrUndefined(opt)
+})
 
-const readDarwinAppearance = (): "dark" | "light" => {
-  const exitCode = Effect.runSync(
-    Effect.gen(function* () {
-      const platform = yield* GentPlatform
-      const result = yield* platform.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"])
-      return result.exitCode
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(Layer.fresh(BunGentPlatformLive))),
-  )
-  return exitCode === 0 ? "dark" : "light"
-}
+const readDarwinAppearance = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const exitCode = yield* spawner
+    .exitCode(ChildProcess.make("defaults", ["read", "-g", "AppleInterfaceStyle"]))
+    .pipe(Effect.orElseSucceed(() => 1))
+  return exitCode === 0 ? ("dark" as const) : ("light" as const)
+})
 
 /**
  * Detect if terminal is using dark or light mode.
- * Uses multiple strategies in order:
+ * Strategies in order:
  * 1. COLORFGBG env var (set by some terminals)
- * 2. macOS system appearance
+ * 2. macOS system appearance (`defaults read AppleInterfaceStyle`)
  * 3. Default to dark
  */
-export function detectColorScheme(): "dark" | "light" {
-  // Check COLORFGBG env (set by some terminals like rxvt, xterm, some terminal emulators)
-  // Format: "fg;bg" where higher bg number = light theme
-  const colorFgBg = readColorFgBg()
+export const detectColorScheme: Effect.Effect<
+  "dark" | "light",
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const colorFgBg = yield* readColorFgBg
   if (colorFgBg !== undefined && colorFgBg.length > 0) {
     const parts = colorFgBg.split(";")
     const bg = parseInt(parts[parts.length - 1] ?? "0", 10)
@@ -40,7 +36,7 @@ export function detectColorScheme(): "dark" | "light" {
     return bg > 6 ? "light" : "dark"
   }
 
-  if (process.platform === "darwin") return readDarwinAppearance()
+  if (process.platform === "darwin") return yield* readDarwinAppearance
 
   return "dark"
-}
+})

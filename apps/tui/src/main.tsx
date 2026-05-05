@@ -32,6 +32,7 @@ import {
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
+import { detectColorScheme } from "./theme/index"
 import { ClientProvider } from "./client/index"
 import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
@@ -301,6 +302,10 @@ const main = Command.make(
 
       const missingAuth = bootstrap.missingAuthProviders
 
+      // Resolve the terminal color scheme once before render so theme detection
+      // never runs in the synchronous Solid render path.
+      const initialThemeMode = yield* detectColorScheme
+
       // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
       // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
       const envWithShutdown = {
@@ -325,7 +330,11 @@ const main = Command.make(
                 >
                   <ExtensionUIProvider>
                     <RouterProvider initialRoute={bootstrap.initialRoute}>
-                      <App debugMode={debug} missingAuthProviders={missingAuth} />
+                      <App
+                        debugMode={debug}
+                        missingAuthProviders={missingAuth}
+                        initialThemeMode={initialThemeMode}
+                      />
                     </RouterProvider>
                   </ExtensionUIProvider>
                 </ClientProvider>

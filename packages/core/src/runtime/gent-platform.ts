@@ -7,8 +7,6 @@
  *
  * Surface (kept small — only what the codebase actually needs):
  *   - `randomId`         — UUIDv7 string (replaces the standalone `IdService`)
- *   - `which(cmd)`       — resolve a binary on PATH, `null` if missing
- *   - `spawnSync(cmd)`   — synchronous subprocess; returns exit code
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
@@ -32,15 +30,6 @@
  */
 
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-
-export interface GentPlatformSpawnSyncOptions {
-  readonly stdout?: "pipe" | "ignore" | "inherit"
-  readonly stderr?: "pipe" | "ignore" | "inherit"
-}
-
-export interface GentPlatformSpawnSyncResult {
-  readonly exitCode: number
-}
 
 export interface GentPlatformOsInfo {
   readonly platform: string
@@ -72,11 +61,6 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
 
 export interface GentPlatformShape {
   readonly randomId: Effect.Effect<string>
-  readonly which: (command: string) => Effect.Effect<string | null>
-  readonly spawnSync: (
-    command: ReadonlyArray<string>,
-    options?: GentPlatformSpawnSyncOptions,
-  ) => Effect.Effect<GentPlatformSpawnSyncResult>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
@@ -103,8 +87,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
           randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
-          which: () => Effect.succeed(null),
-          spawnSync: () => Effect.succeed({ exitCode: 0 }),
           osInfo: Effect.succeed({
             platform: "linux",
             arch: "x64",

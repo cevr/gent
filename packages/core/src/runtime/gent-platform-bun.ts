@@ -23,17 +23,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform.of({
     randomId: Effect.sync(() => Bun.randomUUIDv7()),
 
-    which: (command) => Effect.sync(() => Bun.which(command)),
-
-    spawnSync: (command, options) =>
-      Effect.sync(() => {
-        const result = Bun.spawnSync([...command], {
-          stdout: options?.stdout ?? "pipe",
-          stderr: options?.stderr ?? "pipe",
-        })
-        return { exitCode: result.exitCode }
-      }),
-
     osInfo: Effect.sync(() => ({
       platform: os.platform(),
       arch: os.arch(),

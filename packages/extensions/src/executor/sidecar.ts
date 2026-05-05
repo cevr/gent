@@ -8,6 +8,7 @@
 
 import {
   Clock,
+  Config,
   Context,
   DateTime,
   Duration,
@@ -15,14 +16,16 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
+  type PlatformError,
   Schema,
   Scope,
   Semaphore,
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { GentPlatform, isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
+import { isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
 import {
@@ -123,7 +126,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
-        const platform = yield* GentPlatform
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -302,10 +304,40 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         // ── Binary resolution ──
 
+        // Resolve a command on `$PATH` by directory walk. Replaces the
+        // legacy `platform.which` shim. Returns the absolute path of the
+        // first matching entry, or `undefined` if none exists.
+        const whichOnPath = (
+          command: string,
+        ): Effect.Effect<string | undefined, PlatformError.PlatformError> =>
+          Effect.gen(function* () {
+            const isWindows = process.platform === "win32"
+            // `Config.option` still surfaces `ConfigError` on parse failure
+            // even when the var is missing. Treat any failure as "no PATH".
+            const pathEnv = yield* Config.option(Config.string("PATH"))
+              .asEffect()
+              .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())))
+            const dirs = Option.match(pathEnv, {
+              onNone: () => [] as ReadonlyArray<string>,
+              onSome: (raw) => raw.split(isWindows ? ";" : ":").filter((d) => d.length > 0),
+            })
+            const candidates = isWindows
+              ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
+              : [command]
+            for (const dir of dirs) {
+              for (const name of candidates) {
+                const candidate = path.join(dir, name)
+                const exists = yield* fs.exists(candidate)
+                if (exists) return candidate
+              }
+            }
+            return undefined
+          })
+
         const resolveBinary = Effect.gen(function* () {
           // Try PATH first
-          const fromPath = yield* platform.which("executor")
-          if (fromPath) return fromPath
+          const fromPath = yield* whichOnPath("executor")
+          if (fromPath !== undefined) return fromPath
 
           // Fallback: package resolution → bootstrap if needed
           const pkgPath = yield* Effect.try({
