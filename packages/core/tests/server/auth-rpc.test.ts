@@ -15,9 +15,7 @@ import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
-import { AuthMethod } from "@gent/core/domain/auth-method"
-import { AuthStore, AuthStoreError, type AuthInfo } from "@gent/core/domain/auth-store"
-import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
+import { Auth, AuthError, AuthMethod, type AuthInfo } from "@gent/core/domain/auth"
 import { AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -30,24 +28,21 @@ import { ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 
 const failingAuthStoreLayer = Layer.succeed(
-  AuthStore,
-  AuthStore.of({
+  Auth,
+  Auth.of({
     get: () => Effect.as(Effect.void, undefined as AuthInfo | undefined),
-    set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
-    remove: () => Effect.fail(new AuthStoreError({ message: "delete failed" })),
-    list: () => Effect.succeed([]),
-    listInfo: () => Effect.succeed({}),
+    set: () => Effect.fail(new AuthError({ message: "write failed" })),
+    remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
   }),
 )
 const failingReadAuthStoreLayer = Layer.succeed(
-  AuthStorage,
-  AuthStorage.of({
-    get: () => Effect.fail(new AuthStorageError({ message: "read failed" })),
+  Auth,
+  Auth.of({
+    get: () => Effect.fail(new AuthError({ message: "read failed" })),
     set: () => Effect.void,
-    delete: () => Effect.void,
-    list: () => Effect.succeed([]),
+    remove: () => Effect.void,
   }),
-).pipe((storageLayer) => Layer.provide(AuthStore.Live, storageLayer))
+)
 const stubModel = AiModel.make(
   "test",
   "model",
@@ -220,7 +215,7 @@ describe("auth persistence RPC failures", () => {
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
-            authStoreLayer: failingReadAuthStoreLayer,
+            authLayer: failingReadAuthStoreLayer,
           }),
         )
         const exit = yield* Effect.exit(client.auth.listProviders({}))
@@ -239,7 +234,7 @@ describe("auth persistence RPC failures", () => {
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
-            authStoreLayer: failingAuthStoreLayer,
+            authLayer: failingAuthStoreLayer,
           }),
         )
         const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
@@ -258,7 +253,7 @@ describe("auth persistence RPC failures", () => {
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
-            authStoreLayer: failingAuthStoreLayer,
+            authLayer: failingAuthStoreLayer,
           }),
         )
         const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
@@ -278,7 +273,7 @@ describe("auth persistence RPC failures", () => {
             ...e2ePreset,
             providerLayer,
             extensions: makePersistingExtensions(),
-            authStoreLayer: failingAuthStoreLayer,
+            authLayer: failingAuthStoreLayer,
           }),
         )
         const exit = yield* Effect.exit(
@@ -304,7 +299,7 @@ describe("auth persistence RPC failures", () => {
             ...e2ePreset,
             providerLayer,
             extensions: makePersistingExtensions(),
-            authStoreLayer: failingAuthStoreLayer,
+            authLayer: failingAuthStoreLayer,
           }),
         )
         const authorization = yield* client.auth.authorize({

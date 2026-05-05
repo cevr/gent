@@ -10,11 +10,9 @@ import { SingleRunner } from "effect/unstable/cluster"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
 import { ExtensionId } from "../domain/ids.js"
-import { AuthStorage } from "../domain/auth-storage.js"
-import { AuthStore } from "../domain/auth-store.js"
+import { Auth, AuthGuard } from "../domain/auth.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { AuthGuardLive } from "../runtime/auth-guard-live.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -37,7 +35,7 @@ import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
 const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
-  const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
+  const authLive = Auth.Test()
   const extensionRegistryLive = testExtensionRegistryLayer([
     {
       manifest: { id: ExtensionId.make("test-agents") },
@@ -47,11 +45,11 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
     },
   ])
 
-  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, BunGentPlatformLive)
-  const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
+  const authDeps = Layer.mergeAll(authLive, extensionRegistryLive, BunGentPlatformLive)
+  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
-  return { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive }
+  return { authLive, extensionRegistryLive, authGuardLive, providerAuthLive }
 }
 
 export interface InProcessLayerConfig {
@@ -60,7 +58,7 @@ export interface InProcessLayerConfig {
 }
 
 const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerConfig) => {
-  const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
+  const { authLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
   const memoryStorage = SqliteStorage.MemoryWithSql()
@@ -80,7 +78,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     ModelRegistry.Test(),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    authStoreLive,
+    authLive,
     authGuardLive,
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),

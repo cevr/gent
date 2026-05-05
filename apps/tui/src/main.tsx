@@ -204,8 +204,7 @@ const main = Command.make(
       )) as Context.Context<unknown>
       const visualOpt = yield* Config.option(Config.string("VISUAL"))
       const editorOpt = yield* Config.option(Config.string("EDITOR"))
-      const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
-      const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
+      const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
       const env = {
         visual: Option.getOrUndefined(visualOpt),
         editor: Option.getOrUndefined(editorOpt),
@@ -238,8 +237,7 @@ const main = Command.make(
             cwd,
             state: serverState,
             provider: serverProvider,
-            ...(Option.isSome(authFilePathOpt) ? { authFilePath: authFilePathOpt.value } : {}),
-            ...(Option.isSome(authKeyPathOpt) ? { authKeyPath: authKeyPathOpt.value } : {}),
+            ...(Option.isSome(authDirectoryOpt) ? { authDirectory: authDirectoryOpt.value } : {}),
             debug,
           }),
           Gent.client,

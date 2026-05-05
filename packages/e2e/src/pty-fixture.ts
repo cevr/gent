@@ -64,8 +64,7 @@ export const spawnWithDir = (
     env: {
       ...Bun.env,
       GENT_DATA_DIR: tempDir,
-      GENT_AUTH_FILE_PATH: `${tempDir}/auth.json.enc`,
-      GENT_AUTH_KEY_PATH: `${tempDir}/auth.key`,
+      GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
       ...extraEnv,
     },
   })
@@ -110,7 +109,7 @@ export const readClientLog = (): Effect.Effect<string> =>
 export const seedAndSpawn = (extraArgs: string[] = []) =>
   Effect.gen(function* () {
     const tempDir = makeTempDir()
-    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth.json.enc`, `${tempDir}/auth.key`))
+    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth`))
     return spawnWithDir(tempDir, extraArgs)
   })
 
@@ -131,7 +130,7 @@ export const seedSkillAndSpawn = () =>
       ),
     )
 
-    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth.json.enc`, `${tempDir}/auth.key`))
+    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth`))
     return spawnWithDir(tempDir, [], { HOME: fakeHome })
   })
 

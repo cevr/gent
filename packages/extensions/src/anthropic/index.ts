@@ -204,7 +204,7 @@ export const buildAnthropicModelDriver = (
           // failed.
           creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
         }
-        // Persist keychain creds to AuthStore
+        // Persist keychain creds to Auth
         yield* ctx.persist({
           type: "oauth",
           access: creds.accessToken,

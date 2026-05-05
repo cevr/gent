@@ -1,12 +1,13 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
 import { AgentName, DriverRef, ReasoningEffort, RunSpecSchema } from "../domain/agent.js"
-import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import {
+  AuthAuthorization,
+  AuthMethod,
   AuthProviderInfo,
   AuthProviderQuery,
   ListAuthProvidersPayload,
-} from "../domain/auth-guard.js"
+} from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
 import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
 import {

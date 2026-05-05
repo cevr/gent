@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { AuthStore, AuthStoreError, type AuthInfo } from "../../src/domain/auth-store.js"
+import { Auth, AuthError, type AuthInfo } from "../../src/domain/auth.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId, ProviderId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
@@ -56,20 +56,16 @@ const unusedResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
 
 const missingAuthInfo: AuthInfo | undefined = undefined
-const authLayer = Layer.succeed(AuthStore, {
+const authLayer = Layer.succeed(Auth, {
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
-  list: () => Effect.succeed([]),
-  listInfo: () => Effect.succeed({}),
 })
 
-const failingReadAuthLayer = Layer.succeed(AuthStore, {
-  get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+const failingReadAuthLayer = Layer.succeed(Auth, {
+  get: () => Effect.fail(new AuthError({ message: "read failed" })),
   set: () => Effect.void,
   remove: () => Effect.void,
-  list: () => Effect.succeed([]),
-  listInfo: () => Effect.succeed({}),
 })
 
 const makeHttpLayer = (responseText: string) =>
@@ -115,7 +111,7 @@ const makeRegistryLayerWithDrivers = (
   home: string,
   responseText: string,
   modelDrivers: ReadonlyArray<ModelDriverContribution>,
-  authStoreLayer: Layer.Layer<AuthStore> = authLayer,
+  overrideAuthLayer: Layer.Layer<Auth> = authLayer,
 ) =>
   ModelRegistry.Live.pipe(
     Layer.provide(
@@ -127,7 +123,7 @@ const makeRegistryLayerWithDrivers = (
           modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
           externalDrivers: new Map(),
         }),
-        authStoreLayer,
+        overrideAuthLayer,
         makeHttpLayer(responseText),
       ),
     ),

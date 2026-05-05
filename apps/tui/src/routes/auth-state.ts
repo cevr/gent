@@ -1,7 +1,10 @@
 import { Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method"
-import { AuthProviderInfo as AuthProviderInfoSchema } from "@gent/core/domain/auth-guard"
+import {
+  AuthAuthorization,
+  AuthMethod,
+  AuthProviderInfo as AuthProviderInfoSchema,
+} from "@gent/core/domain/auth"
 
 type AuthProviderInfo = typeof AuthProviderInfoSchema.Type
 

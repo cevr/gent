@@ -33,7 +33,7 @@ export interface RpcHarnessConfig extends Pick<
   | "approvalLayer"
   | "sessionProfileCacheLayer"
   | "extraLayers"
-  | "authStoreLayer"
+  | "authLayer"
   | "configServiceLayer"
   | "layerOverrides"
 > {

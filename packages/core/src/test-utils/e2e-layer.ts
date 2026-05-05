@@ -20,9 +20,7 @@ import {
   type AgentDefinition,
   type AgentRunner,
 } from "../domain/agent.js"
-import { AuthGuardLive } from "../runtime/auth-guard-live.js"
-import { AuthStorage } from "../domain/auth-storage.js"
-import { AuthStore } from "../domain/auth-store.js"
+import { Auth, AuthGuard } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
@@ -71,8 +69,8 @@ export interface E2ELayerConfig {
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
-  /** AuthStore override. Use for public RPC auth failure-path tests. */
-  readonly authStoreLayer?: Layer.Layer<AuthStore>
+  /** Auth override. Use for public RPC auth failure-path tests. */
+  readonly authLayer?: Layer.Layer<Auth>
   /**
    * ConfigService override. Default is `ConfigService.Test()`.
    * Provide `ConfigService.Live` (or a custom layer) to exercise per-cwd
@@ -200,20 +198,19 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       )
 
       // Auth
-      const authStoreLive =
-        config.authStoreLayer ?? Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const authLive = config.authLayer ?? Auth.Test()
       const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
       const driverRegistryLive = DriverRegistry.fromResolved({
         modelDrivers: resolved.modelDrivers,
         externalDrivers: resolved.externalDrivers,
       })
       const authDeps = Layer.mergeAll(
-        authStoreLive,
+        authLive,
         extensionRegistryLive,
         driverRegistryLive,
         BunGentPlatformLive,
       )
-      const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
+      const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       // Base services — everything that doesn't depend on reducing event store
       const baseDepsCore = Layer.mergeAll(
@@ -235,7 +232,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         // INSIDE `provideMerge`.
         BunGentPlatformLive,
         subagentRunnerLayer,
-        authStoreLive,
+        authLive,
         authGuardLive,
         providerAuthLive,
         Layer.provide(FallbackFileIndexLive, BunServices.layer),

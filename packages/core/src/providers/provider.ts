@@ -1,6 +1,6 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { ToolCallId } from "../domain/ids.js"
-import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
+import { Auth, AuthOauth, type AuthService } from "../domain/auth.js"
 import {
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -40,7 +40,7 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
 
 // ── Model Resolver ──
 
-const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) =>
+const makeModelResolver = (authStore: AuthService, defaultRegistry: DriverRegistryService) =>
   Effect.fn("Provider.resolveModel")(function* (
     modelId: string,
     hints?: ProviderHints,
@@ -598,10 +598,10 @@ const _SequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
 export class Provider extends Context.Service<Provider, ProviderService>()(
   "@gent/core/src/providers/provider",
 ) {
-  static Live: Layer.Layer<Provider, never, AuthStore | DriverRegistry> = Layer.effect(
+  static Live: Layer.Layer<Provider, never, Auth | DriverRegistry> = Layer.effect(
     Provider,
     Effect.gen(function* () {
-      const authStore = yield* AuthStore
+      const authStore = yield* Auth
       const registry = yield* DriverRegistry
       const getModel = makeModelResolver(authStore, registry)
 

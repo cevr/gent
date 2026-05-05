@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from "effect"
-import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
-import { AuthAuthorization } from "../domain/auth-method.js"
-import type { AuthMethod } from "../domain/auth-method.js"
+import { Auth, AuthApi, AuthOauth, AuthAuthorization } from "../domain/auth.js"
+import type { AuthMethod } from "../domain/auth.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
 import type { SessionId } from "../domain/ids.js"
 import {
@@ -31,7 +30,7 @@ export interface ProviderAuthService {
 export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry | GentPlatform> =
+  static Live: Layer.Layer<ProviderAuth, never, Auth | DriverRegistry | GentPlatform> =
     Layer.effect(
       ProviderAuth,
       Effect.gen(function* () {
@@ -43,12 +42,12 @@ export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthServ
 
 const makeProviderAuth = (
   driverRegistry: DriverRegistryService,
-): Effect.Effect<ProviderAuthService, never, AuthStore | GentPlatform> =>
+): Effect.Effect<ProviderAuthService, never, Auth | GentPlatform> =>
   Effect.gen(function* () {
-    const authStore = yield* AuthStore
+    const authStore = yield* Auth
     const platform = yield* GentPlatform
 
-    /** Build a PersistAuth callback for a provider — writes credentials to AuthStore */
+    /** Build a PersistAuth callback for a provider — writes credentials to Auth */
     const makePersist =
       (providerId: string): PersistAuth =>
       (auth) => {

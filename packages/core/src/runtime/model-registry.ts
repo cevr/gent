@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
-import { AuthStore } from "../domain/auth-store.js"
+import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model, ModelId, ProviderId } from "../domain/model.js"
@@ -140,7 +140,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     | Path.Path
     | RuntimePlatform
     | DriverRegistry
-    | AuthStore
+    | Auth
     | HttpClientService.HttpClient
   > = Layer.effect(
     ModelRegistry,
@@ -150,7 +150,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const http = yield* HttpClient.HttpClient
       const runtimePlatform = yield* RuntimePlatform
       const driverRegistry = yield* DriverRegistry
-      const authStore = yield* AuthStore
+      const authStore = yield* Auth
       const cachePath = path.join(runtimePlatform.home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 

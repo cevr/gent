@@ -36,8 +36,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const homeOpt = yield* Config.option(Config.string("HOME"))
   const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
   const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
-  const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
-  const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
+  const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
   const persistenceOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
   const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
@@ -57,8 +56,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     home,
     dataDir,
     dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
-    authFilePath: Option.getOrUndefined(authFilePathOpt),
-    authKeyPath: Option.getOrUndefined(authKeyPathOpt),
+    authDirectory: Option.getOrUndefined(authDirectoryOpt),
     persistenceMode:
       Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
     providerMode: resolveProviderMode(Option.getOrUndefined(providerOpt)),
@@ -92,8 +90,7 @@ const program = Effect.scoped(
       shell: config.shell,
       osVersion: os.release(),
       dbPath: config.dbPath,
-      authFilePath: config.authFilePath,
-      authKeyPath: config.authKeyPath,
+      authDirectory: config.authDirectory,
       persistenceMode: config.persistenceMode,
       providerMode: config.providerMode,
       scheduledJobCommand: resolveScheduledJobCommand(),

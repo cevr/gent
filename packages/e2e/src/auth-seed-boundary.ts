@@ -1,17 +1,22 @@
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { BunServices } from "@effect/platform-bun"
+import { Auth, AuthApi } from "@gent/core/domain/auth"
 import { Effect, Layer, ManagedRuntime } from "effect"
 
-export const seedAuthBoundary = (authFilePath: string, authKeyPath: string): Promise<void> => {
-  const storageLayer = AuthStorage.LiveEncryptedFile(authFilePath, authKeyPath).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, BunFileSystem.layer)),
-  )
-  const runtime = ManagedRuntime.make(AuthStore.Live.pipe(Layer.provide(storageLayer)))
+/**
+ * Seeds the on-disk auth store with API keys for the test providers.
+ * Used by e2e fixtures so child gent processes find usable credentials
+ * without prompting.
+ *
+ * `directory` is the same path the SUT will read on launch
+ * (`GENT_AUTH_DIRECTORY` / `dependencies.authDirectory`). Each provider
+ * becomes one URL-encoded file under that directory.
+ */
+export const seedAuthBoundary = (directory: string): Promise<void> => {
+  const runtime = ManagedRuntime.make(Auth.Live(directory).pipe(Layer.provide(BunServices.layer)))
   return runtime
     .runPromise(
       Effect.gen(function* () {
-        const auth = yield* AuthStore
+        const auth = yield* Auth
         yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
         yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
       }),

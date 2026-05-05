@@ -155,8 +155,7 @@ export {
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
-export { AuthMethod } from "../domain/auth-method.js"
-export { AuthOauth } from "../domain/auth-store.js"
+export { AuthMethod, AuthOauth } from "../domain/auth.js"
 export {
   dateFromMillis,
   type Message,

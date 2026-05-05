@@ -45,8 +45,7 @@ export const createWorkerEnv = (
   const env: Record<string, string> = { GENT_DATA_DIR: dataDir }
   if (providerMode !== undefined) env["GENT_PROVIDER_MODE"] = providerMode
   if (includeAuthFiles) {
-    env["GENT_AUTH_FILE_PATH"] = path.join(root, "auth.enc")
-    env["GENT_AUTH_KEY_PATH"] = path.join(root, "auth.key")
+    env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
   }
   if (extra !== undefined) {
     for (const [key, value] of Object.entries(extra)) {

@@ -1,9 +1,7 @@
 import { Effect, Layer, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
-import { AuthGuardLive } from "../runtime/auth-guard-live.js"
-import { AuthStorage } from "../domain/auth-storage.js"
-import { AuthStore } from "../domain/auth-store.js"
+import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -21,7 +19,7 @@ import { resolveProfileRuntime } from "../runtime/profile.js"
 import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
@@ -63,8 +61,11 @@ export interface DependenciesConfig {
   osVersion?: string
   subprocessBinaryPath?: string
   dbPath?: string
-  authFilePath?: string
-  authKeyPath?: string
+  /**
+   * Directory for the on-disk auth store. One URL-encoded file per
+   * provider. Defaults to `${home}/.gent/auth`.
+   */
+  authDirectory?: string
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
@@ -82,8 +83,7 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
   HOME: config.home,
   ...(config.shell !== undefined ? { SHELL: config.shell } : {}),
   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-  ...(config.authFilePath !== undefined ? { GENT_AUTH_FILE_PATH: config.authFilePath } : {}),
-  ...(config.authKeyPath !== undefined ? { GENT_AUTH_KEY_PATH: config.authKeyPath } : {}),
+  ...(config.authDirectory !== undefined ? { GENT_AUTH_DIRECTORY: config.authDirectory } : {}),
   ...(config.persistenceMode !== undefined
     ? { GENT_PERSISTENCE_MODE: config.persistenceMode }
     : {}),
@@ -116,13 +116,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   const baseEventStoreLive =
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
 
-  const authStorageLive = AuthStorage.LiveSystem({
-    platform: config.platform,
-    serviceName: "gent",
-    filePath: config.authFilePath ?? `${config.home}/.gent/auth.json.enc`,
-    keyPath: config.authKeyPath ?? `${config.home}/.gent/auth.key`,
-  })
-  const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
+  // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
+  // `Auth.Live` requires FileSystem + Path; `BunPlatformLive` bundles
+  // `BunServices.layer` (which provides them) with `BunGentPlatformLive`.
+  const authDirectory = config.authDirectory ?? `${config.home}/.gent/auth`
+  const authLive = Layer.provide(Auth.Live(authDirectory), BunPlatformLive)
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
 
@@ -168,10 +166,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
-    Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
+    Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authLive),
   )
-  const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuardLive, authDeps)
+  const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
+  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
@@ -195,8 +193,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     clusterRunnerLive,
     baseEventStoreLive,
     eventPublisherLive,
-    authStorageLive,
-    authStoreLive,
+    authLive,
     authGuardLive,
     providerAuthLive,
     configServiceLive,

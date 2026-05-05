@@ -2,10 +2,8 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "@gent/core/domain/ids"
-import { AuthMethod } from "@gent/core/domain/auth-method"
-import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
-import type { AuthApi, AuthInfo } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { Auth, AuthError, AuthMethod } from "@gent/core/domain/auth"
+import type { AuthApi, AuthInfo, AuthService } from "@gent/core/domain/auth"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
@@ -88,27 +86,25 @@ const testDriverRegistry = DriverRegistry.fromResolved({
 })
 const missingAuthInfo: AuthInfo | undefined = undefined
 const failingAuthStoreLayer = Layer.succeed(
-  AuthStore,
-  AuthStore.of({
+  Auth,
+  Auth.of({
     get: () => Effect.succeed(missingAuthInfo),
-    set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
+    set: () => Effect.fail(new AuthError({ message: "write failed" })),
     remove: () => Effect.void,
-    list: () => Effect.succeed([]),
-    listInfo: () => Effect.succeed({}),
-  }),
+  } satisfies AuthService),
 )
 describe("ProviderAuth", () => {
   it.live("extension authorize + callback stores credentials", () =>
     Effect.gen(function* () {
       pendingCallbacks.clear()
-      const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const authLayer = Auth.Test()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
+        Layer.mergeAll(authLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
       )
       const result = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
-        const store = yield* AuthStore
+        const store = yield* Auth
         const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
         if (authResult === undefined) return { ok: false as const }
         yield* auth.callback(
@@ -128,10 +124,10 @@ describe("ProviderAuth", () => {
   )
   it.live("listMethods returns methods from extension providers", () =>
     Effect.gen(function* () {
-      const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const authLayer = Auth.Test()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
+        Layer.mergeAll(authLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
       )
       const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth

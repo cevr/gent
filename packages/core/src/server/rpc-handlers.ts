@@ -1,8 +1,13 @@
 import { Clock, Effect, Stream, type Context } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
-import { AuthGuard, type AuthGuardService } from "../domain/auth-guard.js"
-import { AuthApi, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
+import {
+  Auth,
+  AuthApi,
+  AuthGuard,
+  type AuthGuardService,
+  type AuthService,
+} from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { EventId, EventStore, type EventEnvelope, type EventStoreService } from "../domain/event.js"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
@@ -89,7 +94,7 @@ interface RpcHandlerDeps {
   readonly sessionRuntime: SessionRuntimeService
   readonly modelRegistry: ModelRegistryService
   readonly driverRegistry: DriverRegistryService
-  readonly authStore: AuthStoreService
+  readonly authStore: AuthService
   readonly authGuard: AuthGuardService
   readonly providerAuth: ProviderAuthService
   readonly extensionRegistry: ExtensionRegistryService
@@ -603,7 +608,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const sessionRuntime = yield* SessionRuntime
     const modelRegistry = yield* ModelRegistry
     const driverRegistry = yield* DriverRegistry
-    const authStore = yield* AuthStore
+    const authStore = yield* Auth
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry

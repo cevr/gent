@@ -5,9 +5,9 @@ import { mkdtempSync, rmSync } from "node:fs"
 import * as os from "node:os"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import * as path from "node:path"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
-import { AuthStorage } from "@gent/core/domain/auth-storage.js"
+import { Auth, AuthApi } from "@gent/core/domain/auth"
 import { createWorkerEnv } from "@gent/core/test-utils/fixtures.js"
 const tempDirs: string[] = []
 const makeTempDir = () => {
@@ -33,15 +33,13 @@ afterEach(() => {
     if (dir !== undefined) rmSync(dir, { recursive: true, force: true })
   }
 })
-const seedAuth = (authFilePath: string, authKeyPath: string) => {
-  const authLayer = AuthStorage.LiveEncryptedFile(authFilePath, authKeyPath).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, BunFileSystem.layer)),
-  )
+const seedAuth = (directory: string) => {
+  const authLayer = Auth.Live(directory).pipe(Layer.provide(BunServices.layer))
   return Effect.runPromise(
     Effect.gen(function* () {
-      const auth = yield* AuthStorage
-      yield* auth.set("anthropic", "test-key")
-      yield* auth.set("openai", "test-key")
+      const auth = yield* Auth
+      yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
+      yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
     }).pipe(Effect.provide(authLayer)),
   )
 }
@@ -65,9 +63,7 @@ describe("headless CLI", () => {
         const appDir = path.resolve(import.meta.dir, "..")
         const homeDir = makeTempDir()
         const env = createWorkerEnv(homeDir, { providerMode: "debug-scripted" })
-        yield* Effect.promise(() =>
-          seedAuth(env["GENT_AUTH_FILE_PATH"]!, env["GENT_AUTH_KEY_PATH"]!),
-        )
+        yield* Effect.promise(() => seedAuth(env["GENT_AUTH_DIRECTORY"]!))
         const proc = Bun.spawn(
           [
             "bun",

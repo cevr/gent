@@ -4,10 +4,13 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
-import { AuthGuard, ListAuthProvidersPayload } from "@gent/core/domain/auth-guard"
-import { AuthGuardLive } from "@gent/core/runtime/auth-guard-live"
-import { AuthApi, AuthInfo, AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
+import {
+  Auth,
+  AuthApi,
+  AuthGuard,
+  type AuthInfo,
+  ListAuthProvidersPayload,
+} from "@gent/core/domain/auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -89,16 +92,15 @@ const helperAgentRegistryLayer = Layer.merge(
 )
 
 describe("AuthGuard", () => {
-  const AuthInfoJson = Schema.fromJsonString(AuthInfo)
-  const encodeAuthInfo = Schema.encodeSync(AuthInfoJson)
-  const apiJson = (key: string) => encodeAuthInfo(new AuthApi({ type: "api", key }))
+  const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
+
+  const guardLayerWithSeed = (
+    seed: Record<string, AuthInfo>,
+    registryLayer: Layer.Layer<ExtensionRegistry | DriverRegistry>,
+  ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
 
   it.live("requiredProviders include cowork + deepwork providers", () => {
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(AuthStore.Live),
-      Layer.provide(AuthStorage.Test()),
-      Layer.provide(testRegistryLayer),
-    )
+    const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.requiredProviders()
@@ -108,11 +110,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("missingRequiredProviders returns missing when no keys", () => {
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(AuthStore.Live),
-      Layer.provide(AuthStorage.Test()),
-      Layer.provide(testRegistryLayer),
-    )
+    const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.missingRequiredProviders()
@@ -122,15 +120,12 @@ describe("AuthGuard", () => {
   })
 
   it.live("missingRequiredProviders clears when keys are present", () => {
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(AuthStore.Live),
-      Layer.provide(
-        AuthStorage.Test({
-          openai: apiJson("sk-openai"),
-          anthropic: apiJson("sk-anthropic"),
-        }),
-      ),
-      Layer.provide(testRegistryLayer),
+    const layer = guardLayerWithSeed(
+      {
+        openai: apiInfo("sk-openai"),
+        anthropic: apiInfo("sk-anthropic"),
+      },
+      testRegistryLayer,
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
@@ -139,27 +134,11 @@ describe("AuthGuard", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("listProviders uses get even when listInfo fails", () => {
-    const missingAuthInfo: AuthInfo | undefined = undefined
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(
-        Layer.succeed(AuthStore, {
-          get: (provider: string) =>
-            provider === "anthropic"
-              ? Effect.succeed(new AuthApi({ type: "api", key: "sk-test" }))
-              : Effect.succeed(missingAuthInfo),
-          set: () => Effect.void,
-          remove: () => Effect.void,
-          list: () => Effect.fail(new AuthStoreError({ message: "list failed" })),
-          listInfo: () => Effect.fail(new AuthStoreError({ message: "listInfo failed" })),
-        }),
-      ),
-      Layer.provide(testRegistryLayer),
-    )
+  it.live("listProviders reports per-provider hasKey via Auth.get", () => {
+    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-test") }, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.listProviders()
-
       const anthropic = result.find((p) => p.provider === "anthropic")
       const openai = result.find((p) => p.provider === "openai")
       expect(anthropic?.hasKey).toBe(true)
@@ -170,11 +149,7 @@ describe("AuthGuard", () => {
   it.live(
     "helper-only modeled agents do not widen required providers beyond the runtime pair",
     () => {
-      const layer = AuthGuardLive.pipe(
-        Layer.provide(AuthStore.Live),
-        Layer.provide(AuthStorage.Test()),
-        Layer.provide(helperAgentRegistryLayer),
-      )
+      const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
       return Effect.gen(function* () {
         const guard = yield* AuthGuard
         const result = yield* guard.requiredProviders()
@@ -186,11 +161,7 @@ describe("AuthGuard", () => {
   )
 
   it.live("selected agent widens required providers to match the actual runtime agent", () => {
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(AuthStore.Live),
-      Layer.provide(AuthStorage.Test()),
-      Layer.provide(helperAgentRegistryLayer),
-    )
+    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.requiredProviders({ agentName: AgentName.make("helper:google") })
@@ -201,11 +172,7 @@ describe("AuthGuard", () => {
   })
 
   it.live("agent routed externally via driverOverrides skips model auth requirements", () => {
-    const layer = AuthGuardLive.pipe(
-      Layer.provide(AuthStore.Live),
-      Layer.provide(AuthStorage.Test()),
-      Layer.provide(testRegistryLayer),
-    )
+    const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       // cowork is an anthropic-modeled agent, but config-routes through

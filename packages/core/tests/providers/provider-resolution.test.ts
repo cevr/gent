@@ -5,12 +5,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import {
-  AuthStore,
-  AuthStoreError,
-  type AuthInfo,
-  type AuthStoreService,
-} from "@gent/core/domain/auth-store"
+import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core/domain/auth"
 import {
   Provider,
   type ProviderError,
@@ -38,14 +33,11 @@ import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
-const emptyAuthInfo: Record<string, AuthInfo> = {}
 const missingAuthInfo: AuthInfo | undefined = undefined
-const testAuthStorage = {
+const testAuthStorage: AuthService = {
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
-  list: () => Effect.succeed([] as ReadonlyArray<string>),
-  listInfo: () => Effect.succeed(emptyAuthInfo),
 }
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
@@ -81,7 +73,7 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
 })
 const buildProviderLayer = (
   extensions: LoadedExtension[],
-  authStore: AuthStoreService = testAuthStorage,
+  authStore: AuthService = testAuthStorage,
 ) => {
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
@@ -89,7 +81,7 @@ const buildProviderLayer = (
     modelDrivers: resolved.modelDrivers,
     externalDrivers: resolved.externalDrivers,
   })
-  const authLayer = Layer.succeed(AuthStore, authStore)
+  const authLayer = Layer.succeed(Auth, authStore)
   return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
 }
 const resolveModel = (request: ModelRequest) =>
@@ -272,9 +264,9 @@ describe("Provider model resolution", () => {
           return fakeResolution()
         },
       }
-      const authStore = {
+      const authStore: AuthService = {
         ...testAuthStorage,
-        get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+        get: () => Effect.fail(new AuthError({ message: "read failed" })),
       }
       const layer = buildProviderLayer([makeExt("auth-fails-ext", [provider])], authStore)
       const result = yield* Effect.exit(

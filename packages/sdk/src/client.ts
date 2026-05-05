@@ -25,9 +25,8 @@ import {
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract.js"
-import type { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
+import type { AuthProviderInfo, AuthAuthorization, AuthMethod } from "@gent/core/domain/auth.js"
 import type { PermissionRule } from "@gent/core/domain/permission.js"
-import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
 import type {
   Message,

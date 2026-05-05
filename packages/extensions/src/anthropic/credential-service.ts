@@ -93,7 +93,7 @@ export class AnthropicCredentialService extends Context.Service<
 >()("@gent/extensions/src/anthropic/credential-service/AnthropicCredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
-   * (when present) durably writes refreshed credentials back to AuthStore.
+   * (when present) durably writes refreshed credentials back to Auth.
    * Write-back failures fail the credential load so callers never run with
    * refresh state that only exists in process memory.
    *
