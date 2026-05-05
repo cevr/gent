@@ -92,6 +92,29 @@ const InvokeToolFields = {
   input: Schema.Unknown,
 }
 
+/**
+ * `EnsureStarted` materializes the entity (runs build, recovers checkpoint,
+ * registers state) without performing any other work. Cold `watchState`
+ * callers send this before subscribing to the registry's SubscriptionRef so
+ * the entity exists when their watcher attaches.
+ */
+const EnsureStartedFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+}
+
+/**
+ * `TerminateBranch` shuts down a single branch's loop. Distinct from
+ * generic `Interrupt` (which only flushes pending mailbox items) because
+ * session termination semantically closes branch resources and must run
+ * inside the entity's own scope. Used by `AgentLoopSessionGovernance`-driven
+ * `terminateSession` sweeps.
+ */
+const TerminateBranchFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+}
+
 type MessageType = Schema.Schema.Type<typeof Message>
 type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 
@@ -116,6 +139,14 @@ type InvokeToolInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
+}
+type EnsureStartedInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+type TerminateBranchInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
 }
 
 export const AgentLoop = Actor.fromEntity("AgentLoop", {
@@ -179,6 +210,28 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     id: (p: InvokeToolInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.commandId,
+    }),
+  },
+  // No-op materialization. Cold `watchState` callers send this before
+  // subscribing to the registry's SubscriptionRef so the entity exists
+  // (build runs, recovery completes, state is registered) when their
+  // watcher attaches. Constant primaryKey collapses redundant calls.
+  EnsureStarted: {
+    payload: EnsureStartedFields,
+    error: AgentLoopError,
+    id: (p: EnsureStartedInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: "ensure-started",
+    }),
+  },
+  // Branch-local shutdown. Used by session terminate sweeps to close a
+  // single branch's loop resources from inside the entity's own scope.
+  TerminateBranch: {
+    payload: TerminateBranchFields,
+    error: AgentLoopError,
+    id: (p: TerminateBranchInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: "terminate-branch",
     }),
   },
 })
@@ -272,6 +325,19 @@ export const AgentLoopLiveActor = Actor.toLayer(
           toolName: operation.toolName,
           input: operation.input,
         }),
+      // c.1.b.1: stub. `getState` materializes the loop via the legacy
+      // `getLoop` path, which is exactly the cold-watch invariant we want.
+      // c.1.b.2 replaces this with the per-entity build's natural
+      // materialization (build runs once, registers state, returns).
+      EnsureStarted: ({ operation }) =>
+        svc
+          .getState({ sessionId: operation.sessionId, branchId: operation.branchId })
+          .pipe(Effect.asVoid),
+      // c.1.b.1: stub. Routed to `terminateSession` (which closes ALL
+      // branches under the session). c.1.b.4 narrows this to a single
+      // branch close once `terminateSession` is rewritten to drive
+      // branch-by-branch via this op.
+      TerminateBranch: ({ operation }) => svc.terminateSession(operation.sessionId),
     }
   }),
   {

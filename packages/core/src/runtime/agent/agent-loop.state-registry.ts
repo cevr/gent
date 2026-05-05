@@ -72,6 +72,12 @@ export interface AgentLoopStateRegistryService {
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<AgentLoopStateHandle | undefined>
+  /**
+   * Lists the branchIds currently registered under `sessionId`. Used by
+   * `terminateSession` to drive a cross-entity actor sweep without resurrecting
+   * the legacy `loopsRef` map.
+   */
+  readonly listForSession: (sessionId: SessionId) => Effect.Effect<ReadonlyArray<BranchId>>
 }
 
 export class AgentLoopStateRegistry extends Context.Service<
@@ -118,6 +124,13 @@ export class AgentLoopStateRegistry extends Context.Service<
           }),
         find: (sessionId, branchId) =>
           Ref.get(ref).pipe(Effect.map((m) => m.get(sessionId)?.get(branchId))),
+        listForSession: (sessionId) =>
+          Ref.get(ref).pipe(
+            Effect.map((m) => {
+              const branches = m.get(sessionId)
+              return branches === undefined ? [] : Array.from(branches.keys())
+            }),
+          ),
       }
     }),
   )

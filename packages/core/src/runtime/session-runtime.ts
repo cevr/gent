@@ -31,6 +31,7 @@ import { AgentLoop } from "./agent/agent-loop.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { AgentLoopStateRegistry } from "./agent/agent-loop.state-registry.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
+import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
@@ -857,6 +858,11 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       // requirements.
       Layer.provide(AgentLoopStateRegistry.Live),
       Layer.provide(AgentLoopSessionGovernance.Live),
+      // `AgentLoopBehaviorDeps` (C5.4.4.c.1.b.1) is the layer-level service
+      // snapshot the per-entity actor build will consume in c.1.b.2. Provided
+      // here so it co-exists with legacy `AgentLoop.Live` until the actor
+      // build replaces the legacy factory in c.1.b.2.
+      Layer.provide(AgentLoopBehaviorDeps.Live(config)),
     )
 
   static LiveWithEntity = (config: {
