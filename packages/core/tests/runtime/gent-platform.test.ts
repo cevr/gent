@@ -35,18 +35,6 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
-    it.live("readFileText returns text for an existing file, null for missing", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        // `/etc/hosts` is a well-known readable file on darwin/linux CI.
-        const present = yield* platform.readFileText("/etc/hosts")
-        expect(present).not.toBeNull()
-        expect(typeof present).toBe("string")
-        const missing = yield* platform.readFileText("/tmp/__gent-platform-test-missing__")
-        expect(missing).toBeNull()
-      }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
-
     it.live("spawnSync surfaces the child exit code", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
@@ -145,11 +133,10 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(GentPlatform.Test("t"))),
     )
 
-    it.live("which/readFileText return null and spawnSync returns 0 by default", () =>
+    it.live("which returns null and spawnSync returns 0 by default", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         expect(yield* platform.which("anything")).toBeNull()
-        expect(yield* platform.readFileText("/anywhere")).toBeNull()
         const r = yield* platform.spawnSync(["true"])
         expect(r.exitCode).toBe(0)
       }).pipe(Effect.provide(GentPlatform.Test())),

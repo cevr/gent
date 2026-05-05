@@ -25,12 +25,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     which: (command) => Effect.sync(() => Bun.which(command)),
 
-    readFileText: (path) =>
-      Effect.tryPromise(() => {
-        const file = Bun.file(path)
-        return file.exists().then((exists) => (exists ? file.text() : null))
-      }).pipe(Effect.orElseSucceed(() => null)),
-
     spawnSync: (command, options) =>
       Effect.sync(() => {
         const result = Bun.spawnSync([...command], {

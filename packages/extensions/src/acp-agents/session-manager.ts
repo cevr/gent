@@ -161,7 +161,7 @@ export const createAcpSessionManager = (
           Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
           // Close codemode scope first so its bound port releases even if
-          // startCodemodeServer fails after `platform.serve` returned, then
+          // startCodemodeServer fails after the HTTP server bound, then
           // tear down the spawned ACP child process.
           Effect.tapError(() =>
             Scope.close(localCodemodeScope, Exit.void).pipe(

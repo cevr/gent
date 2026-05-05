@@ -8,7 +8,6 @@
  * Surface (kept small — only what the codebase actually needs):
  *   - `randomId`         — UUIDv7 string (replaces the standalone `IdService`)
  *   - `which(cmd)`       — resolve a binary on PATH, `null` if missing
- *   - `readFileText(p)`  — read a file as UTF-8 text, `null` if missing
  *   - `spawnSync(cmd)`   — synchronous subprocess; returns exit code
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
@@ -74,7 +73,6 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
 export interface GentPlatformShape {
   readonly randomId: Effect.Effect<string>
   readonly which: (command: string) => Effect.Effect<string | null>
-  readonly readFileText: (path: string) => Effect.Effect<string | null>
   readonly spawnSync: (
     command: ReadonlyArray<string>,
     options?: GentPlatformSpawnSyncOptions,
@@ -106,7 +104,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
           which: () => Effect.succeed(null),
-          readFileText: () => Effect.succeed(null),
           spawnSync: () => Effect.succeed({ exitCode: 0 }),
           osInfo: Effect.succeed({
             platform: "linux",

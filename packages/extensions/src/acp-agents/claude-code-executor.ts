@@ -408,9 +408,9 @@ export const createClaudeCodeSessionManager = (
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
-          // Close codemode scope on startup failure so any port bound by
-          // `platform.serve` is released even if startCodemodeServer fails
-          // after acquireRelease resolved.
+          // Close codemode scope on startup failure so the bound HTTP port
+          // is released even if startCodemodeServer fails after acquireRelease
+          // resolved.
           Effect.tapError(() => Scope.close(localCodemodeScope, Exit.void).pipe(Effect.ignore)),
         )
         mcpServers = { gent: { type: "http", url: `${codemode.url}/mcp` } }
