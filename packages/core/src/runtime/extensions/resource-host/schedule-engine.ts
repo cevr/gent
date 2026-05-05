@@ -111,7 +111,10 @@ const renderWrapperScript = (
     ...(cwd !== undefined ? [`cwd: ${JSON.stringify(cwd)}`] : []),
   ].join(",\n  ")
 
-  return `const command = ${JSON.stringify(command)}\nconst proc = Bun.spawn(command, {\n  ${spawnOptions}\n})\nconst exitCode = await proc.exited\nif (exitCode !== 0) {\n  console.error(${JSON.stringify(`[scheduled-job] ${name} failed`)}, { exitCode, command })\n  process.exit(exitCode)\n}\n`
+  // The emitted script runs in a spawned Bun subprocess (the scheduled job),
+  // not inside the gent runtime — `process.exit` here is fine and is NOT a
+  // GentPlatform.exit candidate.
+  return `const command = ${JSON.stringify(command)}\nconst proc = Bun.spawn(command, {\n  ${spawnOptions}\n})\nconst exitCode = await proc.exited\nif (exitCode !== 0) {\n  console.error(${JSON.stringify(`[scheduled-job] ${name} failed`)}, { exitCode, command })\n  // process.exit in the spawned scheduled-job script — not the gent runtime\n  process.exit(exitCode)\n}\n`
 }
 
 const readState = (
