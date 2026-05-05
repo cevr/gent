@@ -483,6 +483,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ConfigService
     | ModelRegistry
     | GentPlatform
+    | AgentLoopStateRegistry
+    | AgentLoopSessionGovernance
   > =>
     Layer.effect(
       AgentLoop,
@@ -570,10 +572,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 next.delete(key)
                 return next
               })
-              yield* stateRegistry.deregister(sessionId, branchId, {
-                loopRef: handle.loopRef,
-                queueMutationSemaphore: handle.queueMutationSemaphore,
-              })
+              yield* stateRegistry.deregister(sessionId, branchId, handle.loopRef)
             }),
           )
 
@@ -1616,6 +1615,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }
                 return next
               })
+              // Deregister the registry entries in the same critical section
+              // so no read-side caller can observe a stale handle between the
+              // loopsRef delete and `closeLoopHandle` finalization.
+              yield* stateRegistry.deregisterSession(sessionId)
               return selected.map(([, loop]) => loop)
             }),
           )
@@ -2197,13 +2200,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         return service
       }),
-    ).pipe(
-      // `AgentLoopStateRegistry` and `AgentLoopSessionGovernance` back the
-      // per-entity read-side state and cross-entity session lifecycle
-      // (introduced in C5.4.4.a). They are runtime-internal — provided here so
-      // they don't appear in the layer requirements at the call site.
-      Layer.provide(AgentLoopStateRegistry.Live),
-      Layer.provide(AgentLoopSessionGovernance.Live),
     )
 
   static Test = (overrides: Partial<AgentLoopService> = {}): Layer.Layer<AgentLoop> =>

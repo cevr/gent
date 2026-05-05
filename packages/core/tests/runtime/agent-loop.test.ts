@@ -24,6 +24,8 @@ import {
   AgentLoopError,
   type AgentLoopService,
 } from "../../src/runtime/agent/agent-loop"
+import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -178,7 +180,12 @@ const makeLayer = (
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
@@ -201,7 +208,12 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
@@ -270,7 +282,12 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
@@ -316,7 +333,12 @@ const makeLiveToolLayer = (
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
@@ -356,7 +378,12 @@ const makeLayerWithEvents = (
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 const makeLayerWithEventPublisher = (
@@ -379,7 +406,12 @@ const makeLayerWithEventPublisher = (
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, providedEventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      providedEventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 const parityExternalAgent = AgentDefinition.make({
@@ -443,7 +475,12 @@ const makeExternalLayerWithEvents = (
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 /** Poll `getState` until the phase matches, with a short sleep between attempts. */
@@ -572,7 +609,12 @@ describe("streaming", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -1635,7 +1677,12 @@ describe("interaction", () => {
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
-      Layer.merge(deps, eventPublisherLayer),
+      Layer.mergeAll(
+        deps,
+        eventPublisherLayer,
+        AgentLoopStateRegistry.Live,
+        AgentLoopSessionGovernance.Live,
+      ),
     )
   }
   it.live("tool triggers InteractionPendingError and machine parks", () =>
@@ -1780,7 +1827,12 @@ describe("interaction", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const loopLayer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -1919,7 +1971,12 @@ describe("checkpoint persistence", () => {
       )
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+        Layer.mergeAll(
+          deps,
+          Layer.provide(EventPublisherLive, deps),
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -1965,7 +2022,12 @@ describe("checkpoint persistence", () => {
       )
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+        Layer.mergeAll(
+          deps,
+          Layer.provide(EventPublisherLive, deps),
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -2020,7 +2082,12 @@ describe("checkpoint persistence", () => {
       )
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+        Layer.mergeAll(
+          deps,
+          Layer.provide(EventPublisherLive, deps),
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -2086,7 +2153,12 @@ describe("checkpoint persistence", () => {
       )
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+        Layer.mergeAll(
+          deps,
+          Layer.provide(EventPublisherLive, deps),
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -2232,7 +2304,12 @@ describe("recovery", () => {
         AgentLoop.Live({
           baseSections: [{ id: "base", content: "System prompt", priority: 0 }],
         }),
-        Layer.merge(base, eventPublisherLayer),
+        Layer.mergeAll(
+          base,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       ),
     )
   }
@@ -2610,7 +2687,12 @@ describe("durable suspension and queue drain regression", () => {
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
-      Layer.merge(deps, eventPublisherLayer),
+      Layer.mergeAll(
+        deps,
+        eventPublisherLayer,
+        AgentLoopStateRegistry.Live,
+        AgentLoopSessionGovernance.Live,
+      ),
     )
   }
   it.scopedLive(
@@ -2750,7 +2832,12 @@ describe("durable suspension and queue drain regression", () => {
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = Layer.provideMerge(
           AgentLoop.Live({ baseSections: [] }),
-          Layer.merge(deps, eventPublisherLayer),
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         )
         yield* Effect.scoped(
           Effect.gen(function* () {

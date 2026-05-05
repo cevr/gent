@@ -9,6 +9,8 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
+import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -214,7 +216,12 @@ const makeLayerWithEvents = (
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.mergeAll(
+      deps,
+      eventPublisherLayer,
+      AgentLoopStateRegistry.Live,
+      AgentLoopSessionGovernance.Live,
+    ),
   )
 }
 // ── Tests ──
@@ -418,7 +425,12 @@ describe("external turn execution", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -573,7 +585,12 @@ describe("ExternalDriverContribution end-to-end", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -654,7 +671,12 @@ describe("ExternalDriverContribution end-to-end", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -750,7 +772,12 @@ describe("ExternalDriverContribution end-to-end", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -845,7 +872,12 @@ describe("ExternalDriverContribution end-to-end", () => {
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = Layer.provideMerge(
         AgentLoop.Live({ baseSections: [] }),
-        Layer.merge(deps, eventPublisherLayer),
+        Layer.mergeAll(
+          deps,
+          eventPublisherLayer,
+          AgentLoopStateRegistry.Live,
+          AgentLoopSessionGovernance.Live,
+        ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {

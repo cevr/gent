@@ -29,6 +29,8 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
+import { AgentLoopStateRegistry } from "./agent/agent-loop.state-registry.js"
+import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
@@ -252,7 +254,10 @@ type SessionRuntimeEntityLayerRequirements =
   | DriverRegistry
   | ModelRegistry
   | GentPlatform
-  | LayerRequirements<ReturnType<typeof AgentLoop.Live>>
+  | Exclude<
+      LayerRequirements<ReturnType<typeof AgentLoop.Live>>,
+      AgentLoopStateRegistry | AgentLoopSessionGovernance
+    >
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -843,6 +848,15 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       // actor client is consumed but not re-exported.
       Layer.provide(AgentLoopLiveActor),
       Layer.provideMerge(AgentLoop.Live(config)),
+      // `AgentLoopStateRegistry` and `AgentLoopSessionGovernance` are
+      // runtime-internal shared services. They are provided at the entity
+      // boundary (NOT inside `AgentLoop.Live`) so the legacy `AgentLoop`
+      // service and the actor handler (C5.4.4.c) consume the SAME instances —
+      // otherwise actor-owned state and read-side state would split into two
+      // separate registries. `Layer.provide` keeps them out of public layer
+      // requirements.
+      Layer.provide(AgentLoopStateRegistry.Live),
+      Layer.provide(AgentLoopSessionGovernance.Live),
     )
 
   static LiveWithEntity = (config: {
