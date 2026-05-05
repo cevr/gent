@@ -527,30 +527,72 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               ),
             ),
           )
-        const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
-        const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
+        // Nested SessionId → BranchId → value maps. Counsel C5.4.4.a finding:
+        // delimiter-encoded composite keys are structurally unsound since
+        // SessionId/BranchId are unconstrained branded strings.
+        type LoopsByBranch = ReadonlyMap<BranchId, LoopHandle>
+        type LoopsBySession = ReadonlyMap<SessionId, LoopsByBranch>
+        type SemaphoresByBranch = ReadonlyMap<BranchId, Semaphore.Semaphore>
+        type SemaphoresBySession = ReadonlyMap<SessionId, SemaphoresByBranch>
+
+        const loopsRef = yield* Ref.make<LoopsBySession>(new Map())
+        const mutationSemaphoresRef = yield* Ref.make<SemaphoresBySession>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
         const loopWatcherScope = yield* Scope.make()
         let service: AgentLoopService
 
-        const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+        const findLoopHandle = (
+          loops: LoopsBySession,
+          sessionId: SessionId,
+          branchId: BranchId,
+        ): LoopHandle | undefined => loops.get(sessionId)?.get(branchId)
+
+        const setLoopHandle = (
+          loops: LoopsBySession,
+          sessionId: SessionId,
+          branchId: BranchId,
+          handle: LoopHandle,
+        ): LoopsBySession => {
+          const next = new Map(loops)
+          const branches = new Map(next.get(sessionId) ?? new Map())
+          branches.set(branchId, handle)
+          next.set(sessionId, branches)
+          return next
+        }
+
+        const deleteLoopHandle = (
+          loops: LoopsBySession,
+          sessionId: SessionId,
+          branchId: BranchId,
+        ): LoopsBySession => {
+          const branches = loops.get(sessionId)
+          if (branches === undefined) return loops
+          if (!branches.has(branchId)) return loops
+          const next = new Map(loops)
+          const nextBranches = new Map(branches)
+          nextBranches.delete(branchId)
+          if (nextBranches.size === 0) next.delete(sessionId)
+          else next.set(sessionId, nextBranches)
+          return next
+        }
 
         const getMutationSemaphore = Effect.fn("AgentLoop.getMutationSemaphore")(function* (
           sessionId: SessionId,
           branchId: BranchId,
         ) {
-          const key = stateKey(sessionId, branchId)
-          const existing = (yield* Ref.get(mutationSemaphoresRef)).get(key)
+          const existing = (yield* Ref.get(mutationSemaphoresRef)).get(sessionId)?.get(branchId)
           if (existing !== undefined) return existing
 
           const semaphore = yield* Semaphore.make(1)
           return yield* loopsSemaphore.withPermits(1)(
             Effect.gen(function* () {
-              const current = (yield* Ref.get(mutationSemaphoresRef)).get(key)
+              const current = (yield* Ref.get(mutationSemaphoresRef)).get(sessionId)?.get(branchId)
               if (current !== undefined) return current
               yield* Ref.update(mutationSemaphoresRef, (semaphores) => {
                 const next = new Map(semaphores)
-                next.set(key, semaphore)
+                const branches = new Map(next.get(sessionId) ?? new Map())
+                branches.set(branchId, semaphore)
+                next.set(sessionId, branches)
                 return next
               })
               return semaphore
@@ -565,12 +607,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         ) =>
           loopsSemaphore.withPermits(1)(
             Effect.gen(function* () {
-              const key = stateKey(sessionId, branchId)
               yield* Ref.update(loopsRef, (loops) => {
-                if (loops.get(key) !== handle) return loops
-                const next = new Map(loops)
-                next.delete(key)
-                return next
+                if (findLoopHandle(loops, sessionId, branchId) !== handle) return loops
+                return deleteLoopHandle(loops, sessionId, branchId)
               })
               yield* stateRegistry.deregister(sessionId, branchId, handle.loopRef)
             }),
@@ -1439,7 +1478,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           sessionId: SessionId,
           branchId: BranchId,
         ) {
-          const key = stateKey(sessionId, branchId)
           const sideMutationSemaphore = yield* getMutationSemaphore(sessionId, branchId)
           // Allocate + register under semaphore, then run `start` outside.
           // The plain-Effect driver does not auto-fork its turn fiber until
@@ -1454,14 +1492,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     message: `Session runtime terminated: ${sessionId}`,
                   })
                 }
-                const existing = (yield* Ref.get(loopsRef)).get(key)
+                const existing = findLoopHandle(yield* Ref.get(loopsRef), sessionId, branchId)
                 if (existing !== undefined) return undefined
                 const handle = yield* makeLoop(sessionId, branchId, sideMutationSemaphore)
-                yield* Ref.update(loopsRef, (loops) => {
-                  const next = new Map(loops)
-                  next.set(key, handle)
-                  return next
-                })
+                yield* Ref.update(loopsRef, (loops) =>
+                  setLoopHandle(loops, sessionId, branchId, handle),
+                )
                 yield* stateRegistry.register(sessionId, branchId, {
                   loopRef: handle.loopRef,
                   queueMutationSemaphore: handle.queueMutationSemaphore,
@@ -1501,10 +1537,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }
           // Handle was installed by another fiber — guaranteed to exist
           // since the semaphore serializes creation for the same key.
-          const loops = yield* Ref.get(loopsRef)
-          const existing = loops.get(key)
+          const existing = findLoopHandle(yield* Ref.get(loopsRef), sessionId, branchId)
           if (existing === undefined) {
-            return yield* Effect.die(new Error(`Loop handle missing for ${key} after creation`))
+            return yield* Effect.die(
+              new Error(`Loop handle missing for ${sessionId}/${branchId} after creation`),
+            )
           }
           return existing
         })
@@ -1513,9 +1550,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           sessionId: SessionId,
           branchId: BranchId,
         ) {
-          const key = stateKey(sessionId, branchId)
-          const loops = yield* Ref.get(loopsRef)
-          return loops.get(key)
+          return findLoopHandle(yield* Ref.get(loopsRef), sessionId, branchId)
         })
 
         const publishRecoveryProbeAbandoned = (
@@ -1593,33 +1628,30 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const terminateSession = Effect.fn("AgentLoop.terminateSession")(function* (
           sessionId: SessionId,
         ) {
-          const prefix = `${sessionId}:`
           const loopsToClose = yield* loopsSemaphore.withPermits(1)(
             Effect.gen(function* () {
               yield* sessionGovernance.markTerminated(sessionId)
 
-              const selected = Array.from((yield* Ref.get(loopsRef)).entries()).filter(([key]) =>
-                key.startsWith(prefix),
-              )
+              const branches = (yield* Ref.get(loopsRef)).get(sessionId)
+              const selected = branches === undefined ? [] : Array.from(branches.values())
+
               yield* Ref.update(loopsRef, (loops) => {
+                if (!loops.has(sessionId)) return loops
                 const next = new Map(loops)
-                for (const [key] of selected) {
-                  next.delete(key)
-                }
+                next.delete(sessionId)
                 return next
               })
               yield* Ref.update(mutationSemaphoresRef, (semaphores) => {
+                if (!semaphores.has(sessionId)) return semaphores
                 const next = new Map(semaphores)
-                for (const key of next.keys()) {
-                  if (key.startsWith(prefix)) next.delete(key)
-                }
+                next.delete(sessionId)
                 return next
               })
               // Deregister the registry entries in the same critical section
               // so no read-side caller can observe a stale handle between the
               // loopsRef delete and `closeLoopHandle` finalization.
               yield* stateRegistry.deregisterSession(sessionId)
-              return selected.map(([, loop]) => loop)
+              return selected
             }),
           )
 
@@ -2191,7 +2223,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const loops = yield* Ref.get(loopsRef)
-            yield* Effect.forEach(Array.from(loops.values()), closeLoopHandle, {
+            const allHandles: ReadonlyArray<LoopHandle> = Array.from(loops.values()).flatMap(
+              (branches) => Array.from(branches.values()),
+            )
+            yield* Effect.forEach(allHandles, closeLoopHandle, {
               concurrency: "unbounded",
             })
             yield* Scope.close(loopWatcherScope, Exit.void)

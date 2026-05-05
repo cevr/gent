@@ -34,7 +34,13 @@ export type AgentLoopStateHandle = {
   readonly queueMutationSemaphore: Semaphore.Semaphore
 }
 
-const stateKey = (sessionId: SessionId, branchId: BranchId): string => `${sessionId}:${branchId}`
+/**
+ * Nested map: SessionId → BranchId → handle. Counsel finding from C5.4.4.a:
+ * delimiter-encoded `${sessionId}:${branchId}` is structurally unsound since
+ * SessionId/BranchId are unconstrained branded strings — a `:` in either
+ * collides. Nested maps make collision impossible.
+ */
+type Registry = ReadonlyMap<SessionId, ReadonlyMap<BranchId, AgentLoopStateHandle>>
 
 export interface AgentLoopStateRegistryService {
   readonly register: (
@@ -75,41 +81,43 @@ export class AgentLoopStateRegistry extends Context.Service<
   static Live: Layer.Layer<AgentLoopStateRegistry> = Layer.effect(
     AgentLoopStateRegistry,
     Effect.gen(function* () {
-      const ref = yield* Ref.make<Map<string, AgentLoopStateHandle>>(new Map())
+      const ref = yield* Ref.make<Registry>(new Map())
 
-      const sessionPrefix = (sessionId: SessionId): string => `${sessionId}:`
       return {
         register: (sessionId, branchId, handle) =>
           Ref.update(ref, (m) => {
             const next = new Map(m)
-            next.set(stateKey(sessionId, branchId), handle)
+            const branches = new Map(next.get(sessionId) ?? new Map())
+            branches.set(branchId, handle)
+            next.set(sessionId, branches)
             return next
           }),
         deregister: (sessionId, branchId, loopRef) =>
           Ref.update(ref, (m) => {
-            const key = stateKey(sessionId, branchId)
-            const current = m.get(key)
+            const branches = m.get(sessionId)
+            if (branches === undefined) return m
+            const current = branches.get(branchId)
             if (current === undefined) return m
             if (current.loopRef !== loopRef) return m
+            const nextBranches = new Map(branches)
+            nextBranches.delete(branchId)
             const next = new Map(m)
-            next.delete(key)
+            if (nextBranches.size === 0) {
+              next.delete(sessionId)
+            } else {
+              next.set(sessionId, nextBranches)
+            }
             return next
           }),
         deregisterSession: (sessionId) =>
           Ref.update(ref, (m) => {
-            const prefix = sessionPrefix(sessionId)
-            let touched = false
+            if (!m.has(sessionId)) return m
             const next = new Map(m)
-            for (const key of m.keys()) {
-              if (key.startsWith(prefix)) {
-                next.delete(key)
-                touched = true
-              }
-            }
-            return touched ? next : m
+            next.delete(sessionId)
+            return next
           }),
         find: (sessionId, branchId) =>
-          Ref.get(ref).pipe(Effect.map((m) => m.get(stateKey(sessionId, branchId)))),
+          Ref.get(ref).pipe(Effect.map((m) => m.get(sessionId)?.get(branchId))),
       }
     }),
   )

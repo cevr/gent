@@ -59,6 +59,29 @@ describe("AgentLoopStateRegistry", () => {
     }).pipe(Effect.provide(AgentLoopStateRegistry.Live)),
   )
 
+  it.effect(
+    "does not collide when sessionId or branchId contains a `:` (nested-map invariant)",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* AgentLoopStateRegistry
+        // These two pairs would collide under delimiter encoding:
+        //   `${"a:"}:${"x"}`     === "a::x"
+        //   `${"a"}:${":x"}`     === "a::x"
+        const trickySessionA = SessionId.make("a:")
+        const trickyBranchA = BranchId.make("x")
+        const trickySessionB = SessionId.make("a")
+        const trickyBranchB = BranchId.make(":x")
+        const handleA = yield* makeStub()
+        const handleB = yield* makeStub()
+        yield* registry.register(trickySessionA, trickyBranchA, handleA)
+        yield* registry.register(trickySessionB, trickyBranchB, handleB)
+        const foundA = yield* registry.find(trickySessionA, trickyBranchA)
+        const foundB = yield* registry.find(trickySessionB, trickyBranchB)
+        expect(foundA).toBe(handleA)
+        expect(foundB).toBe(handleB)
+      }).pipe(Effect.provide(AgentLoopStateRegistry.Live)),
+  )
+
   it.effect("deregisterSession removes every branch matching sessionId", () =>
     Effect.gen(function* () {
       const registry = yield* AgentLoopStateRegistry
