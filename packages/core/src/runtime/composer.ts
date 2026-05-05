@@ -109,11 +109,13 @@ export const buildEphemeralRuntime = <Provides>(
   readonly layer: Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never>
 } => {
   // Parent context becomes a `Layer.succeedContext` source. Last-writer-wins
-  // occlusion in `Layer.provideMerge` means any Tag the child layer provides
-  // overrides the parent automatically; no explicit omit is needed. No
-  // construction happens — `Layer.succeedContext` doesn't trigger memoized
-  // parent rebuilds, so the prior `Layer.fresh` + `Layer.CurrentMemoMap`
-  // omit are no-ops here.
+  // occlusion comes from `Layer.provideMerge` below (which calls
+  // `Context.merge(parent, child)` so child keys overwrite parent keys —
+  // see effect-smol Layer.ts:1268 + Context.ts:829), not from explicit omit.
+  // The prior `Layer.CurrentMemoMap` omit IS now a no-op because
+  // `Layer.succeedContext` does not trigger a memoized parent rebuild;
+  // that omit was dropped here. `Layer.fresh` below is a different concern
+  // (memoization isolation, not occlusion).
   const parentLayer = Layer.succeedContext(inputs.parentServices)
 
   const overridesLayer = Layer.mergeAll(

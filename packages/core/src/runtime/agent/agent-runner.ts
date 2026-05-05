@@ -489,8 +489,9 @@ const makeSharedRunnerHelpers = (
  * registry/actor/resource/event-bus shape stays identical — extensions don't
  * "see" a different runtime when invoked from a child agent. Local-only
  * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
- * services) are declared as explicit override families, so the parent-omit set
- * stays local to the runtime builder.
+ * services) are declared as explicit override families. Each family is a
+ * named child-owned layer; the composer's `Layer.provideMerge` makes child
+ * keys win over parent keys via last-writer-wins on `Context.merge`.
  */
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
@@ -575,9 +576,10 @@ const buildEphemeralLayer = (params: {
       ),
     ),
   )
-  // Each override family maps to all Tags that should be omitted from the
-  // parent. Adding a new storage sub-Tag updates the explicit builder, not
-  // every ephemeral call site.
+  // Each override family is a named child-owned layer; child keys win over
+  // parent keys by `Layer.provideMerge` last-writer-wins. Adding a new
+  // storage sub-Tag means adding it to the focused storage family, not
+  // updating an omit list at every call site.
   const composed = buildEphemeralRuntime({
     parent: params.parentProfile,
     parentServices: params.parentServices,
@@ -823,10 +825,12 @@ const runEphemeralAgent = (params: {
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
-    // `buildEphemeralRuntime()` wraps the merged layer in `Layer.fresh` and
-    // strips `Layer.CurrentMemoMap` from the forwarded parent context, so
-    // child-local layers are constructed against ephemeral dependencies instead
-    // of being reused from the parent's memo map.
+    // `buildEphemeralRuntime()` wraps the merged layer in `Layer.fresh` so the
+    // child gets its own memo map. Child override layers like
+    // `SqliteStorage.MemoryWithSql()` reference module-level layer constants
+    // for the underlying SqlClient; without a fresh memo map the parent
+    // runtime's memo would alias those instances and the "ephemeral" SQLite
+    // would share the parent's database.
     const { success, reasoning } = yield* runWithBuiltLayer(ephemeralLayer)(childRun).pipe(
       Effect.scoped,
     )

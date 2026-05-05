@@ -414,9 +414,17 @@ describe("scope brand type fences", () => {
     expect(composed.profile.cwd).toBe("/tmp")
   })
 
-  test("ephemeral runtime strips the parent memo map from forwarded context", () =>
+  test("ephemeral runtime gets a fresh memo map and does not reuse the parent's", () =>
     Effect.runPromise(
       Effect.gen(function* () {
+        // The composer wraps the merged layer in `Layer.fresh`, which calls
+        // `makeMemoMapUnsafe()` (effect-smol Layer.ts:1762). This guarantees
+        // child override layers that reference module-level layer constants
+        // (e.g. `SqliteStorage.MemoryWithSql()`'s underlying `SqlClient` layer)
+        // are constructed fresh per child, instead of being aliased from the
+        // parent runtime's memo map. Restoring an explicit `Layer.CurrentMemoMap`
+        // omit on the parent context is unnecessary — `Layer.fresh` is the
+        // load-bearing piece, not the omit.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test reaches internal Effect layer key
         const memoKey = Layer.CurrentMemoMap as unknown as Context.Key<unknown, unknown>
         const parentMemo = { sentinel: "parent-memo-map" }
