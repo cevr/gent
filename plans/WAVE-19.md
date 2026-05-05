@@ -774,21 +774,36 @@ branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
   `4.0.0-beta.59`. Wire `EncoreMessageStorage` adapter against gent's
   existing SQLite storage so `Actor.rerun` works: compose
   `effect/unstable/cluster/SqlMessageStorage.layer` (provides upstream
-  `MessageStorage`) with `encoreMessageStorageLayer(...)` adding a
-  `deleteEnvelope` that surgically removes the row from the cluster
-  `messages` + `replies` tables (per the encore AGENTS.md gotcha:
-  adapters MUST implement `deleteEnvelope` or `.rerun` dies loudly).
-  No callers yet — C5.2/C5.4 consume it.
+  `MessageStorage`) with a manual `Layer.effect(EncoreMessageStorage,
+…)` that yields the upstream `MessageStorage` plus the gent
+  `SqlClient` and calls `fromMessageStorage(upstream, { deleteEnvelope })`.
+  The captured `sql` runs the two deletes (`cluster_replies`, then
+  `cluster_messages`) inside one `sql.withTransaction`, refailing
+  `SqlError` as `PersistenceError`. (The `encoreMessageStorageLayer`
+  helper expects `deleteEnvelope: (req) => Effect<void,
+PersistenceError>` with no service requirements, so it doesn't fit a
+  SQL-backed implementation — manual layer is the right shape.)
+  Per encore AGENTS.md: adapters MUST implement `deleteEnvelope` or
+  `.rerun` dies loudly. Adapter contract test added at
+  `packages/core/tests/runtime/agent/encore-storage.test.ts`. No
+  callers yet — C5.2/C5.4 consume it.
 - **C5.2** — Define `AgentLoop = Actor.fromEntity("AgentLoop", { Submit:
 {...}, Steer: {...}, QueueFollowUp: {...}, Interrupt: {...}, Snapshot:
-{...}, Subscribe: {...} })`. `id(payload)` returns
-  `{ entityId, primaryKey }` keyed by `(sessionId, branchId)` for entityId
-  and the op-specific dedup key for primaryKey. Schemas live alongside
-  the actor definition.
+{...} })`. `id(payload)` returns `{ entityId, primaryKey }` keyed by
+  `(sessionId, branchId)` for entityId and the op-specific dedup key for
+  primaryKey. Schemas live alongside the actor definition. Op shapes
+  reuse gent's existing domain (`Message`, `agentOverride`, `RunSpec`,
+  `interactive`) — no new lean envelope schema. **`Subscribe` is NOT
+  an actor op** (counsel C5.1-followup): `Actor.fromEntity` operations
+  are request/reply effects, and `OperationHandle.watch` is polling
+  status, not a live state stream. State subscription stays as the
+  existing `SubscriptionRef`-backed side-channel exposed via
+  `SessionRuntime` (or `Actor.withProtocol` in a later commit if
+  encore/cluster grows streaming-RPC support).
 - **C5.3** — Migrate persistence keys; reset `agent_loop_checkpoints` table
   shape to match encore's storage layout. Reset is acceptable. Adapter
-  layer uses `encoreMessageStorageLayer` over the existing SQLite
-  `MessageStorage` shape.
+  layer is the manual `EncoreMessageStorageLive` from C5.1 (built via
+  `fromMessageStorage` with a captured `SqlClient`, not the helper).
 - **C5.4** — Move loop body into `Actor.toLayer(AgentLoop, { Submit:
 ({operation}) => ..., Steer: ..., ... })`. Delete `loopsRef` Map,
   `mutationSemaphoresRef` Map, `loopsSemaphore`, per-key
