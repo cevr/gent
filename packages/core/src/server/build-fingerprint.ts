@@ -6,13 +6,11 @@
 import { Config, Effect, FileSystem, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { dateFromMillis } from "../domain/message.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 import { runProcess } from "../utils/run-process.js"
 
-/** True when process.execPath is a compiled gent binary, not a generic runtime like bun. */
-const isCompiledBinary = (): boolean => {
-  const exe = process.execPath
-  return !exe.endsWith("/bun") && !exe.includes("/.bun/")
-}
+/** True when execPath is a compiled gent binary, not a generic runtime like bun. */
+const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe.includes("/.bun/")
 
 /**
  * Compute a build fingerprint from local sources (no env).
@@ -21,14 +19,16 @@ const isCompiledBinary = (): boolean => {
 export const computeLocalFingerprint: Effect.Effect<
   string,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
 > = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const platform = yield* GentPlatform
+  const exe = yield* platform.execPath
 
   // 1. Binary mtime (compiled mode only — skip if running via bun runtime)
-  if (isCompiledBinary()) {
-    const info = yield* fs.stat(process.execPath).pipe(Effect.option)
+  if (isCompiledBinary(exe)) {
+    const info = yield* fs.stat(exe).pipe(Effect.option)
     if (info._tag === "Some") {
       const mtime = Option.getOrElse(info.value.mtime, () => dateFromMillis(0))
       return `bin-${mtime.getTime().toString(36)}`
@@ -57,7 +57,7 @@ export const computeLocalFingerprint: Effect.Effect<
 export const resolveBuildFingerprint: Effect.Effect<
   string,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
 > = computeLocalFingerprint.pipe(
   Effect.flatMap((local) =>
     Effect.gen(function* () {

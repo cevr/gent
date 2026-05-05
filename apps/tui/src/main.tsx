@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import {
   Cause,
   Config,
@@ -69,12 +69,18 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
 
 const ATOM_CACHE_MAX = 256
 
-// Platform layer
-const PlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
+// Platform layer — `BunPlatformLive` bundles `BunServices.layer`
+// (FileSystem, Path, ChildProcessSpawner, …) with `BunGentPlatformLive`
+// so callers can yield `GentPlatform` alongside the standard primitives.
+const PlatformLayer = BunPlatformLive
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
-const makeUiLayer = () => Layer.mergeAll(PlatformLayer, LinkLayer)
+// `OsService.Live` and `LinkLayer` depend on `GentPlatform`, which
+// `PlatformLayer` provides. `Layer.mergeAll` builds in parallel, so use
+// `provideMerge` to thread `GentPlatform` into the dependents while
+// keeping it in the output context for downstream consumers.
+const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
 
 const resolveParentSpan = () =>
   Effect.gen(function* () {

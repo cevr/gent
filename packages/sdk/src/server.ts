@@ -141,7 +141,11 @@ const resolveProviderLayer = (
 
 // ── Platform layers ──
 
-const LocalPlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
+const LocalPlatformLayer = Layer.mergeAll(
+  BunServices.layer,
+  BunFileSystem.layer,
+  BunGentPlatformLive,
+)
 
 // ── Helpers ──
 
@@ -347,8 +351,7 @@ const resolveServerInternal = (
     // SQLite state: registry-aware
     const home = resolveHome(options, stateSpec)
     const dbPath = resolveDbPath(options, stateSpec)
-    // @effect-diagnostics-next-line strictEffectProvide:off platform services for fingerprint computation
-    const fingerprint = yield* Effect.provide(computeLocalFingerprint, BunServices.layer)
+    const fingerprint = yield* computeLocalFingerprint
 
     // Check existing registry entry
     const existing = yield* readRegistryEntry(home, dbPath)

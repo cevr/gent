@@ -25,7 +25,7 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
+import { GentPlatform, isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
 import {
@@ -126,6 +126,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
+        const osInfo = yield* platform.osInfo
+        const isWindows = osInfo.platform === "win32"
+        const execPath = yield* platform.execPath
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -311,7 +315,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           command: string,
         ): Effect.Effect<string | undefined, PlatformError.PlatformError> =>
           Effect.gen(function* () {
-            const isWindows = process.platform === "win32"
             // `Config.option` still surfaces `ConfigError` on parse failure
             // even when the var is missing. Treat any failure as "no PATH".
             const pathEnv = yield* Config.option(Config.string("PATH"))
@@ -349,14 +352,14 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               }),
           })
           const pkgRoot = path.dirname(pkgPath)
-          const binaryName = process.platform === "win32" ? "executor.exe" : "executor"
+          const binaryName = isWindows ? "executor.exe" : "executor"
           const runtimePath = path.join(pkgRoot, "bin", "runtime", binaryName)
 
           const exists = yield* fs.exists(runtimePath)
           if (!exists) {
             // Run postinstall to bootstrap
             const installerPath = path.join(pkgRoot, "postinstall.cjs")
-            const result = yield* runProcess(process.execPath, [installerPath], {
+            const result = yield* runProcess(execPath, [installerPath], {
               cwd: pkgRoot,
             }).pipe(
               Effect.catchTag("ProcessError", (e) =>
@@ -458,14 +461,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // ── Graceful shutdown ──
 
         const isPidAlive = (pid: number) =>
-          Effect.sync(() => {
-            try {
-              process.kill(pid, 0)
-              return true
-            } catch {
-              return false
-            }
-          })
+          platform.signal(pid, 0).pipe(
+            Effect.as(true),
+            Effect.catchTag("SignalError", () => Effect.succeed(false)),
+          )
 
         // OS-level grace period between SIGTERM and SIGKILL. The kernel
         // delivers the signal asynchronously and we have no in-process
@@ -474,10 +473,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const terminatePid = (pid: number) =>
           Effect.gen(function* () {
             if (!(yield* isPidAlive(pid))) return
-            yield* Effect.sync(() => process.kill(pid, "SIGTERM"))
+            yield* platform.signal(pid, "SIGTERM").pipe(Effect.ignore)
             yield* Effect.sleep(Duration.millis(SHUTDOWN_TIMEOUT_MS))
             if (yield* isPidAlive(pid)) {
-              yield* Effect.sync(() => process.kill(pid, "SIGKILL"))
+              yield* platform.signal(pid, "SIGKILL").pipe(Effect.ignore)
             }
           })
 

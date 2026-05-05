@@ -1,4 +1,5 @@
 import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
 import { HttpRouter } from "effect/unstable/http"
@@ -70,7 +71,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
 })
 
 // Platform layer for Storage
-const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
+const PlatformLayer = Layer.mergeAll(BunFileSystem.layer, BunServices.layer, BunGentPlatformLive)
 
 const program = Effect.scoped(
   Effect.gen(function* () {

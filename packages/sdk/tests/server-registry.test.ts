@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Effect, FileSystem, Path, type Scope } from "effect"
+import { Clock, Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
+import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -21,6 +22,8 @@ import {
   releaseLock,
   withLock,
 } from "../src/server-registry"
+
+const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 
 const provideFs = <A, E>(
   effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
@@ -50,7 +53,7 @@ const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
 describe("Build Fingerprint", () => {
   it.live("computeLocalFingerprint returns a non-empty string", () =>
     Effect.gen(function* () {
-      const fp = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
+      const fp = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
       expect(fp).toBeTruthy()
       expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
@@ -59,15 +62,15 @@ describe("Build Fingerprint", () => {
 
   it.live("computeLocalFingerprint is stable across calls", () =>
     Effect.gen(function* () {
-      const fp1 = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
-      const fp2 = yield* computeLocalFingerprint.pipe(Effect.provide(BunServices.layer))
+      const fp1 = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
+      const fp2 = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
       expect(fp1).toBe(fp2)
     }),
   )
 
   it.live("resolveBuildFingerprint resolves to a string", () =>
     Effect.gen(function* () {
-      const fp = yield* resolveBuildFingerprint.pipe(Effect.provide(BunServices.layer))
+      const fp = yield* resolveBuildFingerprint.pipe(Effect.provide(PlatformLayer))
       expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
     }),

@@ -1,5 +1,6 @@
 import { Config, Effect, Option } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 
 const readColorFgBg = Effect.gen(function* () {
   const opt = yield* Config.option(Config.string("COLORFGBG"))
@@ -26,7 +27,7 @@ const readDarwinAppearance = Effect.gen(function* () {
 export const detectColorScheme: Effect.Effect<
   "dark" | "light",
   never,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | GentPlatform
 > = Effect.gen(function* () {
   const colorFgBg = yield* readColorFgBg
   if (colorFgBg !== undefined && colorFgBg.length > 0) {
@@ -36,7 +37,9 @@ export const detectColorScheme: Effect.Effect<
     return bg > 6 ? "light" : "dark"
   }
 
-  if (process.platform === "darwin") return yield* readDarwinAppearance
+  const platform = yield* GentPlatform
+  const info = yield* platform.osInfo
+  if (info.platform === "darwin") return yield* readDarwinAppearance
 
   return "dark"
 })
