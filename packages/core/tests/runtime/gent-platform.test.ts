@@ -145,16 +145,20 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
-    it.live("signal returns a SignalError for a non-numeric / unreachable target", () =>
+    it.live("signal returns a typed SignalError for an unreachable pid", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        // `process.kill` with a clearly unreachable pid (out of pid_max
-        // territory) raises ESRCH on every POSIX host. We assert the typed
-        // `SignalError` is on the failure channel, not the defect channel.
+        // POSIX pid_max is bounded well below 2^31-1 on every documented
+        // host (darwin: ~99999, linux default: 4194304). `process.kill`
+        // therefore raises ESRCH for this pid on every CI runner we
+        // support. We assert the typed `SignalError` is on the failure
+        // channel — not on the defect channel — and that `code` is
+        // populated (supervisor classification reads `code`, not `reason`).
         const failure = yield* Effect.flip(platform.signal(2 ** 31 - 1, 0))
         expect(failure).toBeInstanceOf(SignalError)
         expect(failure.pid).toBe(2 ** 31 - 1)
         expect(failure.signal).toBe(0)
+        expect(failure.code).toBe("ESRCH")
         expect(typeof failure.reason).toBe("string")
         expect(failure.reason.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(BunGentPlatformLive)),
@@ -232,10 +236,28 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(GentPlatform.Test())),
     )
 
-    // The Test layer's default `exit` returns `Effect.never` — calling it
-    // would hang. Tests that need to assert "exit was called with code N"
-    // override the layer with a `Deferred` recorder. This locks that
-    // pattern as the documented usage.
+    // Default Test stub for `exit` dies loudly so accidental calls are
+    // visible failures rather than silent test hangs.
+    it.live("exit dies loudly in the default Test layer", () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const exit = yield* platform.exit(3).pipe(Effect.exit)
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          // It must be a defect (Die), not a typed Failure — exit is
+          // declared `Effect<never>`, so any failure is a defect by shape.
+          // The error message must mention the captured exit code so
+          // misuse is greppable in test output.
+          const pretty = String(exit.cause)
+          expect(pretty).toContain("3")
+          expect(pretty).toContain("recorder")
+        }
+      }).pipe(Effect.provide(GentPlatform.Test())),
+    )
+
+    // Tests that need to assert "exit was called with code N" override
+    // the layer with a `Deferred` recorder. This locks that pattern as
+    // the documented usage.
     it.live("exit captures intended code via a Deferred recorder layer", () =>
       Effect.gen(function* () {
         const captured = yield* Deferred.make<number>()

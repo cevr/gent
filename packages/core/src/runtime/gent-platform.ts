@@ -16,8 +16,15 @@
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
- *   - `exit(code)`       — request the host to exit with `code`
- *   - `now`              — monotonic timestamp in milliseconds
+ *   - `exit(code)`       — request the host to exit with `code`. NOT
+ *                          finalizer-safe: `process.exit` is synchronous and
+ *                          bypasses Effect finalizers. Code that needs
+ *                          deterministic teardown should surface the exit
+ *                          code through the Effect result and let
+ *                          `BunRuntime.runMain` translate it.
+ *   - `now`              — monotonic timestamp in milliseconds. Use for
+ *                          relative measurements (supervisor backoff math),
+ *                          NOT epoch-ish wall-clock comparisons.
  *
  * The `GentPlatform.Test(prefix)` layer mints deterministic ids
  * (`${prefix}-00000001`, ...) and stubs the rest with safe defaults so
@@ -61,9 +68,16 @@ export interface GentPlatformOsInfo {
  */
 export type GentPlatformSignal = NodeJS.Signals | 0
 
+/**
+ * `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. The
+ * supervisor-side classifier reads `code` (POSIX `ESRCH` / `EPERM` /
+ * `EINVAL`) without parsing free-form `reason` text. `code` is `null` when
+ * the underlying error did not carry a `code` property.
+ */
 export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalError", {
   pid: Schema.Number,
   signal: Schema.Union([Schema.String, Schema.Literal(0)]),
+  code: Schema.NullOr(Schema.String),
   reason: Schema.String,
 }) {}
 
@@ -126,7 +140,17 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
           signal: () => Effect.void,
-          exit: () => Effect.never,
+          // The default Test stub dies loudly: silent `Effect.never` would
+          // make accidental `platform.exit(...)` calls in a test hang
+          // forever, which is the worst possible failure mode. Tests that
+          // *intend* to assert "exit was called with code N" override the
+          // layer with a `Deferred` recorder.
+          exit: (code) =>
+            Effect.die(
+              new Error(
+                `GentPlatform.Test: platform.exit(${code}) called without a recorder override. Provide a layer that captures the intended exit code via Deferred.`,
+              ),
+            ),
           now: Ref.updateAndGet(clock, (n) => n + 1),
         })
       }),

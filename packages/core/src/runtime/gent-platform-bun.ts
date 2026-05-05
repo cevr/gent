@@ -70,21 +70,39 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
         try: () => {
           process.kill(pid, signal)
         },
-        catch: (cause) =>
-          new SignalError({
+        catch: (cause) => {
+          const code =
+            cause !== null &&
+            typeof cause === "object" &&
+            "code" in cause &&
+            typeof cause.code === "string"
+              ? cause.code
+              : null
+          return new SignalError({
             pid,
             signal,
+            code,
             reason: cause instanceof Error ? cause.message : String(cause),
-          }),
+          })
+        },
       }),
 
-    // `process.exit` does not return; the cast to `Effect<never>` reflects
-    // that the host process is going down. Callers should sequence this as
-    // the final step of a scope so Effect finalizers run before exit.
+    // `process.exit` is synchronous and bypasses Effect finalizers — there
+    // is no portable, in-Effect way to run finalizers before the host goes
+    // down. This adapter therefore exposes `exit` as a *signal*: it yields
+    // to Effect once (`Effect.yieldNow`) so any pending microtasks drain,
+    // then calls `process.exit`. Code that needs deterministic finalizer
+    // ordering must surface its exit code through the Effect result and
+    // let the entrypoint's `BunRuntime.runMain` translate it (see audit
+    // note in `apps/tui/src/main.tsx:520-536`).
     exit: (code) =>
-      Effect.sync(() => {
-        process.exit(code)
-      }) as Effect.Effect<never>,
+      Effect.yieldNow.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            process.exit(code)
+          }),
+        ),
+      ) as Effect.Effect<never>,
 
     now: Effect.sync(() => performance.now()),
   }),
