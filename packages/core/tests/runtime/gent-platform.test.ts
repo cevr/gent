@@ -7,7 +7,7 @@
  * downstream tests can rely on it without re-checking each method.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Exit, Layer, Scope } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { GentPlatform, SignalError } from "../../src/runtime/gent-platform"
 
@@ -61,40 +61,6 @@ describe("GentPlatform", () => {
         })
         expect(fail.exitCode).toBe(7)
       }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
-
-    it.scopedLive(
-      "serve binds an ephemeral port and serves requests for the scope's lifetime",
-      () =>
-        Effect.gen(function* () {
-          const platform = yield* GentPlatform
-          const scope = yield* Scope.make()
-          const listener = yield* platform
-            .serve({
-              fetch: () => new Response("hi", { status: 200 }),
-            })
-            .pipe(Scope.provide(scope))
-
-          expect(typeof listener.port).toBe("number")
-          expect(listener.port).toBeGreaterThan(0)
-
-          // Round-trip: the listener actually accepts requests while the
-          // scope is open. Using the global fetch is intentional here — the
-          // test exercises a freshly-bound socket on a discovered port, not
-          // a service consumed via HttpClient.
-          // @effect-diagnostics-next-line globalFetchInEffect:off
-          const res = yield* Effect.promise(() => fetch(`http://127.0.0.1:${listener.port}/`))
-          const body = yield* Effect.promise(() => res.text())
-          expect(body).toBe("hi")
-
-          // Scope close MUST run the release finalizer without erroring —
-          // the underlying Bun.serve `.stop()` is invoked. We don't assert
-          // immediate port release because Bun's TCP listener tear-down is
-          // asynchronous; what we DO assert is that finalization itself is
-          // wired (no leaked-scope warning, no error).
-          const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit)
-          expect(closeExit._tag).toBe("Success")
-        }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
     it.live("osInfo reports the live host shape", () =>
@@ -186,18 +152,6 @@ describe("GentPlatform", () => {
         expect(yield* platform.readFileText("/anywhere")).toBeNull()
         const r = yield* platform.spawnSync(["true"])
         expect(r.exitCode).toBe(0)
-      }).pipe(Effect.provide(GentPlatform.Test())),
-    )
-
-    it.scopedLive("serve returns port 0 and is a no-op listener", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const scope = yield* Scope.make()
-        const listener = yield* platform
-          .serve({ fetch: () => new Response("ignored") })
-          .pipe(Scope.provide(scope))
-        expect(listener.port).toBe(0)
-        yield* Scope.close(scope, Exit.void)
       }).pipe(Effect.provide(GentPlatform.Test())),
     )
 

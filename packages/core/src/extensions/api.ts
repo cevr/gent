@@ -268,8 +268,6 @@ export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export type {
   GentPlatformShape,
-  GentPlatformServeOptions,
-  GentPlatformListener,
   GentPlatformSpawnSyncOptions,
   GentPlatformSpawnSyncResult,
 } from "../runtime/gent-platform.js"

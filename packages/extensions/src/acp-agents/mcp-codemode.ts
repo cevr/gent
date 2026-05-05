@@ -9,12 +9,14 @@
  *
  * @module
  */
-import { Effect, Schema, type Scope } from "effect"
+import { Context, Effect, Layer, Schema, type Scope } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { GentPlatform, getToolId, type ToolToken } from "@gent/core/extensions/api"
+import { BunHttpServer } from "@effect/platform-bun"
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { getToolId, type ToolToken } from "@gent/core/extensions/api"
 
 export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
@@ -215,34 +217,51 @@ const createMcpServerForRequest = (
 
 export const startCodemodeServer = (
   config: CodemodeConfig,
-): Effect.Effect<CodemodeServer, never, GentPlatform | Scope.Scope> =>
+): Effect.Effect<CodemodeServer, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const platform = yield* GentPlatform
     const { tools, runTool } = config
     const proxy = makeGentProxy(tools, runTool)
     const toolDescription = generateToolDescription(tools)
 
     // Stateless: fresh Server+Transport per request. MCP SDK's Server.connect()
     // can only be called once per instance, so we create a new server for each
-    // incoming request.
-    const listener = yield* platform.serve({
-      fetch(req) {
-        const url = new URL(req.url)
-        if (url.pathname === "/mcp" && req.method === "POST") {
-          const mcpServer = createMcpServerForRequest(proxy, toolDescription)
-          const transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
-          })
-          return mcpServer.connect(transport).then(() => transport.handleRequest(req))
-        }
-        return new Response("Not found", { status: 404 })
-      },
-    })
+    // incoming request. We treat the WebStandard transport's `handleRequest`
+    // as the boundary and pass through its `Response` via `HttpServerResponse.raw`.
+    const route = HttpRouter.add(
+      "POST",
+      "/mcp",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- BunServerRequest.source is the underlying Request
+        const rawRequest = request.source as Request
+        const mcpServer = createMcpServerForRequest(proxy, toolDescription)
+        const transport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        })
+        const response = yield* Effect.promise(() =>
+          mcpServer.connect(transport).then(() => transport.handleRequest(rawRequest)),
+        )
+        return HttpServerResponse.raw(response)
+      }),
+    )
 
-    const url = `http://127.0.0.1:${listener.port}`
+    // `provideMerge` (vs `provide`) keeps `HttpServer.HttpServer` in the
+    // output context so we can read its bound port after build.
+    const HttpLive = HttpRouter.serve(route).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0 })),
+    )
 
+    const scope = yield* Effect.scope
+    const ctx = yield* Layer.buildWithScope(HttpLive, scope)
+    const server = Context.get(ctx, HttpServer.HttpServer)
+    if (server.address._tag !== "TcpAddress") {
+      return yield* Effect.die(
+        new Error("startCodemodeServer: expected TcpAddress from BunHttpServer"),
+      )
+    }
+    const port = server.address.port
     return {
-      url,
-      port: listener.port,
+      url: `http://127.0.0.1:${port}`,
+      port,
     } satisfies CodemodeServer
   })

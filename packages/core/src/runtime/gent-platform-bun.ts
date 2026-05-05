@@ -25,17 +25,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     which: (command) => Effect.sync(() => Bun.which(command)),
 
-    serve: (options) =>
-      Effect.acquireRelease(
-        Effect.sync(() => Bun.serve({ port: 0, fetch: options.fetch })),
-        (server) => Effect.promise(() => Promise.resolve(server.stop())),
-      ).pipe(
-        Effect.map((server) => ({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- port is always defined when Bun.serve succeeds
-          port: server.port as number,
-        })),
-      ),
-
     readFileText: (path) =>
       Effect.tryPromise(() => {
         const file = Bun.file(path)

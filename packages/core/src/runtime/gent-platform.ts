@@ -8,7 +8,6 @@
  * Surface (kept small — only what the codebase actually needs):
  *   - `randomId`         — UUIDv7 string (replaces the standalone `IdService`)
  *   - `which(cmd)`       — resolve a binary on PATH, `null` if missing
- *   - `serve(opts)`      — scoped HTTP listener; auto-stops when the scope closes
  *   - `readFileText(p)`  — read a file as UTF-8 text, `null` if missing
  *   - `spawnSync(cmd)`   — synchronous subprocess; returns exit code
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
@@ -33,15 +32,7 @@
  * `GentPlatform.Live`'s implementation file (`gent-platform-bun.ts`).
  */
 
-import { Context, Effect, Layer, Ref, Schema, type Scope } from "effect"
-
-export interface GentPlatformServeOptions {
-  readonly fetch: (request: Request) => Response | Promise<Response>
-}
-
-export interface GentPlatformListener {
-  readonly port: number
-}
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 
 export interface GentPlatformSpawnSyncOptions {
   readonly stdout?: "pipe" | "ignore" | "inherit"
@@ -83,9 +74,6 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
 export interface GentPlatformShape {
   readonly randomId: Effect.Effect<string>
   readonly which: (command: string) => Effect.Effect<string | null>
-  readonly serve: (
-    options: GentPlatformServeOptions,
-  ) => Effect.Effect<GentPlatformListener, never, Scope.Scope>
   readonly readFileText: (path: string) => Effect.Effect<string | null>
   readonly spawnSync: (
     command: ReadonlyArray<string>,
@@ -118,7 +106,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
           which: () => Effect.succeed(null),
-          serve: () => Effect.succeed({ port: 0 }),
           readFileText: () => Effect.succeed(null),
           spawnSync: () => Effect.succeed({ exitCode: 0 }),
           osInfo: Effect.succeed({
