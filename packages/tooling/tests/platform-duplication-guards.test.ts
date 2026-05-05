@@ -186,7 +186,7 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/runtime/example.ts",
         line: 1,
-        message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFile",
+        message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFileSystem",
       },
     ])
   })

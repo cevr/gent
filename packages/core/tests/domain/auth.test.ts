@@ -15,7 +15,7 @@ import { Auth, AuthGuard, AuthInfo } from "../../src/domain/auth.js"
 
 describe("Auth", () => {
   describe("Auth.Test", () => {
-    it.live("round-trips api / oauth / well-known variants", () =>
+    it.live("round-trips api / oauth variants", () =>
       Effect.gen(function* () {
         const auth = yield* Auth
 
@@ -39,14 +39,6 @@ describe("Auth", () => {
           expect(anthropic.access).toBe("a")
           expect(anthropic.refresh).toBe("r")
         }
-
-        yield* auth.set(
-          "claude-code",
-          AuthInfo.WellKnown.make({ type: "well-known", source: "claude-code-sdk" }),
-        )
-        const cc = yield* auth.get("claude-code")
-        expect(cc?.type).toBe("well-known")
-        if (cc?.type === "well-known") expect(cc.source).toBe("claude-code-sdk")
 
         yield* auth.remove("openai")
         expect(yield* auth.get("openai")).toBeUndefined()

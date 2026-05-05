@@ -12,10 +12,7 @@
  *
  * Each provider's auth blob is one URL-encoded file under the configured
  * directory (default `~/.gent/auth/`). The schema is `Auth.Info`, a
- * tagged enum with `Api | Oauth | WellKnown` variants. `WellKnown` is
- * for sources that own their auth out-of-band (e.g. Claude Code SDK
- * via OS keychain) and need only a presence marker so `AuthGuard`
- * stops asking for keys.
+ * tagged enum with `Api | Oauth` variants.
  *
  * Breaking change at C2: any existing `~/.gent/auth.json[.enc]` content
  * is unreadable by this module. Users re-authenticate on next launch.
@@ -56,12 +53,15 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
 /**
  * `Auth.Info` — variants persisted in the store.
  *
- * - `Api`       — bearer/API key; presented to the model driver as `key`.
- * - `Oauth`     — refreshable bearer token + expiry; driver may rotate.
- * - `WellKnown` — placeholder for ambient auth owned outside gent (e.g.
- *                 OS keychain via Claude Code SDK). Persists only the
- *                 source label; auth gates use it as a "key present"
- *                 signal so they don't prompt.
+ * - `Api`   — bearer/API key; presented to the model driver as `key`.
+ * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
+ *
+ * A third "ambient auth owned by the driver" variant was specced
+ * during the C2 collapse but has no caller wiring yet, so it isn't
+ * carried as a parallel API. Drivers that own auth out-of-band (e.g.
+ * Claude Code SDK reading the OS keychain) currently bypass the auth
+ * store entirely; if a future caller needs a persisted presence
+ * marker, add it back to this enum at that point.
  */
 export const AuthInfo = TaggedEnumClass("AuthInfo", {
   Api: {
@@ -75,10 +75,6 @@ export const AuthInfo = TaggedEnumClass("AuthInfo", {
     expires: Schema.Number,
     accountId: Schema.optional(Schema.String),
   },
-  WellKnown: {
-    type: Schema.Literal("well-known"),
-    source: Schema.String,
-  },
 })
 export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
 
@@ -86,10 +82,8 @@ export const AuthApi = AuthInfo.Api
 export type AuthApi = typeof AuthInfo.Api.Type
 export const AuthOauth = AuthInfo.Oauth
 export type AuthOauth = typeof AuthInfo.Oauth.Type
-export const AuthWellKnown = AuthInfo.WellKnown
-export type AuthWellKnown = typeof AuthInfo.WellKnown.Type
 
-export const AuthType = Schema.Literals(["api", "oauth", "well-known"])
+export const AuthType = Schema.Literals(["api", "oauth"])
 export type AuthType = typeof AuthType.Type
 
 // ── Auth-guard wire types ───────────────────────────────────────────────
