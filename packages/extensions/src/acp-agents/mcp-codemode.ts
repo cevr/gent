@@ -123,15 +123,17 @@ const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig[
 /**
  * Stringify an arbitrary `execute`-tool result. Handles circular
  * references by substituting `[Circular]` for repeat sights of the
- * same object, falls back to `String(value)` if `JSON.stringify`
- * still throws (e.g. `BigInt`).
+ * same object and BigInt values by suffixing `n` (so `1n` round-trips
+ * as the string `"1n"`, matching dev-tools convention). Falls back to
+ * `String(value)` only if `JSON.stringify` still throws.
  */
-const inspectForMcp = (value: unknown): string => {
+export const inspectForMcp = (value: unknown): string => {
   const seen = new WeakSet<object>()
   try {
     return JSON.stringify(
       value,
       (_key, v: unknown) => {
+        if (typeof v === "bigint") return `${v.toString()}n`
         if (typeof v === "object" && v !== null) {
           if (seen.has(v)) return "[Circular]"
           seen.add(v)
