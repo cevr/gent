@@ -25,8 +25,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     which: (command) => Effect.sync(() => Bun.which(command)),
 
-    inspect: (value) => Bun.inspect(value),
-
     serve: (options) =>
       Effect.acquireRelease(
         Effect.sync(() => Bun.serve({ port: 0, fetch: options.fetch })),

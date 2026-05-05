@@ -8,7 +8,6 @@
  * Surface (kept small — only what the codebase actually needs):
  *   - `randomId`         — UUIDv7 string (replaces the standalone `IdService`)
  *   - `which(cmd)`       — resolve a binary on PATH, `null` if missing
- *   - `inspect(value)`   — human-readable string for arbitrary JS values
  *   - `serve(opts)`      — scoped HTTP listener; auto-stops when the scope closes
  *   - `readFileText(p)`  — read a file as UTF-8 text, `null` if missing
  *   - `spawnSync(cmd)`   — synchronous subprocess; returns exit code
@@ -84,7 +83,6 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
 export interface GentPlatformShape {
   readonly randomId: Effect.Effect<string>
   readonly which: (command: string) => Effect.Effect<string | null>
-  readonly inspect: (value: unknown) => string
   readonly serve: (
     options: GentPlatformServeOptions,
   ) => Effect.Effect<GentPlatformListener, never, Scope.Scope>
@@ -120,13 +118,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
           which: () => Effect.succeed(null),
-          inspect: (value) => {
-            try {
-              return JSON.stringify(value)
-            } catch {
-              return String(value)
-            }
-          },
           serve: () => Effect.succeed({ port: 0 }),
           readFileText: () => Effect.succeed(null),
           spawnSync: () => Effect.succeed({ exitCode: 0 }),

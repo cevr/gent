@@ -118,12 +118,38 @@ const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig[
   )
 }
 
+// ── inspect helper (vendored — replaces GentPlatform.inspect) ──
+
+/**
+ * Stringify an arbitrary `execute`-tool result. Handles circular
+ * references by substituting `[Circular]` for repeat sights of the
+ * same object, falls back to `String(value)` if `JSON.stringify`
+ * still throws (e.g. `BigInt`).
+ */
+const inspectForMcp = (value: unknown): string => {
+  const seen = new WeakSet<object>()
+  try {
+    return JSON.stringify(
+      value,
+      (_key, v: unknown) => {
+        if (typeof v === "object" && v !== null) {
+          if (seen.has(v)) return "[Circular]"
+          seen.add(v)
+        }
+        return v
+      },
+      2,
+    )
+  } catch {
+    return String(value)
+  }
+}
+
 // ── MCP server factory (one per request for stateless mode) ──
 
 const createMcpServerForRequest = (
   proxy: ReturnType<typeof makeGentProxy>,
   toolDescription: string,
-  inspect: (value: unknown) => string,
 ) => {
   const server = new Server({ name: "gent", version: "0.0.0" }, { capabilities: { tools: {} } })
 
@@ -166,7 +192,7 @@ const createMcpServerForRequest = (
         let text: string
         if (value === undefined) text = "(no result)"
         else if (typeof value === "string") text = value
-        else text = inspect(value)
+        else text = inspectForMcp(value)
         return { content: [{ type: "text" as const, text }] }
       })
       .catch((err: unknown) => ({
@@ -201,7 +227,7 @@ export const startCodemodeServer = (
       fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/mcp" && req.method === "POST") {
-          const mcpServer = createMcpServerForRequest(proxy, toolDescription, platform.inspect)
+          const mcpServer = createMcpServerForRequest(proxy, toolDescription)
           const transport = new WebStandardStreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
           })

@@ -97,16 +97,6 @@ describe("GentPlatform", () => {
         }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
-    it.live("inspect produces a human-readable string", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const out = platform.inspect({ a: 1, b: ["x", "y"] })
-        expect(out).toContain("a")
-        expect(out).toContain("1")
-        expect(out).toContain("x")
-      }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
-
     it.live("osInfo reports the live host shape", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
