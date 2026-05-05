@@ -8,37 +8,30 @@
  */
 
 import { Layer, type Config, type Context, type FileSystem, type Path } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import type { SqlClient } from "effect/unstable/sql"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
-import { SessionStorage } from "../storage/session-storage.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { EventStorage } from "../storage/event-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { StorageTransaction } from "../storage/storage-transaction.js"
-import { CheckpointStorage } from "../storage/checkpoint-storage.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
-import { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
-import { SearchStorage } from "../storage/search-storage.js"
-import { EventStore } from "../domain/event.js"
-import { BuiltinEventSink, EventPublisher } from "../domain/event-publisher.js"
+import type { SessionStorage } from "../storage/session-storage.js"
+import type { BranchStorage } from "../storage/branch-storage.js"
+import type { MessageStorage } from "../storage/message-storage.js"
+import type { EventStorage } from "../storage/event-storage.js"
+import type { RelationshipStorage } from "../storage/relationship-storage.js"
+import type { StorageTransaction } from "../storage/storage-transaction.js"
+import type { CheckpointStorage } from "../storage/checkpoint-storage.js"
+import type { InteractionStorage } from "../storage/interaction-storage.js"
+import type { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
+import type { SearchStorage } from "../storage/search-storage.js"
+import type { EventStore } from "../domain/event.js"
+import type { BuiltinEventSink, EventPublisher } from "../domain/event-publisher.js"
 import type { StorageError } from "../domain/storage-error.js"
-import { ApprovalService } from "./approval-service.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { ResourceManager } from "./resource-manager.js"
-import { ToolRunner } from "./agent/tool-runner.js"
-import { SessionRuntime } from "./session-runtime.js"
+import type { ApprovalService } from "./approval-service.js"
+import type { PromptPresenter } from "../domain/prompt-presenter.js"
+import type { ResourceManager } from "./resource-manager.js"
+import type { ToolRunner } from "./agent/tool-runner.js"
+import type { SessionRuntime } from "./session-runtime.js"
 import type { Provider } from "../providers/provider.js"
 import type { ConfigService } from "./config-service.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { RuntimePlatform } from "./runtime-platform.js"
-import {
-  eraseContextKey,
-  eraseLayer,
-  mergeErasedLayers,
-  omitErasedContext,
-  restoreErasedLayer,
-} from "./extensions/effect-membrane.js"
 
 export interface EphemeralRuntimeInputs<Provides> {
   readonly parent: ServerProfile
@@ -97,32 +90,17 @@ type EphemeralExtensionRequires =
   | ConfigService
   | ModelRegistry
 
-const storageOverrideTags = [
-  SqlClient.SqlClient,
-  SessionStorage,
-  BranchStorage,
-  MessageStorage,
-  EventStorage,
-  RelationshipStorage,
-  StorageTransaction,
-  CheckpointStorage,
-  InteractionStorage,
-  InteractionPendingReader,
-  SearchStorage,
-] as const
-
-const eventPublisherOverrideTags = [EventPublisher, BuiltinEventSink] as const
-
-const omitTagsForEphemeralOverrides = [
-  ...storageOverrideTags,
-  EventStore,
-  ...eventPublisherOverrideTags,
-  ApprovalService,
-  PromptPresenter,
-  ResourceManager,
-  ToolRunner,
-  SessionRuntime,
-] as const
+/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane */
+// Extension layer membrane: heterogeneous extension code is typed as
+// `<Provides, unknown, unknown>` upstream. The recovered shape pins the
+// requirement set to `EphemeralExtensionRequires` so the subsequent
+// `Layer.provideMerge` against parent + child storage type-checks.
+const recoverExtensionLayer = <Provides>(
+  layer: Layer.Layer<Provides, unknown, unknown>,
+): Layer.Layer<Provides, never, EphemeralExtensionRequires> =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane
+  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires>
+/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
 
 export const buildEphemeralRuntime = <Provides>(
   inputs: EphemeralRuntimeInputs<Provides>,
@@ -130,70 +108,65 @@ export const buildEphemeralRuntime = <Provides>(
   readonly profile: EphemeralProfile
   readonly layer: Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never>
 } => {
-  // Strip owned services and the parent's memo map. Owned-service omission
-  // prevents already-resolved parent instances from bleeding into the child;
-  // memo-map omission prevents layer-object identity from replaying parent
-  // builds. `Layer.fresh` below is the second half of that contract.
-  const memoKey = eraseContextKey(Layer.CurrentMemoMap)
-  const parentLayer = Layer.succeedContext(
-    omitErasedContext(inputs.parentServices, [
-      ...omitTagsForEphemeralOverrides.map(eraseContextKey),
-      memoKey,
-    ]),
+  // Parent context becomes a `Layer.succeedContext` source. Last-writer-wins
+  // occlusion in `Layer.provideMerge` means any Tag the child layer provides
+  // overrides the parent automatically; no explicit omit is needed. No
+  // construction happens — `Layer.succeedContext` doesn't trigger memoized
+  // parent rebuilds, so the prior `Layer.fresh` + `Layer.CurrentMemoMap`
+  // omit are no-ops here.
+  const parentLayer = Layer.succeedContext(inputs.parentServices)
+
+  const overridesLayer = Layer.mergeAll(
+    inputs.overrides.storage,
+    inputs.overrides.eventStore,
+    inputs.overrides.eventPublisher,
+    inputs.overrides.approval,
+    inputs.overrides.promptPresenter,
+    inputs.overrides.resourceManager,
+    inputs.overrides.toolRunner,
+    inputs.overrides.sessionRuntime,
   )
 
+  // The extension layer is fed by parent context + child storage so its
+  // requirements (`EphemeralExtensionRequires`) resolve before the final
+  // merge with child overrides. Heterogeneous extension code is typed as
+  // `<Provides, unknown, unknown>` upstream — `recoverExtensionLayer` is
+  // the membrane that recovers the typed shape.
   const typedExtensionLayer =
     inputs.extensionLayers === undefined
       ? undefined
-      : restoreErasedLayer<Provides, never, EphemeralExtensionRequires>(
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — extension layer membrane owns heterogeneous extension requirements
-          eraseLayer(inputs.extensionLayers),
-        )
-
+      : // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane
+        recoverExtensionLayer<Provides>(inputs.extensionLayers)
   const extensionLayer =
     typedExtensionLayer === undefined
       ? undefined
       : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, inputs.overrides.storage))
 
-  // Merge order is parent → extension layers fed by parent context + child storage → child overrides. Last writer wins.
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-  const merged = mergeErasedLayers([
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(parentLayer),
-    ...(extensionLayer === undefined
-      ? []
-      : [
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-          eraseLayer(extensionLayer),
-        ]),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.storage),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.eventStore),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.eventPublisher),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.approval),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.promptPresenter),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.resourceManager),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.toolRunner),
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect membrane owns erased runtime context boundary
-    eraseLayer(inputs.overrides.sessionRuntime),
-  ])
+  const childLayer =
+    extensionLayer === undefined ? overridesLayer : Layer.merge(extensionLayer, overridesLayer)
+
+  // Last writer wins: child overrides occlude any matching parent tag. The
+  // `Layer.fresh` wrap is load-bearing: child override layers (e.g.
+  // `SqliteStorage.MemoryWithSql()`) reference module-level layer constants
+  // for the underlying `SqlClient`. Without a fresh memo map, the parent
+  // runtime's memo would cache and reuse those instances across child
+  // builds, so the "ephemeral" SQLite would alias the parent's. Fresh memo
+  // gives the child its own SqliteClient.
+  const merged: Layer.Layer<
+    Provides | EphemeralOverrideProvides,
+    EphemeralOverrideError,
+    never
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Provides ⊕ EphemeralOverrideProvides is the union the call site expects; constrained by EphemeralExtensionRequires being satisfied above
+  > = Layer.fresh(Layer.provideMerge(childLayer, parentLayer)) as Layer.Layer<
+    Provides | EphemeralOverrideProvides,
+    EphemeralOverrideError,
+    never
+  >
 
   const profile = brandEphemeralScope({
     cwd: inputs.parent.cwd,
     resolved: inputs.parent.resolved,
   })
 
-  return {
-    profile,
-    layer: restoreErasedLayer<Provides | EphemeralOverrideProvides, EphemeralOverrideError>(
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-      Layer.fresh(merged),
-    ),
-  }
+  return { profile, layer: merged }
 }
