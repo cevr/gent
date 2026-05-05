@@ -35,7 +35,7 @@ import {
   type CompiledExtensionReactions,
 } from "./extension-reactions.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
-import { sealErasedEffect } from "./effect-membrane.js"
+import { sealErasedEffect } from "./extension-effect-membrane.js"
 
 // SlashCommand — public-facing slash entry. Built from `commands:` bucket
 // winners. Read- and write-intent both surface as commands; the bucket is the

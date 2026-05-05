@@ -17,7 +17,7 @@ import {
   eraseResourceLayer,
   exitErasedEffect,
   type ErasedResourceLayer,
-} from "../effect-membrane.js"
+} from "../extension-effect-membrane.js"
 
 export interface ResourceEntry {
   readonly extensionId: ExtensionId

@@ -22,7 +22,7 @@ import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
-import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
+import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
 
 export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
