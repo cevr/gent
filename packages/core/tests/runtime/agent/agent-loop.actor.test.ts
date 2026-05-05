@@ -16,11 +16,11 @@ const cmdBeta = ActorCommandId.make("cmd-beta")
 
 const fixedNow = dateFromMillis(1_767_225_600_000)
 
-const userMessage = (id: MessageId): Message =>
+const userMessage = (params: { id: MessageId; sessionId: SessionId; branchId: BranchId }) =>
   Message.Regular.make({
-    id,
-    sessionId: sessionA,
-    branchId: branchMain,
+    id: params.id,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
     role: "user",
     parts: [new TextPart({ type: "text", text: "hi" })],
     createdAt: fixedNow,
@@ -29,10 +29,8 @@ const userMessage = (id: MessageId): Message =>
     metadata: undefined,
   })
 
-const submitPayload = (sessionId: SessionId, branchId: BranchId, messageId: MessageId) => ({
-  sessionId,
-  branchId,
-  message: userMessage(messageId),
+const submitPayload = (params: { id: MessageId; sessionId: SessionId; branchId: BranchId }) => ({
+  message: userMessage(params),
   agentOverride: undefined,
   runSpec: undefined,
   interactive: undefined,
@@ -41,36 +39,38 @@ const submitPayload = (sessionId: SessionId, branchId: BranchId, messageId: Mess
 const cancelCommand = (sessionId: SessionId, branchId: BranchId) =>
   Schema.decodeSync(SteerCommand)({ _tag: "Cancel", sessionId, branchId })
 
-const steerPayload = (sessionId: SessionId, branchId: BranchId, commandId: ActorCommandId) => ({
-  sessionId,
-  branchId,
-  commandId,
-  command: cancelCommand(sessionId, branchId),
+const steerPayload = (params: {
+  sessionId: SessionId
+  branchId: BranchId
+  commandId: ActorCommandId
+}) => ({
+  commandId: params.commandId,
+  command: cancelCommand(params.sessionId, params.branchId),
 })
 
-const interruptPayload = (sessionId: SessionId, branchId: BranchId, commandId: ActorCommandId) => ({
-  sessionId,
-  branchId,
-  commandId,
-})
+const interruptPayload = (params: {
+  sessionId: SessionId
+  branchId: BranchId
+  commandId: ActorCommandId
+}) => params
 
 describe("AgentLoop actor identity", () => {
-  it.effect("Submit dedup keys by message id, mailboxes by (sessionId, branchId)", () =>
+  it.effect("Submit dedup keys by message id, mailboxes by message (sessionId, branchId)", () =>
     Effect.gen(function* () {
       const exec1 = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionA, branchMain, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
       )
       const exec1Again = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionA, branchMain, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
       )
       const exec2 = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionA, branchMain, messageTwo),
+        submitPayload({ id: messageTwo, sessionId: sessionA, branchId: branchMain }),
       )
       const execOtherBranch = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionA, branchSecond, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchSecond }),
       )
       const execOtherSession = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionB, branchMain, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionB, branchId: branchMain }),
       )
 
       // Same payload → same ExecId (dedup).
@@ -93,10 +93,10 @@ describe("AgentLoop actor identity", () => {
   it.effect("Submit and QueueFollowUp do not collide despite identical payload", () =>
     Effect.gen(function* () {
       const submitExec = yield* AgentLoop.Submit.executionId(
-        submitPayload(sessionA, branchMain, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
       )
       const followUpExec = yield* AgentLoop.QueueFollowUp.executionId(
-        submitPayload(sessionA, branchMain, messageOne),
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
       )
 
       // Same entityId + primaryKey but different tag → distinct ExecId.
@@ -106,20 +106,24 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("Steer dedup keys by commandId", () =>
+  it.effect("Steer routes via command target, dedups by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.Steer.executionId(
-        steerPayload(sessionA, branchMain, cmdAlpha),
+        steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
       )
       const execAlphaAgain = yield* AgentLoop.Steer.executionId(
-        steerPayload(sessionA, branchMain, cmdAlpha),
+        steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
       )
       const execBeta = yield* AgentLoop.Steer.executionId(
-        steerPayload(sessionA, branchMain, cmdBeta),
+        steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdBeta }),
+      )
+      const execOtherBranch = yield* AgentLoop.Steer.executionId(
+        steerPayload({ sessionId: sessionA, branchId: branchSecond, commandId: cmdAlpha }),
       )
 
       expect(execAlpha).toBe(execAlphaAgain)
       expect(execAlpha).not.toBe(execBeta)
+      expect(execAlpha).not.toBe(execOtherBranch)
       expect(String(execAlpha)).toBe(`session-a:branch-main\x00Steer\x00cmd-alpha`)
     }),
   )
@@ -127,14 +131,26 @@ describe("AgentLoop actor identity", () => {
   it.effect("Interrupt dedup keys by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.Interrupt.executionId(
-        interruptPayload(sessionA, branchMain, cmdAlpha),
+        interruptPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
       )
       const execBeta = yield* AgentLoop.Interrupt.executionId(
-        interruptPayload(sessionA, branchMain, cmdBeta),
+        interruptPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdBeta }),
       )
 
       expect(execAlpha).not.toBe(execBeta)
       expect(String(execAlpha)).toBe(`session-a:branch-main\x00Interrupt\x00cmd-alpha`)
+    }),
+  )
+
+  it.effect("Steer and Interrupt with same commandId do not collide (different tags)", () =>
+    Effect.gen(function* () {
+      const steerExec = yield* AgentLoop.Steer.executionId(
+        steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
+      )
+      const interruptExec = yield* AgentLoop.Interrupt.executionId(
+        interruptPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
+      )
+      expect(steerExec).not.toBe(interruptExec)
     }),
   )
 })
