@@ -669,7 +669,18 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     drainQueuedMessages: (input) =>
       requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.drainQueue(input)),
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const commandId = ActorCommandId.make(yield* platform.randomId)
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.DrainQueue.make({
+                ...input,
+                commandId,
+              }),
+            )
+          }),
+        ),
         Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
       ),
 

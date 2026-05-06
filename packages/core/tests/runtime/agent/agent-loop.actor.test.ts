@@ -187,6 +187,30 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
+  it.effect("DrainQueue dedup keys by commandId", () =>
+    Effect.gen(function* () {
+      const execAlpha = yield* AgentLoop.DrainQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdAlpha,
+      })
+      const execAlphaAgain = yield* AgentLoop.DrainQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdAlpha,
+      })
+      const execBeta = yield* AgentLoop.DrainQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+        commandId: cmdBeta,
+      })
+
+      expect(execAlpha).toBe(execAlphaAgain)
+      expect(execAlpha).not.toBe(execBeta)
+      expect(String(execAlpha)).toBe(`session-a:branch-main\x00DrainQueue\x00cmd-alpha`)
+    }),
+  )
+
   it.effect("RecordToolResult dedup keys by toolCallId", () =>
     Effect.gen(function* () {
       const callA = ToolCallId.make("tool-call-a")

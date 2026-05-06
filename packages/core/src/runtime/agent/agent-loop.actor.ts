@@ -52,6 +52,7 @@ import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Message, TextPart, type MessageMetadata } from "../../domain/message.js"
+import { QueueSnapshot } from "../../domain/queue.js"
 import {
   ActorCommandId,
   BranchId,
@@ -76,6 +77,7 @@ import {
   countQueuedFollowUps,
   emptyLoopQueueState,
   projectRuntimeState,
+  queueSnapshotFromQueueState,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
@@ -113,6 +115,12 @@ const RespondInteractionFields = {
   sessionId: SessionId,
   branchId: BranchId,
   requestId: InteractionRequestId,
+}
+
+const DrainQueueFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
 }
 
 const RecordToolResultFields = {
@@ -170,6 +178,11 @@ type RespondInteractionInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly requestId: InteractionRequestId
+}
+type DrainQueueInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
 }
 type RecordToolResultInput = {
   readonly sessionId: SessionId
@@ -229,6 +242,17 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     id: (p: RespondInteractionInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.requestId,
+    }),
+  },
+  // Queue drain is a mutating state transition; route it through the
+  // branch-local actor so it serializes with the actor-owned queue.
+  DrainQueue: {
+    payload: DrainQueueFields,
+    success: QueueSnapshot,
+    error: AgentLoopError,
+    id: (p: DrainQueueInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: p.commandId,
     }),
   },
   // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
@@ -620,6 +644,23 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
                   ),
                 )
             }),
+          ),
+        ),
+      DrainQueue: ({ operation }) =>
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const queue = yield* SubscriptionRef.get(handle.loopRef).pipe(
+                  Effect.map((s) => s.queue),
+                )
+                const snapshot = queueSnapshotFromQueueState(queue)
+                yield* handle.persistQueueState(emptyLoopQueueState())
+                return snapshot
+              }),
+            ),
           ),
         ),
       RecordToolResult: ({ operation }) =>
