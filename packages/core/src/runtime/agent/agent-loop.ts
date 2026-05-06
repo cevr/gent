@@ -464,6 +464,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 yield* stateRegistry.register(sessionId, branchId, {
                   loopRef: handle.loopRef,
                   queueMutationSemaphore: handle.queueMutationSemaphore,
+                  persistQueueState: handle.persistQueueState,
+                  closed: handle.closed,
                 })
                 return handle
               }),
@@ -1090,6 +1092,21 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           drainQueue: (input) =>
             Effect.gen(function* () {
+              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+              if (registered?.persistQueueState !== undefined) {
+                const persistQueueState = registered.persistQueueState
+                return yield* registered.queueMutationSemaphore.withPermits(1)(
+                  Effect.gen(function* () {
+                    const queue = yield* SubscriptionRef.get(registered.loopRef).pipe(
+                      Effect.map((s) => s.queue),
+                    )
+                    const snapshot = queueSnapshotFromQueueState(queue)
+                    yield* persistQueueState(emptyLoopQueueState())
+                    return snapshot
+                  }),
+                )
+              }
+
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
                 if (yield* sessionGovernance.isTerminated(input.sessionId)) {
@@ -1114,6 +1131,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           getQueue: (input) =>
             Effect.gen(function* () {
+              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+              if (registered !== undefined) {
+                return yield* registered.queueMutationSemaphore.withPermits(1)(
+                  SubscriptionRef.get(registered.loopRef).pipe(
+                    Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+                  ),
+                )
+              }
+
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
                 if (yield* sessionGovernance.isTerminated(input.sessionId)) {
@@ -1140,6 +1166,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           getState: (input) =>
             Effect.gen(function* () {
+              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+              if (registered !== undefined) {
+                return yield* registered.queueMutationSemaphore.withPermits(1)(
+                  SubscriptionRef.get(registered.loopRef).pipe(Effect.map(projectRuntimeState)),
+                )
+              }
+
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop !== undefined) {
                 const state = yield* loop.queueMutationSemaphore.withPermits(1)(
@@ -1172,6 +1205,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             }),
           watchState: (input) =>
             Effect.gen(function* () {
+              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+              if (registered !== undefined) {
+                const changes = SubscriptionRef.changes(registered.loopRef).pipe(
+                  Stream.map(projectRuntimeState),
+                )
+                return registered.closed === undefined
+                  ? changes
+                  : changes.pipe(Stream.interruptWhen(Deferred.await(registered.closed)))
+              }
+
               const loop = yield* getLoop(input.sessionId, input.branchId)
               return SubscriptionRef.changes(loop.loopRef).pipe(
                 Stream.map(projectRuntimeState),

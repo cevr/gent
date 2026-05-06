@@ -34,21 +34,62 @@
  * @module
  */
 
-import { Effect, Schema } from "effect"
+import {
+  Clock,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+  SubscriptionRef,
+  type Layer,
+} from "effect"
+import { CurrentAddress } from "effect/unstable/cluster/Entity"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
-import { Message } from "../../domain/message.js"
+import { DEFAULTS } from "../../domain/defaults.js"
+import { Message, TextPart, type MessageMetadata } from "../../domain/message.js"
 import {
   ActorCommandId,
   BranchId,
   InteractionRequestId,
+  MessageId,
   SessionId,
   ToolCallId,
 } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
-import { AgentLoop as AgentLoopService } from "./agent-loop.js"
-import { AgentLoopError, commandIdForToolCall } from "./agent-loop.commands.js"
-import { entityIdOf } from "./agent-loop.entity-id.js"
+import { GentPlatform } from "../gent-platform.js"
+import {
+  AgentLoopError,
+  assistantMessageIdForCommand,
+  commandIdForToolCall,
+  toolCallIdForCommand,
+  toolResultMessageIdForCommand,
+} from "./agent-loop.commands.js"
+import {
+  appendFollowUpQueueState,
+  appendSteeringItem,
+  buildRunningState,
+  countQueuedFollowUps,
+  emptyLoopQueueState,
+  projectRuntimeState,
+  type QueuedTurnItem,
+} from "./agent-loop.state.js"
+import {
+  LoopDriverEvent,
+  type LoopHandle,
+  causeToAgentLoopError,
+  interruptActiveStream,
+  makeAgentLoopBehavior,
+} from "./agent-loop.behavior.js"
+import { AgentLoopBehaviorDeps } from "./agent-loop.behavior-deps.js"
+import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
+import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
+import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
+import { invokeToolPhase, recordToolResultPhase } from "./phases/turn.js"
 
 const TurnSubmissionFields = {
   message: Message,
@@ -236,65 +277,323 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
 })
 
+type WithoutCurrentAddress<L> =
+  L extends Layer.Layer<infer ROut, infer E, infer RIn>
+    ? Layer.Layer<ROut, E, Exclude<RIn, CurrentAddress>>
+    : never
+
+const buildQueuedTurnItem = (operation: {
+  readonly message: MessageType
+  readonly agentOverride?: typeof AgentName.Type
+  readonly runSpec?: typeof RunSpecSchema.Type
+  readonly interactive?: boolean
+}): QueuedTurnItem => ({
+  message: operation.message,
+  ...(operation.agentOverride !== undefined ? { agentOverride: operation.agentOverride } : {}),
+  ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
+  ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
+})
+
 /**
- * `Actor.toLayer` handler layer for `AgentLoop`. Each handler delegates to
- * the legacy `AgentLoopService` Tag (the per-(sessionId, branchId)
- * imperative implementation). C5.4.4 will collapse the legacy
- * implementation into the actor body; until then this is a pass-through
- * that stages the architectural change without rewriting recovery flow.
+ * `Actor.toLayer` handler layer for `AgentLoop`.
  *
- * **`RecordToolResult` commandId fallback** (C5.4.1 counsel forward-note):
- * legacy `recordToolResultPhase` derives the persisted tool-result message
- * id from `commandId` via `toolResultMessageIdForCommand`. If the actor
- * payload's `commandId` is absent, generating a fresh random id per call
- * would produce a different message id on retry — breaking the actor's
- * dedup contract (same `toolCallId` must resolve to the same persisted
- * effect). The handler derives a deterministic fallback from `toolCallId`
- * via `commandIdForToolCall`, so retries collapse to the same message id.
+ * C5.4.4.c.1.b transfers per-(sessionId, branchId) loop ownership from the
+ * legacy `AgentLoop.Live` map into the actor entity instance. Upstream
+ * `Entity.CurrentAddress` is available inside the underlying cluster entity
+ * build; effect-encore does not re-export it, so import from Effect directly.
  */
-export const AgentLoopLiveActor = Actor.toLayer(
+const AgentLoopLiveActorLayer = Actor.toLayer(
   AgentLoop,
   Effect.gen(function* () {
-    const svc = yield* AgentLoopService
-    return {
-      Submit: ({ operation }) =>
-        svc.submit(operation.message, {
-          ...(operation.agentOverride !== undefined
-            ? { agentOverride: operation.agentOverride }
-            : {}),
-          ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
-          ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
+    const deps = yield* AgentLoopBehaviorDeps
+    const stateRegistry = yield* AgentLoopStateRegistry
+    const sessionGovernance = yield* AgentLoopSessionGovernance
+    const platform = yield* GentPlatform
+    const addr = yield* CurrentAddress
+    const { sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(Effect.orDie)
+    const sideMutationSemaphore = yield* Semaphore.make(1)
+    const closed = yield* Ref.make(false)
+    const operationSeen = yield* Ref.make(false)
+
+    let handle: LoopHandle
+
+    const closeLoopHandle = (loop: LoopHandle) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(closed)) return
+        yield* Ref.set(closed, true)
+        yield* interruptActiveStream(loop.activeStreamRef)
+        yield* Deferred.succeed(loop.closed, undefined).pipe(Effect.ignore)
+        yield* Scope.close(loop.scope, Exit.void)
+      }).pipe(Effect.ignore)
+
+    const cleanupLoop = (loop: LoopHandle) =>
+      stateRegistry
+        .deregister(sessionId, branchId, loop.loopRef)
+        .pipe(Effect.andThen(closeLoopHandle(loop)), Effect.ignore)
+
+    const currentRuntimeState = (loop: LoopHandle) =>
+      SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
+
+    const markWrite = Effect.gen(function* () {
+      if (yield* sessionGovernance.isTerminated(sessionId)) {
+        return yield* new AgentLoopError({
+          message: `Session runtime terminated: ${sessionId}`,
+        })
+      }
+      return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
+    })
+
+    const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+      target.sessionId === sessionId && target.branchId === branchId
+        ? Effect.void
+        : Effect.fail(
+            new AgentLoopError({
+              message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
+            }),
+          )
+
+    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
+      readonly message?: MessageType
+      readonly content?: string
+      readonly metadata?: MessageMetadata
+    }) {
+      const wasAlreadyWarm = yield* markWrite
+      const message =
+        input.message ??
+        Message.Regular.make({
+          id: MessageId.make(yield* platform.randomId),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: input.content ?? "" })],
+          createdAt: yield* DateTime.nowAsDate,
+          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+        })
+
+      yield* ensureTarget(message)
+      const item = { message }
+      const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const currentQueue = yield* SubscriptionRef.get(handle.loopRef).pipe(
+            Effect.map((s) => s.queue),
+          )
+          if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
+            return yield* new AgentLoopError({
+              message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+            })
+          }
+          if (!wasAlreadyWarm) {
+            yield* handle.persistQueueState(appendFollowUpQueueState(currentQueue, item))
+            return
+          }
+          const projectedState = yield* currentRuntimeState(handle)
+          const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+            Effect.map((s) => s.startingState),
+          )
+          if (startingState !== undefined) {
+            yield* handle.persistQueueSnapshot(
+              startingState,
+              appendFollowUpQueueState(currentQueue, item),
+            )
+            return
+          }
+          if (projectedState._tag !== "Idle") {
+            yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+            return
+          }
+          const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+            Effect.map((s) => s.state),
+          )
+          if (loopState._tag !== "Idle") {
+            yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+            return
+          }
+          const startedAtMs = yield* Clock.currentTimeMillis
+          const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
+          yield* SubscriptionRef.update(handle.loopRef, (s) => ({
+            ...s,
+            startingState: reservedRunningState,
+          }))
+          return reservedRunningState
         }),
-      QueueFollowUp: ({ operation }) => {
-        // Legacy `svc.queueFollowUp` builds the message internally from
-        // `{sessionId, branchId, content, metadata}` then enqueues. The actor
-        // payload carries an already-constructed `Message`, so we extract the
-        // text content and metadata back out to drive the legacy enqueue
-        // path until C5.4.4 collapses the body.
-        const text = operation.message.parts
-          .filter((part) => part.type === "text")
-          .map((part) => (part as { readonly text: string }).text)
-          .join("")
-        return svc
-          .queueFollowUp({
-            sessionId: operation.message.sessionId,
-            branchId: operation.message.branchId,
-            content: text,
-            ...(operation.message.metadata !== undefined
-              ? { metadata: operation.message.metadata }
-              : {}),
-          })
+      )
+      if (reservedStart !== undefined) {
+        yield* handle
+          .dispatch(LoopDriverEvent.Start.make({ item }))
           .pipe(
-            Effect.catchTag("StorageError", (cause) =>
-              Effect.fail(
-                new AgentLoopError({ message: `queueFollowUp storage failed: ${cause.message}` }),
-              ),
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
             ),
           )
+      }
+    })
+
+    handle = yield* makeAgentLoopBehavior(
+      {
+        ...deps,
+        enqueueFollowUp: (input) => enqueueMessage(input),
       },
-      Steer: ({ operation }) => svc.steer(operation.command),
+      sessionId,
+      branchId,
+      sideMutationSemaphore,
+      emptyLoopQueueState(),
+    )
+
+    yield* stateRegistry.register(sessionId, branchId, {
+      loopRef: handle.loopRef,
+      queueMutationSemaphore: handle.queueMutationSemaphore,
+      persistQueueState: handle.persistQueueState,
+      closed: handle.closed,
+    })
+    yield* Effect.addFinalizer(() => cleanupLoop(handle))
+    const startupExit = yield* Effect.exit(
+      handle.start.pipe(Effect.andThen(handle.refreshRuntimeState)),
+    )
+    const ensureStarted = Effect.suspend(() =>
+      Exit.isSuccess(startupExit)
+        ? Effect.void
+        : Effect.fail(causeToAgentLoopError(startupExit.cause)),
+    )
+
+    const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
+      operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item = buildQueuedTurnItem(operation)
+      const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+            Effect.map((s) => s.startingState),
+          )
+          if (startingState !== undefined) {
+            yield* handle.persistQueueSnapshot(
+              startingState,
+              appendFollowUpQueueState(
+                yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+                item,
+              ),
+            )
+            return
+          }
+          const projectedState = yield* currentRuntimeState(handle)
+          if (projectedState._tag !== "Idle") {
+            const nextQueue = appendFollowUpQueueState(
+              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+              item,
+            )
+            yield* handle.persistQueueCurrentState(nextQueue)
+            return
+          }
+          const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+            Effect.map((s) => s.state),
+          )
+          if (loopState._tag !== "Idle") {
+            const nextQueue = appendFollowUpQueueState(
+              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+              item,
+            )
+            yield* handle.persistQueueCurrentState(nextQueue)
+            return
+          }
+
+          const startedAtMs = yield* Clock.currentTimeMillis
+          const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
+          yield* SubscriptionRef.update(handle.loopRef, (s) => ({
+            ...s,
+            startingState: reservedRunningState,
+          }))
+          return reservedRunningState
+        }),
+      )
+      if (reservedStart !== undefined) {
+        yield* handle
+          .dispatch(LoopDriverEvent.Start.make({ item }))
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+      }
+    })
+
+    const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
+      command: SteerCommandType,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(command)
+      yield* markWrite
+      const projectedState = yield* currentRuntimeState(handle)
+
+      const wrapDispatch = (event: LoopDriverEvent) =>
+        handle
+          .dispatch(event)
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+
+      switch (command._tag) {
+        case "SwitchAgent":
+          yield* wrapDispatch(LoopDriverEvent.SwitchAgent.make({ agent: command.agent }))
+          return
+
+        case "Cancel":
+        case "Interrupt":
+          if (
+            projectedState._tag === "Running" ||
+            projectedState._tag === "WaitingForInteraction"
+          ) {
+            yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
+            return
+          }
+          const loopState = yield* handle.snapshot
+          if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+            yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
+          }
+          return
+
+        case "Interject": {
+          const interjectMessage = Message.Interjection.make({
+            id: MessageId.make(yield* platform.randomId),
+            sessionId: command.sessionId,
+            branchId: command.branchId,
+            role: "user",
+            parts: [new TextPart({ type: "text", text: command.message })],
+            createdAt: yield* DateTime.nowAsDate,
+          })
+          const item: QueuedTurnItem = {
+            message: interjectMessage,
+            ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
+          }
+          const shouldInterrupt = yield* handle.queueMutationSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const nextQueue = appendSteeringItem(
+                yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+                item,
+              )
+              yield* handle.persistQueueState(nextQueue)
+              const loopState = yield* handle.snapshot
+              return projectedState._tag === "Running" || loopState._tag === "Running"
+            }),
+          )
+          if (shouldInterrupt) {
+            yield* interruptActiveStream(handle.activeStreamRef)
+          }
+          return
+        }
+      }
+    })
+
+    return {
+      Submit: ({ operation }) => submitTurn(operation),
+      QueueFollowUp: ({ operation }) =>
+        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
+      Steer: ({ operation }) => applySteer(operation.command),
       Interrupt: ({ operation }) =>
-        svc.steer(
+        applySteer(
           Schema.decodeSync(SteerCommand)({
             _tag: "Cancel",
             sessionId: operation.sessionId,
@@ -302,42 +601,85 @@ export const AgentLoopLiveActor = Actor.toLayer(
           }),
         ),
       RespondInteraction: ({ operation }) =>
-        svc.respondInteraction({
-          sessionId: operation.sessionId,
-          branchId: operation.branchId,
-          requestId: operation.requestId,
-        }),
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
+            Effect.gen(function* () {
+              const projectedState = yield* currentRuntimeState(handle)
+              if (projectedState._tag !== "WaitingForInteraction") {
+                const state = yield* handle.snapshot
+                if (state._tag !== "WaitingForInteraction") return
+              }
+              yield* handle
+                .dispatch(
+                  LoopDriverEvent.InteractionResponded.make({ requestId: operation.requestId }),
+                )
+                .pipe(
+                  Effect.catchEager((error) =>
+                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                  ),
+                )
+            }),
+          ),
+        ),
       RecordToolResult: ({ operation }) =>
-        svc.recordToolResult({
-          sessionId: operation.sessionId,
-          branchId: operation.branchId,
-          commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
-          toolCallId: operation.toolCallId,
-          toolName: operation.toolName,
-          output: operation.output,
-          ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
-        }),
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
+            handle.sideMutationSemaphore.withPermits(1)(
+              recordToolResultPhase({
+                storage: deps.turnStorage,
+                eventPublisher: deps.eventPublisher,
+                commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
+                sessionId: operation.sessionId,
+                branchId: operation.branchId,
+                toolCallId: operation.toolCallId,
+                toolName: operation.toolName,
+                output: operation.output,
+                ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+              }),
+            ),
+          ),
+          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+        ),
       InvokeTool: ({ operation }) =>
-        svc.invokeTool({
-          sessionId: operation.sessionId,
-          branchId: operation.branchId,
-          commandId: operation.commandId,
-          toolName: operation.toolName,
-          input: operation.input,
-        }),
-      // c.1.b.1: stub. `getState` materializes the loop via the legacy
-      // `getLoop` path, which is exactly the cold-watch invariant we want.
-      // c.1.b.2 replaces this with the per-entity build's natural
-      // materialization (build runs once, registers state, returns).
-      EnsureStarted: ({ operation }) =>
-        svc
-          .getState({ sessionId: operation.sessionId, branchId: operation.branchId })
-          .pipe(Effect.asVoid),
-      // c.1.b.1: stub. Routed to `terminateSession` (which closes ALL
-      // branches under the session). c.1.b.4 narrows this to a single
-      // branch close once `terminateSession` is rewritten to drive
-      // branch-by-branch via this op.
-      TerminateBranch: ({ operation }) => svc.terminateSession(operation.sessionId),
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
+            handle.sideMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+                const environment = yield* handle.resolveTurnProfile
+                yield* invokeToolPhase({
+                  assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                  toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                  toolCallId: toolCallIdForCommand(operation.commandId),
+                  toolName: operation.toolName,
+                  input: operation.input,
+                  publishEvent: (event) =>
+                    deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+                  eventPublisher: deps.eventPublisher,
+                  sessionId: operation.sessionId,
+                  branchId: operation.branchId,
+                  currentTurnAgent,
+                  toolRunner: deps.toolRunner,
+                  extensionRegistry: environment.turnExtensionRegistry,
+                  permission: environment.turnPermission,
+                  hostCtx: environment.turnHostCtx,
+                  resourceManager: deps.resourceManager,
+                  storage: deps.turnStorage,
+                })
+              }),
+            ),
+          ),
+          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+        ),
+      EnsureStarted: ({ operation }) => ensureTarget(operation).pipe(Effect.andThen(ensureStarted)),
+      TerminateBranch: ({ operation }) =>
+        ensureTarget(operation).pipe(
+          Effect.andThen(sessionGovernance.markTerminated(sessionId)),
+          Effect.andThen(cleanupLoop(handle)),
+        ),
     }
   }),
   {
@@ -348,3 +690,12 @@ export const AgentLoopLiveActor = Actor.toLayer(
     concurrency: "unbounded",
   },
 )
+
+// effect-encore forwards to Effect Cluster, which provides CurrentAddress
+// internally for entity handlers; its wrapper type does not yet exclude that
+// internal requirement. Keep the cast at this boundary until encore's d.ts
+// catches up with upstream Entity.toLayer.
+// oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- effect-encore's wrapper type leaks CurrentAddress even though Effect Cluster provides it inside Entity.toLayer.
+export const AgentLoopLiveActor = AgentLoopLiveActorLayer as WithoutCurrentAddress<
+  typeof AgentLoopLiveActorLayer
+>

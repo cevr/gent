@@ -29,6 +29,7 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
+import { entityIdOf } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopStateRegistry } from "./agent/agent-loop.state-registry.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
@@ -382,11 +383,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   // re-introduce the actor client requirement at each call site).
   const actorClientFactory = yield* AgentLoopActor.Context
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
-    actorClientFactory(`${sessionId}:${branchId}`)
+    actorClientFactory(entityIdOf(sessionId, branchId))
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
+  const agentLoopStateRegistry = yield* AgentLoopStateRegistry
+  const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
   const platform = yield* GentPlatform
@@ -738,10 +741,29 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     watchState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
+        const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+        yield* ref.execute(AgentLoopActor.EnsureStarted.make(input))
         return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
-    terminateSession: (sessionId) => agentLoop.terminateSession(sessionId),
+    terminateSession: (sessionId) =>
+      Effect.gen(function* () {
+        yield* agentLoopSessionGovernance.markTerminated(sessionId)
+        const branches = yield* agentLoopStateRegistry.listForSession(sessionId)
+        yield* Effect.forEach(
+          branches,
+          (branchId) =>
+            agentLoopActorRefFor(sessionId, branchId).pipe(
+              Effect.flatMap((ref) =>
+                ref.execute(AgentLoopActor.TerminateBranch.make({ sessionId, branchId })),
+              ),
+            ),
+          { concurrency: "unbounded", discard: true },
+        )
+        yield* agentLoop.terminateSession(sessionId)
+      }).pipe(
+        Effect.catchCause((cause) => Effect.fail(wrapError("terminateSession failed", cause))),
+      ),
 
     restoreSession: (sessionId) => agentLoop.restoreSession(sessionId),
   } satisfies SessionRuntimeService

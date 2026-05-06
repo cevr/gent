@@ -25,13 +25,24 @@
  * @module
  */
 
-import { Context, Effect, Layer, Ref, type Semaphore, type SubscriptionRef } from "effect"
+import {
+  Context,
+  Effect,
+  Layer,
+  Ref,
+  type Deferred,
+  type Semaphore,
+  type SubscriptionRef,
+} from "effect"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import type { AgentLoopState } from "./agent-loop.state.js"
+import type { AgentLoopError } from "./agent-loop.commands.js"
+import type { AgentLoopState, LoopQueueState } from "./agent-loop.state.js"
 
 export type AgentLoopStateHandle = {
   readonly loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>
   readonly queueMutationSemaphore: Semaphore.Semaphore
+  readonly persistQueueState?: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
+  readonly closed?: Deferred.Deferred<void>
 }
 
 /**
