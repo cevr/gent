@@ -123,6 +123,11 @@ const DrainQueueFields = {
   commandId: ActorCommandId,
 }
 
+const GetQueueFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+}
+
 const RecordToolResultFields = {
   sessionId: SessionId,
   branchId: BranchId,
@@ -183,6 +188,10 @@ type DrainQueueInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
+}
+type GetQueueInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
 }
 type RecordToolResultInput = {
   readonly sessionId: SessionId
@@ -253,6 +262,15 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     id: (p: DrainQueueInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.commandId,
+    }),
+  },
+  GetQueue: {
+    payload: GetQueueFields,
+    success: QueueSnapshot,
+    error: AgentLoopError,
+    id: (p: GetQueueInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: "get-queue",
     }),
   },
   // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
@@ -660,6 +678,17 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
                 yield* handle.persistQueueState(emptyLoopQueueState())
                 return snapshot
               }),
+            ),
+          ),
+        ),
+      GetQueue: ({ operation }) =>
+        ensureTarget(operation).pipe(
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              SubscriptionRef.get(handle.loopRef).pipe(
+                Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+              ),
             ),
           ),
         ),

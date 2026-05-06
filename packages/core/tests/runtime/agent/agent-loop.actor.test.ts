@@ -211,6 +211,27 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
+  it.effect("GetQueue uses a stable branch-local read key", () =>
+    Effect.gen(function* () {
+      const execMain = yield* AgentLoop.GetQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+      })
+      const execMainAgain = yield* AgentLoop.GetQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchMain,
+      })
+      const execOtherBranch = yield* AgentLoop.GetQueue.executionId({
+        sessionId: sessionA,
+        branchId: branchSecond,
+      })
+
+      expect(execMain).toBe(execMainAgain)
+      expect(execMain).not.toBe(execOtherBranch)
+      expect(String(execMain)).toBe(`session-a:branch-main\x00GetQueue\x00get-queue`)
+    }),
+  )
+
   it.effect("RecordToolResult dedup keys by toolCallId", () =>
     Effect.gen(function* () {
       const callA = ToolCallId.make("tool-call-a")

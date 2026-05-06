@@ -686,7 +686,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     getQueuedMessages: (input) =>
       requireSessionBranch(input).pipe(
-        Effect.flatMap(() => agentLoop.getQueue(input)),
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(AgentLoopActor.GetQueue.make(input))
+          }),
+        ),
         Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
       ),
 
