@@ -45,8 +45,9 @@ import {
   Scope,
   Semaphore,
   SubscriptionRef,
-  type Layer,
+  Layer,
 } from "effect"
+import { ShardingConfig } from "effect/unstable/cluster"
 import { CurrentAddress } from "effect/unstable/cluster/Entity"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
@@ -209,12 +210,18 @@ type GetStateInput = {
 type RecordToolResultInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly commandId?: ActorCommandId
   readonly toolCallId: ToolCallId
+  readonly toolName: string
+  readonly output: unknown
+  readonly isError?: boolean
 }
 type InvokeToolInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
+  readonly toolName: string
+  readonly input: unknown
 }
 type EnsureStartedInput = {
   readonly sessionId: SessionId
@@ -223,6 +230,9 @@ type EnsureStartedInput = {
 type TerminateBranchInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+}
+type HandlerRequest<Operation> = {
+  readonly operation: Operation & { readonly _tag: string }
 }
 
 export const AgentLoop = Actor.fromEntity("AgentLoop", {
@@ -374,140 +384,141 @@ const buildQueuedTurnItem = (operation: {
  * `Entity.CurrentAddress` is available inside the underlying cluster entity
  * build; effect-encore does not re-export it, so import from Effect directly.
  */
-const AgentLoopLiveActorLayer = Actor.toLayer(
-  AgentLoop,
-  Effect.gen(function* () {
-    const deps = yield* AgentLoopBehaviorDeps
-    const stateRegistry = yield* AgentLoopStateRegistry
-    const sessionGovernance = yield* AgentLoopSessionGovernance
-    const platform = yield* GentPlatform
-    const addr = yield* CurrentAddress
-    const { sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(Effect.orDie)
-    const sideMutationSemaphore = yield* Semaphore.make(1)
-    const closed = yield* Ref.make(false)
-    const operationSeen = yield* Ref.make(false)
+const buildAgentLoopActorHandlers = Effect.gen(function* () {
+  const deps = yield* AgentLoopBehaviorDeps
+  const stateRegistry = yield* AgentLoopStateRegistry
+  const sessionGovernance = yield* AgentLoopSessionGovernance
+  const platform = yield* GentPlatform
+  const addr = yield* CurrentAddress
+  const { sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(Effect.orDie)
+  const sideMutationSemaphore = yield* Semaphore.make(1)
+  const closed = yield* Ref.make(false)
+  const operationSeen = yield* Ref.make(false)
 
-    let handle: LoopHandle
+  let handle: LoopHandle
+  let startupExit: Exit.Exit<void, AgentLoopError>
 
-    const closeLoopHandle = (loop: LoopHandle) =>
+  const closeLoopHandle = (loop: LoopHandle) =>
+    Effect.gen(function* () {
+      if (yield* Ref.get(closed)) return
+      yield* Ref.set(closed, true)
+      yield* interruptActiveStream(loop.activeStreamRef)
+      yield* Deferred.succeed(loop.closed, undefined).pipe(Effect.ignore)
+      yield* Scope.close(loop.scope, Exit.void)
+    }).pipe(Effect.ignore)
+
+  const cleanupLoop = (loop: LoopHandle) =>
+    stateRegistry
+      .deregister(sessionId, branchId, loop.loopRef)
+      .pipe(Effect.andThen(closeLoopHandle(loop)), Effect.ignore)
+
+  const currentRuntimeState = (loop: LoopHandle) =>
+    SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
+
+  const markWrite = Effect.gen(function* () {
+    if (yield* sessionGovernance.isTerminated(sessionId)) {
+      return yield* new AgentLoopError({
+        message: `Session runtime terminated: ${sessionId}`,
+      })
+    }
+    return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
+  })
+
+  const rejectIfTerminated = Effect.gen(function* () {
+    if (yield* sessionGovernance.isTerminated(sessionId)) {
+      return yield* new AgentLoopError({
+        message: `Session terminated: ${sessionId}`,
+      })
+    }
+  })
+
+  const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+    target.sessionId === sessionId && target.branchId === branchId
+      ? Effect.void
+      : Effect.fail(
+          new AgentLoopError({
+            message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
+          }),
+        )
+
+  const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
+    readonly message?: MessageType
+    readonly content?: string
+    readonly metadata?: MessageMetadata
+  }) {
+    const wasAlreadyWarm = yield* markWrite
+    const message =
+      input.message ??
+      Message.Regular.make({
+        id: MessageId.make(yield* platform.randomId),
+        sessionId,
+        branchId,
+        role: "user",
+        parts: [new TextPart({ type: "text", text: input.content ?? "" })],
+        createdAt: yield* DateTime.nowAsDate,
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      })
+
+    yield* ensureTarget(message)
+    const item = { message }
+    const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        if (yield* Ref.get(closed)) return
-        yield* Ref.set(closed, true)
-        yield* interruptActiveStream(loop.activeStreamRef)
-        yield* Deferred.succeed(loop.closed, undefined).pipe(Effect.ignore)
-        yield* Scope.close(loop.scope, Exit.void)
-      }).pipe(Effect.ignore)
-
-    const cleanupLoop = (loop: LoopHandle) =>
-      stateRegistry
-        .deregister(sessionId, branchId, loop.loopRef)
-        .pipe(Effect.andThen(closeLoopHandle(loop)), Effect.ignore)
-
-    const currentRuntimeState = (loop: LoopHandle) =>
-      SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
-
-    const markWrite = Effect.gen(function* () {
-      if (yield* sessionGovernance.isTerminated(sessionId)) {
-        return yield* new AgentLoopError({
-          message: `Session runtime terminated: ${sessionId}`,
-        })
-      }
-      return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
-    })
-
-    const rejectIfTerminated = Effect.gen(function* () {
-      if (yield* sessionGovernance.isTerminated(sessionId)) {
-        return yield* new AgentLoopError({
-          message: `Session terminated: ${sessionId}`,
-        })
-      }
-    })
-
-    const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-      target.sessionId === sessionId && target.branchId === branchId
-        ? Effect.void
-        : Effect.fail(
-            new AgentLoopError({
-              message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
-            }),
+        const currentQueue = yield* SubscriptionRef.get(handle.loopRef).pipe(
+          Effect.map((s) => s.queue),
+        )
+        if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
+          return yield* new AgentLoopError({
+            message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+          })
+        }
+        if (!wasAlreadyWarm) {
+          yield* handle.persistQueueState(appendFollowUpQueueState(currentQueue, item))
+          return
+        }
+        const projectedState = yield* currentRuntimeState(handle)
+        const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+          Effect.map((s) => s.startingState),
+        )
+        if (startingState !== undefined) {
+          yield* handle.persistQueueSnapshot(
+            startingState,
+            appendFollowUpQueueState(currentQueue, item),
           )
+          return
+        }
+        if (projectedState._tag !== "Idle") {
+          yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+          return
+        }
+        const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+          Effect.map((s) => s.state),
+        )
+        if (loopState._tag !== "Idle") {
+          yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+          return
+        }
+        const startedAtMs = yield* Clock.currentTimeMillis
+        const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
+        yield* SubscriptionRef.update(handle.loopRef, (s) => ({
+          ...s,
+          startingState: reservedRunningState,
+        }))
+        return reservedRunningState
+      }),
+    )
+    if (reservedStart !== undefined) {
+      yield* handle
+        .dispatch(LoopDriverEvent.Start.make({ item }))
+        .pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
+    }
+  })
 
-    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
-      readonly message?: MessageType
-      readonly content?: string
-      readonly metadata?: MessageMetadata
-    }) {
-      const wasAlreadyWarm = yield* markWrite
-      const message =
-        input.message ??
-        Message.Regular.make({
-          id: MessageId.make(yield* platform.randomId),
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [new TextPart({ type: "text", text: input.content ?? "" })],
-          createdAt: yield* DateTime.nowAsDate,
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-        })
-
-      yield* ensureTarget(message)
-      const item = { message }
-      const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const currentQueue = yield* SubscriptionRef.get(handle.loopRef).pipe(
-            Effect.map((s) => s.queue),
-          )
-          if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
-            return yield* new AgentLoopError({
-              message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
-            })
-          }
-          if (!wasAlreadyWarm) {
-            yield* handle.persistQueueState(appendFollowUpQueueState(currentQueue, item))
-            return
-          }
-          const projectedState = yield* currentRuntimeState(handle)
-          const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
-            Effect.map((s) => s.startingState),
-          )
-          if (startingState !== undefined) {
-            yield* handle.persistQueueSnapshot(
-              startingState,
-              appendFollowUpQueueState(currentQueue, item),
-            )
-            return
-          }
-          if (projectedState._tag !== "Idle") {
-            yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
-            return
-          }
-          const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
-            Effect.map((s) => s.state),
-          )
-          if (loopState._tag !== "Idle") {
-            yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
-            return
-          }
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-          yield* SubscriptionRef.update(handle.loopRef, (s) => ({
-            ...s,
-            startingState: reservedRunningState,
-          }))
-          return reservedRunningState
-        }),
-      )
-      if (reservedStart !== undefined) {
-        yield* handle
-          .dispatch(LoopDriverEvent.Start.make({ item }))
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-      }
-    })
-
+  const openLoop = Effect.gen(function* () {
+    yield* Ref.set(closed, false)
     handle = yield* makeAgentLoopBehavior(
       {
         ...deps,
@@ -525,106 +536,73 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
       persistQueueState: handle.persistQueueState,
       closed: handle.closed,
     })
-    yield* Effect.addFinalizer(() => cleanupLoop(handle))
-    const startupExit = yield* Effect.exit(
-      handle.start.pipe(Effect.andThen(handle.refreshRuntimeState)),
-    )
-    const ensureStarted = Effect.suspend(() =>
-      Exit.isSuccess(startupExit)
-        ? Effect.void
-        : Effect.fail(causeToAgentLoopError(startupExit.cause)),
-    )
+    startupExit = yield* Effect.exit(handle.start.pipe(Effect.andThen(handle.refreshRuntimeState)))
+  })
 
-    const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
-      operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
-    ) {
-      yield* ensureStarted
-      yield* ensureTarget(operation.message)
-      yield* markWrite
-      const item = buildQueuedTurnItem(operation)
-      const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
-            Effect.map((s) => s.startingState),
-          )
-          if (startingState !== undefined) {
-            yield* handle.persistQueueSnapshot(
-              startingState,
-              appendFollowUpQueueState(
-                yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-                item,
-              ),
-            )
-            return
-          }
-          const projectedState = yield* currentRuntimeState(handle)
-          if (projectedState._tag !== "Idle") {
-            const nextQueue = appendFollowUpQueueState(
+  yield* openLoop
+  yield* Effect.addFinalizer(() => cleanupLoop(handle))
+
+  const ensureStarted = Effect.gen(function* () {
+    if (yield* Ref.get(closed)) {
+      yield* openLoop
+    }
+    if (Exit.isSuccess(startupExit)) return
+    return yield* causeToAgentLoopError(startupExit.cause)
+  })
+
+  const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
+    operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
+  ) {
+    yield* ensureStarted
+    yield* ensureTarget(operation.message)
+    yield* markWrite
+    const item = buildQueuedTurnItem(operation)
+    const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const startingState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+          Effect.map((s) => s.startingState),
+        )
+        if (startingState !== undefined) {
+          yield* handle.persistQueueSnapshot(
+            startingState,
+            appendFollowUpQueueState(
               yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
               item,
-            )
-            yield* handle.persistQueueCurrentState(nextQueue)
-            return
-          }
-          const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
-            Effect.map((s) => s.state),
-          )
-          if (loopState._tag !== "Idle") {
-            const nextQueue = appendFollowUpQueueState(
-              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-              item,
-            )
-            yield* handle.persistQueueCurrentState(nextQueue)
-            return
-          }
-
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-          yield* SubscriptionRef.update(handle.loopRef, (s) => ({
-            ...s,
-            startingState: reservedRunningState,
-          }))
-          return reservedRunningState
-        }),
-      )
-      if (reservedStart !== undefined) {
-        yield* handle
-          .dispatch(LoopDriverEvent.Start.make({ item }))
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
             ),
           )
-      }
-    })
+          return
+        }
+        const projectedState = yield* currentRuntimeState(handle)
+        if (projectedState._tag !== "Idle") {
+          const nextQueue = appendFollowUpQueueState(
+            yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+            item,
+          )
+          yield* handle.persistQueueCurrentState(nextQueue)
+          return
+        }
+        const loopState = yield* SubscriptionRef.get(handle.loopRef).pipe(
+          Effect.map((s) => s.state),
+        )
+        if (loopState._tag !== "Idle") {
+          const nextQueue = appendFollowUpQueueState(
+            yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+            item,
+          )
+          yield* handle.persistQueueCurrentState(nextQueue)
+          return
+        }
 
-    const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (
-      operation: typeof AgentLoop.Run.make extends (payload: infer P) => unknown ? P : never,
-    ) {
-      yield* ensureStarted
-      yield* ensureTarget(operation.message)
-      yield* markWrite
-      const item = buildQueuedTurnItem(operation)
-      const start = yield* handle.queueMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const initialState = yield* handle.snapshot
-          if (initialState._tag !== "Idle") {
-            const nextQueue = appendFollowUpQueueState(
-              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-              item,
-            )
-            yield* handle.persistQueueState(nextQueue)
-            return undefined
-          }
-          const current = yield* SubscriptionRef.get(handle.loopRef)
-          return {
-            stateEpochBaseline: current.stateEpoch,
-            turnFailureBaseline: current.turnFailure?.epoch ?? 0,
-          }
-        }),
-      )
-      if (start === undefined) return
-
+        const startedAtMs = yield* Clock.currentTimeMillis
+        const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
+        yield* SubscriptionRef.update(handle.loopRef, (s) => ({
+          ...s,
+          startingState: reservedRunningState,
+        }))
+        return reservedRunningState
+      }),
+    )
+    if (reservedStart !== undefined) {
       yield* handle
         .dispatch(LoopDriverEvent.Start.make({ item }))
         .pipe(
@@ -632,231 +610,263 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
             cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
           ),
         )
+    }
+  })
 
-      yield* Effect.raceFirst(
-        Effect.raceFirst(
-          awaitIdleStateSince(handle, start.stateEpochBaseline),
-          awaitTurnFailure(handle, start.turnFailureBaseline),
-        ),
-        handle.persistenceFailure,
-      ).pipe(
+  const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (
+    operation: typeof AgentLoop.Run.make extends (payload: infer P) => unknown ? P : never,
+  ) {
+    yield* ensureStarted
+    yield* ensureTarget(operation.message)
+    yield* markWrite
+    const item = buildQueuedTurnItem(operation)
+    const start = yield* handle.queueMutationSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const initialState = yield* handle.snapshot
+        if (initialState._tag !== "Idle") {
+          const nextQueue = appendFollowUpQueueState(
+            yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+            item,
+          )
+          yield* handle.persistQueueState(nextQueue)
+          return undefined
+        }
+        const current = yield* SubscriptionRef.get(handle.loopRef)
+        return {
+          stateEpochBaseline: current.stateEpoch,
+          turnFailureBaseline: current.turnFailure?.epoch ?? 0,
+        }
+      }),
+    )
+    if (start === undefined) return
+
+    yield* handle
+      .dispatch(LoopDriverEvent.Start.make({ item }))
+      .pipe(
         Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
       )
-      yield* failIfTurnFailedSince(handle, start.turnFailureBaseline)
-    })
 
-    const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
-      command: SteerCommandType,
-    ) {
-      yield* ensureStarted
-      yield* ensureTarget(command)
-      yield* markWrite
-      const projectedState = yield* currentRuntimeState(handle)
+    yield* Effect.raceFirst(
+      Effect.raceFirst(
+        awaitIdleStateSince(handle, start.stateEpochBaseline),
+        awaitTurnFailure(handle, start.turnFailureBaseline),
+      ),
+      handle.persistenceFailure,
+    ).pipe(
+      Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+    )
+    yield* failIfTurnFailedSince(handle, start.turnFailureBaseline)
+  })
 
-      const wrapDispatch = (event: LoopDriverEvent) =>
-        handle
-          .dispatch(event)
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
+  const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (command: SteerCommandType) {
+    yield* ensureStarted
+    yield* ensureTarget(command)
+    yield* markWrite
+    const projectedState = yield* currentRuntimeState(handle)
 
-      switch (command._tag) {
-        case "SwitchAgent":
-          yield* wrapDispatch(LoopDriverEvent.SwitchAgent.make({ agent: command.agent }))
-          return
+    const wrapDispatch = (event: LoopDriverEvent) =>
+      handle
+        .dispatch(event)
+        .pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
 
-        case "Cancel":
-        case "Interrupt":
-          if (
-            projectedState._tag === "Running" ||
-            projectedState._tag === "WaitingForInteraction"
-          ) {
-            yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
-            return
-          }
-          const loopState = yield* handle.snapshot
-          if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-            yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
-          }
-          return
+    switch (command._tag) {
+      case "SwitchAgent":
+        yield* wrapDispatch(LoopDriverEvent.SwitchAgent.make({ agent: command.agent }))
+        return
 
-        case "Interject": {
-          const interjectMessage = Message.Interjection.make({
-            id: MessageId.make(yield* platform.randomId),
-            sessionId: command.sessionId,
-            branchId: command.branchId,
-            role: "user",
-            parts: [new TextPart({ type: "text", text: command.message })],
-            createdAt: yield* DateTime.nowAsDate,
-          })
-          const item: QueuedTurnItem = {
-            message: interjectMessage,
-            ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
-          }
-          const shouldInterrupt = yield* handle.queueMutationSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const nextQueue = appendSteeringItem(
-                yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-                item,
-              )
-              yield* handle.persistQueueState(nextQueue)
-              const loopState = yield* handle.snapshot
-              return projectedState._tag === "Running" || loopState._tag === "Running"
-            }),
-          )
-          if (shouldInterrupt) {
-            yield* interruptActiveStream(handle.activeStreamRef)
-          }
+      case "Cancel":
+      case "Interrupt":
+        if (projectedState._tag === "Running" || projectedState._tag === "WaitingForInteraction") {
+          yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
           return
         }
-      }
-    })
+        const loopState = yield* handle.snapshot
+        if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+          yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
+        }
+        return
 
-    return {
-      Submit: ({ operation }) => submitTurn(operation),
-      Run: ({ operation }) => runTurn(operation),
-      QueueFollowUp: ({ operation }) =>
-        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
-      Steer: ({ operation }) => applySteer(operation.command),
-      Interrupt: ({ operation }) =>
-        applySteer(
-          Schema.decodeSync(SteerCommand)({
-            _tag: "Cancel",
-            sessionId: operation.sessionId,
-            branchId: operation.branchId,
+      case "Interject": {
+        const interjectMessage = Message.Interjection.make({
+          id: MessageId.make(yield* platform.randomId),
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: command.message })],
+          createdAt: yield* DateTime.nowAsDate,
+        })
+        const item: QueuedTurnItem = {
+          message: interjectMessage,
+          ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
+        }
+        const shouldInterrupt = yield* handle.queueMutationSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const nextQueue = appendSteeringItem(
+              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+              item,
+            )
+            yield* handle.persistQueueState(nextQueue)
+            const loopState = yield* handle.snapshot
+            return projectedState._tag === "Running" || loopState._tag === "Running"
+          }),
+        )
+        if (shouldInterrupt) {
+          yield* interruptActiveStream(handle.activeStreamRef)
+        }
+        return
+      }
+    }
+  })
+
+  return {
+    Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
+      submitTurn(operation),
+    Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) => runTurn(operation),
+    QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+      ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
+    Steer: ({ operation }: HandlerRequest<SteerInput>) => applySteer(operation.command),
+    Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
+      applySteer(
+        Schema.decodeSync(SteerCommand)({
+          _tag: "Cancel",
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+        }),
+      ),
+    RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(markWrite),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const projectedState = yield* currentRuntimeState(handle)
+            if (projectedState._tag !== "WaitingForInteraction") {
+              const state = yield* handle.snapshot
+              if (state._tag !== "WaitingForInteraction") return
+            }
+            yield* handle
+              .dispatch(
+                LoopDriverEvent.InteractionResponded.make({ requestId: operation.requestId }),
+              )
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
           }),
         ),
-      RespondInteraction: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(
+      ),
+    DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(markWrite),
+        Effect.andThen(ensureStarted),
+        Effect.andThen(
+          handle.queueMutationSemaphore.withPermits(1)(
             Effect.gen(function* () {
-              const projectedState = yield* currentRuntimeState(handle)
-              if (projectedState._tag !== "WaitingForInteraction") {
-                const state = yield* handle.snapshot
-                if (state._tag !== "WaitingForInteraction") return
-              }
-              yield* handle
-                .dispatch(
-                  LoopDriverEvent.InteractionResponded.make({ requestId: operation.requestId }),
-                )
-                .pipe(
-                  Effect.catchEager((error) =>
-                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                  ),
-                )
+              const queue = yield* SubscriptionRef.get(handle.loopRef).pipe(
+                Effect.map((s) => s.queue),
+              )
+              const snapshot = queueSnapshotFromQueueState(queue)
+              yield* handle.persistQueueState(emptyLoopQueueState())
+              return snapshot
             }),
           ),
         ),
-      DrainQueue: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                const queue = yield* SubscriptionRef.get(handle.loopRef).pipe(
-                  Effect.map((s) => s.queue),
-                )
-                const snapshot = queueSnapshotFromQueueState(queue)
-                yield* handle.persistQueueState(emptyLoopQueueState())
-                return snapshot
-              }),
+      ),
+    GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(rejectIfTerminated),
+        Effect.andThen(ensureStarted),
+        Effect.andThen(
+          handle.queueMutationSemaphore.withPermits(1)(
+            SubscriptionRef.get(handle.loopRef).pipe(
+              Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
             ),
           ),
         ),
-      GetQueue: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(rejectIfTerminated),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              SubscriptionRef.get(handle.loopRef).pipe(
-                Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
-              ),
-            ),
+      ),
+    GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(rejectIfTerminated),
+        Effect.andThen(ensureStarted),
+        Effect.andThen(
+          handle.queueMutationSemaphore.withPermits(1)(
+            SubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
           ),
         ),
-      GetState: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(rejectIfTerminated),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              SubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
-            ),
+      ),
+    RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(markWrite),
+        Effect.andThen(
+          handle.sideMutationSemaphore.withPermits(1)(
+            recordToolResultPhase({
+              storage: deps.turnStorage,
+              eventPublisher: deps.eventPublisher,
+              commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
+              sessionId: operation.sessionId,
+              branchId: operation.branchId,
+              toolCallId: operation.toolCallId,
+              toolName: operation.toolName,
+              output: operation.output,
+              ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+            }),
           ),
         ),
-      RecordToolResult: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(
-            handle.sideMutationSemaphore.withPermits(1)(
-              recordToolResultPhase({
-                storage: deps.turnStorage,
+        Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+      ),
+    InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(markWrite),
+        Effect.andThen(
+          handle.sideMutationSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+              const environment = yield* handle.resolveTurnProfile
+              yield* invokeToolPhase({
+                assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                toolCallId: toolCallIdForCommand(operation.commandId),
+                toolName: operation.toolName,
+                input: operation.input,
+                publishEvent: (event) =>
+                  deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
                 eventPublisher: deps.eventPublisher,
-                commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
                 sessionId: operation.sessionId,
                 branchId: operation.branchId,
-                toolCallId: operation.toolCallId,
-                toolName: operation.toolName,
-                output: operation.output,
-                ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
-              }),
-            ),
+                currentTurnAgent,
+                toolRunner: deps.toolRunner,
+                extensionRegistry: environment.turnExtensionRegistry,
+                permission: environment.turnPermission,
+                hostCtx: environment.turnHostCtx,
+                resourceManager: deps.resourceManager,
+                storage: deps.turnStorage,
+              })
+            }),
           ),
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
         ),
-      InvokeTool: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(
-            handle.sideMutationSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-                const environment = yield* handle.resolveTurnProfile
-                yield* invokeToolPhase({
-                  assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                  toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                  toolCallId: toolCallIdForCommand(operation.commandId),
-                  toolName: operation.toolName,
-                  input: operation.input,
-                  publishEvent: (event) =>
-                    deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
-                  eventPublisher: deps.eventPublisher,
-                  sessionId: operation.sessionId,
-                  branchId: operation.branchId,
-                  currentTurnAgent,
-                  toolRunner: deps.toolRunner,
-                  extensionRegistry: environment.turnExtensionRegistry,
-                  permission: environment.turnPermission,
-                  hostCtx: environment.turnHostCtx,
-                  resourceManager: deps.resourceManager,
-                  storage: deps.turnStorage,
-                })
-              }),
-            ),
-          ),
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-        ),
-      EnsureStarted: ({ operation }) => ensureTarget(operation).pipe(Effect.andThen(ensureStarted)),
-      TerminateBranch: ({ operation }) =>
-        ensureTarget(operation).pipe(
-          Effect.andThen(sessionGovernance.markTerminated(sessionId)),
-          Effect.andThen(cleanupLoop(handle)),
-        ),
-    }
-  }),
-  {
-    // Long-lived ops (Submit/RunTurn) park inside the loop body via
-    // commandGate. `concurrency: "unbounded"` keeps short ops
-    // (RecordToolResult, RespondInteraction, Steer) from blocking the
-    // mailbox behind a slow Submit.
-    concurrency: "unbounded",
-  },
-)
+        Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+      ),
+    EnsureStarted: ({ operation }: HandlerRequest<EnsureStartedInput>) =>
+      ensureTarget(operation).pipe(Effect.andThen(ensureStarted)),
+    TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
+      ensureTarget(operation).pipe(
+        Effect.andThen(sessionGovernance.markTerminated(sessionId)),
+        Effect.andThen(cleanupLoop(handle)),
+      ),
+  }
+})
+
+const AgentLoopLiveActorLayer = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
+  // Long-lived ops (Submit/RunTurn) park inside the loop body via
+  // commandGate. `concurrency: "unbounded"` keeps short ops
+  // (RecordToolResult, RespondInteraction, Steer) from blocking the
+  // mailbox behind a slow Submit.
+  concurrency: "unbounded",
+})
 
 // effect-encore forwards to Effect Cluster, which provides CurrentAddress
 // internally for entity handlers; its wrapper type does not yet exclude that
@@ -865,4 +875,13 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
 // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- effect-encore's wrapper type leaks CurrentAddress even though Effect Cluster provides it inside Entity.toLayer.
 export const AgentLoopLiveActor = AgentLoopLiveActorLayer as WithoutCurrentAddress<
   typeof AgentLoopLiveActorLayer
+>
+
+const AgentLoopTestActorLayer = Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers, {
+  // Match the production mailbox behavior used by AgentLoopLiveActor.
+  concurrency: "unbounded",
+}).pipe(Layer.provide(ShardingConfig.layerDefaults))
+
+export const AgentLoopTestActor = AgentLoopTestActorLayer as WithoutCurrentAddress<
+  typeof AgentLoopTestActorLayer
 >

@@ -9,6 +9,8 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
+import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
+import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
@@ -214,13 +216,17 @@ const makeLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return Layer.provideMerge(
-    AgentLoop.Live({ baseSections: [] }),
-    Layer.mergeAll(
-      deps,
-      eventPublisherLayer,
-      AgentLoopStateRegistry.Live,
-      AgentLoopSessionGovernance.Live,
+  return AgentLoop.Live({ baseSections: [] }).pipe(
+    Layer.provide(
+      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+    ),
+    Layer.provideMerge(
+      Layer.mergeAll(
+        deps,
+        eventPublisherLayer,
+        AgentLoopStateRegistry.Live,
+        AgentLoopSessionGovernance.Live,
+      ),
     ),
   )
 }
@@ -423,13 +429,17 @@ describe("external turn execution", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = Layer.provideMerge(
-        AgentLoop.Live({ baseSections: [] }),
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
+      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provide(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         ),
       )
       yield* Effect.scoped(
@@ -583,13 +593,17 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = Layer.provideMerge(
-        AgentLoop.Live({ baseSections: [] }),
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
+      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provide(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         ),
       )
       yield* Effect.scoped(
@@ -669,13 +683,17 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = Layer.provideMerge(
-        AgentLoop.Live({ baseSections: [] }),
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
+      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provide(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         ),
       )
       yield* Effect.scoped(
@@ -770,13 +788,17 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = Layer.provideMerge(
-        AgentLoop.Live({ baseSections: [] }),
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
+      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provide(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         ),
       )
       yield* Effect.scoped(
@@ -870,13 +892,17 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = Layer.provideMerge(
-        AgentLoop.Live({ baseSections: [] }),
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
+      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provide(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            eventPublisherLayer,
+            AgentLoopStateRegistry.Live,
+            AgentLoopSessionGovernance.Live,
+          ),
         ),
       )
       yield* Effect.scoped(

@@ -53,13 +53,10 @@ import { ResourceManager } from "../resource-manager.js"
 import {
   appendFollowUpQueueState,
   appendSteeringItem,
-  buildIdleState,
   buildRunningState,
   countQueuedFollowUps,
   emptyLoopQueueState,
   SessionRuntimeStateSchema,
-  queueSnapshotFromQueueState,
-  runtimeStateFromLoopState,
   projectRuntimeState,
   type LoopQueueState,
   type SessionRuntimeState,
@@ -96,9 +93,10 @@ import {
   failIfTurnFailedSince,
   interruptActiveStream,
   makeAgentLoopBehavior,
-  resolveStoredAgent,
   type AgentLoopBehaviorDeps,
 } from "./agent-loop.behavior.js"
+import { AgentLoop as AgentLoopActor } from "./agent-loop.actor.js"
+import { entityIdOf } from "./agent-loop.entity-id.js"
 
 // Agent Loop Context
 
@@ -201,10 +199,14 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | GentPlatform
     | AgentLoopStateRegistry
     | AgentLoopSessionGovernance
+    | Context.Service.Identifier<typeof AgentLoopActor.Context>
   > =>
     Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
+        const actorClientFactory = yield* AgentLoopActor.Context
+        const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
+          actorClientFactory(entityIdOf(sessionId, branchId))
         const sessionStorage = yield* SessionStorage
         const messageStorage = yield* MessageStorage
         const eventStorage = yield* EventStorage
@@ -223,6 +225,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
         const platform = yield* GentPlatform
+        const nextActorCommandId = Effect.map(platform.randomId, (id) => ActorCommandId.make(id))
         const stateRegistry = yield* AgentLoopStateRegistry
         const sessionGovernance = yield* AgentLoopSessionGovernance
         // Yield ConfigService at setup so the captured service shape is
@@ -536,7 +539,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const currentRuntimeState = (loop: LoopHandle) =>
           SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
 
-        const terminateSession = Effect.fn("AgentLoop.terminateSession")(function* (
+        const _terminateSession = Effect.fn("AgentLoop.terminateSession")(function* (
           sessionId: SessionId,
         ) {
           const loopsToClose = yield* loopsSemaphore.withPermits(1)(
@@ -572,7 +575,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           })
         })
 
-        const restoreSession = Effect.fn("AgentLoop.restoreSession")(function* (
+        const _restoreSession = Effect.fn("AgentLoop.restoreSession")(function* (
           sessionId: SessionId,
         ) {
           yield* loopsSemaphore.withPermits(1)(sessionGovernance.clearTerminated(sessionId))
@@ -853,7 +856,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             .pipe(Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))))
         })
 
-        const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
+        const _dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
           command: LoopCommand,
         ) {
           switch (command._tag) {
@@ -877,7 +880,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }
         })
 
-        const enqueueFollowUp = Effect.fn("AgentLoop.enqueueFollowUp")(function* (
+        const _enqueueFollowUp = Effect.fn("AgentLoop.enqueueFollowUp")(function* (
           message: Message,
         ) {
           const existingLoop = yield* findLoop(message.sessionId, message.branchId)
@@ -991,15 +994,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               interactive?: boolean
             },
           ) {
-            return yield* dispatchLoopCommand({
-              _tag: "SubmitTurn",
-              message,
-              ...(options?.agentOverride !== undefined
-                ? { agentOverride: options.agentOverride }
-                : {}),
-              ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
-              ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
-            })
+            const ref = yield* agentLoopActorRefFor(message.sessionId, message.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.Submit.make({
+                message,
+                agentOverride: options?.agentOverride,
+                runSpec: options?.runSpec,
+                interactive: options?.interactive,
+              }),
+            )
           }),
 
           run: Effect.fn("AgentLoop.run")(function* (
@@ -1010,15 +1013,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               interactive?: boolean
             },
           ) {
-            return yield* dispatchLoopCommand({
-              _tag: "RunTurn",
-              message,
-              ...(options?.agentOverride !== undefined
-                ? { agentOverride: options.agentOverride }
-                : {}),
-              ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
-              ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
-            })
+            const ref = yield* agentLoopActorRefFor(message.sessionId, message.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.Run.make({
+                message,
+                agentOverride: options?.agentOverride,
+                runSpec: options?.runSpec,
+                interactive: options?.interactive,
+              }),
+            )
           }),
 
           queueFollowUp: Effect.fn("AgentLoop.queueFollowUp")(function* (input) {
@@ -1031,145 +1034,111 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               createdAt: yield* DateTime.nowAsDate,
               ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
             })
-            yield* enqueueFollowUp(message)
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.QueueFollowUp.make({
+                message,
+                agentOverride: undefined,
+                runSpec: undefined,
+                interactive: undefined,
+              }),
+            )
           }),
 
-          steer: (command) => dispatchLoopCommand({ _tag: "ApplySteer", command }),
+          steer: Effect.fn("AgentLoop.steer")(function* (command) {
+            const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
+            yield* ref.execute(
+              AgentLoopActor.Steer.make({
+                commandId: yield* nextActorCommandId,
+                command,
+              }),
+            )
+          }),
 
-          drainQueue: (input) =>
-            Effect.gen(function* () {
-              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
-              if (registered?.persistQueueState !== undefined) {
-                const persistQueueState = registered.persistQueueState
-                return yield* registered.queueMutationSemaphore.withPermits(1)(
-                  Effect.gen(function* () {
-                    const queue = yield* SubscriptionRef.get(registered.loopRef).pipe(
-                      Effect.map((s) => s.queue),
-                    )
-                    const snapshot = queueSnapshotFromQueueState(queue)
-                    yield* persistQueueState(emptyLoopQueueState())
-                    return snapshot
-                  }),
-                )
-              }
+          drainQueue: Effect.fn("AgentLoop.drainQueue")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.DrainQueue.make({
+                ...input,
+                commandId: yield* nextActorCommandId,
+              }),
+            )
+          }),
 
-              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
-              if (loop === undefined) {
-                if (yield* sessionGovernance.isTerminated(input.sessionId)) {
-                  return yield* new AgentLoopError({
-                    message: `Session terminated: ${input.sessionId}`,
-                  })
-                }
-                return queueSnapshotFromQueueState(emptyLoopQueueState())
-              }
+          getQueue: Effect.fn("AgentLoop.getQueue")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(AgentLoopActor.GetQueue.make(input))
+          }),
 
-              return yield* loop.queueMutationSemaphore.withPermits(1)(
-                Effect.gen(function* () {
-                  const queue = yield* SubscriptionRef.get(loop.loopRef).pipe(
-                    Effect.map((s) => s.queue),
-                  )
-                  const snapshot = queueSnapshotFromQueueState(queue)
-                  yield* loop.persistQueueState(emptyLoopQueueState())
-                  return snapshot
-                }),
-              )
-            }),
+          respondInteraction: Effect.fn("AgentLoop.respondInteraction")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+          }),
 
-          getQueue: (input) =>
-            Effect.gen(function* () {
-              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
-              if (registered !== undefined) {
-                return yield* registered.queueMutationSemaphore.withPermits(1)(
-                  SubscriptionRef.get(registered.loopRef).pipe(
-                    Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+          recordToolResult: Effect.fn("AgentLoop.recordToolResult")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.RecordToolResult.make({
+                ...input,
+                commandId: input.commandId,
+                isError: input.isError,
+              }),
+            )
+          }),
+
+          invokeTool: Effect.fn("AgentLoop.invokeTool")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.InvokeTool.make({
+                ...input,
+                commandId: input.commandId ?? (yield* nextActorCommandId),
+              }),
+            )
+          }),
+
+          getState: Effect.fn("AgentLoop.getState")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(AgentLoopActor.GetState.make(input))
+          }),
+          watchState: Effect.fn("AgentLoop.watchState")(function* (input) {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(AgentLoopActor.EnsureStarted.make(input))
+            const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+            if (registered === undefined) {
+              return yield* new AgentLoopError({
+                message: `AgentLoop state unavailable: ${input.sessionId}/${input.branchId}`,
+              })
+            }
+            const changes = SubscriptionRef.changes(registered.loopRef).pipe(
+              Stream.map(projectRuntimeState),
+            )
+            return registered.closed === undefined
+              ? changes
+              : changes.pipe(Stream.interruptWhen(Deferred.await(registered.closed)))
+          }),
+
+          terminateSession: Effect.fn("AgentLoop.terminateSession")(function* (sessionId) {
+            yield* sessionGovernance.markTerminated(sessionId)
+            const branchIds = yield* stateRegistry.listForSession(sessionId)
+            yield* Effect.forEach(
+              branchIds,
+              (branchId) =>
+                agentLoopActorRefFor(sessionId, branchId).pipe(
+                  Effect.flatMap((ref) =>
+                    ref.execute(
+                      AgentLoopActor.TerminateBranch.make({
+                        sessionId,
+                        branchId,
+                      }),
+                    ),
                   ),
-                )
-              }
-
-              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
-              if (loop === undefined) {
-                if (yield* sessionGovernance.isTerminated(input.sessionId)) {
-                  return yield* new AgentLoopError({
-                    message: `Session terminated: ${input.sessionId}`,
-                  })
-                }
-                return queueSnapshotFromQueueState(emptyLoopQueueState())
-              }
-
-              return yield* loop.queueMutationSemaphore.withPermits(1)(
-                SubscriptionRef.get(loop.loopRef).pipe(
-                  Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+                  Effect.ignore,
                 ),
-              )
-            }),
-
-          respondInteraction: (input) =>
-            dispatchLoopCommand({ _tag: "RespondInteraction", ...input }),
-
-          recordToolResult: (input) => dispatchLoopCommand({ _tag: "RecordToolResult", ...input }),
-
-          invokeTool: (input) => dispatchLoopCommand({ _tag: "InvokeTool", ...input }),
-
-          getState: (input) =>
-            Effect.gen(function* () {
-              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
-              if (registered !== undefined) {
-                return yield* registered.queueMutationSemaphore.withPermits(1)(
-                  SubscriptionRef.get(registered.loopRef).pipe(Effect.map(projectRuntimeState)),
-                )
-              }
-
-              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
-              if (loop !== undefined) {
-                const state = yield* loop.queueMutationSemaphore.withPermits(1)(
-                  SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState)),
-                )
-                return state
-              }
-
-              // No running loop. Before synthesizing an idle state from
-              // persisted events, confirm the session wasn't terminated — the
-              // terminated set outlives `closeLoopHandle` and catches the
-              // check-then-use race where delete lands between the caller's
-              // `requireSessionExists` gate and this fallback.
-              if (yield* sessionGovernance.isTerminated(input.sessionId)) {
-                return yield* new AgentLoopError({
-                  message: `Session terminated: ${input.sessionId}`,
-                })
-              }
-
-              return runtimeStateFromLoopState(
-                buildIdleState({
-                  currentAgent: yield* resolveStoredAgent({
-                    storage: turnStorage,
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                  }),
-                }),
-                emptyLoopQueueState(),
-              )
-            }),
-          watchState: (input) =>
-            Effect.gen(function* () {
-              const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
-              if (registered !== undefined) {
-                const changes = SubscriptionRef.changes(registered.loopRef).pipe(
-                  Stream.map(projectRuntimeState),
-                )
-                return registered.closed === undefined
-                  ? changes
-                  : changes.pipe(Stream.interruptWhen(Deferred.await(registered.closed)))
-              }
-
-              const loop = yield* getLoop(input.sessionId, input.branchId)
-              return SubscriptionRef.changes(loop.loopRef).pipe(
-                Stream.map(projectRuntimeState),
-                Stream.interruptWhen(Deferred.await(loop.closed)),
-              )
-            }),
-
-          terminateSession,
-          restoreSession,
+              { concurrency: "unbounded", discard: true },
+            )
+            yield* stateRegistry.deregisterSession(sessionId)
+          }),
+          restoreSession: (sessionId) => sessionGovernance.clearTerminated(sessionId),
         }
 
         yield* Effect.addFinalizer(() =>

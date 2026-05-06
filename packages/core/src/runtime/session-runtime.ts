@@ -258,7 +258,9 @@ type SessionRuntimeEntityLayerRequirements =
   | GentPlatform
   | Exclude<
       LayerRequirements<ReturnType<typeof AgentLoop.Live>>,
-      AgentLoopStateRegistry | AgentLoopSessionGovernance
+      | AgentLoopStateRegistry
+      | AgentLoopSessionGovernance
+      | Context.Service.Identifier<typeof AgentLoopActor.Context>
     >
 
 export interface SessionRuntimeService {
@@ -880,14 +882,12 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         concurrency: "unbounded",
       },
     ).pipe(
-      // `AgentLoopLiveActor` provides the `AgentLoop` actor client (consumed
-      // by `makeLiveSessionRuntime` through `AgentLoopActor.<Op>.execute`)
-      // and depends on the legacy `AgentLoop` Tag (consumed by handler
-      // delegation). Both stay live until C5.4.4 collapses the imperative
-      // loop into the actor body. Using `provide` (not `provideMerge`) so the
-      // actor client is consumed but not re-exported.
-      Layer.provide(AgentLoopLiveActor),
       Layer.provideMerge(AgentLoop.Live(config)),
+      // `AgentLoopLiveActor` provides the `AgentLoop` actor client consumed
+      // by both `makeLiveSessionRuntime` and the legacy `AgentLoop` facade.
+      // Provide it after merging those two consumers so the actor client is
+      // shared and not re-exported from `LiveWithEntity`.
+      Layer.provide(AgentLoopLiveActor),
       // `AgentLoopStateRegistry` and `AgentLoopSessionGovernance` are
       // runtime-internal shared services. They are provided at the entity
       // boundary (NOT inside `AgentLoop.Live`) so the legacy `AgentLoop`
