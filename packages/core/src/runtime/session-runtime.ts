@@ -698,7 +698,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     getState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
-        const loopState = yield* agentLoop.getState(input)
+        const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+        const loopState = yield* ref.execute(AgentLoopActor.GetState.make(input))
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 

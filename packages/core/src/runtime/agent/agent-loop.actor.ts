@@ -78,6 +78,7 @@ import {
   emptyLoopQueueState,
   projectRuntimeState,
   queueSnapshotFromQueueState,
+  SessionRuntimeStateSchema,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
@@ -124,6 +125,11 @@ const DrainQueueFields = {
 }
 
 const GetQueueFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+}
+
+const GetStateFields = {
   sessionId: SessionId,
   branchId: BranchId,
 }
@@ -190,6 +196,10 @@ type DrainQueueInput = {
   readonly commandId: ActorCommandId
 }
 type GetQueueInput = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+type GetStateInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
@@ -271,6 +281,15 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     id: (p: GetQueueInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: "get-queue",
+    }),
+  },
+  GetState: {
+    payload: GetStateFields,
+    success: SessionRuntimeStateSchema,
+    error: AgentLoopError,
+    id: (p: GetStateInput) => ({
+      entityId: entityIdOf(p.sessionId, p.branchId),
+      primaryKey: "get-state",
     }),
   },
   // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
@@ -383,6 +402,14 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
         })
       }
       return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
+    })
+
+    const rejectIfTerminated = Effect.gen(function* () {
+      if (yield* sessionGovernance.isTerminated(sessionId)) {
+        return yield* new AgentLoopError({
+          message: `Session terminated: ${sessionId}`,
+        })
+      }
     })
 
     const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
@@ -683,12 +710,23 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
         ),
       GetQueue: ({ operation }) =>
         ensureTarget(operation).pipe(
+          Effect.andThen(rejectIfTerminated),
           Effect.andThen(ensureStarted),
           Effect.andThen(
             handle.queueMutationSemaphore.withPermits(1)(
               SubscriptionRef.get(handle.loopRef).pipe(
                 Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
               ),
+            ),
+          ),
+        ),
+      GetState: ({ operation }) =>
+        ensureTarget(operation).pipe(
+          Effect.andThen(rejectIfTerminated),
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              SubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
             ),
           ),
         ),
