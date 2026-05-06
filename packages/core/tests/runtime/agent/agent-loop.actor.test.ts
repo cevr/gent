@@ -113,6 +113,20 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
+  it.effect("Submit and Run do not collide despite identical payload", () =>
+    Effect.gen(function* () {
+      const submitExec = yield* AgentLoop.Submit.executionId(
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
+      )
+      const runExec = yield* AgentLoop.Run.executionId(
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
+      )
+
+      expect(submitExec).not.toBe(runExec)
+      expect(String(runExec)).toBe(`session-a:branch-main\x00Run\x00msg-1`)
+    }),
+  )
+
   it.effect("Steer routes via command target, dedups by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.Steer.executionId(

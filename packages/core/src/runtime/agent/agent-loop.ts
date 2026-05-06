@@ -9,7 +9,6 @@ import {
   Layer,
   Option,
   Ref,
-  Schema,
   Semaphore,
   Scope,
   Stream,
@@ -62,7 +61,6 @@ import {
   queueSnapshotFromQueueState,
   runtimeStateFromLoopState,
   projectRuntimeState,
-  type AgentLoopState,
   type LoopQueueState,
   type SessionRuntimeState,
   type QueuedTurnItem,
@@ -92,7 +90,10 @@ import {
 import {
   LoopDriverEvent,
   type LoopHandle,
+  awaitIdleStateSince,
+  awaitTurnFailure,
   causeToAgentLoopError,
+  failIfTurnFailedSince,
   interruptActiveStream,
   makeAgentLoopBehavior,
   resolveStoredAgent,
@@ -100,61 +101,6 @@ import {
 } from "./agent-loop.behavior.js"
 
 // Agent Loop Context
-
-const awaitIdleStateSince = (loop: LoopHandle, baseline: number): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
-    yield* SubscriptionRef.changes(loop.loopRef).pipe(
-      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
-      Stream.runHead,
-    )
-  })
-
-const failTurnFailureState = (failure: { readonly error: unknown }) =>
-  Effect.fail(
-    Schema.is(AgentLoopError)(failure.error)
-      ? failure.error
-      : new AgentLoopError({
-          message: "Agent loop turn failed",
-          cause: failure.error,
-        }),
-  )
-
-const awaitTurnFailure = (
-  loop: LoopHandle,
-  baseline: number,
-): Effect.Effect<void, AgentLoopError> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
-      return yield* failTurnFailureState(current.turnFailure)
-    }
-    const hasNewTurnFailure = (
-      state: AgentLoopState,
-    ): state is AgentLoopState & {
-      readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
-    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
-    const next = yield* SubscriptionRef.changes(loop.loopRef).pipe(
-      Stream.filter(hasNewTurnFailure),
-      Stream.runHead,
-    )
-    if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
-    return yield* new AgentLoopError({
-      message: "Agent loop turn failure stream ended",
-    })
-  })
-
-const failIfTurnFailedSince = (
-  loop: LoopHandle,
-  baseline: number,
-): Effect.Effect<void, AgentLoopError> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
-      return yield* failTurnFailureState(current.turnFailure)
-    }
-  })
 
 // Internal turn engine. Server-facing callers should go through SessionRuntime.
 

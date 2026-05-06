@@ -22,6 +22,7 @@ import {
   Schema,
   Scope,
   Semaphore,
+  Stream,
   SubscriptionRef,
 } from "effect"
 import {
@@ -167,6 +168,61 @@ export type LoopHandle = {
   closed: Deferred.Deferred<void>
   scope: Scope.Closeable
 }
+
+export const awaitIdleStateSince = (loop: LoopHandle, baseline: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
+    yield* SubscriptionRef.changes(loop.loopRef).pipe(
+      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
+      Stream.runHead,
+    )
+  })
+
+const failTurnFailureState = (failure: { readonly error: unknown }) =>
+  Effect.fail(
+    Schema.is(AgentLoopError)(failure.error)
+      ? failure.error
+      : new AgentLoopError({
+          message: "Agent loop turn failed",
+          cause: failure.error,
+        }),
+  )
+
+export const awaitTurnFailure = (
+  loop: LoopHandle,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
+    const hasNewTurnFailure = (
+      state: AgentLoopState,
+    ): state is AgentLoopState & {
+      readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
+    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
+    const next = yield* SubscriptionRef.changes(loop.loopRef).pipe(
+      Stream.filter(hasNewTurnFailure),
+      Stream.runHead,
+    )
+    if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
+    return yield* new AgentLoopError({
+      message: "Agent loop turn failure stream ended",
+    })
+  })
+
+export const failIfTurnFailedSince = (
+  loop: LoopHandle,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(loop.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
+  })
 
 export const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
   Effect.gen(function* () {

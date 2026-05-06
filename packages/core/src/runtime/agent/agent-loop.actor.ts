@@ -84,7 +84,10 @@ import {
 import {
   LoopDriverEvent,
   type LoopHandle,
+  awaitIdleStateSince,
+  awaitTurnFailure,
   causeToAgentLoopError,
+  failIfTurnFailedSince,
   interruptActiveStream,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
@@ -224,6 +227,14 @@ type TerminateBranchInput = {
 
 export const AgentLoop = Actor.fromEntity("AgentLoop", {
   Submit: {
+    payload: TurnSubmissionFields,
+    error: AgentLoopError,
+    id: (p: TurnSubmissionInput) => ({
+      entityId: entityIdOf(p.message.sessionId, p.message.branchId),
+      primaryKey: p.message.id,
+    }),
+  },
+  Run: {
     payload: TurnSubmissionFields,
     error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
@@ -587,6 +598,53 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
       }
     })
 
+    const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (
+      operation: typeof AgentLoop.Run.make extends (payload: infer P) => unknown ? P : never,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item = buildQueuedTurnItem(operation)
+      const start = yield* handle.queueMutationSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const initialState = yield* handle.snapshot
+          if (initialState._tag !== "Idle") {
+            const nextQueue = appendFollowUpQueueState(
+              yield* SubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
+              item,
+            )
+            yield* handle.persistQueueState(nextQueue)
+            return undefined
+          }
+          const current = yield* SubscriptionRef.get(handle.loopRef)
+          return {
+            stateEpochBaseline: current.stateEpoch,
+            turnFailureBaseline: current.turnFailure?.epoch ?? 0,
+          }
+        }),
+      )
+      if (start === undefined) return
+
+      yield* handle
+        .dispatch(LoopDriverEvent.Start.make({ item }))
+        .pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
+
+      yield* Effect.raceFirst(
+        Effect.raceFirst(
+          awaitIdleStateSince(handle, start.stateEpochBaseline),
+          awaitTurnFailure(handle, start.turnFailureBaseline),
+        ),
+        handle.persistenceFailure,
+      ).pipe(
+        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+      )
+      yield* failIfTurnFailedSince(handle, start.turnFailureBaseline)
+    })
+
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       command: SteerCommandType,
     ) {
@@ -658,6 +716,7 @@ const AgentLoopLiveActorLayer = Actor.toLayer(
 
     return {
       Submit: ({ operation }) => submitTurn(operation),
+      Run: ({ operation }) => runTurn(operation),
       QueueFollowUp: ({ operation }) =>
         ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
       Steer: ({ operation }) => applySteer(operation.command),
