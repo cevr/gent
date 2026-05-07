@@ -1447,6 +1447,9 @@ Recursive audit findings accepted on 2026-05-07:
 - P2: session mutation host tests used fake in-memory storage and did not
   prove `forkBranch`, `deleteBranch`, or `deleteMessages` through the public
   RPC request boundary.
+- P2: `packages/extensions/tests/task-tools/task-tools.test.ts` remained a
+  god test spanning model-facing tools, `TaskService.remove`,
+  `TaskStorage` metadata/delete behavior, and delegate background mode.
 
 Completed sub-commits:
 
@@ -1459,6 +1462,9 @@ Completed sub-commits:
 - C97.2 added public RPC request acceptance coverage for extension-host
   session mutation capabilities: fork current branch, create/delete a
   non-current branch, and delete messages after a cursor.
+- C97.3 split the task-tools god test into behavior-owned files:
+  task tool execution, task service removal, task storage boundaries, and
+  delegate background mode.
 
 Verification on 2026-05-07:
 
@@ -1467,6 +1473,8 @@ Verification on 2026-05-07:
 - `bun test packages/core/tests/extensions/extension-surface-locks.test.ts`
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
+- `bun run --cwd packages/extensions typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/task-tools/task-tool-execution.test.ts packages/extensions/tests/task-tools/task-service.test.ts packages/extensions/tests/task-tools/task-storage.test.ts packages/extensions/tests/delegate/delegate-background.test.ts`
 
 #### C98: docs: update architecture and AGENTS receipts
 
