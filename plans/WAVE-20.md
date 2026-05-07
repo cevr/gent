@@ -524,8 +524,8 @@ Implementation notes:
   registry; it is the actor materialization/wake operation used by state reads
   and restart interaction recovery.
 - Test runner sharding changed from `xargs -n 10 -P 6` to `xargs -n 6 -P 4`
-  after the root budget probe showed CPU contention; `bun run test` now reports
-  4.677s against the 5s budget.
+  after the timing diagnostic showed CPU contention; `bun run test` stayed in
+  the core gate path, while `bun run test:diagnose` carries slow-chunk timing.
 - TUI test sharding changed from `xargs -n 10 -P 5` to `xargs -n 10 -P 2`
   after the pre-commit hook reproduced budget flake under package-level CPU
   contention; root `bun run test` reports 4.841s after the change.
@@ -781,7 +781,7 @@ Verification on 2026-05-07:
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
 - `bun run gate` after splitting `auto-integration.test.ts` into two
   name-filtered package-test lanes and balancing core chunks at `-n 8 -P 4`;
-  test wall `4899ms / budget 5000ms`.
+  test wall `4899ms`.
 
 #### C24-C30: refactor(runtime): adopt STM queue/state model if C23 proves it
 
@@ -819,8 +819,8 @@ Verification on 2026-05-07:
 
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
-- `bun run gate`; test wall `4847ms / budget 5000ms`
-- Pre-commit `bun run test`; test wall `4684ms / budget 5000ms`
+- `bun run gate`; test wall `4847ms`
+- Pre-commit `bun run test`; test wall `4684ms`
 
 #### C25: refactor(runtime): hide the transactional loop state cell
 
@@ -841,7 +841,38 @@ Verification on 2026-05-07:
 
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent/agent-loop.actor.test.ts packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/session-runtime.test.ts`
-- `bun run gate`; test wall `4855ms / budget 5000ms`
+- `bun run gate`; test wall `4855ms`
+
+Status: complete in `6321c02b refactor(runtime): encapsulate loop state cell`.
+
+Verification on 2026-05-07:
+
+- Pre-commit `bun run test`; test wall `4875ms`
+
+#### C26: refactor(runtime): centralize follow-up start reservation
+
+Move the duplicated submit/follow-up queue decision into
+`AgentLoopBehavior.reserveStartOrQueueFollowUp`. The actor should not inspect
+`startingState`, count follow-ups, or write the reservation field directly.
+
+Definition of done:
+
+- `Submit` and `QueueFollowUp` share one reservation/queue path.
+- The behavior-owned path still uses `queueMutationSemaphore` and persists the
+  queue snapshot before public state publication.
+- The actor no longer imports `DEFAULTS`, `Clock`, `buildRunningState`, or
+  `countQueuedFollowUps` for that decision.
+- `bun run --cwd packages/core typecheck`.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent/agent-loop.actor.test.ts packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/session-runtime.test.ts`
+- `bun run --cwd packages/core test`; server/RPC group split into an explicit
+  owned lane, slowest core shard `3.65s`
+- `bun run test`; all behavioral tests pass
+- `bun run test:diagnose`; diagnostic wall `4300ms`, no duration failure
+- `bun run gate`; test wall `4338ms`
 
 ### Part D — Extension API Narrowing
 

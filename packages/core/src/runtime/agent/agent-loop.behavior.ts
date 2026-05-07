@@ -64,6 +64,8 @@ import {
   toWaitingForInteractionState,
   updateCurrentAgentOnState,
   buildInitialAgentLoopState,
+  appendFollowUpQueueState,
+  countQueuedFollowUps,
   projectRuntimeState,
   queueSnapshotFromQueueState,
   type AgentLoopState,
@@ -138,6 +140,10 @@ export type AgentLoopBehavior = {
   queueState: Effect.Effect<LoopQueueState>
   queueSnapshot: Effect.Effect<QueueSnapshot>
   setStartingState: (state: RunningState) => Effect.Effect<void>
+  reserveStartOrQueueFollowUp: (
+    item: QueuedTurnItem,
+    options: { readonly coldQueueOnly: boolean },
+  ) => Effect.Effect<RunningState | undefined, AgentLoopError>
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
@@ -388,6 +394,42 @@ export const makeAgentLoopBehavior = (
         ...s,
         startingState: state,
       }))
+    const reserveStartOrQueueFollowUp = (
+      item: QueuedTurnItem,
+      options: { readonly coldQueueOnly: boolean },
+    ) =>
+      queueMutationSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* readState
+          if (countQueuedFollowUps(current.queue) >= DEFAULTS.followUpQueueMax) {
+            return yield* new AgentLoopError({
+              message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+            })
+          }
+
+          const nextQueue = appendFollowUpQueueState(current.queue, item)
+          if (options.coldQueueOnly) {
+            yield* persistRuntimeSnapshot(current.state, nextQueue)
+            return
+          }
+
+          if (current.startingState !== undefined) {
+            yield* persistRuntimeSnapshot(current.startingState, nextQueue)
+            return
+          }
+
+          const projectedState = projectRuntimeState(current)
+          if (projectedState._tag !== "Idle" || current.state._tag !== "Idle") {
+            yield* persistRuntimeSnapshot(current.state, nextQueue)
+            return
+          }
+
+          const startedAtMs = yield* Clock.currentTimeMillis
+          const reservedRunningState = buildRunningState(current.state, item, { startedAtMs })
+          yield* setStartingState(reservedRunningState)
+          return reservedRunningState
+        }),
+      )
 
     const refreshRuntimeState = Effect.gen(function* () {
       if (!started) return
@@ -1115,6 +1157,7 @@ export const makeAgentLoopBehavior = (
       queueState,
       queueSnapshot,
       setStartingState,
+      reserveStartOrQueueFollowUp,
       resolveTurnProfile,
       persistState: persistRuntimeState,
       refreshRuntimeState,

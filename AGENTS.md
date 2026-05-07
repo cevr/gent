@@ -9,6 +9,7 @@ bun install
 bun run typecheck  # tsgo + @effect/language-service, must pass clean
 bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
+bun run test:diagnose # Print slowest chunks without failing on duration
 bun run smoke      # Headless mode smoke test
 bun run clean      # Remove dist and tsbuildinfo files
 ```
@@ -98,6 +99,7 @@ apps/server/             # BunHttpServer
 
 ```bash
 bun run test              # unit/integration (~2s)
+bun run test:diagnose     # timing diagnostics; does not fail on duration
 bun run test:e2e          # PTY + focused server-process lifecycle coverage (slow)
 bun run gate              # typecheck + lint + fmt + build + test
 ```

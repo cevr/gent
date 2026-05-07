@@ -1,17 +1,17 @@
-const budgetPrefix = "--budget-ms="
+const slowPrefix = "--slow-ms="
 
-const budgetArg = Bun.argv.find((arg) => arg.startsWith(budgetPrefix))
+const slowArg = Bun.argv.find((arg) => arg.startsWith(slowPrefix))
 const separatorIndex = Bun.argv.indexOf("--")
-const budgetMs = budgetArg === undefined ? 5_000 : Number(budgetArg.slice(budgetPrefix.length))
+const slowMs = slowArg === undefined ? 5_000 : Number(slowArg.slice(slowPrefix.length))
 const command = separatorIndex === -1 ? [] : Bun.argv.slice(separatorIndex + 1)
 
-if (!Number.isFinite(budgetMs) || budgetMs <= 0) {
-  console.error(`[test-budget] invalid budget: ${budgetArg}`)
+if (!Number.isFinite(slowMs) || slowMs <= 0) {
+  console.error(`[test-diagnose] invalid slow threshold: ${slowArg}`)
   process.exit(1)
 }
 
 if (command.length === 0) {
-  console.error("[test-budget] missing command after --")
+  console.error("[test-diagnose] missing command after --")
   process.exit(1)
 }
 
@@ -69,28 +69,27 @@ const bunRuns = [
 if (exitCode !== 0) {
   process.stdout.write(stdout)
   process.stderr.write(stderr)
-  console.error(`[test-budget] command failed after ${elapsedMs.toFixed(0)}ms`)
+  console.error(`[test-diagnose] command failed after ${elapsedMs.toFixed(0)}ms`)
   process.exit(exitCode)
 }
 
 const packageTimes = [...stdout.matchAll(/^\s*Time:\s+(.+)$/gm)].map((match) => match[1])
 if (packageTimes.length > 0) {
-  console.log(`[test-budget] turbo reported ${packageTimes.at(-1)}`)
+  console.log(`[test-diagnose] workspace runner reported ${packageTimes.at(-1)}`)
 }
 if (bunRuns.length > 0) {
   const slowest = bunRuns
     .slice(0, 5)
     .map((run) => `${run.label} ${formatMs(run.ms)}`)
     .join(", ")
-  console.log(`[test-budget] slowest bun test chunks: ${slowest}`)
+  console.log(`[test-diagnose] slowest bun test chunks: ${slowest}`)
 }
-console.log(`[test-budget] wall ${elapsedMs.toFixed(0)}ms / budget ${budgetMs.toFixed(0)}ms`)
+console.log(
+  `[test-diagnose] wall ${elapsedMs.toFixed(0)}ms / slow threshold ${slowMs.toFixed(0)}ms`,
+)
 
-if (elapsedMs > budgetMs) {
-  process.stdout.write(stdout)
-  process.stderr.write(stderr)
-  console.error(
-    `[test-budget] exceeded budget by ${(elapsedMs - budgetMs).toFixed(0)}ms; inspect the reported chunks and reduce test cost without changing the test taxonomy`,
+if (elapsedMs > slowMs) {
+  console.log(
+    `[test-diagnose] exceeded slow threshold by ${(elapsedMs - slowMs).toFixed(0)}ms; inspect the reported chunks and reduce test cost without changing the test taxonomy`,
   )
-  process.exit(1)
 }

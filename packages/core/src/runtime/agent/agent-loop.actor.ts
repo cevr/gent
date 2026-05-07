@@ -35,7 +35,6 @@
  */
 
 import {
-  Clock,
   DateTime,
   Deferred,
   Effect,
@@ -52,7 +51,6 @@ import { ShardingConfig } from "effect/unstable/cluster"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
-import { DEFAULTS } from "../../domain/defaults.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
@@ -77,8 +75,6 @@ import {
 import {
   appendFollowUpQueueState,
   appendSteeringItem,
-  buildRunningState,
-  countQueuedFollowUps,
   emptyLoopQueueState,
   projectRuntimeState,
   queueSnapshotFromQueueState,
@@ -663,42 +659,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
     yield* ensureTarget(message)
     const item = { message }
-    const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const currentQueue = yield* handle.queueState
-        if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
-          return yield* new AgentLoopError({
-            message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
-          })
-        }
-        if (!wasAlreadyWarm) {
-          yield* handle.persistQueueState(appendFollowUpQueueState(currentQueue, item))
-          return
-        }
-        const projectedState = yield* currentRuntimeState(handle)
-        const startingState = (yield* handle.readState).startingState
-        if (startingState !== undefined) {
-          yield* handle.persistQueueSnapshot(
-            startingState,
-            appendFollowUpQueueState(currentQueue, item),
-          )
-          return
-        }
-        if (projectedState._tag !== "Idle") {
-          yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
-          return
-        }
-        const loopState = yield* handle.snapshot
-        if (loopState._tag !== "Idle") {
-          yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
-          return
-        }
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-        yield* handle.setStartingState(reservedRunningState)
-        return reservedRunningState
-      }),
-    )
+    const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
+      coldQueueOnly: !wasAlreadyWarm,
+    })
     if (reservedStart !== undefined) {
       yield* handle
         .startTurn(item)
@@ -819,35 +782,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     yield* ensureTarget(operation.message)
     yield* markWrite
     const item = buildQueuedTurnItem(operation)
-    const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const startingState = (yield* handle.readState).startingState
-        if (startingState !== undefined) {
-          yield* handle.persistQueueSnapshot(
-            startingState,
-            appendFollowUpQueueState(yield* handle.queueState, item),
-          )
-          return
-        }
-        const projectedState = yield* currentRuntimeState(handle)
-        if (projectedState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
-          yield* handle.persistQueueCurrentState(nextQueue)
-          return
-        }
-        const loopState = yield* handle.snapshot
-        if (loopState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
-          yield* handle.persistQueueCurrentState(nextQueue)
-          return
-        }
-
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-        yield* handle.setStartingState(reservedRunningState)
-        return reservedRunningState
-      }),
-    )
+    const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
+      coldQueueOnly: false,
+    })
     if (reservedStart !== undefined) {
       yield* handle
         .startTurn(item)
