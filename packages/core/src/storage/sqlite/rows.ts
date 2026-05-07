@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
-import {
-  Message,
-  Branch,
-  MessagePart,
-  MessageMetadata,
-  Session,
-  dateFromMillis,
-} from "../../domain/message.js"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { Message, Branch, MessageMetadata, Session, dateFromMillis } from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
@@ -15,9 +9,18 @@ import { ReasoningEffort } from "../../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 
 // Schema decoders - Effect-based (no sync throws)
-export const MessagePartJson = Schema.fromJsonString(MessagePart)
-export const decodeMessagePart = Schema.decodeUnknownEffect(MessagePartJson)
-export const encodeMessagePart = Schema.encodeEffect(MessagePartJson)
+export const StoredPromptPart = Schema.Union([
+  Prompt.TextPart,
+  Prompt.FilePart,
+  Prompt.ToolCallPart,
+  Prompt.ToolResultPart,
+  Prompt.ReasoningPart,
+  Prompt.ToolApprovalRequestPart,
+  Prompt.ToolApprovalResponsePart,
+])
+export const StoredPromptPartJson = Schema.fromJsonString(StoredPromptPart)
+export const decodeStoredPromptPart = Schema.decodeUnknownEffect(StoredPromptPartJson)
+export const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
 export const EventJson = Schema.fromJsonString(Schema.Unknown)
 export const decodeEventJson = Schema.decodeUnknownEffect(EventJson)
 export const encodeEventJson = Schema.encodeEffect(EventJson)
@@ -119,7 +122,7 @@ export const branchFromRow = (row: BranchRow): Branch => rowToBranch(decodeBranc
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.map(
-    Effect.forEach(partJsons, (partJson) => decodeMessagePart(partJson)),
+    Effect.forEach(partJsons, (partJson) => decodeStoredPromptPart(partJson)),
     (parts) => {
       const fields = {
         id: row.id,
@@ -142,7 +145,7 @@ export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<st
 
 export const encodeStoredMessage = (message: Message) =>
   Effect.gen(function* () {
-    const partJsons = yield* Effect.forEach(message.parts, (part) => encodeMessagePart(part))
+    const partJsons = yield* Effect.forEach(message.parts, (part) => encodeStoredPromptPart(part))
     return {
       partJsons,
       metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
@@ -191,7 +194,7 @@ export const insertMessageContent = Effect.fn("Storage.insertMessageContent")(fu
     (partJson, ordinal) =>
       Effect.gen(function* () {
         const chunkId = contentChunkId(partJson)
-        const part = yield* decodeMessagePart(partJson)
+        const part = yield* decodeStoredPromptPart(partJson)
         yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
         yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`
       }),
