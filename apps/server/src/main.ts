@@ -1,4 +1,5 @@
 import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
@@ -32,6 +33,7 @@ const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string
 }
 
 const resolveRuntimeConfig = Effect.gen(function* () {
+  const platform = yield* GentPlatform
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
   const homeOpt = yield* Config.option(Config.string("HOME"))
@@ -44,6 +46,10 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const debugModeOpt = yield* Config.option(Config.string("GENT_DEBUG_MODE"))
   const shellOpt = yield* Config.option(Config.string("SHELL"))
   const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
+  const serverId = yield* Option.match(serverIdOpt, {
+    onNone: () => platform.randomId,
+    onSome: Effect.succeed,
+  })
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
   const sharedServerUrlOpt = yield* Config.option(Config.string("GENT_SHARED_SERVER_URL"))
 
@@ -64,7 +70,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
     shell: Option.getOrUndefined(shellOpt),
-    serverId: Option.getOrElse(serverIdOpt, () => Bun.randomUUIDv7()),
+    serverId,
     idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
     sharedServerUrl: Option.getOrUndefined(sharedServerUrlOpt),
   }

@@ -1,9 +1,9 @@
 /**
  * `BunGentPlatform` — Bun-runtime implementation of `GentPlatform`. This is
  * the ONLY file in the codebase allowed to reference the `Bun` global; the
- * `no-bun-outside-adapter` lint rule rejects `Bun.*` MemberExpressions
- * everywhere else (modulo a small set of structural exemptions: scripts,
- * tooling, e2e harnesses, `main.ts` entrypoints, and tests).
+ * platform duplication guards reject `Bun.randomUUIDv7()` everywhere else.
+ * The broader no-bun lint keeps other `Bun.*` calls inside adapter-shaped
+ * files, scripts, tooling, e2e harnesses, and tests.
  *
  * It is also the sole sanctioned home for raw `process.*` access (pid,
  * execPath, kill, exit) and Node `os` info — every other source file routes

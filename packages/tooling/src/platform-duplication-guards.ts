@@ -59,6 +59,10 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     message:
       "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
   },
+  {
+    pattern: /\bBun\.randomUUIDv7\b/,
+    message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
+  },
 ]
 
 const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
@@ -76,7 +80,11 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
 ]
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
-  ...bannedActiveSourcePatterns,
+  ...bannedActiveSourcePatterns.filter(({ pattern }) =>
+    file === "packages/core/src/runtime/gent-platform-bun.ts"
+      ? pattern.source !== "\\bBun\\.randomUUIDv7\\b"
+      : true,
+  ),
   ...(file === "packages/core/src/server/transport-contract.ts"
     ? bannedTransportContractPatterns
     : []),

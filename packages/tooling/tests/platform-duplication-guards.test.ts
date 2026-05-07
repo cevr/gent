@@ -215,4 +215,26 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([])
   })
+
+  test("flags Bun.randomUUIDv7 outside the platform adapter", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/example.ts",
+        "const id = Bun.randomUUIDv7()",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/server/example.ts",
+        line: 1,
+        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        "const id = Bun.randomUUIDv7()",
+      ),
+    ).toEqual([])
+  })
 })

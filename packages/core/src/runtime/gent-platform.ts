@@ -6,7 +6,7 @@
  * live in exactly one file (`BunGentPlatformLive`).
  *
  * Surface (kept small — only what the codebase actually needs):
- *   - `randomId`         — UUIDv7 string (replaces the standalone `IdService`)
+ *   - `randomId`         — UUIDv7 string for runtime-owned identifiers
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
