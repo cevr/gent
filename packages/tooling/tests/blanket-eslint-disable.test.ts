@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { findBlanketEslintDisables } from "../src/blanket-eslint-disable"
+import {
+  findBannedEslintDisableBlocks,
+  findBlanketEslintDisables,
+} from "../src/blanket-eslint-disable"
 
 const directive = ["eslint", "disable"].join("-")
 
@@ -31,6 +34,24 @@ describe("blanket eslint disable checker", () => {
           `// ${directive}-next-line @typescript-eslint/no-unsafe-type-assertion -- boundary`,
           "const value = foreign as Local",
         ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
+  test("flags rule-named block comments", () => {
+    expect(
+      findBannedEslintDisableBlocks(
+        "sample.ts",
+        `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- boundary */`,
+      ),
+    ).toEqual([{ file: "sample.ts", line: 1 }])
+  })
+
+  test("allows block comments only in explicit fixture files", () => {
+    expect(
+      findBannedEslintDisableBlocks(
+        "tests/fixtures/bad-suppression.ts",
+        `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- fixture */`,
       ),
     ).toEqual([])
   })

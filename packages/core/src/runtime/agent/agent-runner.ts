@@ -162,13 +162,11 @@ interface EphemeralRuntimeOverrides {
   readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
 }
 
-/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane */
 const recoverExtensionLayer = <Provides>(
   layer: Layer.Layer<Provides, unknown, unknown>,
 ): Layer.Layer<Provides, never, EphemeralExtensionRequires> =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane
-  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires>
-/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
+  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
 
 const composeEphemeralRuntimeLayer = <Provides>(params: {
   readonly parentServices: Context.Context<never>

@@ -145,10 +145,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             // Test override layers are heterogeneous; the harness erases R/E
             // at this boundary. Production paths flow through
             // `collectProcessLayers`.
-            /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values */
+            const rawOverrideLayer = override()
+            type TestOverrideLayer = Layer.Layer<unknown, unknown, never>
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>
-            /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
+            const overrideLayer = rawOverrideLayer as unknown as TestOverrideLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             const layerOverride = defineResource({
               scope: "process",
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off

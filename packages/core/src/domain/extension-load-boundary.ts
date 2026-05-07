@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import type { ExtensionId } from "./ids.js"
 import { ExtensionLoadError } from "./extension.js"
 
-/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary */
 const toExtensionLoadError = (opts: {
   readonly extensionId: ExtensionId
   readonly message: string
@@ -21,9 +20,9 @@ export const sealRuntimeLoadedEffect = <A>(opts: {
   readonly effect: () => Effect.Effect<A, unknown, unknown>
   readonly failureMessage: (cause: unknown) => string
   readonly defectMessage: (cause: unknown) => string
-}): Effect.Effect<A, ExtensionLoadError> =>
+}): Effect.Effect<A, ExtensionLoadError> => {
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  Effect.suspend(opts.effect).pipe(
+  const sealed = Effect.suspend(opts.effect).pipe(
     Effect.catchEager((cause) =>
       Effect.fail(
         toExtensionLoadError({
@@ -42,5 +41,7 @@ export const sealRuntimeLoadedEffect = <A>(opts: {
         }),
       ),
     ),
-  ) as Effect.Effect<A, ExtensionLoadError>
-/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
+  )
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  return sealed as Effect.Effect<A, ExtensionLoadError> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+}

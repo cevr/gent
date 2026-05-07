@@ -1,4 +1,4 @@
-import { findBlanketEslintDisables } from "./blanket-eslint-disable"
+import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blanket-eslint-disable"
 
 const trackedFiles = (await Bun.$`git ls-files --cached --others --exclude-standard`.text())
   .split("\n")
@@ -21,13 +21,19 @@ const failures: string[] = []
 for (const entry of files) {
   if (entry === undefined) continue
   const { file, text } = entry
-  for (const finding of findBlanketEslintDisables(file, text)) {
-    failures.push(`${finding.file}:${finding.line}`)
+  for (const finding of [
+    ...findBlanketEslintDisables(file, text),
+    ...findBannedEslintDisableBlocks(file, text),
+  ]) {
+    const key = `${finding.file}:${finding.line}`
+    if (!failures.includes(key)) failures.push(key)
   }
 }
 
 if (failures.length > 0) {
-  console.error("Blanket eslint-disable comments are banned. Name the exact rule instead:")
+  console.error(
+    "Blanket eslint-disable comments and block eslint-disable comments are banned. Use line-local suppressions with exact rules:",
+  )
   for (const failure of failures) console.error(`  ${failure}`)
   process.exit(1)
 }

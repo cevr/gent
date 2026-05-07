@@ -1054,6 +1054,26 @@ Definition of done:
 - Checker tests cover rule-named blocks.
 - `bun run lint` catches new block disables.
 
+Status: complete.
+
+Implementation notes:
+
+- Converted all live `/* eslint-disable ... */` / `/* eslint-enable ... */`
+  regions to local line suppressions at the exact erased boundary.
+- Extended `check-blanket-eslint-disable.ts` to reject any block-level
+  `eslint-disable` outside explicit fixture files, including rule-named blocks.
+- Added checker coverage for rule-named block disables and explicit fixture
+  allowance.
+
+Verification on 2026-05-07:
+
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/blanket-eslint-disable.test.ts`
+- `bun packages/tooling/src/check-blanket-eslint-disable.ts`
+- `bun run --cwd packages/tooling test`
+- `bun run --cwd packages/core typecheck`
+- `bun run lint`
+- `bun run gate`; test wall `4387ms`
+
 #### C49: test(core): add `testExtensionHostContext`
 
 Create a typed test fixture with die-stubbed facets. Migrate the extension

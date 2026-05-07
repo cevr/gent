@@ -148,10 +148,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
             .filter((r) => r.scope === "process")
             .map((r) => {
               // Resource layers carry their own R/E; harness boundary.
-              /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values */
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              const merged = Layer.provideMerge(r.layer as Layer.Layer<any>, baseLayerAny)
-              /* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion */
+              const merged = Layer.provideMerge(r.layer as Layer.Layer<any>, baseLayerAny) // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
               // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
               return merged as Layer.Layer<never, never, object>
             }),
