@@ -96,6 +96,7 @@ Commits landed in this wave so far:
 - `4d8f91f2 refactor(extensions): keep process runner out of author api`
 - `bae05284 refactor(extensions): remove platform from author api`
 - `3c0843c2 fix(extensions): isolate resource startup failures`
+- `30cb8972 fix(extensions): serialize oauth credential refresh`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -121,9 +122,10 @@ classes of privilege and races, but the deeper P1s remain:
 - Task-tools now publishes a generic `ExtensionStateChanged` pulse and owns
   `Task`, `TaskId`, status/transition schemas, and task-storage integration
   tests. The previous task ownership mismatch is closed.
-- OAuth credential refresh cells are still plain `Ref` read-refresh-write
-  paths in OpenAI and Anthropic; concurrent stale calls can duplicate refresh
-  work and race rotated refresh tokens.
+- OAuth credential refresh cells now use `SynchronizedRef.modifyEffect` in
+  OpenAI and Anthropic, with concurrent stale-refresh tests proving duplicate
+  refreshes collapse to one serialized update while preserving OpenAI rotated
+  refresh tokens across persist failures.
 - The child session tracker still mutates a `Ref<Map<...>>` from independent
   parent/child subscription fibers and can lose interleaved state updates.
 - The scheduler still probes `globalThis.Bun.cron` from core runtime and fails
@@ -690,24 +692,32 @@ Validation:
 Goal: apply Effect-owned serialized state primitives to remaining extension/TUI
 race surfaces found by the fresh Effect usage lane.
 
+Status: credential refresh closed by `30cb8972`; child-session tracker remains
+open.
+
 Work:
 
 - Replace OpenAI and Anthropic credential refresh `Ref` cells with
   `SynchronizedRef.modifyEffect` or a single-flight credential service so stale
-  concurrent calls cannot duplicate refresh or overwrite rotated tokens.
+  concurrent calls cannot duplicate refresh or overwrite rotated tokens. Done
+  in `30cb8972`.
 - Convert `ChildSessionTracker` mutations to `Ref.modify` at minimum, or to a
   `TxSubscriptionRef<Map<...>>` if subscribers need transactional change
   streams.
 - Add concurrent stale-refresh tests for OpenAI and Anthropic credential
-  services.
+  services. Done in `30cb8972`.
 - Add parent/child interleaving regression for the TUI tracker.
 
 Validation:
 
-- Focused provider credential tests.
+- Focused provider credential tests:
+  `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/openai/openai-credential-service.test.ts tests/anthropic/anthropic-credential-service.test.ts tests/openai/openai-extension-driver.test.ts tests/anthropic/anthropic-extension-driver.test.ts`
 - Focused child session tracker tests.
+- `bun run lint`
 - `bun run typecheck`
-- `bun run gate`
+- `bun run gate` passed before commit and in the successful `30cb8972`
+  pre-commit hook. One earlier pre-commit retry hit a Bun 1.3.13 segfault in an
+  unrelated core test shard; rerun passed without code changes.
 
 ### C21.10 — Upstream Encore Actor DX
 
