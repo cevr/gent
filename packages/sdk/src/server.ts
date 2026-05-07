@@ -32,15 +32,15 @@ import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
 import { workspaceHeadersForCwd, type WorkspaceHeaders } from "./transport-headers.js"
 import {
-  readRegistryEntry,
-  validateRegistryEntry,
-  writeRegistryEntry,
-  removeRegistryEntry,
-  ServerRegistryEntry,
+  readServerLock,
+  validateServerLockEntry,
+  writeServerLock,
+  removeServerLock,
+  ServerLockEntry,
   computeLocalFingerprint,
-  registryIdentityOf,
+  serverLockIdentityOf,
   signalIfIdentityOwned,
-} from "./server-registry.js"
+} from "./server-lock.js"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 // ── Types ──
@@ -312,7 +312,7 @@ const buildOwnedServer = (
 
 const probeServer = (
   rpcUrl: string,
-  expected: ReturnType<typeof registryIdentityOf>,
+  expected: ReturnType<typeof serverLockIdentityOf>,
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
@@ -320,7 +320,7 @@ const probeServer = (
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-    const identity = (yield* response.json) as Partial<ReturnType<typeof registryIdentityOf>>
+    const identity = (yield* response.json) as Partial<ReturnType<typeof serverLockIdentityOf>>
     // Server id/db/build prove endpoint identity; pid/host prove signal ownership.
     // All fields must match before attach or SIGTERM.
     return (
@@ -337,12 +337,12 @@ const probeServer = (
   )
 
 /**
- * Probe a registry entry's `/_gent/identity` endpoint and confirm every
+ * Probe a server lock entry's `/_gent/identity` endpoint and confirm every
  * identity field matches. Shared with `server stop` paths (TUI/CLI) so
  * PID-reuse after a crash never signals an unrelated process.
  */
-export const probeRegistryEntryIdentity = (entry: ServerRegistryEntry): Effect.Effect<boolean> =>
-  probeServer(entry.rpcUrl, registryIdentityOf(entry))
+export const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boolean> =>
+  probeServer(entry.rpcUrl, serverLockIdentityOf(entry))
 
 // ── Main server resolver ──
 
@@ -368,22 +368,22 @@ const resolveServerInternal = (
       return yield* buildOwnedServer(options, stateSpec, providerSpec)
     }
 
-    // SQLite state: registry-aware
+    // SQLite state: shared-server aware
     const home = resolveHome(options, stateSpec)
     const dbPath = resolveDbPath(options, stateSpec)
     const fingerprint = yield* computeLocalFingerprint
 
-    // Check existing registry entry
-    const existing = yield* readRegistryEntry(home, dbPath)
+    // Check the single shared server lock.
+    const existing = yield* readServerLock(home)
     if (existing !== undefined) {
-      const validation = validateRegistryEntry(existing)
+      const validation = validateServerLockEntry(existing)
       if (validation.valid && existing.buildFingerprint === fingerprint) {
         // Probe the server before trusting — verify serverId, dbPath, fingerprint
         const alive = yield* probeServer(existing.rpcUrl, {
           serverId: existing.serverId,
           pid: existing.pid,
           hostname: existing.hostname,
-          dbPath,
+          dbPath: existing.dbPath,
           buildFingerprint: fingerprint,
         })
         if (alive) {
@@ -393,19 +393,19 @@ const resolveServerInternal = (
           })
         }
       }
-      // Stale — only signal when the live process proves it owns this registry identity.
+      // Stale — only signal when the live process proves it owns this server identity.
       if (validation.valid) {
-        yield* signalIfIdentityOwned(existing, probeRegistryEntryIdentity)
+        yield* signalIfIdentityOwned(existing, probeServerLockEntryIdentity)
       }
-      yield* removeRegistryEntry(home, dbPath, existing.serverId)
+      yield* removeServerLock(home, existing.serverId)
     }
 
     const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
     const internal = getOwnedInternal(server)
     if (internal !== undefined) {
-      yield* writeRegistryEntry(
+      yield* writeServerLock(
         home,
-        new ServerRegistryEntry({
+        new ServerLockEntry({
           serverId: internal.serverId,
           pid: process.pid,
           hostname: os.hostname(),
@@ -415,9 +415,9 @@ const resolveServerInternal = (
           startedAt: yield* Clock.currentTimeMillis,
         }),
       )
-      // Clean up registry on scope close.
+      // Clean up the shared server lock on scope close.
       yield* Effect.addFinalizer(() =>
-        removeRegistryEntry(home, dbPath, internal.serverId).pipe(Effect.ignore),
+        removeServerLock(home, internal.serverId).pipe(Effect.ignore),
       )
     }
     return server

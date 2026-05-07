@@ -49,17 +49,17 @@ import { runHeadless } from "./headless-runner"
 import {
   Gent,
   GentConnectionError,
-  probeRegistryEntryIdentity,
+  probeServerLockEntryIdentity,
   type GentClientBundle,
 } from "@gent/sdk"
 import {
-  listRegistryEntries,
-  validateRegistryEntry,
-  removeRegistryEntry,
+  readServerLock,
+  validateServerLockEntry,
+  removeServerLock,
   isPidAlive,
   getLocalHostname,
   signalIfIdentityOwned,
-} from "@gent/sdk/server-registry"
+} from "@gent/sdk/server-lock"
 
 // Clear client log on startup
 clearClientLog()
@@ -408,26 +408,24 @@ const sessions = Command.make(
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entries = yield* listRegistryEntries(home)
+    const entry = yield* readServerLock(home)
 
-    if (entries.length === 0) {
-      yield* Console.log("No registered servers.")
+    if (entry === undefined) {
+      yield* Console.log("No shared server.")
       return
     }
 
-    yield* Console.log("Registered servers:\n")
+    yield* Console.log("Shared server:\n")
     yield* Console.log(
       `${"PID".padEnd(8)} ${"STATUS".padEnd(10)} ${"SERVER ID".padEnd(40)} ${"DB PATH".padEnd(40)} ${"URL"}`,
     )
     yield* Console.log("─".repeat(120))
 
-    for (const entry of entries) {
-      const validation = validateRegistryEntry(entry)
-      const status = validation.valid ? "alive" : `dead (${validation.reason})`
-      yield* Console.log(
-        `${String(entry.pid).padEnd(8)} ${status.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
-      )
-    }
+    const validation = validateServerLockEntry(entry)
+    const status = validation.valid ? "alive" : `dead (${validation.reason})`
+    yield* Console.log(
+      `${String(entry.pid).padEnd(8)} ${status.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
+    )
   }),
 )
 
@@ -444,49 +442,35 @@ const serverStop = Command.make(
     Effect.gen(function* () {
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const thisHost = getLocalHostname()
-      const entries = yield* listRegistryEntries(home)
+      const entry = yield* readServerLock(home)
 
-      if (entries.length === 0) {
-        yield* Console.log("No registered servers.")
+      if (entry === undefined) {
+        yield* Console.log("No shared server.")
         return
       }
 
-      // Only consider entries on this host — never signal cross-host PIDs
-      const localEntries = entries.filter((e) => e.hostname === thisHost)
-      const toStop = all ? localEntries : localEntries.filter((e) => isPidAlive(e.pid))
-
-      if (toStop.length === 0) {
-        yield* Console.log("No live servers to stop on this host.")
+      if (entry.hostname !== thisHost || (!all && !isPidAlive(entry.pid))) {
+        yield* Console.log("No live shared server to stop on this host.")
         return
       }
 
-      // Signal all targets — identity-probe before SIGTERM so PID reuse after a
+      // Signal target — identity-probe before SIGTERM so PID reuse after a
       // crash never kills an unrelated process (same boundary as SDK attach).
-      for (const entry of toStop) {
-        const outcome = yield* signalIfIdentityOwned(entry, probeRegistryEntryIdentity)
-        if (outcome === "signaled") {
-          yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
-        } else {
-          yield* Console.log(`Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`)
-        }
+      const outcome = yield* signalIfIdentityOwned(entry, probeServerLockEntryIdentity)
+      if (outcome === "signaled") {
+        yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
+      } else {
+        yield* Console.log(`Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`)
       }
 
-      // Wait for processes to exit, then cleanup registry
+      // Wait for the process to exit, then cleanup the server lock.
       yield* Effect.sleep("2 seconds")
 
-      let stillAlive = 0
-      for (const entry of toStop) {
-        if (isPidAlive(entry.pid)) {
-          stillAlive++
-        } else {
-          yield* removeRegistryEntry(home, entry.dbPath, entry.serverId)
-        }
-      }
-
-      if (stillAlive > 0) {
-        yield* Console.log(`\n${stillAlive} server(s) still running after SIGTERM.`)
+      if (isPidAlive(entry.pid)) {
+        yield* Console.log("\nShared server is still running after SIGTERM.")
       } else {
-        yield* Console.log(`\nAll ${toStop.length} server(s) stopped and cleaned up.`)
+        yield* removeServerLock(home, entry.serverId)
+        yield* Console.log("\nShared server stopped and cleaned up.")
       }
     }),
 )

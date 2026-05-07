@@ -5,7 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./supervisor": "./src/supervisor.ts",
-    "./server-registry": "./src/server-registry.ts"
+    "./server-lock": "./src/server-lock.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
