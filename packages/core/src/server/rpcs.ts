@@ -6,34 +6,18 @@ import {
   type Rpc,
 } from "effect/unstable/rpc"
 import { SessionRpcs } from "./rpcs/session.js"
-import { BranchRpcs } from "./rpcs/branch.js"
-import { MessageRpcs } from "./rpcs/message.js"
-import { SteerRpcs } from "./rpcs/steer.js"
-import { QueueRpcs } from "./rpcs/queue.js"
-import { InteractionRpcs } from "./rpcs/interaction.js"
-import { PermissionRpcs } from "./rpcs/permission.js"
-import { ModelRpcs } from "./rpcs/model.js"
 import { AuthRpcs } from "./rpcs/auth.js"
-import { DriverRpcs } from "./rpcs/driver.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
-import { ServerRpcs } from "./rpcs/server.js"
+import { RuntimeRpcs } from "./rpcs/runtime.js"
 import type { GentConnectionError } from "./transport-contract.js"
 import { WorkspaceRpcMiddleware, WorkspaceHeaderError } from "./workspace-rpc.js"
 
 // Re-export sub-groups for handler wiring
 export {
   SessionRpcs,
-  BranchRpcs,
-  MessageRpcs,
-  SteerRpcs,
-  QueueRpcs,
-  InteractionRpcs,
-  PermissionRpcs,
-  ModelRpcs,
   AuthRpcs,
-  DriverRpcs,
   ExtensionRpcs,
-  ServerRpcs,
+  RuntimeRpcs,
   WorkspaceHeaderError,
   WorkspaceRpcMiddleware,
 }
@@ -82,20 +66,7 @@ export {
 // ============================================================================
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(
-    SessionRpcs,
-    BranchRpcs,
-    MessageRpcs,
-    SteerRpcs,
-    QueueRpcs,
-    InteractionRpcs,
-    PermissionRpcs,
-    ModelRpcs,
-    AuthRpcs,
-    DriverRpcs,
-    ExtensionRpcs,
-    ServerRpcs,
-  )
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, RuntimeRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ============================================================================

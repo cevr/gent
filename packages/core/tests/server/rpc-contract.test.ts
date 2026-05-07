@@ -1,14 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { GentRpcs, WorkspaceRpcMiddleware } from "../../src/server/rpcs"
-import { BranchRpcs } from "../../src/server/rpcs/branch"
 import { SessionRpcs } from "../../src/server/rpcs/session"
 
-const decodeSuccess = (
-  group: typeof SessionRpcs | typeof BranchRpcs,
-  key: string,
-  value: unknown,
-): unknown => {
+const decodeSuccess = (key: string, value: unknown): unknown => {
+  const group = SessionRpcs
   const rpc = group.requests.get(key)
   if (rpc === undefined) throw new Error(`Missing RPC ${key}`)
   return Schema.decodeUnknownSync(rpc.successSchema)(value)
@@ -17,7 +13,7 @@ const decodeSuccess = (
 describe("RPC contract schemas", () => {
   test("decode inlined session success payloads", () => {
     expect(
-      decodeSuccess(SessionRpcs, "session.create", {
+      decodeSuccess("session.create", {
         sessionId: "session-1",
         branchId: "branch-1",
         name: "Session",
@@ -29,17 +25,17 @@ describe("RPC contract schemas", () => {
     })
 
     expect(
-      decodeSuccess(SessionRpcs, "session.updateReasoningLevel", {
+      decodeSuccess("session.updateReasoningLevel", {
         reasoningLevel: "medium",
       }),
     ).toEqual({ reasoningLevel: "medium" })
   })
 
   test("decode inlined branch success payloads", () => {
-    expect(decodeSuccess(BranchRpcs, "branch.create", { branchId: "branch-1" })).toEqual({
+    expect(decodeSuccess("branch.create", { branchId: "branch-1" })).toEqual({
       branchId: "branch-1",
     })
-    expect(decodeSuccess(BranchRpcs, "branch.fork", { branchId: "branch-2" })).toEqual({
+    expect(decodeSuccess("branch.fork", { branchId: "branch-2" })).toEqual({
       branchId: "branch-2",
     })
   })

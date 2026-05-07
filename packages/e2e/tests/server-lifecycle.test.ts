@@ -53,7 +53,7 @@ describe("server lifecycle", () => {
   )
 
   it.live(
-    "server.status RPC returns connection count and uptime",
+    "runtime.status RPC returns connection count and uptime",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -66,7 +66,7 @@ describe("server lifecycle", () => {
 
           const bundle = yield* Gent.client(url)
           yield* bundle.runtime.lifecycle.waitForReady
-          const status = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
+          const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
 
           expect(status.pid).toBe(proc.pid)
           expect(status.uptime).toBeGreaterThan(0)
@@ -117,7 +117,9 @@ describe("server lifecycle", () => {
           })
           const bundle1 = yield* Gent.client(server1)
 
-          const status1 = yield* bundle1.client.server.status().pipe(Effect.mapError(toTestFailure))
+          const status1 = yield* bundle1.client.runtime
+            .status()
+            .pipe(Effect.mapError(toTestFailure))
           const pid1 = status1.pid
 
           const server2 = yield* Gent.server({
@@ -221,7 +223,7 @@ describe("server lifecycle", () => {
           )
           yield* bundle.runtime.lifecycle.waitForReady
 
-          const status = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
+          const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* sleepMillis(idleTimeoutMs * 0.6)
@@ -261,7 +263,7 @@ describe("server lifecycle", () => {
           const states: string[] = []
           bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
 
-          const status1 = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
+          const status1 = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
           expect(states).toContain("connected")
 
@@ -279,7 +281,7 @@ describe("server lifecycle", () => {
           )
           expect(reconnected).toBe(true)
 
-          const status2 = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
+          const status2 = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* Scope.close(clientScope, Exit.void)

@@ -16,7 +16,7 @@ import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 
-describe("DriverRpcs", () => {
+describe("ExtensionRpcs", () => {
   it.live("driver.list returns registered drivers and current overrides", () =>
     Effect.scoped(
       Effect.gen(function* () {

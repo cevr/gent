@@ -571,11 +571,11 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
 })
 
 // ============================================================================
-// Server status handlers
+// Runtime status handlers
 // ============================================================================
 
-const buildServerRpcHandlers = (deps: RpcHandlerDeps) => ({
-  "server.status": () =>
+const buildRuntimeRpcHandlers = (deps: RpcHandlerDeps) => ({
+  "runtime.status": () =>
     Effect.gen(function* () {
       const connectionCount =
         deps.connectionTracker !== undefined ? yield* deps.connectionTracker.count() : 0
@@ -671,7 +671,7 @@ const RpcHandlers = GentRpcs.toLayer(
       ...buildSessionRpcHandlers(deps),
       ...buildConfigRpcHandlers(deps),
       ...buildExtensionRpcHandlers(deps),
-      ...buildServerRpcHandlers(deps),
+      ...buildRuntimeRpcHandlers(deps),
     }
   }),
 )

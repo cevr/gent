@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
 
-export const ServerStatusResult = Schema.Struct({
+export const RuntimeStatusResult = Schema.Struct({
   serverId: Schema.String,
   pid: Schema.Number,
   hostname: Schema.String,
@@ -11,11 +11,11 @@ export const ServerStatusResult = Schema.Struct({
   dbPath: Schema.String,
   buildFingerprint: Schema.String,
 })
-export type ServerStatusResult = typeof ServerStatusResult.Type
+export type RuntimeStatusResult = typeof RuntimeStatusResult.Type
 
-export class ServerRpcs extends RpcGroup.make(
-  Rpc.make("status", {
-    success: ServerStatusResult,
+export class RuntimeRpcs extends RpcGroup.make(
+  Rpc.make("runtime.status", {
+    success: RuntimeStatusResult,
     error: GentRpcError,
   }),
-).prefix("server.") {}
+) {}
