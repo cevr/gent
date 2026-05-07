@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
-import { Glob } from "bun"
+import picomatch from "picomatch"
 import {
   FileIndex,
   FileIndexError,
@@ -11,8 +11,10 @@ import {
 // Gitignore parsing (ported from apps/tui/src/utils/fallback-file-search.ts)
 // ---------------------------------------------------------------------------
 
-const parseGitignorePatterns = (content: string): Glob[] => {
-  const patterns: Glob[] = []
+type PathMatcher = (path: string) => boolean
+
+const parseGitignorePatterns = (content: string): PathMatcher[] => {
+  const patterns: PathMatcher[] = []
   for (const raw of content.split("\n")) {
     const line = raw.trim()
     if (line.length === 0 || line.startsWith("#")) continue
@@ -26,74 +28,94 @@ const parseGitignorePatterns = (content: string): Glob[] => {
     if (pattern.startsWith("/")) pattern = pattern.slice(1)
 
     if (hasSlash) {
-      patterns.push(new Glob(pattern))
-      patterns.push(new Glob(`${pattern}/**`))
+      patterns.push(picomatch(pattern, { dot: true }))
+      patterns.push(picomatch(`${pattern}/**`, { dot: true }))
     } else {
-      patterns.push(new Glob(pattern))
-      patterns.push(new Glob(`**/${pattern}`))
-      patterns.push(new Glob(`${pattern}/**`))
-      patterns.push(new Glob(`**/${pattern}/**`))
+      patterns.push(picomatch(pattern, { dot: true }))
+      patterns.push(picomatch(`**/${pattern}`, { dot: true }))
+      patterns.push(picomatch(`${pattern}/**`, { dot: true }))
+      patterns.push(picomatch(`**/${pattern}/**`, { dot: true }))
     }
   }
   return patterns
 }
 
-const isGitignored = (path: string, patterns: Glob[]): boolean =>
-  patterns.some((g) => g.match(path))
+const isGitignored = (path: string, patterns: ReadonlyArray<PathMatcher>): boolean =>
+  patterns.some((matches) => matches(path))
 
-const gitignoreCache = new Map<string, Glob[]>()
+const gitignoreCache = new Map<string, PathMatcher[]>()
 
 const loadGitignore = (
   cwd: string,
   fs: FileSystem.FileSystem,
   path: Path.Path,
-): Effect.Effect<Glob[]> => {
+): Effect.Effect<PathMatcher[]> => {
   const cached = gitignoreCache.get(cwd)
   if (cached !== undefined) return Effect.succeed(cached)
 
   return fs.readFileString(path.join(cwd, ".gitignore")).pipe(
     Effect.map((content) => parseGitignorePatterns(content)),
-    Effect.orElseSucceed(() => [] as Glob[]),
+    Effect.orElseSucceed(() => [] as PathMatcher[]),
     Effect.tap((patterns) => Effect.sync(() => gitignoreCache.set(cwd, patterns))),
   )
 }
 
 // ---------------------------------------------------------------------------
-// Async scan helper — collects all files from Bun.Glob
+// Async scan helper — walks the Effect FileSystem and filters with picomatch
 // ---------------------------------------------------------------------------
 
-const FILE_GLOB = new Glob("**/*")
-
-const scanAllFiles = (cwd: string, fs: FileSystem.FileSystem, pathService: Path.Path) =>
+const scanAllFiles = (
+  cwd: string,
+  fs: FileSystem.FileSystem,
+  pathService: Path.Path,
+): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
   Effect.gen(function* () {
     const ignorePatterns = yield* loadGitignore(cwd, fs, pathService)
 
-    // Collect glob results first (async iterator), then stat each file via Effect
-    const relativePaths = yield* Effect.tryPromise({
-      try: () =>
-        Array.fromAsync(FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })).then((paths) =>
-          paths.filter((rp) => !isGitignored(rp, ignorePatterns)),
-        ),
-      catch: () => new FileIndexError({ message: "glob scan failed", cwd }),
-    })
-
     const files: IndexedFile[] = []
-    for (const relativePath of relativePaths) {
-      const absPath = pathService.join(cwd, relativePath)
-      const info = yield* fs.stat(absPath).pipe(Effect.option)
-      if (info._tag === "None") continue
+    const scanDir: (
+      absoluteDir: string,
+      relativeDir: string,
+    ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir) =>
+      Effect.gen(function* () {
+        const entries = yield* fs
+          .readDirectory(absoluteDir)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new FileIndexError({ message: `directory scan failed: ${cause.message}`, cwd }),
+            ),
+          )
 
-      files.push({
-        path: absPath,
-        relativePath,
-        fileName: pathService.basename(relativePath),
-        size: Number(info.value.size),
-        modifiedMs: Option.match(info.value.mtime, {
-          onNone: () => 0,
-          onSome: (d) => d.getTime(),
-        }),
+        for (const entry of entries) {
+          const relativePath = relativeDir.length === 0 ? entry : `${relativeDir}/${entry}`
+          if (isGitignored(relativePath, ignorePatterns)) continue
+
+          const absPath = pathService.join(absoluteDir, entry)
+          const info = yield* fs.stat(absPath).pipe(Effect.option)
+          if (info._tag === "None") continue
+
+          if (info.value.type === "Directory") {
+            yield* scanDir(absPath, relativePath)
+            continue
+          }
+
+          if (info.value.type !== "File") continue
+
+          files.push({
+            path: absPath,
+            relativePath,
+            fileName: pathService.basename(relativePath),
+            size: Number(info.value.size),
+            modifiedMs: Option.match(info.value.mtime, {
+              onNone: () => 0,
+              onSome: (d) => d.getTime(),
+            }),
+          })
+        }
       })
-    }
+
+    yield* scanDir(cwd, "")
 
     return files
   })

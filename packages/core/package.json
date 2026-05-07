@@ -166,7 +166,8 @@
   },
   "dependencies": {
     "effect-encore": "catalog:",
-    "effect-wide-event": "catalog:"
+    "effect-wide-event": "catalog:",
+    "picomatch": "catalog:"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

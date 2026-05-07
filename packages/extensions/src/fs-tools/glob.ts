@@ -1,6 +1,6 @@
 import { Effect, Schema, Path } from "effect"
 import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
-import { Glob } from "bun"
+import picomatch from "picomatch"
 
 // Glob Tool Error
 
@@ -53,9 +53,17 @@ export const GlobTool = tool({
     const limit = params.limit ?? 100
 
     const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
-    const glob = new Glob(params.pattern)
+    const matches = yield* Effect.try({
+      try: () => picomatch(params.pattern, { dot: true }),
+      catch: (e) =>
+        new GlobError({
+          message: `Invalid glob pattern: ${e}`,
+          pattern: params.pattern,
+          cause: e,
+        }),
+    })
 
-    const matched = allFiles.filter((f) => glob.match(f.relativePath))
+    const matched = allFiles.filter((f) => matches(f.relativePath))
 
     // Sort by mtime desc
     matched.sort((a, b) => b.modifiedMs - a.modifiedMs)

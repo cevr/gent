@@ -15,6 +15,7 @@
         "@effect/sql-sqlite-bun": "catalog:",
         "@effect/tsgo": "0.5.2",
         "@types/bun": "^1.3.13",
+        "@types/picomatch": "catalog:",
         "@typescript/native-preview": "7.0.0-dev.20260412.1",
         "concurrently": "^9.2.1",
         "effect": "catalog:",
@@ -73,6 +74,7 @@
       "dependencies": {
         "effect-encore": "catalog:",
         "effect-wide-event": "catalog:",
+        "picomatch": "catalog:",
       },
       "optionalDependencies": {
         "@ff-labs/fff-bun": "catalog:",
@@ -115,6 +117,7 @@
         "@types/turndown": "^5.0.6",
         "es-git": "^0.6.0",
         "linkedom": "^0.18.12",
+        "picomatch": "catalog:",
         "turndown": "^7.2.4",
       },
       "peerDependencies": {
@@ -153,6 +156,7 @@
     "@effect/sql-pg": "4.0.0-beta.59",
     "@effect/sql-sqlite-bun": "4.0.0-beta.59",
     "@ff-labs/fff-bun": "0.6.4",
+    "@types/picomatch": "^4.0.3",
     "effect": "4.0.0-beta.59",
     "effect-bun-test": "0.3.0",
     "effect-encore": "file:/Users/cvr/Developer/personal/effect-encore",
@@ -160,6 +164,7 @@
     "effect-wide-event": "file:/Users/cvr/Developer/personal/effect-wide-event",
     "msgpackr": "^1.11.10",
     "multipasta": "^0.2.7",
+    "picomatch": "^4.0.4",
     "solid-js": "^1.9.11",
   },
   "packages": {
@@ -654,6 +659,8 @@
     "@types/jsesc": ["@types/jsesc@2.5.1", "", {}, "sha512-9VN+6yxLOPLOav+7PwjZbxiID2bVaeq0ED4qSQmdQTdjnXJSaCVKTR58t15oqH1H5t8Ng2ZX1SabJVoN9Q34bw=="],
 
     "@types/node": ["@types/node@25.5.0", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw=="],
+
+    "@types/picomatch": ["@types/picomatch@4.0.3", "", {}, "sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ=="],
 
     "@types/turndown": ["@types/turndown@5.0.6", "", {}, "sha512-ru00MoyeeouE5BX4gRL+6m/BsDfbRayOskWqUvh7CLGW+UXxHQItqALa38kKnOiZPqJrtzJUgAC2+F0rL1S4Pg=="],
 
@@ -1461,7 +1468,7 @@
 
     "@effect/sql/uuid": ["uuid@11.1.1", "", { "bin": { "uuid": "dist/esm/bin/uuid" } }, "sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ=="],
 
-    "@gent/core/effect-encore": ["effect-encore@file:../effect-encore", { "devDependencies": { "@changesets/changelog-github": "^0.6.0", "@changesets/cli": "^2.30.0", "@effect/cluster": "^0.56.2", "@effect/language-service": "^0.85.1", "@effect/rpc": "^0.73.0", "@effect/workflow": "^0.18.0", "@types/bun": "^1.3.11", "@typescript/native-preview": "^7.0.0-dev.20260410.1", "concurrently": "^9.2.1", "effect": "4.0.0-beta.46", "effect-bun-test": "^0.3.0", "effect-v3": "npm:effect@^3.21.0", "lefthook": "^2.1.4", "oxfmt": "^0.42.0", "oxlint": "^1.57.0", "oxlint-plugin-effect": "file:../effect-oxlint/packages/oxlint-plugin-effect", "tsdown": "^0.21.7", "typescript": "^5.9.3" }, "peerDependencies": { "@effect/cluster": "*", "@effect/rpc": "*", "@effect/workflow": "*", "effect": ">=4.0.0-beta.46" }, "optionalPeers": ["@effect/cluster", "@effect/rpc", "@effect/workflow"] }],
+    "@gent/core/effect-encore": ["effect-encore@file:../effect-encore", { "devDependencies": { "@changesets/changelog-github": "^0.6.0", "@changesets/cli": "^2.30.0", "@effect/cluster": "^0.56.2", "@effect/language-service": "^0.85.1", "@effect/rpc": "^0.73.0", "@effect/workflow": "^0.18.0", "@types/bun": "^1.3.11", "@typescript/native-preview": "^7.0.0-dev.20260410.1", "concurrently": "^9.2.1", "effect": "4.0.0-beta.46", "effect-bun-test": "^0.3.0", "effect-v3": "npm:effect@^3.21.0", "lefthook": "^2.1.4", "oxfmt": "^0.42.0", "oxlint": "^1.57.0", "tsdown": "^0.21.7", "typescript": "^5.9.3" }, "peerDependencies": { "@effect/cluster": "*", "@effect/rpc": "*", "@effect/workflow": "*", "effect": ">=4.0.0-beta.46" }, "optionalPeers": ["@effect/cluster", "@effect/rpc", "@effect/workflow"] }],
 
     "@gent/core/effect-wide-event": ["effect-wide-event@file:../effect-wide-event", { "dependencies": { "effect": "4.0.0-beta.52" }, "devDependencies": { "@changesets/changelog-github": "^0.6.0", "@changesets/cli": "^2.30.0", "@effect/language-service": "^0.82.0", "@types/bun": "1.3.11", "concurrently": "^9.2.1", "effect-bun-test": "0.2.1", "effect-v3": "npm:effect@^3.21.0", "lefthook": "^2.1.4", "oxfmt": "^0.41.0", "oxlint": "^1.56.0", "tsdown": "^0.21.4", "typescript": "^5.9.3" }, "peerDependencies": { "effect": ">=3.19.16" } }],
 
@@ -1532,8 +1539,6 @@
     "yargs/string-width": ["string-width@4.2.3", "", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="],
 
     "@gent/core/effect-encore/oxfmt": ["oxfmt@0.42.0", "", { "dependencies": { "tinypool": "2.1.0" }, "optionalDependencies": { "@oxfmt/binding-android-arm-eabi": "0.42.0", "@oxfmt/binding-android-arm64": "0.42.0", "@oxfmt/binding-darwin-arm64": "0.42.0", "@oxfmt/binding-darwin-x64": "0.42.0", "@oxfmt/binding-freebsd-x64": "0.42.0", "@oxfmt/binding-linux-arm-gnueabihf": "0.42.0", "@oxfmt/binding-linux-arm-musleabihf": "0.42.0", "@oxfmt/binding-linux-arm64-gnu": "0.42.0", "@oxfmt/binding-linux-arm64-musl": "0.42.0", "@oxfmt/binding-linux-ppc64-gnu": "0.42.0", "@oxfmt/binding-linux-riscv64-gnu": "0.42.0", "@oxfmt/binding-linux-riscv64-musl": "0.42.0", "@oxfmt/binding-linux-s390x-gnu": "0.42.0", "@oxfmt/binding-linux-x64-gnu": "0.42.0", "@oxfmt/binding-linux-x64-musl": "0.42.0", "@oxfmt/binding-openharmony-arm64": "0.42.0", "@oxfmt/binding-win32-arm64-msvc": "0.42.0", "@oxfmt/binding-win32-ia32-msvc": "0.42.0", "@oxfmt/binding-win32-x64-msvc": "0.42.0" }, "bin": { "oxfmt": "bin/oxfmt" } }, "sha512-QhejGErLSMReNuZ6vxgFHDyGoPbjTRNi6uGHjy0cvIjOQFqD6xmr/T+3L41ixR3NIgzcNiJ6ylQKpvShTgDfqg=="],
-
-    "@gent/core/effect-encore/oxlint-plugin-effect": ["oxlint-plugin-effect@file:../effect-oxlint/packages/oxlint-plugin-effect", {}],
 
     "@gent/core/effect-encore/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

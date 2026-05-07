@@ -1,6 +1,6 @@
 import { Effect, Option, Schema, FileSystem, Path } from "effect"
 import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
-import { Glob } from "bun"
+import picomatch from "picomatch"
 
 // Grep Tool Error
 
@@ -146,11 +146,19 @@ export const GrepTool = tool({
       // Use FileIndex for directory file discovery
       const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
       const globPattern = params.glob ?? "**/*"
-      const glob = new Glob(globPattern)
+      const matchesGlob = yield* Effect.try({
+        try: () => picomatch(globPattern, { dot: true }),
+        catch: (e) =>
+          new GrepError({
+            message: `Invalid glob pattern: ${e}`,
+            pattern: params.pattern,
+            cause: e,
+          }),
+      })
 
       for (const file of allFiles) {
         if (matches.length >= limit) break
-        if (!glob.match(file.relativePath)) continue
+        if (!matchesGlob(file.relativePath)) continue
         yield* searchFile(file.path)
       }
     }

@@ -3,6 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
+import { ActorAddressResolver } from "effect-encore"
 import {
   AgentRunError,
   DEFAULT_AGENT_NAME,
@@ -264,6 +265,7 @@ type SessionRuntimeEntityLayerRequirements =
       | AgentLoopSessionGovernance
       | Context.Service.Identifier<typeof AgentLoopActor.Context>
     >
+  | LayerRequirements<ReturnType<typeof AgentLoopBehaviorDeps.Live>>
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -386,6 +388,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   // instead of the `OperationHandle.execute(payload)` form (which would
   // re-introduce the actor client requirement at each call site).
   const actorClientFactory = yield* AgentLoopActor.Context
+  const actorAddressResolver = yield* ActorAddressResolver
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
     actorClientFactory(entityIdOf(sessionId, branchId))
   const sharding = yield* Sharding.Sharding
@@ -516,6 +519,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
     AgentLoopActor.redeliver(entityIdOf(target.sessionId, target.branchId)).pipe(
       Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+      Effect.provideService(ActorAddressResolver, actorAddressResolver),
       Effect.provideService(Sharding.Sharding, sharding),
       Effect.ignore,
     )
