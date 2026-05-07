@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { TaskService, TaskServiceUnavailableError } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { BuiltinEventSink, EventPublisherLive } from "@gent/core/domain/event-publisher"
+import { ExtensionEventSink, EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -51,7 +51,7 @@ describe("TaskService", () => {
       )
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(TaskService.Live, BuiltinEventSink.Test(), GentPlatform.Test()),
+        Layer.mergeAll(TaskService.Live, ExtensionEventSink.Test(), GentPlatform.Test()),
       ),
     ),
   )

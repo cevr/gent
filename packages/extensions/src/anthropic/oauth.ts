@@ -2,8 +2,7 @@ import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effec
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import * as os from "node:os"
-import { ProviderAuthError } from "@gent/core/extensions/api"
-import { runProcess } from "../../internal/builtin.js"
+import { ProviderAuthError, runProcess } from "@gent/core/extensions/api"
 
 // ── Claude Code Keychain Reader ──
 

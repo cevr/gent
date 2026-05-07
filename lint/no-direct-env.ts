@@ -372,14 +372,14 @@ const plugin: Plugin = {
      *   - `./api.js` or `../api.js` (relative to extension file in core)
      *   - `@gent/core/extensions/api` (package path, for extracted extensions)
      *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
-     *   - Sibling extension files (relative `./` or `../` within extensions/)
+     *   - Sibling extension files (relative `./` or `../` within extensions/src/)
      *
      * Extensions may NOT import from:
      *   - `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`,
      *     `@gent/core/server/*`, `@gent/core/providers/*`
      *   - Relative paths that escape into domain/, runtime/, storage/, etc.
      *
-     * Applies to: packages/core/src/extensions/** and packages/extensions/**
+     * Applies to: packages/core/src/extensions/** and packages/extensions/src/**
      * Exempt: extensions/api.ts (the builder implementation)
      */
     "no-extension-internal-imports": {
@@ -388,15 +388,11 @@ const plugin: Plugin = {
 
         // Scope: only extension implementation files
         const inCoreExtensions = filename.includes("packages/core/src/extensions/")
-        const inExtensionsPackage = filename.includes("packages/extensions/")
+        const inExtensionsPackage = filename.includes("packages/extensions/src/")
         if (!inCoreExtensions && !inExtensionsPackage) return {}
 
-        // Exempt: api.ts is the public bridge; internal/builtin.ts is the
-        // narrow builtin-only membrane for Gent-owned extensions.
-        if (
-          filename.endsWith("/extensions/api.ts") ||
-          filename.endsWith("/packages/extensions/internal/builtin.ts")
-        ) {
+        // Exempt: api.ts is the public bridge implementation.
+        if (filename.endsWith("/extensions/api.ts")) {
           return {}
         }
 

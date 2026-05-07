@@ -298,13 +298,6 @@
       ],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
       "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
-      "@gent/extensions/builtin-internal": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/builtin-internal.js": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/builtin-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/core-internal": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/core-internal.js": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/core-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/internal/*": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/acp-agents": ["./packages/extensions/src/acp-agents/index.ts"],
       "@gent/extensions/acp-agents.js": ["./packages/extensions/src/acp-agents/index.ts"],
       "@gent/extensions/acp-agents/claude-code-executor": [

@@ -17,9 +17,10 @@ The new structural center is:
    tool result schemas are still erased to `Schema.Unknown`; `ToolRunner`
    manually revalidates results instead of letting `Toolkit` own both input and
    output.
-3. **The extension API must become small.** Third-party authors should see an
-   authoring API, not runtime internals, host seams, task/session/domain model
-   internals, and builtin-only affordances.
+3. **The extension API must be singular.** Shipped extensions are just the
+   starting set users can enable. They do not get a private or privileged API;
+   anything an extension needs is either public authoring API or belongs behind
+   a host-owned design.
 4. **Suppressions are signals until proven otherwise.** Most compile-time
    `@ts-expect-error` tests are warranted, but block disables, host-context
    casts, and repeated SDK/TUI fake casts are architectural debt.
@@ -876,74 +877,82 @@ Verification on 2026-05-07:
 
 ### Part D — Extension API Narrowing
 
-#### C31: docs/extensions): define public vs builtin-internal API inventory
+#### C31: docs(extensions): define singular extension API inventory
 
 Write the target API inventory before moving imports:
 
 - public authoring: `defineExtension`, `tool`, `request`, `action`,
   `resource`, `reaction`, `defineAgent`, minimal ids/schemas/errors;
-- builtin internal: host context, session mutation helpers, runtime/platform
-  seams, raw events, task internals, driver internals.
+- host-owned internals: host context, session mutation helpers, raw
+  storage/event internals, driver registry internals.
 
 Definition of done:
 
 - `ARCHITECTURE.md` and `docs/extensions.md` agree.
+- Shipped extensions and user/project extensions have the same import contract.
 - No code moved yet; this commit locks the target.
 
 Status: complete in this Gent commit.
 
 Implementation notes:
 
-- `ARCHITECTURE.md` now names `packages/core/src/extensions/api.ts` as the
-  third-party authoring surface and `packages/core/src/extensions/internal.ts`
-  / `packages/extensions/internal/builtin.ts` as the privileged builtin seam.
-- `docs/extensions.md` now contains a public-vs-builtin-internal API inventory
-  that separates authoring primitives from host/runtime/storage/event/test
-  internals.
-- No imports were migrated in C31; the inventory is the contract for C32-C46.
+- Superseded on 2026-05-07: builtin-internal framing was incorrect. Builtins
+  mean shipped defaults, not privileged extensions. The corrected inventory is
+  singular: `packages/core/src/extensions/api.ts` is the only extension API.
 
 Verification on 2026-05-07:
 
 - `bun run typecheck`
 
-#### C32-C45: refactor(extensions): move builtin-only imports behind internal API
+#### C32-C45: refactor(extensions): remove privileged extension API assumptions
 
-Migrate builtins away from public `@gent/core/extensions/api` exports that
-should be internal-only. Use `packages/extensions/internal/builtin.ts` as the
-privileged path.
+Migrate shipped extensions, docs, and lint away from any private/privileged
+extension surface. Public extension API is the only import path for
+extension-facing primitives; host internals stay inaccessible to all
+extensions.
 
 Definition of done:
 
-- Third-party authoring imports remain small.
-- Builtins still compile through internal path.
+- Shipped extensions import extension-facing primitives only from
+  `@gent/core/extensions/api` or sibling extension modules.
+- There is no `packages/extensions/internal/builtin.ts` or
+  `packages/core/src/extensions/internal.ts`.
+- Lint has no shipped-extension exemption.
 - No product feature removed.
 - Focused extension tests per family, then `bun run gate`.
 
-Status: in progress.
+Status: complete in this Gent commit.
 
-Sub-commit C32 complete: moved builtin process/platform plumbing through the
-privileged internal seam.
+Sub-commit C32 was superseded by the singular-API correction: process/platform
+plumbing must not move through a privileged extension seam.
 
 Implementation notes:
 
-- `packages/core/src/extensions/internal.ts` now exports `runProcess`,
-  `ProcessError`, `ProcessResult`, and `RunProcessOptions`.
-- `packages/extensions/internal/builtin.ts` re-exports those process helpers
-  beside `GentPlatform`.
-- Executor sidecar, Anthropic OAuth, ACP session manager, and workflow helpers
-  no longer import `runProcess` / `GentPlatform` from the public extension API.
-- No public compatibility alias was added; public exports are left only until
-  the final C46 narrowing commit deletes the stale surface.
+- Delete `packages/core/src/extensions/internal.ts` and
+  `packages/extensions/internal/builtin.ts`.
+- Rename `BuiltinEventSink` to `ExtensionEventSink`.
+- Export extension-facing runtime primitives through
+  `@gent/core/extensions/api`.
+- Remove package/tsconfig aliases for private extension internals.
+- Update `gent/no-extension-internal-imports` so shipped extensions have no
+  special exemption.
 
 Verification on 2026-05-07:
 
 - `bun run --cwd packages/extensions typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/executor-integration.test.ts packages/core/tests/extensions/acp-agents.test.ts packages/core/tests/extensions/anthropic-credential-service.test.ts`
 - `bun run gate`; test wall `4271ms`
+- Superseding verification after singular-API correction:
+  - `bun run --cwd packages/core typecheck`
+  - `bun run --cwd packages/extensions typecheck`
+  - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/acp-agents.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/runtime/task-service.test.ts`
+  - `bun run gate`; test wall `4437ms`
 
 #### C46: refactor(core): narrow `packages/core/src/extensions/api.ts`
 
-Delete public re-exports that are now internal-only.
+Audit public re-exports against the singular API inventory. Delete host-owned
+internals; keep only extension-facing primitives that shipped and user/project
+extensions can use on equal terms.
 
 Definition of done:
 
@@ -1162,8 +1171,8 @@ Wave 20 is not done when a subset is green. It is done when:
 - Gent no longer carries Encore `CurrentAddress` erasure or live-state registry
   workarounds after upstream primitives exist.
 - Effect AI owns tool input and output schemas.
-- Public extension API is author-facing and small; builtin internals are behind
-  an internal path.
+- Extension API is singular: shipped, project, and user extensions share one
+  public authoring surface with no private/privileged extension path.
 - Named block disables are banned; recurring test/host/SDK casts are replaced
   with typed fixtures.
 - Extension tests live under `@gent/extensions`; god tests are split; RPC/model

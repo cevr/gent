@@ -198,6 +198,8 @@ export { isRecord, isRecordArray } from "../domain/guards.js"
 export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
+export { ExtensionEventSink } from "../domain/event-publisher.js"
+export type { ExtensionEventSinkService } from "../domain/event-publisher.js"
 export {
   type ExtensionContributions,
   type ExtensionReactions,
@@ -269,6 +271,8 @@ export { runProcess, ProcessError } from "../utils/run-process.js"
 export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export type { GentPlatformShape } from "../runtime/gent-platform.js"
+export { ToolRunner } from "../runtime/agent/tool-runner.js"
+export type { ToolRunnerService } from "../runtime/agent/tool-runner.js"
 
 // ── Public API ──
 

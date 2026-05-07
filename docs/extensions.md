@@ -48,46 +48,35 @@ You need at most 8 concepts to write a complete extension:
 | 7   | `defineAgent`     | Spawnable subagent                               |
 | 8   | `PermissionRule`  | Allow/deny rule for tool patterns                |
 
-Third-party extensions import authoring primitives from one path:
+Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
 
-Gent-owned builtins may additionally use the private
-`packages/extensions/internal/builtin.ts` bridge for runtime services that are
-not part of the authoring API. Project and user extensions must not import that
-bridge.
+"Builtin" only means "shipped with Gent". Shipped, project, and user
+extensions follow the same import contract; there is no private or privileged
+extension API.
 
-## Public vs Builtin-Internal API
+## Public API
 
-`@gent/core/extensions/api` is intentionally small. It is for authoring
-extensions, not for reaching into Gent runtime internals.
+`@gent/core/extensions/api` is the extension API. Anything an extension needs
+must either live here as a stable authoring primitive or be redesigned so the
+host owns it.
 
 Public authoring surface:
 
-| Area            | Public exports                                                                  |
-| --------------- | ------------------------------------------------------------------------------- |
-| Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                     |
-| Capabilities    | `tool`, `request`, `ref`, `action`                                              |
-| Resources       | `defineResource`, `resource`, resource scope/schedule types, `ReadOnly` helpers |
-| Reactions       | Reaction input/output types needed to implement `reactions`                     |
-| Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                         |
-| Stable ids      | `ExtensionId`, `TaskId`, `ArtifactId`, `ToolCallId`                             |
-| Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors       |
-| Serialization   | Message/output projection helpers safe to expose across extension boundaries    |
+| Area             | Public exports                                                                  |
+| ---------------- | ------------------------------------------------------------------------------- |
+| Extension shape  | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                     |
+| Capabilities     | `tool`, `request`, `ref`, `action`                                              |
+| Resources        | `defineResource`, `resource`, resource scope/schedule types, `ReadOnly` helpers |
+| Reactions        | Reaction input/output types needed to implement `reactions`                     |
+| Agents           | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                         |
+| Stable ids       | `ExtensionId`, `TaskId`, `ArtifactId`, `ToolCallId`                             |
+| Policies/errors  | `PermissionRule`, capability/provider-auth/agent-run author-facing errors       |
+| Runtime services | `GentPlatform`, `ToolRunner`, `ExtensionEventSink`, `runProcess`                |
+| Serialization    | Message/output projection helpers safe to expose across extension boundaries    |
 
-Builtin-internal surface:
-
-| Area             | Internal examples                                                                   |
-| ---------------- | ----------------------------------------------------------------------------------- |
-| Host plumbing    | `ExtensionHostContext`, tool-execute input, projection internals                    |
-| Runtime services | `ToolRunner`, `GentPlatform`, agent loop/session runtime internals                  |
-| Storage/events   | task/session mutation services, event publisher/store, interaction pending reader   |
-| Drivers/auth     | driver registry internals and provider auth persistence machinery                   |
-| Raw domain       | raw events, task internals, message internals not in the serialized author contract |
-| Test helpers     | raw tool metadata, `getToolEffect`, fixture builders                                |
-
-Builtin extensions import privileged services from
-`packages/extensions/internal/builtin.ts`. That bridge is a private implementation
-detail and is not exported from `@gent/extensions`.
+There is no builtin-internal surface. Shipped extensions are useful defaults,
+not a second trust tier.
 
 ## Discovery
 

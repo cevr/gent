@@ -337,12 +337,18 @@ describe("Effect-purity locks (compile-time)", () => {
   test("public extension api does not expose runtime engine tags or server routers", () => {
     // @ts-expect-error — machine execution is not authoring surface
     type _BadMachineExecute = PublicExtensionApi.MachineExecute
-    // @ts-expect-error — tool runner is runtime plumbing, not extension authoring api
-    type _BadToolRunner = PublicExtensionApi.ToolRunner
     // @ts-expect-error — interaction pending reader is a storage seam, not authoring api
     type _BadInteractionPendingReader = PublicExtensionApi.InteractionPendingReader
     // @ts-expect-error — event publisher is an app/domain service, not extension api
     type _BadEventPublisher = PublicExtensionApi.EventPublisher
+
+    expect(true).toBe(true)
+  })
+
+  test("extension runtime services are public, not privileged", () => {
+    type _ToolRunner = PublicExtensionApi.ToolRunner
+    type _ExtensionEventSink = PublicExtensionApi.ExtensionEventSink
+    type _GentPlatform = PublicExtensionApi.GentPlatform
 
     expect(true).toBe(true)
   })

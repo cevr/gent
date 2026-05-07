@@ -40,10 +40,10 @@ packages/
 │   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
 │   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
 │   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
-│   ├── extensions/# api.ts public authoring surface + internal.ts builtin seam
+│   ├── extensions/# api.ts public extension surface
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
-├── extensions/    # all 27 builtin extensions + private internal/builtin bridge
+├── extensions/    # shipped extension set
 └── sdk/           # direct + RPC transports over one client contract
 ```
 
@@ -298,26 +298,23 @@ Core never imports from extensions. Composition roots (apps, SDK) pass `BuiltinE
 
 ### Extension boundary contract
 
-Third-party extensions may import from:
+Extensions may import from:
 
 - `@gent/core/extensions/api` — the authoring surface
 - `effect`, `@effect/*` — as peer deps
 
-Third-party extensions may NOT import from `@gent/core/domain/*`,
+Extensions may NOT import from `@gent/core/domain/*`,
 `@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`,
-`@gent/core/providers/*`, or `@gent/core/extensions/internal`. The
-`no-extension-internal-imports` oxlint rule enforces this.
-
-Gent-owned builtins have one privileged bridge:
-`packages/extensions/internal/builtin.ts`, which re-exports the small set of
-runtime/app services that builtins need but third-party authors must not see.
-Builtins should import privileged services from that bridge, not from public
-`@gent/core/extensions/api` and not from core internals directly.
+or `@gent/core/providers/*`. The `no-extension-internal-imports` oxlint rule
+enforces this for shipped extensions, and the same rule defines the contract
+for user/project extensions. "Builtin" means "included in the default
+distribution", not privileged.
 
 ### Extension API Inventory
 
-`@gent/core/extensions/api` is the third-party authoring API. It should expose
-only:
+`@gent/core/extensions/api` is the extension API. Anything an extension needs
+must either live here as a stable authoring primitive or move behind a
+host-owned design. It should expose:
 
 - extension shape: `defineExtension`, `GentExtension`,
   `ExtensionSetupContext`, `DefineExtensionInput`;
@@ -341,8 +338,10 @@ Everything else is builtin/internal:
   internals);
 - storage, event publisher, event store, task/session mutation services, and
   interaction pending readers;
-- runtime/platform services (`GentPlatform`, `ToolRunner`, agent loop/session
-  runtime internals, process runners used as implementation details);
+- extension-owned runtime services that are part of the authoring contract
+  (`GentPlatform`, `ToolRunner`, `ExtensionEventSink`, `runProcess`);
+- agent loop/session runtime internals and process runners that are only host
+  implementation details;
 - raw event/task/message domain internals that are not part of the serialized
   authoring contract;
 - driver registry internals and provider auth persistence machinery;

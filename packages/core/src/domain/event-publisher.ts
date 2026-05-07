@@ -14,7 +14,7 @@ export interface EventPublisherService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
 }
 
-export interface BuiltinEventSinkService {
+export interface ExtensionEventSinkService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
 }
 
@@ -32,11 +32,12 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
     })
 }
 
-export class BuiltinEventSink extends Context.Service<BuiltinEventSink, BuiltinEventSinkService>()(
-  "@gent/core/src/domain/event-publisher/BuiltinEventSink",
-) {
-  static Test = (): Layer.Layer<BuiltinEventSink> =>
-    Layer.succeed(BuiltinEventSink, {
+export class ExtensionEventSink extends Context.Service<
+  ExtensionEventSink,
+  ExtensionEventSinkService
+>()("@gent/core/src/domain/event-publisher/ExtensionEventSink") {
+  static Test = (): Layer.Layer<ExtensionEventSink> =>
+    Layer.succeed(ExtensionEventSink, {
       publish: () => Effect.void,
     })
 }
@@ -91,28 +92,31 @@ type DeliveryJob = {
 const makePublisherContext = (publisher: EventPublisherService) =>
   Context.empty().pipe(
     Context.add(EventPublisher, publisher),
-    Context.add(BuiltinEventSink, {
+    Context.add(ExtensionEventSink, {
       publish: publisher.publish,
     }),
   )
 
-export const EventPublisherLive: Layer.Layer<EventPublisher | BuiltinEventSink, never, EventStore> =
-  Layer.effectContext(
-    Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const deps: InnerPublisherDeps = { baseEventStore }
-      const deliver = yield* makeSerializedDeliver((envelope) => deliverInner(envelope, deps))
+export const EventPublisherLive: Layer.Layer<
+  EventPublisher | ExtensionEventSink,
+  never,
+  EventStore
+> = Layer.effectContext(
+  Effect.gen(function* () {
+    const baseEventStore = yield* EventStore
+    const deps: InnerPublisherDeps = { baseEventStore }
+    const deliver = yield* makeSerializedDeliver((envelope) => deliverInner(envelope, deps))
 
-      return makePublisherContext(
-        EventPublisher.of({
-          append: (event) => baseEventStore.append(event),
-          deliver,
-          publish: (event) =>
-            Effect.gen(function* () {
-              const envelope = yield* baseEventStore.append(event)
-              yield* deliver(envelope)
-            }),
-        }),
-      )
-    }),
-  )
+    return makePublisherContext(
+      EventPublisher.of({
+        append: (event) => baseEventStore.append(event),
+        deliver,
+        publish: (event) =>
+          Effect.gen(function* () {
+            const envelope = yield* baseEventStore.append(event)
+            yield* deliver(envelope)
+          }),
+      }),
+    )
+  }),
+)

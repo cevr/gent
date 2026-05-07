@@ -13,8 +13,7 @@
  */
 
 import { Context, Effect, Random } from "effect"
-import { ToolCallId, type ToolCapabilityContext } from "@gent/core/extensions/api"
-import { ToolRunner } from "../../internal/builtin.js"
+import { ToolCallId, ToolRunner, type ToolCapabilityContext } from "@gent/core/extensions/api"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**

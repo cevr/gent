@@ -4,8 +4,7 @@
 
 import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
-import { AgentRunError, type AgentRunResult } from "@gent/core/extensions/api"
-import { runProcess } from "../internal/builtin.js"
+import { AgentRunError, runProcess, type AgentRunResult } from "@gent/core/extensions/api"
 
 // ── Shell Command Runner ──
 

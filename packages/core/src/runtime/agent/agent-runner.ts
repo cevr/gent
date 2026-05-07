@@ -33,7 +33,7 @@ import {
   type EventEnvelope,
 } from "../../domain/event.js"
 import {
-  BuiltinEventSink,
+  ExtensionEventSink,
   EventPublisher,
   type EventPublisherService,
 } from "../../domain/event-publisher.js"
@@ -131,7 +131,7 @@ type EphemeralOverrideProvides =
   | EphemeralStorageProvides
   | EventStore
   | EventPublisher
-  | BuiltinEventSink
+  | ExtensionEventSink
   | ApprovalService
   | PromptPresenter
   | ResourceManager
@@ -151,7 +151,7 @@ interface EphemeralRuntimeOverrides {
   readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
   readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
   readonly eventPublisher: Layer.Layer<
-    EventPublisher | BuiltinEventSink,
+    EventPublisher | ExtensionEventSink,
     EphemeralOverrideError,
     never
   >
@@ -647,7 +647,7 @@ const buildEphemeralLayer = (params: {
       })
       return Context.empty().pipe(
         Context.add(EventPublisher, publisher),
-        Context.add(BuiltinEventSink, {
+        Context.add(ExtensionEventSink, {
           publish: publisher.publish,
         }),
       )

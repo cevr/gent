@@ -14,8 +14,9 @@ import {
   type AgentName,
   type SessionId,
   type BranchId,
+  ExtensionEventSink,
+  GentPlatform,
 } from "@gent/core/extensions/api"
-import { BuiltinEventSink, GentPlatform } from "../internal/builtin.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
@@ -66,7 +67,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, TaskServiceUnavailableError, BuiltinEventSink | GentPlatform>
+  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionEventSink | GentPlatform>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -80,9 +81,9 @@ export interface TaskServiceApi {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskTransitionError, BuiltinEventSink>
+  ) => Effect.Effect<Task | undefined, TaskTransitionError, ExtensionEventSink>
 
-  readonly remove: (id: TaskId) => Effect.Effect<void, never, BuiltinEventSink>
+  readonly remove: (id: TaskId) => Effect.Effect<void, never, ExtensionEventSink>
 
   readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
@@ -119,7 +120,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.create(params),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* BuiltinEventSink
+                const eventSink = yield* ExtensionEventSink
                 const platform = yield* GentPlatform
                 const id = TaskId.make(yield* platform.randomId)
                 const now = yield* DateTime.nowAsDate
@@ -180,7 +181,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.update(id, fields),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* BuiltinEventSink
+                const eventSink = yield* ExtensionEventSink
                 // Validate status transition if status is being changed
                 if (fields.status !== undefined) {
                   const existing = yield* storage.getTask(id)
@@ -255,7 +256,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.remove(id),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* BuiltinEventSink
+                const eventSink = yield* ExtensionEventSink
                 const existing = yield* storage.getTask(id).pipe(Effect.orDie)
                 if (existing === undefined) {
                   yield* storage.deleteTask(id).pipe(Effect.orDie)

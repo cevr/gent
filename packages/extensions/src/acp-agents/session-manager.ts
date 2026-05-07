@@ -19,7 +19,7 @@ import { ChildProcess } from "effect/unstable/process"
 // `ChildProcessSpawner` re-exported from `effect/unstable/process` is a
 // namespace — for the runtime tag value we need the deep module path.
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { GentPlatform, type GentPlatformShape } from "../../internal/builtin.js"
+import { GentPlatform, type GentPlatformShape } from "@gent/core/extensions/api"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import { AcpError, makeAcpConnection, type AcpClosedError, type AcpConnection } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
