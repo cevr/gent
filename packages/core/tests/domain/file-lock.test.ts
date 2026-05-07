@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Fiber, Layer, Ref, type Path } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, type Path } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FileLockService } from "@gent/core/domain/file-lock"
 
@@ -23,7 +23,7 @@ describe("FileLockService", () => {
             "/same/path",
             Effect.gen(function* () {
               yield* Ref.update(order, (o) => [...o, `${label}-start`])
-              yield* Effect.sleep("10 millis")
+              yield* Effect.yieldNow
               yield* Ref.update(order, (o) => [...o, `${label}-end`])
             }),
           )
@@ -56,7 +56,7 @@ describe("FileLockService", () => {
             path,
             Effect.gen(function* () {
               yield* Ref.update(order, (o) => [...o, `${label}-start`])
-              yield* Effect.sleep("10 millis")
+              yield* Effect.yieldNow
               yield* Ref.update(order, (o) => [...o, `${label}-end`])
             }),
           )
@@ -116,9 +116,17 @@ describe("FileLockService", () => {
         expect(yield* lock.currentSize()).toBe(0)
 
         // While a lock is held the entry is present.
-        const held = yield* Effect.forkChild(lock.withLock("/held/path", Effect.sleep("50 millis")))
-        yield* Effect.sleep("5 millis")
+        const release = yield* Deferred.make<void>()
+        const entered = yield* Deferred.make<void>()
+        const held = yield* Effect.forkChild(
+          lock.withLock(
+            "/held/path",
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        )
+        yield* Deferred.await(entered)
         expect(yield* lock.currentSize()).toBe(1)
+        yield* Deferred.succeed(release, undefined)
         yield* Fiber.join(held)
         expect(yield* lock.currentSize()).toBe(0)
       }),

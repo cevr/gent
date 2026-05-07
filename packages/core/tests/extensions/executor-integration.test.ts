@@ -546,7 +546,7 @@ describe("Executor runtime lifecycle", () => {
             // Now release the (cancelled) in-flight handshake. If it races
             // back to Ready, the regression has reappeared.
             yield* Deferred.succeed(sidecarGate, undefined)
-            yield* Effect.sleep("100 millis")
+            yield* Effect.yieldNow
             const final = yield* executorSnapshot
             expect(final.status).toBe("idle")
           }).pipe(Effect.provide(makeRuntimeLayer(extension)))

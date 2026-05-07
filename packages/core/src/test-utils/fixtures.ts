@@ -84,7 +84,7 @@ export const waitFor = <A>(
             : `timed out waiting for ${label}`
         return yield* new WaitForError({ message: errorMessage })
       }
-      yield* Effect.sleep("25 millis")
+      yield* Effect.sleep("5 millis")
       return yield* loop
     })
     return yield* loop
