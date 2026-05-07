@@ -10,6 +10,7 @@ import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
 import { dateFromMillis, Session, Branch, Message } from "@gent/core/domain/message"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { CurrentWorkspaceId } from "@gent/core/server/workspace-rpc"
 
 const test = it.live.layer(SqliteStorage.TestWithSql())
 
@@ -17,6 +18,8 @@ const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
 const datePlusMillis = (date: Date, millis: number): Date => dateFromMillis(date.getTime() + millis)
 const ONE_DAY_MILLIS = 86_400_000
+const WORKSPACE_A = "a".repeat(64)
+const WORKSPACE_B = "b".repeat(64)
 
 // Fixture helpers
 
@@ -138,6 +141,37 @@ describe("searchMessages", () => {
 
       expect(results.length).toBeGreaterThan(0)
       expect(results.every((result) => result.sessionId === first.sessionId)).toBe(true)
+    }))
+
+  test("filters results to the current workspace", () =>
+    Effect.gen(function* () {
+      const first = yield* createFixture({ sessionName: "first workspace" }).pipe(
+        Effect.provideService(CurrentWorkspaceId, WORKSPACE_A),
+      )
+      yield* addMessage(
+        first.sessionId,
+        first.branchId,
+        "user",
+        "workspace isolated search term",
+      ).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+
+      const second = yield* createFixture({ sessionName: "second workspace" }).pipe(
+        Effect.provideService(CurrentWorkspaceId, WORKSPACE_B),
+      )
+      yield* addMessage(
+        second.sessionId,
+        second.branchId,
+        "user",
+        "workspace isolated search term",
+      ).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore
+        .searchMessages("workspace isolated search term")
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+
+      expect(results.map((result) => result.sessionId)).toContain(first.sessionId)
+      expect(results.map((result) => result.sessionId)).not.toContain(second.sessionId)
     }))
 
   test("filters by dateBefore (older messages only)", () =>

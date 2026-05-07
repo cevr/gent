@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { StorageError } from "../domain/storage-error.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
@@ -21,6 +22,7 @@ export const sanitizeFts5Query = (raw: string): string => {
 
 const buildSearchFilters = (
   sql: SqlClient.SqlClient,
+  workspaceId: string,
   options?: {
     sessionId?: string
     dateAfter?: number
@@ -28,6 +30,7 @@ const buildSearchFilters = (
   },
 ) =>
   sql.and([
+    sql`s.workspace_id = ${workspaceId}`,
     ...(options?.sessionId !== undefined ? [sql`m.session_id = ${options.sessionId}`] : []),
     ...(options?.dateAfter !== undefined ? [sql`m.created_at > ${options.dateAfter}`] : []),
     ...(options?.dateBefore !== undefined ? [sql`m.created_at < ${options.dateBefore}`] : []),
@@ -68,7 +71,8 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
 
             const ftsQuery = sanitizeFts5Query(query)
             if (ftsQuery.length === 0) return []
-            const filters = buildSearchFilters(sql, options)
+            const workspaceId = yield* CurrentWorkspaceId
+            const filters = buildSearchFilters(sql, workspaceId, options)
 
             const rows = yield* sql<{
               session_id: string

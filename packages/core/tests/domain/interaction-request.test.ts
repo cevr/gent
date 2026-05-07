@@ -16,6 +16,7 @@ import {
 } from "@gent/core/domain/interaction-request"
 import { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { CurrentWorkspaceId } from "@gent/core/server/workspace-rpc"
 
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(
@@ -33,6 +34,8 @@ const persistInteraction = (is: InteractionStorageService, record: InteractionRe
 // ============================================================================
 describe("Interaction Request", () => {
   const storageLive = Layer.merge(SqliteStorage.MemoryWithSql(), GentPlatform.Test())
+  const workspaceA = "a".repeat(64)
+  const workspaceB = "b".repeat(64)
   it.live("present persists request to storage and throws InteractionPendingError", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
@@ -95,6 +98,66 @@ describe("Interaction Request", () => {
       expect(after.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
         false,
       )
+    }).pipe(Effect.provide(storageLive)),
+  )
+  it.live("pending requests are scoped to the current workspace", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const first = {
+        requestId: InteractionRequestId.make("req-workspace-a"),
+        type: "approval",
+        sessionId: SessionId.make("s-workspace-a"),
+        branchId: BranchId.make("b-workspace-a"),
+        paramsJson: "{}",
+        status: "pending" as const,
+        createdAt: yield* Clock.currentTimeMillis,
+      }
+      const second = {
+        requestId: InteractionRequestId.make("req-workspace-b"),
+        type: "approval",
+        sessionId: SessionId.make("s-workspace-b"),
+        branchId: BranchId.make("b-workspace-b"),
+        paramsJson: "{}",
+        status: "pending" as const,
+        createdAt: first.createdAt + 1,
+      }
+
+      yield* ensureStorageParents({
+        sessionId: first.sessionId,
+        branchId: first.branchId,
+      }).pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
+      yield* is.persist(first).pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
+      yield* ensureStorageParents({
+        sessionId: second.sessionId,
+        branchId: second.branchId,
+      }).pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+      yield* is.persist(second).pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+
+      const pendingA = yield* is
+        .listPending()
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
+      const pendingB = yield* is
+        .listPending()
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+
+      expect(pendingA.map((record) => record.requestId)).toEqual([first.requestId])
+      expect(pendingB.map((record) => record.requestId)).toEqual([second.requestId])
+
+      yield* is
+        .resolve(second.requestId)
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
+      const stillPendingB = yield* is
+        .listPending()
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+      expect(stillPendingB.map((record) => record.requestId)).toEqual([second.requestId])
+
+      yield* is
+        .resolve(second.requestId)
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+      const resolvedB = yield* is
+        .listPending()
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+      expect(resolvedB).toEqual([])
     }).pipe(Effect.provide(storageLive)),
   )
   it.live("pending requests are unique per session branch", () =>
