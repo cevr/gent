@@ -1266,6 +1266,8 @@ Progress:
   `@gent/core/runtime/runtime-platform` export.
 - C59 moved Anthropic/OpenAI extension and provider-helper tests into
   `packages/extensions`.
+- C60 moved self-contained ACP/Claude, auto, executor unit, librarian, MCP
+  codemode, and handoff tests into `packages/extensions`.
 
 Verification on 2026-05-07:
 

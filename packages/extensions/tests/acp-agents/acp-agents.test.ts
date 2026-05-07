@@ -9,17 +9,17 @@ import { Context, Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ToolRunner, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
-import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
-import type { ToolCapabilityContext } from "../../src/domain/capability/tool.js"
-import { testExtensionHostContext } from "../../src/test-utils/index.js"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
 } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
-import { makeAcpRunTool } from "../../../extensions/src/acp-agents/executor-boundary.js"
-import { runMcpToolHandler } from "../../../extensions/src/acp-agents/mcp-codemode-boundary.js"
+import { makeAcpRunTool } from "../../src/acp-agents/executor-boundary.js"
+import { runMcpToolHandler } from "../../src/acp-agents/mcp-codemode-boundary.js"
 // ── ACP → response part mapping ──
 const makeNotification = (update: unknown) =>
   Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
