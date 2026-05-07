@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" -print0 | xargs -0 -n 1 -P 2 bun test --reporter=dots'"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
