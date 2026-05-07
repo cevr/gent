@@ -3,11 +3,11 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GlobTool } from "@gent/extensions/fs-tools/glob"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
-import { FallbackFileIndexLive } from "../../../src/runtime/file-index/index"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { TestFileIndexLive } from "../helpers/file-index-layer.js"
 
 const ctx: ToolCapabilityContext = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -24,7 +24,7 @@ const PlatformLayer = Layer.mergeAll(
     home: "/tmp/test-home",
     platform: "test",
   }),
-  Layer.provide(FallbackFileIndexLive, BunServices.layer),
+  Layer.provide(TestFileIndexLive, BunServices.layer),
 )
 
 describe("GlobTool", () => {

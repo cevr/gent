@@ -1244,6 +1244,19 @@ Definition of done:
   intentionally.
 - `bun run test` and `bun run gate`.
 
+Progress:
+
+- C54 moved fs-tools and exec-tools tests into `packages/extensions/tests`.
+  The moved fs tests no longer import core private file-index runtime modules;
+  they use a package-local `FileIndex` test layer through the public extension
+  API.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/extensions test`
+- `bun run --cwd packages/extensions typecheck`
+- `bun run test`
+
 #### C76: test(core): make `createRpcHarness` the default extension acceptance helper
 
 Demote raw `createE2ELayer` usage to advanced wiring. Migrate repeated RPC tests
