@@ -17,7 +17,6 @@ import {
 } from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { pathToFileURL } from "node:url"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class.js"
 import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
 
 export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervisorError>()(
@@ -27,34 +26,29 @@ export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervi
   },
 ) {}
 
-export const WorkerLifecycleState = TaggedEnumClass("WorkerLifecycleState", {
-  Starting: TaggedEnumClass.variant("starting", {
-    port: Schema.Number,
-    restartCount: Schema.Number,
-  }),
-  Running: TaggedEnumClass.variant("running", {
-    port: Schema.Number,
-    pid: Schema.Number,
-    restartCount: Schema.Number,
-  }),
-  Restarting: TaggedEnumClass.variant("restarting", {
-    port: Schema.Number,
-    restartCount: Schema.Number,
-    previousPid: Schema.UndefinedOr(Schema.Number),
-    exitCode: Schema.NullOr(Schema.Number),
-  }),
-  Stopped: TaggedEnumClass.variant("stopped", {
-    port: Schema.Number,
-    restartCount: Schema.Number,
-  }),
-  Failed: TaggedEnumClass.variant("failed", {
-    port: Schema.Number,
-    restartCount: Schema.Number,
-    message: Schema.String,
-    exitCode: Schema.NullOr(Schema.Number),
-  }),
-})
-export type WorkerLifecycleState = Schema.Schema.Type<typeof WorkerLifecycleState>
+export type WorkerLifecycleState =
+  | { readonly _tag: "starting"; readonly port: number; readonly restartCount: number }
+  | {
+      readonly _tag: "running"
+      readonly port: number
+      readonly pid: number
+      readonly restartCount: number
+    }
+  | {
+      readonly _tag: "restarting"
+      readonly port: number
+      readonly restartCount: number
+      readonly previousPid?: number
+      readonly exitCode: number | null
+    }
+  | { readonly _tag: "stopped"; readonly port: number; readonly restartCount: number }
+  | {
+      readonly _tag: "failed"
+      readonly port: number
+      readonly restartCount: number
+      readonly message: string
+      readonly exitCode: number | null
+    }
 
 export interface WorkerSupervisor {
   readonly url: string
@@ -532,10 +526,11 @@ export const startWorkerSupervisor = (
       let current: WorkerProcess | undefined
       let endpoint: WorkerEndpoint | undefined
       let restartPromise: Promise<void> | undefined
-      let state: WorkerLifecycleState = WorkerLifecycleState.Starting.make({
+      let state: WorkerLifecycleState = {
+        _tag: "starting",
         port: UNKNOWN_WORKER_PORT,
         restartCount,
-      })
+      }
       const isShared = options.shared === true
       const handleProcessExit = () => {
         killWorkerSync(current)
@@ -582,13 +577,12 @@ export const startWorkerSupervisor = (
 
         endpoint = { port: readyWorker.port, url: readyWorker.url }
         restartPromise = undefined
-        emit(
-          WorkerLifecycleState.Running.make({
-            port: endpoint.port,
-            pid: readyWorker.proc.pid,
-            restartCount,
-          }),
-        )
+        emit({
+          _tag: "running",
+          port: endpoint.port,
+          pid: readyWorker.proc.pid,
+          restartCount,
+        })
 
         // Watch for unexpected exits to trigger restart. Forked detached so
         // the supervisor's acquireRelease body completes; the watcher is
@@ -604,12 +598,11 @@ export const startWorkerSupervisor = (
             // Shared mode: exit code 0 is intentional idle shutdown — don't restart
             if (isShared && code === 0) {
               stopped = true
-              emit(
-                WorkerLifecycleState.Stopped.make({
-                  port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
-                  restartCount,
-                }),
-              )
+              emit({
+                _tag: "stopped",
+                port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+                restartCount,
+              })
               return
             }
 
@@ -660,26 +653,24 @@ export const startWorkerSupervisor = (
             // Crash-loop detection: too many crash restarts in window → permanent failure
             if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
               restartPromise = undefined
-              emit(
-                WorkerLifecycleState.Failed.make({
-                  port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
-                  restartCount,
-                  message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
-                  exitCode: input.exitCode,
-                }),
-              )
+              emit({
+                _tag: "failed",
+                port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+                restartCount,
+                message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
+                exitCode: input.exitCode,
+              })
               return
             }
           }
 
-          emit(
-            WorkerLifecycleState.Restarting.make({
-              port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
-              restartCount,
-              previousPid: input?.previousPid,
-              exitCode: input?.exitCode ?? null,
-            }),
-          )
+          emit({
+            _tag: "restarting",
+            port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+            restartCount,
+            previousPid: input?.previousPid,
+            exitCode: input?.exitCode ?? null,
+          })
 
           // Exponential backoff only for crash restarts
           const backoffMs = isCrash
@@ -700,14 +691,13 @@ export const startWorkerSupervisor = (
                 Effect.andThen(
                   Effect.sync(() => {
                     restartPromise = undefined
-                    emit(
-                      WorkerLifecycleState.Failed.make({
-                        port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
-                        restartCount,
-                        message: error.message,
-                        exitCode: input?.exitCode ?? current?.exitCodeRef.exitCode ?? null,
-                      }),
-                    )
+                    emit({
+                      _tag: "failed",
+                      port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+                      restartCount,
+                      message: error.message,
+                      exitCode: input?.exitCode ?? current?.exitCodeRef.exitCode ?? null,
+                    })
                   }),
                   Effect.fail(error),
                 ),
@@ -739,12 +729,11 @@ export const startWorkerSupervisor = (
         const proc = current
         current = undefined
         if (proc !== undefined) yield* stopWorker(proc)
-        emit(
-          WorkerLifecycleState.Stopped.make({
-            port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
-            restartCount,
-          }),
-        )
+        emit({
+          _tag: "stopped",
+          port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+          restartCount,
+        })
         yield* shutdownLog("supervisor.stop.done")
       }).pipe(Effect.catchEager(() => Effect.void))
 
