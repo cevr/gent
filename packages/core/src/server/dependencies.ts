@@ -179,21 +179,23 @@ export const createDependencies = (config: DependenciesConfig) => {
   const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
 
   const baseServicesLive = Layer.provideMerge(
-    Layer.mergeAll(
-      runtimePlatformLive,
+    Layer.provideMerge(
+      Layer.mergeAll(
+        runtimePlatformLive,
+        clusterRunnerLive,
+        eventServicesLive,
+        authLive,
+        authGuardLive,
+        providerAuthLive,
+        configServiceLive,
+        Layer.provide(modelRegistryLive, FetchHttpClient.layer),
+        extensionRegistryLive,
+        fileLockServiceLive,
+        modelResolverLive,
+        Layer.provide(FileIndexLive, runtimePlatformLive),
+        FetchHttpClient.layer,
+      ),
       BunGentPlatformLive,
-      clusterRunnerLive,
-      eventServicesLive,
-      authLive,
-      authGuardLive,
-      providerAuthLive,
-      configServiceLive,
-      Layer.provide(modelRegistryLive, FetchHttpClient.layer),
-      extensionRegistryLive,
-      fileLockServiceLive,
-      modelResolverLive,
-      Layer.provide(FileIndexLive, runtimePlatformLive),
-      FetchHttpClient.layer,
     ),
     storageLive,
   )

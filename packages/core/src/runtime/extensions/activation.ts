@@ -1,5 +1,5 @@
-import { Cause, Effect } from "effect"
-import type { FileSystem, Path, Scope } from "effect"
+import { Cause, Effect, Exit, Layer, Scope } from "effect"
+import type { FileSystem, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "../gent-platform.js"
 import type {
@@ -27,6 +27,7 @@ import {
   type ScheduledJobCommand,
   type SchedulerFailure,
 } from "./resource-host/schedule-engine.js"
+import { buildResourceLayer, collectResourceEntries } from "./resource-host/resource-layer.js"
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
@@ -357,6 +358,56 @@ const groupScheduledJobFailures = (
   return byExtension
 }
 
+const activateProcessResources = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): Effect.Effect<
+  {
+    readonly active: ReadonlyArray<LoadedExtension>
+    readonly failed: ReadonlyArray<FailedExtension>
+  },
+  never,
+  Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const active: LoadedExtension[] = []
+    const failed: FailedExtension[] = []
+
+    for (const ext of extensions) {
+      const hasLifecycle = collectResourceEntries([ext], "process").some(
+        ({ resource }) => resource.start !== undefined || resource.stop !== undefined,
+      )
+      if (!hasLifecycle) {
+        active.push(ext)
+        continue
+      }
+
+      const resourceScope = yield* Scope.make()
+      const exit = yield* Layer.buildWithScope(
+        buildResourceLayer([ext], "process"),
+        resourceScope,
+      ).pipe(Effect.exit)
+      if (Exit.isSuccess(exit)) {
+        active.push(ext)
+        yield* Effect.addFinalizer(() => Scope.close(resourceScope, Exit.void))
+        continue
+      }
+
+      yield* Scope.close(resourceScope, Exit.void).pipe(Effect.ignore)
+      const error = Cause.pretty(exit.cause)
+      failed.push(toFailedExtension(ext, "startup", error))
+      yield* Effect.logWarning("extension.startup.failed").pipe(
+        Effect.annotateLogs({
+          extensionId: ext.manifest.id,
+          scope: ext.scope,
+          sourcePath: ext.sourcePath,
+          error,
+        }),
+      )
+    }
+
+    return { active, failed }
+  })
+
 export const reconcileLoadedExtensions = (params: {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions?: ReadonlyArray<FailedExtension>
@@ -371,10 +422,7 @@ export const reconcileLoadedExtensions = (params: {
 > =>
   Effect.gen(function* () {
     const validated = yield* validateLoadedExtensions(params.extensions)
-    // Lifecycle is structural: `Resource.start`/`stop` are woven into each
-    // Resource's layer by `withLifecycle` in `resource-host/index.ts`, so
-    // activation is identity over `validated.active`.
-    const activated: ExtensionActivationResult = { active: [...validated.active], failed: [] }
+    const activated = yield* activateProcessResources(validated.active)
     const scheduledJobFailures = yield* reconcileScheduledJobs({
       extensions: activated.active,
       home: params.home,

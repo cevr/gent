@@ -494,4 +494,64 @@ describe("extension activation isolation", () => {
       }).pipe(Effect.provide(fsLayer)),
     ),
   )
+
+  it.scopedLive("resource startup failure deactivates only the owning extension", () =>
+    narrowR(
+      Effect.gen(function* () {
+        const healthy = makeLoaded("healthy-ext", {
+          tools: [
+            tool({
+              id: "healthy_tool",
+              description: "healthy",
+              params: {} as never,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              start: Effect.void,
+            }) as never,
+          ],
+        })
+        const broken = makeLoaded("broken-resource", {
+          tools: [
+            tool({
+              id: "broken_tool",
+              description: "broken",
+              params: {} as never,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              start: Effect.fail(new Error("resource start boom") as never),
+            }) as never,
+          ],
+        })
+
+        const result = yield* reconcileLoadedExtensions({
+          extensions: [healthy, broken],
+          home: "/tmp",
+          command: undefined,
+        })
+
+        expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
+          ExtensionId.make("healthy-ext"),
+        ])
+        expect(result.resolved.failedExtensions).toHaveLength(1)
+        expect(result.resolved.failedExtensions[0]).toMatchObject({
+          manifest: { id: ExtensionId.make("broken-resource") },
+          phase: "startup",
+        })
+        expect(result.resolved.failedExtensions[0]?.error).toContain("resource start boom")
+        expect([...result.resolved.modelCapabilities.keys()]).toEqual(["healthy_tool"])
+      }),
+    ),
+  )
 })

@@ -35,7 +35,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { GentPlatform } from "./gent-platform.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { buildResourceLayer } from "./extensions/resource-host/index.js"
+import { buildResourceLayer, buildResourceServiceLayer } from "./extensions/resource-host/index.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -294,12 +294,19 @@ export const compileBaseSections = (
  * `ResolvedExtensions` (same cwd) instead of re-discovering, but they then
  * call this same builder so the wiring shape is identical.
  */
-export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
-  // Process-scope Resource layer — services merged in parallel, lifecycle
-  // (start/stop) threaded sequentially with reverse-order teardown. cwd /
-  // session / branch Resources are routed through the per-cwd / ephemeral
-  // composers (added in later commits).
-  const resourceLayer = buildResourceLayer(resolved.extensions, "process")
+export const buildExtensionLayers = (
+  resolved: ResolvedExtensions,
+  options?: { readonly lifecycle?: "run" | "skip" },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous extension Resource services are intentionally erased at this host membrane
+): Layer.Layer<any, never, never> => {
+  // Process-scope Resource layer. Runtime profiles pre-activate resources
+  // during reconciliation so startup failures can be attached to the owning
+  // extension before registries are resolved; direct test/child builders keep
+  // the legacy layer path unless they explicitly skip lifecycle hooks.
+  const resourceLayer =
+    options?.lifecycle === "skip"
+      ? buildResourceServiceLayer(resolved.extensions, "process")
+      : buildResourceLayer(resolved.extensions, "process")
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -322,7 +329,9 @@ export const buildProfileRuntime = (params: {
   readonly configService: ConfigServiceService
 }) =>
   Effect.gen(function* () {
-    const combinedLayer = buildExtensionLayers(params.profile.resolved)
+    const combinedLayer = buildExtensionLayers(params.profile.resolved, {
+      lifecycle: "skip",
+    })
     const layerContext = yield* Layer.build(combinedLayer)
     const registryService = Context.get(layerContext, ExtensionRegistry)
     const driverRegistryService = Context.get(layerContext, DriverRegistry)

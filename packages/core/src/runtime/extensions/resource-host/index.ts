@@ -8,7 +8,13 @@
  * @module
  */
 
-export { buildResourceLayer, collectResourceEntries, type ResourceEntry } from "./resource-layer.js"
+export {
+  buildResourceLayer,
+  buildResourceServiceLayer,
+  collectResourceEntries,
+  mergeResourceServiceLayers,
+  type ResourceEntry,
+} from "./resource-layer.js"
 
 export {
   collectSchedules,

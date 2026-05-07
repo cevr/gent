@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect, Exit, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceScope } from "../../../domain/resource.js"
@@ -42,12 +42,22 @@ export const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-const mergeResourceServiceLayers = (entries: ReadonlyArray<ResourceEntry>): ErasedResourceLayer =>
+export const mergeResourceServiceLayers = (
+  entries: ReadonlyArray<ResourceEntry>,
+): ErasedResourceLayer =>
   entries.reduce<ErasedResourceLayer>(
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
     (acc, { resource }) => Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
+
+export const buildResourceServiceLayer = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  scope: ResourceScope = "process",
+): ErasedResourceLayer => {
+  const entries = collectResourceEntries(extensions, scope)
+  return entries.length === 0 ? emptyErasedResourceLayer : mergeResourceServiceLayers(entries)
+}
 
 const buildLifecycleLayer = (
   entries: ReadonlyArray<ResourceEntry>,
@@ -61,11 +71,14 @@ const buildLifecycleLayer = (
           const exit = yield* exitErasedEffect(() => start)
           if (Exit.isFailure(exit)) {
             yield* Effect.logError("resource.start.failed").pipe(
-              Effect.annotateLogs({ extensionId: entry.extensionId, cause: String(exit.cause) }),
+              Effect.annotateLogs({
+                extensionId: entry.extensionId,
+                cause: Cause.pretty(exit.cause),
+              }),
             )
             return yield* new ResourceStartError({
               extensionId: entry.extensionId,
-              cause: String(exit.cause),
+              cause: Cause.pretty(exit.cause),
             })
           }
         }

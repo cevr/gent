@@ -99,6 +99,37 @@ const dynamicExtension = defineExtension({
 })
 
 describe("resolveRuntimeProfile", () => {
+  it.live(
+    "resolveProfileRuntime starts process resources once and skips duplicate lifecycle hooks",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let starts = 0
+          const extension = defineExtension({
+            id: "@gent/test-runtime-profile-start-once",
+            resources: [
+              defineResource({
+                scope: "process",
+                layer: Layer.empty,
+                start: Effect.sync(() => {
+                  starts += 1
+                }),
+              }) as never,
+            ],
+          })
+
+          yield* resolveProfileRuntime({
+            cwd: "/tmp",
+            home: "/tmp",
+            platform: "darwin",
+            extensions: [extension],
+          })
+
+          expect(starts).toBe(1)
+        }),
+      ).pipe(Effect.provide(sharedLayer)),
+  )
+
   it.live("same inputs across modes produce equivalent profiles", () =>
     Effect.scoped(
       Effect.gen(function* () {
