@@ -1430,7 +1430,7 @@ Definition of done:
 
 - No P0/P1/P2 remains, or this plan is extended before closure.
 
-Status: in progress.
+Status: complete.
 
 Recursive audit findings accepted on 2026-05-07:
 
@@ -1495,6 +1495,19 @@ Verification on 2026-05-07:
 Update `ARCHITECTURE.md`, `docs/extensions.md`, and AGENTS test guidance if the
 implemented shape diverges from current docs.
 
+Status: complete.
+
+Implementation notes:
+
+- `ARCHITECTURE.md` now describes `SessionRuntime` as the only public session
+  engine and `AgentLoop` as direct actor-backed internal control-plane
+  plumbing, with no public `AgentLoop` service facade.
+- `ARCHITECTURE.md` and `docs/extensions.md` document that builtins are shipped
+  defaults only: shipped, project, and user extensions share the same public
+  `@gent/core/extensions/api` contract.
+- `docs/extensions.md` examples now include tool output schemas, matching the
+  Effect AI-owned result contract.
+
 #### C99: test: full verification sweep
 
 Run:
@@ -1532,7 +1545,7 @@ Definition of done:
   `packages/core/tests/runtime/agent-loop-stm-queue.test.ts`.
 - No new public API and no parallel legacy queue path.
 
-Status: in progress.
+Status: complete.
 
 Completed sub-commits:
 
@@ -1567,7 +1580,7 @@ Definition of done:
 - `bun run --cwd packages/core typecheck` and the ToolRunner/agent-loop test
   lane pass.
 
-Status: in progress.
+Status: complete.
 
 Completed sub-commits:
 

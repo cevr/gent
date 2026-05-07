@@ -22,6 +22,7 @@ const GreetTool = tool({
   params: Schema.Struct({
     name: Schema.String.annotate({ description: "Who to greet" }),
   }),
+  output: Schema.String,
   execute: (params) => Effect.succeed(`Hello, ${params.name}!`),
 })
 
@@ -122,6 +123,7 @@ const EchoTool = tool({
   id: "echo",
   description: "Echo back the input",
   params: Schema.Struct({ text: Schema.String }),
+  output: Schema.String,
   execute: (params) => Effect.succeed(params.text),
 })
 
@@ -136,6 +138,8 @@ export default defineExtension({
 - `id` — stable name (the LLM sees this as the tool name)
 - `description` — sent to the LLM as the tool description
 - `params` — `Schema.Schema` (must be context-free for sync JSON decode)
+- `output` — `Schema.Schema` validated by Effect AI before the tool result is
+  returned to the model
 - `execute(params, ctx)` — returns `Effect`
 - Optional: `intent`, `needs`, `interactive`, `permissionRules`, `prompt`,
   `promptSnippet`, `promptGuidelines`

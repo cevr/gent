@@ -149,7 +149,10 @@ Core orchestration lives in:
 Shape:
 
 - `SessionRuntime` is the single public session engine.
-- `AgentLoop` is an actor-backed internal control plane. The public `AgentLoop` service is a facade over `agent-loop.actor.ts`; the actor entity id includes `(workspaceId, sessionId, branchId)`.
+- `AgentLoop` is an actor-backed internal control plane. There is no public
+  `AgentLoop` service facade; `session-runtime.ts` talks to
+  `agent-loop.actor.ts` directly. The actor entity id includes
+  `(workspaceId, sessionId, branchId)`.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
@@ -282,7 +285,7 @@ Extension shape lives in:
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
 - `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
-- `packages/extensions/src/` — all 27 builtin extension implementations
+- `packages/extensions/src/` — shipped extension implementations
 - `apps/tui/src/extensions/` — TUI discovery, loading, resolution
 
 ### Dependency direction
