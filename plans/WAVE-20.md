@@ -1258,6 +1258,9 @@ Progress:
   The ask-user tests now stub the public interaction facet directly, and the
   artifacts RPC test loads `ArtifactsExtension` through public extension
   inputs.
+- C57 moved skills tests and extension-local memory tests into
+  `packages/extensions`. The skills RPC test now uses public extension inputs
+  plus `layerOverrides` instead of core's private setup/compiler helpers.
 
 Verification on 2026-05-07:
 

@@ -3,24 +3,22 @@
  * request(...) path with per-request scopes, matching production behavior.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, type Layer } from "effect"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
-import { ref } from "@gent/core/extensions/api"
-import type { LoadedExtension } from "../../../src/domain/extension.js"
+import { Effect } from "effect"
+import { ref, type ProjectionTurnContext, type TurnProjection } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core/debug/provider"
 import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { setupExtension } from "../../../src/runtime/extensions/loader"
-import { compileExtensionReactions } from "../../../src/runtime/extensions/extension-reactions"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsRpc } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
-import { defineResource } from "@gent/core/domain/contribution"
-import { Gent } from "@gent/sdk"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
+import { testSetupCtx } from "@gent/core/test-utils"
 import { e2ePreset } from "../helpers/test-preset"
+
+const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
+  e as Effect.Effect<A, E, never>
 
 const testSkills = [
   new Skill({
@@ -42,57 +40,41 @@ const testSkills = [
 const sessionId = SessionId.make("skills-test-session")
 const branchId = BranchId.make("skills-test-branch")
 
-const setupSkillsExtension = Effect.provide(
-  Effect.gen(function* () {
-    const loaded = yield* setupExtension(
-      { extension: SkillsExtension, scope: "builtin", sourcePath: "builtin" },
-      "/test/cwd",
-      "/test/home",
-    )
-    return {
-      ...loaded,
-      contributions: {
-        ...loaded.contributions,
-        resources: (loaded.contributions.resources ?? []).map((r) =>
-          r.tag === Skills
-            ? defineResource({
-                ...r,
-                layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
-              })
-            : r,
-        ),
-      },
-    } satisfies LoadedExtension
-  }),
-  BunPlatformLive,
-)
+const skillsLayerOverride = { "@gent/skills": () => Skills.Test(testSkills) }
 
 describe("SkillsExtension via RPC", () => {
   it.live("turn projection contributes loaded skills to the prompt", () =>
-    Effect.gen(function* () {
-      const ext = yield* setupSkillsExtension
-      const compiled = compileExtensionReactions([ext])
+    narrowR(
+      Effect.gen(function* () {
+        const contributions = yield* SkillsExtension.setup(testSetupCtx())
 
-      const result = yield* compiled
-        .resolveTurnProjection({
-          sessionId,
-          branchId,
-          cwd: "/test/cwd",
-          home: "/test/home",
-          turn: {
+        const turnProjection = contributions.reactions?.turnProjection
+        if (turnProjection === undefined) throw new Error("expected skills turn projection")
+        const runTurnProjection = turnProjection as (
+          ctx: ProjectionTurnContext,
+        ) => Effect.Effect<TurnProjection, never, Skills>
+
+        const result = yield* narrowR(
+          runTurnProjection({
             sessionId,
             branchId,
-            agent: getBuiltinAgent("cowork")!,
-            allTools: [],
-            agentName: AgentName.make("cowork"),
-          },
-        })
-        .pipe(Effect.provide(Skills.Test(testSkills)))
+            cwd: "/test/cwd",
+            home: "/test/home",
+            turn: {
+              sessionId,
+              branchId,
+              agent: getBuiltinAgent("cowork")!,
+              allTools: [],
+              agentName: AgentName.make("cowork"),
+            },
+          }).pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
+        )
 
-      const section = result.promptSections.find((s) => s.id === "skills")
-      expect(section?.content).toContain("effect-v4")
-      expect(section?.content).toContain("react")
-    }),
+        const section = (result.promptSections ?? []).find((s) => s.id === "skills")
+        expect(section?.content).toContain("effect-v4")
+        expect(section?.content).toContain("react")
+      }),
+    ),
   )
 
   it.live(
@@ -100,13 +82,13 @@ describe("SkillsExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupSkillsExtension
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [SkillsExtension],
+            layerOverrides: skillsLayerOverride,
+          })
 
           const reply = (yield* client.extension.request({
             sessionId,
@@ -130,13 +112,13 @@ describe("SkillsExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupSkillsExtension
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [SkillsExtension],
+            layerOverrides: skillsLayerOverride,
+          })
 
           const reply = (yield* client.extension.request({
             sessionId,
@@ -160,13 +142,13 @@ describe("SkillsExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupSkillsExtension
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [SkillsExtension],
+            layerOverrides: skillsLayerOverride,
+          })
 
           const reply = yield* client.extension.request({
             sessionId,
