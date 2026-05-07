@@ -9,7 +9,7 @@
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "typecheck": "tsgo --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts --path-ignore-patterns='**/headless-cli-exit.test.ts' --path-ignore-patterns='**/headless-runner.test.ts' tests",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" ! -name \"headless-cli-exit.test.ts\" ! -name \"headless-runner.test.ts\" -print0 | xargs -0 -n 12 -P 4 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts'",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ./node_modules/@opentui/solid/scripts/preload.ts integration tests/headless-cli-exit.test.ts tests/headless-runner.test.ts"
   },
   "dependencies": {
