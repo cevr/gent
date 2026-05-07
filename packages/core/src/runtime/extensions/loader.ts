@@ -7,7 +7,7 @@ import { ExtensionLoadError } from "../../domain/extension.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
-import { validatePackageShape } from "../../extensions/api.js"
+import { validateExtensionPackageShape } from "../../domain/extension-package-shape.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { getToolMetadata } from "../../domain/capability/tool.js"
 
@@ -267,7 +267,7 @@ export const setupExtension = (
     // setups already run this; raw `{ manifest, setup }` objects (e.g. tests,
     // hand-rolled extensions) bypass it. Running here closes the install
     // boundary — malformed contributions fail activation, not mid-dispatch.
-    yield* validatePackageShape(extension.manifest, contributions)
+    yield* validateExtensionPackageShape(extension.manifest, contributions)
 
     return {
       manifest: extension.manifest,

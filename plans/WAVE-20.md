@@ -995,6 +995,23 @@ Verification on 2026-05-07:
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/interaction-tools/prompt.test.ts packages/core/tests/extensions/task-tools/task-tools.test.ts packages/core/tests/extensions/executor-integration.test.ts packages/core/tests/extensions/fs-tools/read.test.ts packages/core/tests/extensions/fs-tools/glob.test.ts packages/core/tests/extensions/fs-tools/grep.test.ts packages/core/tests/extensions/fs-tools/edit.test.ts`
 
+Sub-commit C46.3 complete: moved runtime package-shape validation out of the
+public extension API.
+
+Implementation notes:
+
+- Added `packages/core/src/domain/extension-package-shape.ts` as the shared
+  validator for `defineExtension` and runtime-loaded packages.
+- `@gent/core/extensions/api` no longer exports `validatePackageShape`.
+- Runtime loader imports the validator from the owning domain module.
+- `extension-surface-locks.test.ts` proves package-shape validation is not
+  public extension API.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/activation.test.ts`
+
 #### C47: docs(examples): delete or migrate stale pipeline/subscription examples
 
 Migrate examples to reactions or delete them if they no longer teach a live

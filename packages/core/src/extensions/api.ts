@@ -7,7 +7,7 @@
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
  *
  * The bucket name IS the discrimination — TypeScript catches a command
- * placed in `tools` at the call site; runtime `validatePackageShape` adds
+ * placed in `tools` at the call site; runtime package-shape validation adds
  * field-local error messages for runtime-loaded (JS) extensions.
  *
  * Effect-native end-to-end: every contribution returns Effect. There are no
@@ -52,12 +52,11 @@ import type { ExtensionContributions, ExtensionReactions } from "../domain/contr
 import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionCapability } from "../domain/capability/action.js"
 import type { RequestCapability } from "../domain/capability/request.js"
+import type { ToolCapability } from "../domain/capability/tool.js"
 import {
-  getToolId,
-  getToolMetadata,
-  isToolCapability,
-  type ToolCapability,
-} from "../domain/capability/tool.js"
+  validateExtensionPackageShape,
+  validateKnownExtensionInputBuckets,
+} from "../domain/extension-package-shape.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -391,159 +390,13 @@ const resolveField = <A>(
   })
 
 /**
- * Cross-bucket validation — runs after every bucket's spec resolves. Codex
- *  finding 4: field-local errors beat "_kind expected". The shape of the
- * messages is `Extension "@x" <field>[<i>] invalid: <reason>`.
- *
- * Invariants enforced here:
- *   - Tool leaves must have a non-empty description.
- *   - Intra-extension capability/agent/driver id/name collisions are surfaced
- *     (cross-extension collisions are scope-precedence's concern).
- */
-
-/**
- * Per-bucket id-uniqueness check. Mutates `capIds` to record locations and
- * returns an error message if a duplicate is found within the bucket or
- * across previously-checked buckets.
- */
-const checkBucketIds = (
-  bucket: string,
-  entries: ReadonlyArray<{ readonly id: string } | ToolCapability>,
-  capIds: Map<string, string>,
-): string | undefined => {
-  for (const [i, cap] of entries.entries()) {
-    const id = isToolCapability(cap) ? getToolId(cap) : cap.id
-    if (capIds.has(id)) {
-      return `${bucket}[${i}] (${id}): duplicate id within extension (also at ${capIds.get(id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
-    }
-    capIds.set(id, `${bucket}[${i}]`)
-  }
-  return undefined
-}
-
-/**
- * Tools require a non-empty description because the model sees it as the tool
- * description. Bucket shape makes non-tool leaves unreachable here.
- */
-const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): string | undefined => {
-  for (const [i, cap] of tools.entries()) {
-    if (!isToolCapability(cap)) {
-      return `tools[${i}]: tool must be created with \`tool({...})\` so Gent metadata is attached`
-    }
-    const metadata = getToolMetadata(cap)
-    if (cap.description === undefined || cap.description === "") {
-      return `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`
-    }
-  }
-  return undefined
-}
-
-const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
-  const tools = contribs.tools ?? []
-  const commands = contribs.actions ?? []
-  const rpc = contribs.requests ?? []
-  const toolErr = checkToolDescriptions(tools)
-  if (toolErr !== undefined) return toolErr
-  // Validate id-uniqueness across all buckets in declaration order so error
-  // messages name the correct bucket.
-  const capIds = new Map<string, string>()
-  return (
-    checkBucketIds("tools", tools, capIds) ??
-    checkBucketIds("commands", commands, capIds) ??
-    checkBucketIds("rpc", rpc, capIds)
-  )
-}
-
-const validateAgents = (contribs: ExtensionContributions): string | undefined => {
-  const agentNames = new Map<string, number>()
-  for (const [i, a] of (contribs.agents ?? []).entries()) {
-    if (agentNames.has(a.name)) {
-      return `agents[${i}] (${a.name}): duplicate name within extension (also at index ${agentNames.get(a.name)})`
-    }
-    agentNames.set(a.name, i)
-  }
-  return undefined
-}
-
-const validateDriverIds = (contribs: ExtensionContributions): string | undefined => {
-  const allDriverIds = new Map<string, string>()
-  for (const [i, d] of (contribs.modelDrivers ?? []).entries()) {
-    if (allDriverIds.has(d.id)) {
-      return `modelDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`
-    }
-    allDriverIds.set(d.id, `modelDrivers[${i}]`)
-  }
-  for (const [i, d] of (contribs.externalDrivers ?? []).entries()) {
-    if (allDriverIds.has(d.id)) {
-      return `externalDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`
-    }
-    allDriverIds.set(d.id, `externalDrivers[${i}]`)
-  }
-  return undefined
-}
-
-const allowedContributionBuckets = new Set([
-  "resources",
-  "tools",
-  "actions",
-  "requests",
-  "agents",
-  "reactions",
-  "modelDrivers",
-  "externalDrivers",
-])
-
-const allowedExtensionInputKeys = new Set(["id", "client", ...allowedContributionBuckets])
-
-const unknownBucketMessage = (key: string) =>
-  `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
-    allowedContributionBuckets,
-  ).join(", ")}`
-
-const validateKnownBuckets = (contribs: ExtensionContributions): string | undefined => {
-  for (const key of Object.keys(contribs)) {
-    if (!allowedContributionBuckets.has(key)) {
-      return unknownBucketMessage(key)
-    }
-  }
-  return undefined
-}
-
-const validateKnownInputBuckets = (params: object): string | undefined => {
-  for (const key of Object.keys(params)) {
-    if (!allowedExtensionInputKeys.has(key)) {
-      return unknownBucketMessage(key)
-    }
-  }
-  return undefined
-}
-
-/** Internal: cross-bucket validation invoked by `defineExtension` and
- *  `setupExtension` (the loader runs it defensively on raw `{ manifest, setup }`
- *  objects that bypassed `defineExtension`). */
-export const validatePackageShape = (
-  manifest: ExtensionManifest,
-  contribs: ExtensionContributions,
-): Effect.Effect<void, ExtensionLoadError> =>
-  Effect.gen(function* () {
-    const checks = [validateKnownBuckets, validateCapabilities, validateAgents, validateDriverIds]
-    for (const check of checks) {
-      const message = check(contribs)
-      if (message !== undefined) {
-        return yield* new ExtensionLoadError({ extensionId: manifest.id, message })
-      }
-    }
-  })
-
-/**
  * Define an extension as typed contribution buckets.
  *
  * Each bucket is optional and homogeneously typed. Buckets accept a literal
  * array (most common), a `(ctx) => array` factory, or a `(ctx) => Effect<array>`
  * factory. Errors during resolution are annotated with the bucket name.
  *
- * Cross-bucket validation runs after all buckets resolve — see
- * `validatePackageShape` for the enforced invariants.
+ * Cross-bucket validation runs after all buckets resolve.
  *
  * @example
  * ```ts
@@ -574,7 +427,7 @@ export function defineExtension(
     ...(params.client !== undefined ? { client: params.client } : {}),
     setup: (ctx) =>
       Effect.gen(function* () {
-        const inputMessage = validateKnownInputBuckets(params)
+        const inputMessage = validateKnownExtensionInputBuckets(params)
         if (inputMessage !== undefined) {
           return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
         }
@@ -600,7 +453,7 @@ export function defineExtension(
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
         }
-        yield* validatePackageShape(manifest, contribs)
+        yield* validateExtensionPackageShape(manifest, contribs)
         return contribs
       }),
   }

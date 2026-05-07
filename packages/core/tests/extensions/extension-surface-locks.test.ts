@@ -328,6 +328,8 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadIsToolCapability = typeof PublicExtensionApi.isToolCapability
     // @ts-expect-error — direct tool-effect extraction is a test helper, not authoring API
     type _BadGetToolEffect = typeof PublicExtensionApi.getToolEffect
+    // @ts-expect-error — package shape validation is host loader plumbing, not authoring API
+    type _BadValidatePackageShape = typeof PublicExtensionApi.validatePackageShape
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
     // @ts-expect-error — all session facet methods must map storage failures to host errors

@@ -16,8 +16,8 @@ import {
   getToolId,
   request,
   tool,
-  validatePackageShape,
 } from "@gent/core/extensions/api"
+import { validateExtensionPackageShape } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core/domain/capability/tool"
 import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
@@ -327,7 +327,9 @@ describe("defineExtension", () => {
   it.live("unknown runtime-loaded contribution buckets fail activation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
-        validatePackageShape({ id: ExtensionId.make("unknown-bucket") }, { actors: [] } as never),
+        validateExtensionPackageShape({ id: ExtensionId.make("unknown-bucket") }, {
+          actors: [],
+        } as never),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
