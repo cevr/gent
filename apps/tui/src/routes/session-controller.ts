@@ -12,7 +12,6 @@ import { autocompleteContribution } from "../extensions/client-facets.js"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { ReasoningEffort } from "@gent/core/domain/agent.js"
-import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
 import {
   ComposerInteractionEvent,
@@ -55,11 +54,25 @@ import {
   type SessionUiEffect,
 } from "./session-ui-state"
 import { createPromptSearchController } from "./prompt-search-controller"
-
-type QueueState = {
-  steering: readonly QueueEntryInfo[]
-  followUp: readonly QueueEntryInfo[]
-}
+import {
+  beginAuthCheck,
+  clearQueue,
+  closeAuthGate as closeAuthGateState,
+  completeAuthCheck,
+  failAuthCheck,
+  formatAuthGateError,
+  initialSessionControllerState,
+  isBlockingAuthGate,
+  queuedDraftText,
+  setElapsed as setControllerElapsed,
+  setQueue,
+  type QueueState,
+} from "./session-controller-state"
+import {
+  currentMillis,
+  defaultActivityDecor,
+  pickActivityDecor,
+} from "./session-controller-activity"
 
 export interface SessionController {
   client: ClientContextValue
@@ -95,54 +108,8 @@ export interface SessionController {
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
-// Each spinner has frames and a tick multiplier (ticks per frame at 60ms base).
-// multiplier 1 = 60ms/frame, 2 = 120ms/frame, etc.
-const SPINNERS = [
-  { frames: ["·", "•", "*", "⁑", "⁂"], multiplier: 2 },
-  { frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], multiplier: 1 },
-  { frames: ["⠁⠂⠄⡀", "⠂⠄⡀⢀", "⠄⡀⢀⠠", "⡀⢀⠠⠐", "⢀⠠⠐⠈", "⠠⠐⠈⠁", "⠐⠈⠁⠂", "⠈⠁⠂⠄"], multiplier: 2 },
-  { frames: ["⠉⠉", "⠓⠓", "⠦⠦", "⣄⣄", "⠦⠦", "⠓⠓"], multiplier: 2 },
-  { frames: ["⠃", "⠉", "⠘", "⠰", "⢠", "⣀", "⡄", "⠆"], multiplier: 2 },
-  { frames: ["⣀⣀", "⣤⣤", "⣶⣶", "⣿⣿", "⣿⣿", "⣶⣶", "⣤⣤", "⣀⣀", "⠀⠀"], multiplier: 2 },
-  { frames: ["⢕⢕", "⡪⡪", "⢊⠔", "⡡⢊"], multiplier: 4 },
-  {
-    frames: ["⠀⠀⠀", "⠂⠂⠂", "⠌⠌⠌", "⡑⡑⡑", "⢕⢕⢕", "⣫⣫⣫", "⣿⣿⣿", "⣫⣫⣫", "⢕⢕⢕", "⡑⡑⡑", "⠌⠌⠌", "⠂⠂⠂"],
-    multiplier: 2,
-  },
-]
-
-const THINKING_WORDS = [
-  "thinking",
-  "pondering",
-  "reasoning",
-  "analyzing",
-  "processing",
-  "evaluating",
-  "reflecting",
-  "deliberating",
-  "considering",
-  "contemplating",
-  "mulling",
-  "deducing",
-  "inferring",
-  "examining",
-  "synthesizing",
-  "assessing",
-  "ruminating",
-]
-
-const currentMillis = () => performance.timeOrigin + performance.now()
-
-const pickRandom = <T>(arr: readonly T[], random: number): T => {
-  const item = arr[Math.floor(random * arr.length)]
-  if (item === undefined) throw new Error("pickRandom: empty array")
-  return item
-}
-
 const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
   state._tag === "tree" ? state.tree : null
-
-type AuthGateState = "checking" | "open" | "closed" | "error"
 
 export function createSessionController(props: {
   sessionId: SessionId
@@ -171,34 +138,40 @@ export function createSessionController(props: {
   const tick = useSpinnerClock()
 
   // ── Auth gate ──
-  const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
-    !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
+  const [controllerState, setControllerState] = createSignal(
+    initialSessionControllerState({
+      debugMode: props.debugMode,
+      missingAuthProviders: props.missingAuthProviders,
+      agent: client.agent(),
+    }),
   )
-  const [validatedAgent, setValidatedAgent] = createSignal<string | undefined>(client.agent())
-
-  let authCheckVersion = 0
+  const authGateState = () => controllerState().authGate
+  const validatedAgent = () => controllerState().validatedAgent
+  const queueState = () => controllerState().queue
+  const elapsed = () => controllerState().elapsed
+  const updateControllerState = (
+    update: (state: ReturnType<typeof controllerState>) => ReturnType<typeof controllerState>,
+  ) => setControllerState((current) => update(current))
   createEffect(
     on(
       () => client.agent(),
       (agentName) => {
         if (props.debugMode || agentName === undefined) return
-        const version = ++authCheckVersion
-        setAuthGateState("checking")
+        const version = controllerState().authCheckVersion + 1
+        updateControllerState(beginAuthCheck)
         client.runtime.cast(
           client.client.auth.listProviders({ agentName, sessionId: props.sessionId }).pipe(
             Effect.tap((providers) =>
               Effect.sync(() => {
-                if (version !== authCheckVersion) return
-                setValidatedAgent(agentName)
                 const missing = providers.some((p) => p.required && !p.hasKey)
-                setAuthGateState(missing ? "open" : "closed")
+                updateControllerState((state) =>
+                  completeAuthCheck(state, { version, agent: agentName, missing }),
+                )
               }),
             ),
             Effect.catchEager((error) =>
               Effect.sync(() => {
-                if (version !== authCheckVersion) return
-                setValidatedAgent(undefined)
-                setAuthGateState("error")
+                updateControllerState((state) => failAuthCheck(state, version))
                 client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
               }),
             ),
@@ -216,8 +189,6 @@ export function createSessionController(props: {
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
-  const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
-  const [elapsed, setElapsed] = createSignal(0)
   let activityStartTime = currentMillis()
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
@@ -320,7 +291,7 @@ export function createSessionController(props: {
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
       },
-      onQueueSnapshot: setQueueState,
+      onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
     },
     props.initialPrompt,
     // Gate prompt send on auth resolution — feed waits for stream + this signal
@@ -353,13 +324,15 @@ export function createSessionController(props: {
   createEffect(() => {
     const nextActivity = activity()
     activityStartTime = currentMillis()
-    setElapsed(0)
+    updateControllerState((state) => setControllerElapsed(state, 0))
 
     if (nextActivity.phase === "idle") return
 
     const fiber = client.runtime.fork(
       Effect.sync(() => {
-        setElapsed(currentMillis() - activityStartTime)
+        updateControllerState((state) =>
+          setControllerElapsed(state, currentMillis() - activityStartTime),
+        )
       }).pipe(Effect.repeat(Schedule.spaced("1 second"))),
     )
     onCleanup(() => {
@@ -368,8 +341,7 @@ export function createSessionController(props: {
   })
 
   // Pick a random spinner + thinking word each time activity starts
-  let activeSpinner = SPINNERS[0] ?? { frames: ["·"], multiplier: 1 }
-  let activeWord = "thinking"
+  let activityDecor = defaultActivityDecor()
   createEffect(
     on(
       () => activity().phase,
@@ -379,11 +351,9 @@ export function createSessionController(props: {
             Effect.gen(function* () {
               const spinnerRandom = yield* Random.next
               const wordRandom = yield* Random.next
-              const spinner = pickRandom(SPINNERS, spinnerRandom)
-              const word = pickRandom(THINKING_WORDS, wordRandom)
+              const nextDecor = pickActivityDecor({ spinnerRandom, wordRandom })
               yield* Effect.sync(() => {
-                activeSpinner = spinner
-                activeWord = word
+                activityDecor = nextDecor
               })
             }),
           )
@@ -394,8 +364,8 @@ export function createSessionController(props: {
 
   const spinner = createMemo(() => {
     const t = tick()
-    const step = Math.floor(t / activeSpinner.multiplier)
-    return activeSpinner.frames[step % activeSpinner.frames.length] ?? "·"
+    const step = Math.floor(t / activityDecor.spinner.multiplier)
+    return activityDecor.spinner.frames[step % activityDecor.spinner.frames.length] ?? "·"
   })
 
   const phaseLabel = createMemo(() => {
@@ -404,7 +374,7 @@ export function createSessionController(props: {
       case "idle":
         return nextActivity.turn > 0 ? "idle" : "ready"
       case "thinking":
-        return activeWord
+        return activityDecor.word
       case "tool":
         return nextActivity.toolInfo ?? "working"
     }
@@ -626,14 +596,14 @@ export function createSessionController(props: {
       client.drainQueuedMessages().pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
-            const all = [...steering, ...followUp]
-            if (all.length === 0) return
+            const text = queuedDraftText({ steering, followUp })
+            if (text === undefined) return
             onComposerInteraction(
               ComposerInteractionEvent.RestoreDraft.make({
-                text: all.map((entry) => entry.content).join("\n"),
+                text,
               }),
             )
-            setQueueState({ steering: [], followUp: [] })
+            updateControllerState(clearQueue)
           }),
         ),
         Effect.catchEager((error) =>
@@ -648,9 +618,7 @@ export function createSessionController(props: {
   const closeOverlay = () => dispatchSessionUi(SessionUiEvent.CloseOverlay.make({}))
 
   const resolveAuthGate = () => {
-    authCheckVersion++
-    setValidatedAgent(client.agent())
-    setAuthGateState("closed")
+    updateControllerState((state) => closeAuthGateState(state, client.agent()))
     closeOverlay()
   }
 
@@ -801,17 +769,6 @@ export function createSessionController(props: {
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
-}
-
-const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
-
-const formatAuthGateError = (error: unknown): string => {
-  if (error instanceof Error) return error.message
-  if (error !== null && typeof error === "object" && "message" in error) {
-    const message = error.message
-    if (typeof message === "string") return message
-  }
-  return String(error)
 }
 
 // ── Context ──
