@@ -21,9 +21,9 @@ import {
   clientCommandContribution,
   overlayContribution,
 } from "../client-facets.js"
-import type { AutoSnapshotReply } from "@gent/extensions/auto-protocol.js"
-import { AutoRpc } from "@gent/extensions/auto-protocol.js"
-import { AutoExtension } from "@gent/extensions/auto.js"
+import type { AutoSnapshotReply } from "@gent/extensions/auto/protocol.js"
+import { AutoRpc } from "@gent/extensions/auto/protocol.js"
+import { AutoExtension } from "@gent/extensions/auto/index.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 import { requestExtension, ClientTransport } from "../client-transport"
 import { ClientShell, ClientLifecycle } from "../client-services"

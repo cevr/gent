@@ -9,7 +9,7 @@ import {
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
 import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
-import { AutoRead } from "./auto-controller.js"
+import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 

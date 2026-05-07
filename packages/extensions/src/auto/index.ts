@@ -15,7 +15,7 @@ import {
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
-import { AutoCheckpointTool } from "./auto-checkpoint.js"
+import { AutoCheckpointTool } from "./checkpoint.js"
 import {
   AutoControllerLive,
   AutoRead,
@@ -23,12 +23,12 @@ import {
   AutoWrite,
   projectSnapshot,
   viewForState,
-} from "./auto-controller.js"
-import { AutoJournal } from "./auto-journal.js"
-import { AUTO_EXTENSION_ID, AutoRpc } from "./auto-protocol.js"
+} from "./controller.js"
+import { AutoJournal } from "./journal.js"
+import { AUTO_EXTENSION_ID, AutoRpc } from "./protocol.js"
 
-export { AutoRead, AutoState, AutoWrite, projectSnapshot, viewForState } from "./auto-controller.js"
-export { AUTO_EXTENSION_ID } from "./auto-protocol.js"
+export { AutoRead, AutoState, AutoWrite, projectSnapshot, viewForState } from "./controller.js"
+export { AUTO_EXTENSION_ID } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const REVIEW_TOOL = "review"

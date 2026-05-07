@@ -20,7 +20,7 @@ import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
+import { AutoRead, AutoWrite } from "@gent/extensions/auto/controller"
 
 const sessionId = SessionId.make("auto-e2e-session")
 const branchId = BranchId.make("auto-e2e-branch")

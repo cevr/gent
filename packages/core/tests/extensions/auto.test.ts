@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AutoExtension, AutoState, viewForState } from "@gent/extensions/auto"
-import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
+import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto/controller"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const makeLayer = () => AutoControllerLive

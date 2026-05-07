@@ -8,7 +8,7 @@
 import { createSignal } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { ref } from "@gent/core/extensions/api"
-import { AutoRpc } from "@gent/extensions/auto-protocol.js"
+import { AutoRpc } from "@gent/extensions/auto/protocol.js"
 import { ChromePanel } from "../components/chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useClient } from "../client/context"

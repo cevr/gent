@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { CapabilityError, ExtensionId, request } from "@gent/core/extensions/api"
-import { AutoRead, AutoWrite } from "./auto-controller.js"
+import { AutoRead, AutoWrite } from "./controller.js"
 
 export const AUTO_EXTENSION_ID = ExtensionId.make("@gent/auto")
 

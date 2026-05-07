@@ -6,7 +6,7 @@ import {
   type TurnProjection,
   withReadOnly,
 } from "@gent/core/extensions/api"
-import type { AutoSnapshotReply } from "./auto-protocol.js"
+import type { AutoSnapshotReply } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const DEFAULT_MAX_ITERATIONS = 10
@@ -205,13 +205,13 @@ interface AutoWriteShape extends AutoReadShape {
 }
 
 export class AutoRead extends Context.Service<AutoRead, ReadOnly<AutoReadShape>>()(
-  "@gent/extensions/src/auto-controller/AutoRead",
+  "@gent/extensions/src/auto/controller/AutoRead",
 ) {
   declare readonly [ReadOnlyBrand]: true
 }
 
 export class AutoWrite extends Context.Service<AutoWrite, AutoWriteShape>()(
-  "@gent/extensions/src/auto-controller/AutoWrite",
+  "@gent/extensions/src/auto/controller/AutoWrite",
 ) {}
 
 const transitionStartAuto = (
