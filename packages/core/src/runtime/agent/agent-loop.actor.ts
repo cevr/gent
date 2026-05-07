@@ -1056,7 +1056,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
 const AgentLoopLiveActorLayer = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
   // Long-lived ops (Submit/RunTurn) park inside the loop body via
-  // commandGate. `concurrency: "unbounded"` keeps short ops
+  // actor-owned queue/side mutation gates. `concurrency: "unbounded"` keeps short ops
   // (RecordToolResult, RespondInteraction, Steer) from blocking the
   // mailbox behind a slow Submit.
   concurrency: "unbounded",

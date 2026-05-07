@@ -1,4 +1,4 @@
-import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, Semaphore, Stream } from "effect"
+import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
@@ -403,44 +403,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
   const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
-  const commandGate = yield* Semaphore.make(1)
-  const serializeCommand = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    commandGate.withPermits(1)(effect)
-  const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-    extensionRegistry,
-    overrides: {
-      sessionControl: {
-        queueFollowUp: (input) =>
-          Effect.gen(function* () {
-            const message = Message.Regular.make({
-              id: MessageId.make(yield* platform.randomId),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: input.content })],
-              createdAt: yield* DateTime.nowAsDate,
-              ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-            })
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.send(
-              AgentLoopActor.QueueFollowUp.make({
-                message,
-                agentOverride: undefined,
-                runSpec: undefined,
-                interactive: undefined,
-              }),
-            )
-            yield* waitForSubmittedMessageAccepted({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              messageId: message.id,
-              content: input.content,
-            })
-          }),
-      },
-    },
-  })
-
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
@@ -507,6 +469,41 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       })
       yield* loop
     })
+
+  const queueFollowUpThroughActor = Effect.fn("SessionRuntime.queueFollowUpThroughActor")(
+    function* (input: QueueFollowUpPayload) {
+      const message = Message.Regular.make({
+        id: MessageId.make(yield* platform.randomId),
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        role: "user",
+        parts: [new TextPart({ type: "text", text: input.content })],
+        createdAt: yield* DateTime.nowAsDate,
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      })
+      yield* AgentLoopActor.QueueFollowUp.send({
+        message,
+        agentOverride: undefined,
+        runSpec: undefined,
+        interactive: undefined,
+      }).pipe(Effect.provideService(AgentLoopActor.Context, actorClientFactory))
+      yield* waitForSubmittedMessageAccepted({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        messageId: message.id,
+        content: input.content,
+      })
+    },
+  )
+
+  const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+    extensionRegistry,
+    overrides: {
+      sessionControl: {
+        queueFollowUp: queueFollowUpThroughActor,
+      },
+    },
+  })
 
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
     AgentLoopActor.redeliver(entityIdOf(target.sessionId, target.branchId)).pipe(
@@ -624,130 +621,89 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
   return {
     sendUserMessage: (input) =>
-      serializeCommand(
-        sendUserMessage(input).pipe(
-          Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
-        ),
+      sendUserMessage(input).pipe(
+        Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
       ),
 
     recordToolResult: (input) =>
-      serializeCommand(
-        requireSessionBranch(input).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-              yield* ref.execute(
-                AgentLoopActor.RecordToolResult.make({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  toolCallId: input.toolCallId,
-                  toolName: input.toolName,
-                  output: input.output,
-                  commandId: input.commandId,
-                  isError: input.isError,
-                }),
-              )
-            }),
-          ),
-          Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.RecordToolResult.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                toolCallId: input.toolCallId,
+                toolName: input.toolName,
+                output: input.output,
+                commandId: input.commandId,
+                isError: input.isError,
+              }),
+            )
+          }),
         ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
       ),
 
     invokeTool: (input) =>
-      serializeCommand(
-        requireSessionBranch(input).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              const commandId = input.commandId ?? ActorCommandId.make(yield* platform.randomId)
-              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-              yield* ref.execute(
-                AgentLoopActor.InvokeTool.make({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  commandId,
-                  toolName: input.toolName,
-                  input: input.input,
-                }),
-              )
-            }),
-          ),
-          Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const commandId = input.commandId ?? ActorCommandId.make(yield* platform.randomId)
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(
+              AgentLoopActor.InvokeTool.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                commandId,
+                toolName: input.toolName,
+                input: input.input,
+              }),
+            )
+          }),
         ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
       ),
 
     steer: (command) =>
-      serializeCommand(
-        requireSessionBranch(command).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              const commandId = ActorCommandId.make(yield* platform.randomId)
-              const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-              yield* ref.send(AgentLoopActor.Steer.make({ commandId, command }))
-            }),
-          ),
-          Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
+      requireSessionBranch(command).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const commandId = ActorCommandId.make(yield* platform.randomId)
+            const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
+            yield* ref.send(AgentLoopActor.Steer.make({ commandId, command }))
+          }),
         ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
       ),
 
     respondInteraction: (input) =>
-      serializeCommand(
-        requireSessionBranch(input).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-              yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
-            }),
-          ),
-          Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+          }),
         ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
       ),
 
     runPrompt: (input: RunPromptInput) =>
-      serializeCommand(
-        agentLoop.runOnce(input).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentRunError({
-                message: cause.message,
-                cause,
-              }),
-          ),
+      agentLoop.runOnce(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentRunError({
+              message: cause.message,
+              cause,
+            }),
         ),
       ),
 
     queueFollowUp: (input) =>
-      serializeCommand(
-        requireSessionBranch(input).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              const message = Message.Regular.make({
-                id: MessageId.make(yield* platform.randomId),
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                role: "user",
-                parts: [new TextPart({ type: "text", text: input.content })],
-                createdAt: yield* DateTime.nowAsDate,
-                ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-              })
-              const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-              yield* ref.send(
-                AgentLoopActor.QueueFollowUp.make({
-                  message,
-                  agentOverride: undefined,
-                  runSpec: undefined,
-                  interactive: undefined,
-                }),
-              )
-              yield* waitForSubmittedMessageAccepted({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                messageId: message.id,
-                content: input.content,
-              })
-            }),
-          ),
-          Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
-        ),
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() => queueFollowUpThroughActor(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
       ),
 
     drainQueuedMessages: (input) =>
@@ -959,9 +915,9 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     SessionRuntimeEntity.toLayer(
       makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
       {
-        // Long-lived read streams (watchState) must not occupy the entity
-        // server mailbox; mutating commands serialize through `commandGate`
-        // inside the per-entity SessionRuntime service.
+        // SessionRuntime hosts long-lived streams and control-plane calls;
+        // per-branch mutation ordering lives in AgentLoop's entity operation
+        // queue and actor-owned mutation gates.
         concurrency: "unbounded",
       },
     ).pipe(
