@@ -92,6 +92,7 @@ Commits landed in this wave so far:
 - `5bb02ea9 refactor(extensions): require explicit wide tool context`
 - `b9334674 refactor(extensions): keep tool runner in core runtime`
 - `6b19a08a refactor(extensions): publish task state changes generically`
+- `05579bfa refactor(task-tools): own task domain in extension`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -110,11 +111,9 @@ classes of privilege and races, but the deeper P1s remain:
 - The extension author API is narrower, but it still exposes `runProcess` and
   `GentPlatform`. Builtins are still able to use host-level APIs that third
   party extensions should not receive by default.
-- Task-tools now publishes a generic `ExtensionStateChanged` pulse instead of
-  raw task lifecycle events through `@gent/core/extensions/api`, but the
-  `Task` schema and legacy `TaskCreated` / `TaskUpdated` / `TaskCompleted` /
-  `TaskFailed` / `TaskStopped` / `TaskDeleted` event variants still live in
-  core. That is a P1 ownership mismatch: task is an extension concern.
+- Task-tools now publishes a generic `ExtensionStateChanged` pulse and owns
+  `Task`, `TaskId`, status/transition schemas, and task-storage integration
+  tests. The previous task ownership mismatch is closed.
 - OAuth credential refresh cells are still plain `Ref` read-refresh-write
   paths in OpenAI and Anthropic; concurrent stale calls can duplicate refresh
   work and race rotated refresh tokens.
@@ -137,8 +136,7 @@ Fresh re-audit receipts to carry into the remaining batches:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/session-manager.ts:85`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:256`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:258`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts:219`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/task.ts:1`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools/domain.ts:1`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/index.ts:264`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/credential-service.ts:227`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/index.ts:248`
@@ -576,18 +574,18 @@ Validation:
 
 Goal: make builtins and external extensions use one minimal, non-privileged API.
 
-Status: partial. Commits `8b5fb090`, `5bb02ea9`, `b9334674`, and `6b19a08a`
-removed several host-loader, tool-runner, wide-context, raw-event, and task
-event privileges. `runProcess`, `GentPlatform`, and core-owned task domain
-types/events still remain.
+Status: partial. Commits `8b5fb090`, `5bb02ea9`, `b9334674`, `6b19a08a`, and
+`05579bfa` removed several host-loader, tool-runner, wide-context, raw-event,
+task event, and core-owned task-domain privileges. `runProcess` and
+`GentPlatform` still remain.
 
 Work:
 
 - Redefine `packages/core/src/extensions/api.ts` as the small author API.
 - Remove exports of runtime/platform/private host services, including
   `runProcess` and `GentPlatform`.
-- Move task-tools schemas/storage/events out of core or replace the legacy core
-  task event variants with extension-owned state/request semantics.
+- Keep task-tools schemas/storage/events extension-owned; do not re-export them
+  from core author APIs.
 - Migrate builtins to the narrowed API.
 - Add lint/static guards for forbidden extension imports.
 - Delete compatibility aliases and old docs examples.
