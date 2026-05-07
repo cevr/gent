@@ -31,6 +31,8 @@ export interface RpcHarnessConfig extends Pick<
   | "extensionInputs"
   | "subagentRunner"
   | "approvalLayer"
+  | "durableApproval"
+  | "storagePath"
   | "sessionProfileCacheLayer"
   | "extraLayers"
   | "authLayer"

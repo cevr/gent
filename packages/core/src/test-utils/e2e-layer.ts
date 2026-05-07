@@ -24,9 +24,11 @@ import { Auth, AuthGuard } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
+import { EventStoreError } from "../domain/event.js"
 import { ExtensionId, type InteractionRequestId, SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
+import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -45,6 +47,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionCommands } from "../server/session-commands.js"
 import { AppServicesLive } from "../server/index.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
 import { ServerIdentity } from "../server/server-identity.js"
 import {
   reconcileLoadedExtensions,
@@ -65,6 +68,10 @@ export interface E2ELayerConfig {
   readonly subagentRunner?: AgentRunner
   /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
+  /** Use the production cold-interaction service with durable pending rows. */
+  readonly durableApproval?: boolean
+  /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
+  readonly storagePath?: string
   /** Optional per-cwd profile cache for shared-server routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
@@ -171,7 +178,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       //
       // Extension layers may require SqlClient — provide it below via
       // `provideMerge(resourceLayer, baseDeps)`.
-      const storageLayer = SqliteStorage.MemoryWithSql()
+      const storageLayer =
+        config.storagePath === undefined
+          ? SqliteStorage.MemoryWithSql()
+          : Layer.provide(SqliteStorage.LiveWithSql(config.storagePath), BunServices.layer)
       const clusterRunnerLive = Layer.provide(
         SingleRunner.layer({ runnerStorage: "memory" }),
         storageLayer,
@@ -252,14 +262,60 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         EventPublisherLive,
         Layer.merge(baseDeps, baseEventStoreLive),
       )
+      const durableApprovalLayer = Layer.provide(
+        Layer.unwrap(
+          Effect.gen(function* () {
+            const store = yield* InteractionStorage
+            return ApprovalService.LiveWithStorage({
+              persist: (record) =>
+                store.persist(record).pipe(
+                  Effect.asVoid,
+                  Effect.mapError(
+                    (cause) =>
+                      new EventStoreError({
+                        message: "Failed to persist interaction request",
+                        cause,
+                      }),
+                  ),
+                ),
+              resolve: (requestId) =>
+                store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+            })
+          }),
+        ),
+        Layer.mergeAll(baseDeps, eventPublisherLive, BunGentPlatformLive),
+      )
+      const defaultApprovalLayer =
+        config.durableApproval === true ? durableApprovalLayer : ApprovalService.Test()
       const approvalLayer =
-        config.approvalLayer === undefined
-          ? ApprovalService.Test()
-          : Layer.provide(
+        config.approvalLayer !== undefined
+          ? Layer.provide(
               config.approvalLayer,
               Layer.merge(eventPublisherLive, BunGentPlatformLive),
             )
+          : defaultApprovalLayer
       const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
+      const interactionRecoveryLive = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const interactionStore = yield* InteractionStorage
+          const approvalService = yield* ApprovalService
+
+          const pending = yield* interactionStore.listPending()
+          for (const record of pending) {
+            const params = yield* decodeInteractionParams(record.paramsJson).pipe(
+              Effect.option,
+              Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+            )
+            if (params === undefined) continue
+            yield* approvalService
+              .rehydrate(record.requestId, params, {
+                sessionId: record.sessionId,
+                branchId: record.branchId,
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+          }
+        }),
+      ).pipe(Layer.provide(depsWithApproval))
       const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(
         SessionRuntime.LiveWithEntity({
@@ -281,6 +337,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           toolRunnerLive,
           sessionMutationsLive,
           sessionRuntimeLive,
+          interactionRecoveryLive,
           ServerIdentity.Test(),
         ),
       )

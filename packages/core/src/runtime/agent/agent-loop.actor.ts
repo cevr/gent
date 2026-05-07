@@ -486,7 +486,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     return messages.some((message) => message.sessionId === sessionId)
   })
 
-  const hasIncompleteUserTurn = Effect.gen(function* () {
+  const latestIncompleteUserTurn = Effect.gen(function* () {
     const envelopes = yield* deps.turnStorage.events
       .listEvents({ sessionId, branchId })
       .pipe(Effect.catchEager(() => Effect.succeed([])))
@@ -497,13 +497,19 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           : [],
       ),
     )
-    return envelopes.some(
+    const incomplete = envelopes.filter(
       (envelope) =>
         envelope.event._tag === "MessageReceived" &&
         envelope.event.message.role === "user" &&
         !completed.has(envelope.event.message.id),
     )
+    const latest = incomplete[incomplete.length - 1]?.event
+    return latest?._tag === "MessageReceived" ? latest.message : undefined
   })
+
+  const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(
+    Effect.map((message) => message !== undefined),
+  )
 
   const startNextQueuedTurnIfIdle = Effect.gen(function* () {
     const start = yield* handle.queueMutationSemaphore.withPermits(1)(
@@ -920,7 +926,19 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
             const projectedState = yield* currentRuntimeState(handle)
             if (projectedState._tag !== "WaitingForInteraction") {
               const state = yield* handle.snapshot
-              if (state._tag !== "WaitingForInteraction") return
+              if (state._tag !== "WaitingForInteraction") {
+                if (state._tag !== "Idle") return
+                const message = yield* latestIncompleteUserTurn
+                if (message === undefined) return
+                yield* handle
+                  .startTurn({ message })
+                  .pipe(
+                    Effect.catchEager((error) =>
+                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                    ),
+                  )
+                return
+              }
             }
             yield* handle
               .respondInteraction(operation.requestId)
