@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Layer, Option } from "effect"
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -21,6 +21,13 @@ import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
 // Pure state management — no execution, no fibers, no agent spawning.
 
+export class TaskServiceUnavailableError extends Schema.TaggedErrorClass<TaskServiceUnavailableError>()(
+  "TaskServiceUnavailableError",
+  {
+    message: Schema.String,
+  },
+) {}
+
 type TaskServiceFallbackApi = {
   readonly create: (params: {
     sessionId: SessionId
@@ -31,7 +38,7 @@ type TaskServiceFallbackApi = {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task>
+  }) => Effect.Effect<Task, TaskServiceUnavailableError>
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
   readonly list: (sessionId: SessionId, branchId?: BranchId) => Effect.Effect<ReadonlyArray<Task>>
   readonly update: (
@@ -59,7 +66,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, never, BuiltinEventSink | GentPlatform>
+  }) => Effect.Effect<Task, TaskServiceUnavailableError, BuiltinEventSink | GentPlatform>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -87,7 +94,12 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
 ) {
   /** No-op TaskService returned when @gent/task-tools is disabled (TaskStorage absent) */
   private static readonly Noop: TaskServiceFallbackApi = {
-    create: () => Effect.die("TaskStorage not available — @gent/task-tools is disabled"),
+    create: () =>
+      Effect.fail(
+        new TaskServiceUnavailableError({
+          message: "TaskStorage not available — @gent/task-tools is disabled",
+        }),
+      ),
     // @effect-diagnostics-next-line effectSucceedWithVoid:off
     get: () => Effect.succeed<Task | undefined>(undefined),
     list: () => Effect.succeed<ReadonlyArray<Task>>([]),

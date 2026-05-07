@@ -1,9 +1,9 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { TaskService } from "@gent/extensions/task-tools-service"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { TaskService, TaskServiceUnavailableError } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { EventPublisherLive } from "@gent/core/domain/event-publisher"
+import { BuiltinEventSink, EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -33,6 +33,29 @@ const makeLayer = () => {
 }
 
 describe("TaskService", () => {
+  it.live("create fails with typed unavailable error when task storage is absent", () =>
+    Effect.gen(function* () {
+      const taskService = yield* TaskService
+      const exit = yield* taskService
+        .create({
+          sessionId,
+          branchId,
+          subject: "Missing storage task",
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return yield* Effect.die("expected unavailable failure")
+      const reason = exit.cause.reasons.find(Cause.isFailReason)
+      expect(reason !== undefined && Schema.is(TaskServiceUnavailableError)(reason.error)).toBe(
+        true,
+      )
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TaskService.Live, BuiltinEventSink.Test(), GentPlatform.Test()),
+      ),
+    ),
+  )
+
   it.live("supports sibling layer composition used by extensions", () =>
     Effect.gen(function* () {
       const layer = makeLayer()
