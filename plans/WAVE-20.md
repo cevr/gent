@@ -353,12 +353,12 @@ Receipts:
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts:512`
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts:1938`
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts:2060`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-commands.test.ts:341`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-commands.test.ts:1683`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-commands.test.ts:1808`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-storage.test.ts:20`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-storage.test.ts:1636`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-storage.test.ts:1680`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-command-persistence.test.ts:21`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts:25`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-delete.test.ts:1`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:17`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-message-storage.test.ts:17`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-concurrency.test.ts:17`
 
 **P2: Some tests are implementation-shaped and several RPC tests bypass the
 canonical harness.**
@@ -1341,10 +1341,14 @@ Completed sub-commits:
 - C77-C81 split `storage/sqlite-storage.test.ts` into behavior-owned files:
   `sqlite-session-storage`, `sqlite-event-storage`, `sqlite-branch-storage`,
   `sqlite-message-storage`, and `sqlite-concurrency`.
+- C82-C85 split `server/session-commands.test.ts` into behavior-owned files:
+  `session-command-persistence`, `session-delete`, `message-send`, and
+  `session-idempotency`, with shared fixtures in `server/session-commands/`.
 
 Verification on 2026-05-07:
 
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/storage/sqlite-session-storage.test.ts packages/core/tests/storage/sqlite-event-storage.test.ts packages/core/tests/storage/sqlite-branch-storage.test.ts packages/core/tests/storage/sqlite-message-storage.test.ts packages/core/tests/storage/sqlite-concurrency.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-command-persistence.test.ts packages/core/tests/server/session-delete.test.ts packages/core/tests/server/message-send.test.ts packages/core/tests/server/session-idempotency.test.ts`
 
 #### C86-C92: test(tui): mirror TUI source structure
 

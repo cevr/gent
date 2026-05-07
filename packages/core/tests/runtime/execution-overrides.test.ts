@@ -4,7 +4,7 @@
  * Verifies the CLI serialization round-trip used by SubprocessRunner.
  *
  * Public message.send runSpec behavior is covered by
- * tests/server/session-commands.test.ts.
+ * tests/server/message-send.test.ts.
  */
 
 import { describe, test, expect } from "bun:test"
