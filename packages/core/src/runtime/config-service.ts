@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Ref, Schema, FileSystem, Path, SynchronizedRef } from "effect"
 import { AgentName, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimePlatform } from "./runtime-platform.js"
@@ -104,7 +104,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const defaultUserConfig = new UserConfig({ permissions: [] })
 
       // State: user + project configs
-      const userConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
+      const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
       const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
 
       const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
@@ -139,7 +139,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         const userConfig = yield* readConfig(userConfigPath)
         const projectConfig = yield* readConfig(projectConfigPath)
 
-        yield* Ref.set(userConfigRef, userConfig)
+        yield* SynchronizedRef.set(userConfigRef, userConfig)
         yield* Ref.set(projectConfigRef, projectConfig)
 
         return mergeConfigs(userConfig, projectConfig)
@@ -178,9 +178,23 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         )
       }
 
+      const mutateUserConfig = <A>(
+        decide: (current: UserConfig) => {
+          readonly value: A
+          readonly updated: UserConfig
+          readonly save: boolean
+        },
+      ) =>
+        SynchronizedRef.modifyEffect(userConfigRef, (current) => {
+          const decision = decide(current)
+          return (decision.save ? saveUserConfig(decision.updated) : Effect.void).pipe(
+            Effect.as([decision.value, decision.updated] as const),
+          )
+        })
+
       const service: ConfigServiceService = {
         get: Effect.fn("ConfigService.get")(function* (cwd) {
-          const user = yield* Ref.get(userConfigRef)
+          const user = yield* SynchronizedRef.get(userConfigRef)
           // No cwd, or cwd matches the server's launch cwd: short-circuit
           // to the cached project ref so launch-cwd callers don't pay an
           // extra disk read per request.
@@ -193,75 +207,77 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         }),
 
         set: Effect.fn("ConfigService.set")(function* (partial) {
-          const current = yield* Ref.get(userConfigRef)
-          const updated = new UserConfig({
-            permissions: partial.permissions ?? current.permissions,
-            disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
-            driverOverrides: partial.driverOverrides ?? current.driverOverrides,
+          yield* mutateUserConfig((current) => {
+            const updated = new UserConfig({
+              permissions: partial.permissions ?? current.permissions,
+              disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
+              driverOverrides: partial.driverOverrides ?? current.driverOverrides,
+            })
+            return { value: undefined, updated, save: true }
           })
-          yield* Ref.set(userConfigRef, updated)
-          yield* saveUserConfig(updated)
         }),
 
         getPermissionRules: Effect.fn("ConfigService.getPermissionRules")(function* () {
-          const user = yield* Ref.get(userConfigRef)
+          const user = yield* SynchronizedRef.get(userConfigRef)
           const project = yield* Ref.get(projectConfigRef)
           return [...(project.permissions ?? []), ...(user.permissions ?? [])]
         }),
 
         addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
-          const current = yield* Ref.get(userConfigRef)
-          const permissions = [...(current.permissions ?? []), rule]
-          const updated = new UserConfig({
-            permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides: current.driverOverrides,
+          yield* mutateUserConfig((current) => {
+            const permissions = [...(current.permissions ?? []), rule]
+            const updated = new UserConfig({
+              permissions,
+              disabledExtensions: current.disabledExtensions,
+              driverOverrides: current.driverOverrides,
+            })
+            return { value: undefined, updated, save: true }
           })
-          yield* Ref.set(userConfigRef, updated)
-          yield* saveUserConfig(updated)
         }),
 
         removePermissionRule: Effect.fn("ConfigService.removePermissionRule")(
           function* (tool, pattern) {
-            const current = yield* Ref.get(userConfigRef)
-            const permissions = (current.permissions ?? []).filter(
-              (r) => !(r.tool === tool && r.pattern === pattern),
-            )
-            const updated = new UserConfig({
-              permissions: permissions.length > 0 ? permissions : undefined,
-              disabledExtensions: current.disabledExtensions,
-              driverOverrides: current.driverOverrides,
+            yield* mutateUserConfig((current) => {
+              const permissions = (current.permissions ?? []).filter(
+                (r) => !(r.tool === tool && r.pattern === pattern),
+              )
+              const updated = new UserConfig({
+                permissions: permissions.length > 0 ? permissions : undefined,
+                disabledExtensions: current.disabledExtensions,
+                driverOverrides: current.driverOverrides,
+              })
+              return { value: undefined, updated, save: true }
             })
-            yield* Ref.set(userConfigRef, updated)
-            yield* saveUserConfig(updated)
           },
         ),
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
-          const current = yield* Ref.get(userConfigRef)
-          const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
-          const updated = new UserConfig({
-            permissions: current.permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides,
+          yield* mutateUserConfig((current) => {
+            const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
+            const updated = new UserConfig({
+              permissions: current.permissions,
+              disabledExtensions: current.disabledExtensions,
+              driverOverrides,
+            })
+            return { value: undefined, updated, save: true }
           })
-          yield* Ref.set(userConfigRef, updated)
-          yield* saveUserConfig(updated)
         }),
 
         clearDriverOverride: Effect.fn("ConfigService.clearDriverOverride")(function* (agent) {
-          const current = yield* Ref.get(userConfigRef)
-          const existing = current.driverOverrides ?? {}
-          if (!(agent in existing)) return
-          const next = { ...existing }
-          delete next[agent]
-          const updated = new UserConfig({
-            permissions: current.permissions,
-            disabledExtensions: current.disabledExtensions,
-            driverOverrides: Object.keys(next).length > 0 ? next : undefined,
+          yield* mutateUserConfig((current) => {
+            const existing = current.driverOverrides ?? {}
+            if (!(agent in existing)) {
+              return { value: undefined, updated: current, save: false }
+            }
+            const next = { ...existing }
+            delete next[agent]
+            const updated = new UserConfig({
+              permissions: current.permissions,
+              disabledExtensions: current.disabledExtensions,
+              driverOverrides: Object.keys(next).length > 0 ? next : undefined,
+            })
+            return { value: undefined, updated, save: true }
           })
-          yield* Ref.set(userConfigRef, updated)
-          yield* saveUserConfig(updated)
         }),
 
         loadInstructions: Effect.fn("ConfigService.loadInstructions")(function* (cwd) {

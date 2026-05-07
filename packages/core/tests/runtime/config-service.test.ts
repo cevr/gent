@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
@@ -82,6 +82,73 @@ describe("ConfigService", () => {
         const result = yield* cfg.getPermissionRules()
         expect(result.length).toBe(3)
       }).pipe(Effect.provide(ConfigService.Test())),
+    )
+
+    it.scopedLive("concurrent live appends preserve every user rule", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const tools = Array.from({ length: 24 }, (_, index) => `ConcurrentTool${index}`)
+        const allRulesWriteStarted = yield* Deferred.make<void>()
+        const observedConfigWrites = yield* Ref.make(0)
+        const delayedFsLayer = Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const realFs = yield* FileSystem.FileSystem
+            return FileSystem.makeNoop({
+              ...realFs,
+              writeFileString: (filePath, content, options) =>
+                Effect.gen(function* () {
+                  if (filePath === path.join(home, ConfigService.USER_CONFIG_RELATIVE)) {
+                    yield* Ref.update(observedConfigWrites, (count) => count + 1)
+                    const decoded = yield* Schema.decodeUnknownEffect(
+                      Schema.fromJsonString(UserConfig),
+                    )(content).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
+                    const count = decoded.permissions?.length ?? 0
+                    if (count === tools.length) {
+                      yield* Deferred.succeed(allRulesWriteStarted, undefined).pipe(
+                        Effect.catchEager(() => Effect.void),
+                      )
+                    }
+                    if (count === 1) {
+                      yield* Deferred.await(allRulesWriteStarted).pipe(
+                        Effect.timeoutOption("50 millis"),
+                      )
+                    }
+                  }
+                  yield* realFs.writeFileString(filePath, content, options)
+                }),
+            })
+          }),
+        ).pipe(Layer.provide(BunServices.layer))
+        const platformLayer = Layer.mergeAll(
+          delayedFsLayer,
+          Path.layer,
+          RuntimePlatform.Live({ cwd, home, platform: "darwin" }),
+        )
+        const live = ConfigService.Live.pipe(Layer.provide(platformLayer))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* Effect.all(
+            tools.map((tool) =>
+              cfg.addPermissionRule(new PermissionRule({ tool, action: "allow" })),
+            ),
+            { concurrency: "unbounded" },
+          )
+          const result = yield* cfg.getPermissionRules()
+          expect(result.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
+          expect(yield* Ref.get(observedConfigWrites)).toBeGreaterThan(0)
+          const persistedText = yield* fs.readFileString(
+            path.join(home, ConfigService.USER_CONFIG_RELATIVE),
+          )
+          const persisted = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(
+            persistedText,
+          )
+          expect(persisted.permissions?.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
     )
 
     it.live("removing a rule by tool drops the matching entry", () => {
