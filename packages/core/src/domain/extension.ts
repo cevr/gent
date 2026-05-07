@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatformShape } from "../runtime/gent-platform.js"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
-import type { ToolToken } from "./capability/tool.js"
+import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
@@ -110,7 +110,7 @@ export interface SystemPromptInput {
    * Tools resolved for this turn. ACP-aware hooks need this to render
    * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
    */
-  readonly tools?: ReadonlyArray<ToolToken>
+  readonly tools?: ReadonlyArray<ToolCapability>
   /**
    * Tool surface declared by the resolved driver (`"native"` or
    * `"codemode"`). Set by the agent loop from
@@ -289,7 +289,7 @@ export interface ExtensionReactions<E = never, R = never> {
 
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
-  readonly allTools: ReadonlyArray<ToolToken>
+  readonly allTools: ReadonlyArray<ToolCapability>
 }
 
 /** Turn-scoped host + agent context used by prompt/tool-policy reactions. */

@@ -1,7 +1,7 @@
 /**
  * Extension authoring API.
  *
- * Single entry point: `defineExtension({ id, resources?, tools?, commands?, rpc?, ... })`.
+ * Single entry point: `defineExtension({ id, resources?, tools?, actions?, requests?, ... })`.
  * The factory accepts typed sub-arrays (literal arrays OR `(ctx) => array` OR
  * `(ctx) => Effect<array>` per bucket), validates them, and produces a
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
@@ -50,14 +50,14 @@ import type {
 } from "../domain/extension.js"
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
-import type { ActionToken } from "../domain/capability/action.js"
-import type { RequestToken } from "../domain/capability/request.js"
+import type { ActionCapability } from "../domain/capability/action.js"
+import type { RequestCapability } from "../domain/capability/request.js"
 import {
   getToolEffect,
   getToolId,
   getToolMetadata,
-  isToolToken,
-  type ToolToken,
+  isToolCapability,
+  type ToolCapability,
 } from "../domain/capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
@@ -214,26 +214,26 @@ export {
   getToolEffect,
   getToolMetadata,
   getToolMetadataOption,
-  isToolToken,
+  isToolCapability,
   tool,
   GentToolMetadataTag,
   type ToolCapabilityContext,
   type GentToolMetadata,
   type ToolInput,
-  type ToolToken,
+  type ToolCapability,
 } from "../domain/capability/tool.js"
 export {
   ref,
   request,
   type ReadRequestInput,
-  type RequestToken,
+  type RequestCapability,
   type WriteRequestInput,
 } from "../domain/capability/request.js"
 export {
   action,
   type ActionInput,
   type ActionSurface,
-  type ActionToken,
+  type ActionCapability,
 } from "../domain/capability/action.js"
 export type {
   CapabilityContext,
@@ -303,23 +303,23 @@ export interface DefineExtensionInput<Client = unknown> {
   readonly resources?: FieldSpec<AnyResourceContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
-   * dispatch surface: every entry must be a `ToolToken` — `request({...})`
+   * dispatch surface: every entry must be a `ToolCapability` — `request({...})`
    * and `action({...})` outputs cannot be slotted here.
    */
-  readonly tools?: FieldSpec<ToolToken>
+  readonly tools?: FieldSpec<ToolCapability>
   /**
    * Human-driven UI commands authored via `action({...})`. The bucket name is
-   * the dispatch surface: every entry must be an `ActionToken` — `tool({...})`
+   * the dispatch surface: every entry must be an `ActionCapability` — `tool({...})`
    * and `request({...})` outputs cannot be slotted here.
    */
-  readonly actions?: FieldSpec<ActionToken>
+  readonly actions?: FieldSpec<ActionCapability>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * The bucket name is the dispatch surface: every entry must be a
-   * `RequestToken` — `tool({...})` and `action({...})` outputs cannot be
+   * `RequestCapability` — `tool({...})` and `action({...})` outputs cannot be
    * slotted here.
    */
-  readonly requests?: FieldSpec<RequestToken>
+  readonly requests?: FieldSpec<RequestCapability>
   readonly agents?: FieldSpec<AgentDefinition>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
@@ -408,11 +408,11 @@ const resolveField = <A>(
  */
 const checkBucketIds = (
   bucket: string,
-  entries: ReadonlyArray<{ readonly id: string } | ToolToken>,
+  entries: ReadonlyArray<{ readonly id: string } | ToolCapability>,
   capIds: Map<string, string>,
 ): string | undefined => {
   for (const [i, cap] of entries.entries()) {
-    const id = isToolToken(cap) ? getToolId(cap) : cap.id
+    const id = isToolCapability(cap) ? getToolId(cap) : cap.id
     if (capIds.has(id)) {
       return `${bucket}[${i}] (${id}): duplicate id within extension (also at ${capIds.get(id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
     }
@@ -425,9 +425,9 @@ const checkBucketIds = (
  * Tools require a non-empty description because the model sees it as the tool
  * description. Bucket shape makes non-tool leaves unreachable here.
  */
-const checkToolDescriptions = (tools: ReadonlyArray<ToolToken>): string | undefined => {
+const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): string | undefined => {
   for (const [i, cap] of tools.entries()) {
-    if (!isToolToken(cap)) {
+    if (!isToolCapability(cap)) {
       return `tools[${i}]: tool must be created with \`tool({...})\` so Gent metadata is attached`
     }
     const metadata = getToolMetadata(cap)

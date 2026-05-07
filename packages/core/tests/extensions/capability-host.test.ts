@@ -12,7 +12,13 @@ import {
   CapabilityError,
   CapabilityNotFoundError,
 } from "@gent/core/domain/capability"
-import { action, request, tool, type RequestToken, type ToolToken } from "@gent/core/extensions/api"
+import {
+  action,
+  request,
+  tool,
+  type RequestCapability,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core/domain/ids"
 
@@ -25,7 +31,7 @@ const ctx: CapabilityCoreContext = {
 }
 const extWith = (
   scope: "builtin" | "user" | "project",
-  requests: ReadonlyArray<RequestToken>,
+  requests: ReadonlyArray<RequestCapability>,
 ): LoadedExtension => ({
   manifest: { id: extensionId },
   scope,
@@ -54,7 +60,7 @@ const pingAction = (params?: { readonly id?: string; readonly value?: string }) 
     execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
   })
 
-const shadowTool = (params?: { readonly id?: string }): ToolToken =>
+const shadowTool = (params?: { readonly id?: string }): ToolCapability =>
   tool({
     id: params?.id ?? "tool-shadow",
     description: "Tool shadow",
@@ -75,7 +81,7 @@ const expectRpcFailure = (
   })
 
 describe("extension capability registries", () => {
-  it.live("dispatches request tokens by (extensionId, capabilityId)", () =>
+  it.live("dispatches request capabilities by (extensionId, capabilityId)", () =>
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
@@ -86,7 +92,7 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("dispatches slash-decorated request tokens through the rpc registry", () =>
+  it.live("dispatches slash-decorated request capabilities through the rpc registry", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "ping",
@@ -111,7 +117,7 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("rpc registry does not dispatch action tokens", () =>
+  it.live("rpc registry does not dispatch action capabilities", () =>
     Effect.gen(function* () {
       const cap = action({
         id: "private-ping",
@@ -262,7 +268,7 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("scope precedence shadows lower-scope request tokens by identity", () =>
+  it.live("scope precedence shadows lower-scope request capabilities by identity", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "thing", value: "builtin" })
       const project = echoRequest({ id: "thing", value: "project" })

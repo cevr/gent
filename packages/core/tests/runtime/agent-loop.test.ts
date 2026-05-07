@@ -51,7 +51,7 @@ import {
   tool,
   ToolNeeds,
   type AnyResourceContribution,
-  type ToolToken,
+  type ToolCapability,
 } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
 import {
@@ -92,7 +92,7 @@ import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
 // ============================================================================
 
 const makeExtRegistry = (
-  tools: ReadonlyArray<ToolToken> = [],
+  tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const resolved = resolveExtensions([
@@ -211,7 +211,7 @@ const respondAgentLoopInteraction = (input: {
   })
 const makeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolToken> = [],
+  tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
@@ -297,7 +297,7 @@ const retryableStreamError = () =>
   })
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolToken> = [],
+  tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
@@ -351,7 +351,7 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
 const makeLayerWithEvents = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventsRef: Ref.Ref<AgentEvent[]>,
-  tools: ReadonlyArray<ToolToken> = [],
+  tools: ReadonlyArray<ToolCapability> = [],
 ) => {
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
@@ -1657,7 +1657,7 @@ describe("interaction", () => {
     })
   }
   const makeInteractionRecordingLayer = (
-    tools: ReadonlyArray<ToolToken>,
+    tools: ReadonlyArray<ToolCapability>,
     providerLayer?: Layer.Layer<LanguageModel.LanguageModel>,
   ) => {
     const resolvedProviderLayer = providerLayer ?? makeInteractionProviderLayer()

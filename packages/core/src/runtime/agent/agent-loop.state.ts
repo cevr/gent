@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type { ToolToken } from "../../domain/capability/tool.js"
+import type { ToolCapability } from "../../domain/capability/tool.js"
 import {
   AgentName,
   RunSpecSchema,
@@ -212,7 +212,7 @@ export type ResolvedTurn = {
   modelId: ModelIdType
   reasoning?: ReasoningEffortType
   temperature?: number
-  tools?: ReadonlyArray<ToolToken>
+  tools?: ReadonlyArray<ToolCapability>
   agent?: AgentDefinitionType
   driver?: DriverRef
   /** Origin of {@link driver} — set by `resolveAgentDriver` in the loop's

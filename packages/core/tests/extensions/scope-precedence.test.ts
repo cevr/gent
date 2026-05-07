@@ -20,7 +20,7 @@ const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never>
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { getToolEffect, tool, type ToolToken } from "@gent/core/extensions/api"
+import { getToolEffect, tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentDefinition } from "@gent/core/domain/agent"
 import { AgentName } from "@gent/core/domain/agent"
@@ -46,7 +46,7 @@ const stubProjectionCtx = {
   },
 }
 
-const toolReturning = (name: string, label: string): ToolToken<{}, string> =>
+const toolReturning = (name: string, label: string): ToolCapability<{}, string> =>
   tool({
     id: name,
     description: label,
@@ -78,7 +78,11 @@ describe("scope precedence", () => {
         ext("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string, never>
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolCapability<
+        {},
+        string,
+        never
+      >
       return narrowR(
         getToolEffect(resolvedTool)({}, {} as never).pipe(
           Effect.orDie,
@@ -189,7 +193,11 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolToken<{}, string, never>
+      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolCapability<
+        {},
+        string,
+        never
+      >
       return narrowR(
         getToolEffect(resolvedTool)({}, {} as never).pipe(
           Effect.orDie,

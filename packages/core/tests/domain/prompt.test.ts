@@ -9,7 +9,7 @@ import {
 } from "@gent/core/domain/prompt"
 import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, type ToolCapability } from "@gent/core/extensions/api"
 
 describe("buildSystemPrompt", () => {
   const base = {
@@ -160,7 +160,7 @@ describe("buildTurnPrompt", () => {
       readonly promptSnippet?: string
       readonly promptGuidelines?: ReadonlyArray<string>
     } = {},
-  ): ToolToken =>
+  ): ToolCapability =>
     tool({
       id,
       description: overrides.description ?? id,

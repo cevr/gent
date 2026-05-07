@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Schema, Stream } from "effect"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -51,7 +51,7 @@ const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   resolveModel: () => fakeResolution(),
 })
 const EchoParams = Schema.Struct({ text: Schema.String })
-const echoCapability: ToolToken = tool({
+const echoCapability: ToolCapability = tool({
   id: "echo",
   description: "Echo input",
   params: EchoParams,
@@ -105,7 +105,7 @@ const resolveModel = (request: ModelRequest) =>
 const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<string, AiTool.Any>>(
   request: ModelRequest & {
     readonly prompt: Prompt.RawInput
-    readonly tools?: ReadonlyArray<ToolToken>
+    readonly tools?: ReadonlyArray<ToolCapability>
     readonly toolkit?: ToolkitInput<Tools>
   },
 ) =>

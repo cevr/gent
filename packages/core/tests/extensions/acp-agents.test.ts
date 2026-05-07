@@ -7,7 +7,7 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Context, Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { ToolRunner } from "../../src/extensions/internal.js"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
@@ -310,7 +310,7 @@ describe("codemode proxy", () => {
         toolName: string
         args: unknown
       }> = []
-      const mockTool: ToolToken = tool({
+      const mockTool: ToolCapability = tool({
         id: "echo",
         description: "echo tool",
         params: Schema.Struct({ text: Schema.String }),
@@ -415,7 +415,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         recordingToolRunner,
       ) as unknown as Context.Context<never>
       const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
-      const mockTool: ToolToken = tool({
+      const mockTool: ToolCapability = tool({
         id: "echo",
         description: "echo tool",
         params: Schema.Struct({ text: Schema.String }),
@@ -453,7 +453,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         failingToolRunner,
       ) as unknown as Context.Context<never>
       const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
-      const mockTool: ToolToken = tool({
+      const mockTool: ToolCapability = tool({
         id: "echo",
         description: "echo",
         params: Schema.Struct({ text: Schema.String }),

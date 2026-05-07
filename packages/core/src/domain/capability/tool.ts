@@ -22,7 +22,7 @@ import {
   Capability,
   type CapabilityEffect,
   type ModelCapabilityContext,
-  type ToolCapability,
+  type ToolCapability as ToolCapabilityVariant,
 } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
@@ -61,8 +61,8 @@ export const ToolNeeds = {
   write: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "write" }),
 } as const
 
-const ToolTokenBrand: unique symbol = Symbol("@gent/core/ToolToken")
-declare const ToolTokenType: unique symbol
+const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
+declare const ToolCapabilityType: unique symbol
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
   readonly intent: "read" | "write"
@@ -83,28 +83,28 @@ export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefine
 )
 
 /**
- * `ToolToken` — `tool({...})` return type. Gent tools are native Effect AI
+ * `ToolCapability` — `tool({...})` return type. Gent tools are native Effect AI
  * tools annotated with Gent execution metadata. Runtime code reads Gent-only
  * fields from the annotation instead of widening Effect's tool surface.
  */
-export type ToolToken<Input = unknown, Output = unknown, Error = unknown> = AiTool.Any & {
-  readonly [ToolTokenBrand]: true
-  readonly [ToolTokenType]?: {
+export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> = AiTool.Any & {
+  readonly [ToolCapabilityBrand]: true
+  readonly [ToolCapabilityType]?: {
     readonly input: Input
     readonly output: Output
     readonly error: Error
   }
-} & ToolCapability
+} & ToolCapabilityVariant
 
 export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
-export const isToolToken = (value: unknown): value is ToolToken => {
+export const isToolCapability = (value: unknown): value is ToolCapability => {
   const tag =
     typeof value === "object" && value !== null && "_tag" in value ? value._tag : undefined
   if (
     !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
-    !(ToolTokenBrand in value) ||
+    !(ToolCapabilityBrand in value) ||
     tag !== "tool"
   ) {
     return false
@@ -113,10 +113,10 @@ export const isToolToken = (value: unknown): value is ToolToken => {
 }
 
 /**
- * Invariant violation: a `ToolToken` should always carry `GentToolMetadata`.
+ * Invariant violation: a `ToolCapability` should always carry `GentToolMetadata`.
  * Surfaces as a typed defect (via `Effect.die`) when callers thread through
  * an Effect; surfaces as a synchronous throw otherwise. Either path is a
- * programmer-misuse-only signal — no runtime code can construct a `ToolToken`
+ * programmer-misuse-only signal — no runtime code can construct a `ToolCapability`
  * without metadata through the public `tool({...})` factory.
  */
 export class ToolMetadataMissingError extends Schema.TaggedErrorClass<ToolMetadataMissingError>()(
@@ -131,20 +131,20 @@ export class ToolMetadataMissingError extends Schema.TaggedErrorClass<ToolMetada
 }
 
 export const getToolMetadata = <Input, Output, Error>(
-  tool: ToolToken<Input, Output, Error>,
+  tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error> => {
   const metadata = getToolMetadataOption(tool)
   if (metadata === undefined) {
     throw new ToolMetadataMissingError({ toolName: tool.name })
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolToken carries Input/Output as a phantom type; annotation storage is intentionally heterogeneous.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolCapability carries Input/Output as a phantom type; annotation storage is intentionally heterogeneous.
   return metadata as GentToolMetadata<Input, Output, Error>
 }
 
-export const getToolId = (tool: ToolToken): ToolId => getToolMetadata(tool).id
+export const getToolId = (tool: ToolCapability): ToolId => getToolMetadata(tool).id
 
 export const getToolEffect = <Input, Output, Error>(
-  tool: ToolToken<Input, Output, Error>,
+  tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
 
 /** Context passed to `tool({...}).execute`. Same shape as the wide
@@ -213,7 +213,7 @@ export interface ToolInput<
 }
 
 /**
- * Lower a `ToolInput` to a `ToolToken` with `intent: "write"` by default.
+ * Lower a `ToolInput` to a `ToolCapability` with `intent: "write"` by default.
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
@@ -223,7 +223,7 @@ export const tool = <
   Deps,
 >(
   input: ToolInput<Params, Result, Error, Deps>,
-): ToolToken<Schema.Schema.Type<Params>, Result, Error> => {
+): ToolCapability<Schema.Schema.Type<Params>, Result, Error> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
   const id = ToolId.make(input.id)
@@ -273,7 +273,7 @@ export const tool = <
     ...(metadata.prompt !== undefined ? { prompt: metadata.prompt } : {}),
     metadata,
   })
-  const branded = Object.assign(native, capability, { [ToolTokenBrand]: true as const })
+  const branded = Object.assign(native, capability, { [ToolCapabilityBrand]: true as const })
 
   return branded
 }

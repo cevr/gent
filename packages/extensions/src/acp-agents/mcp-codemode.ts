@@ -16,7 +16,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as AiTool from "effect/unstable/ai/Tool"
 import { BunHttpServer } from "@effect/platform-bun"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { getToolId, type ToolToken } from "@gent/core/extensions/api"
+import { getToolId, type ToolCapability } from "@gent/core/extensions/api"
 
 export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
@@ -37,7 +37,7 @@ export interface CodemodeServer {
 }
 
 export interface CodemodeConfig {
-  readonly tools: ReadonlyArray<ToolToken>
+  readonly tools: ReadonlyArray<ToolCapability>
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
@@ -52,7 +52,7 @@ export interface CodemodeConfig {
  * tool's description AND as the ACP system prompt's tools section
  * (replaces the default per-tool listing for external-routed agents).
  */
-export const generateToolDescription = (tools: ReadonlyArray<ToolToken>): string => {
+export const generateToolDescription = (tools: ReadonlyArray<ToolCapability>): string => {
   const lines = [
     "Execute JavaScript with access to gent tools.",
     "",
@@ -101,7 +101,10 @@ export const generateToolDescription = (tools: ReadonlyArray<ToolToken>): string
 
 // ── Proxy factory ──
 
-const makeGentProxy = (tools: ReadonlyArray<ToolToken>, runTool: CodemodeConfig["runTool"]) => {
+const makeGentProxy = (
+  tools: ReadonlyArray<ToolCapability>,
+  runTool: CodemodeConfig["runTool"],
+) => {
   const toolNames = new Set(tools.map((tool) => String(getToolId(tool))))
 
   return new Proxy(

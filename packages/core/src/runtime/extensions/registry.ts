@@ -22,13 +22,13 @@ import type {
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
-import type { ActionToken } from "../../domain/capability/action.js"
-import type { RequestToken } from "../../domain/capability/request.js"
+import type { ActionCapability } from "../../domain/capability/action.js"
+import type { RequestCapability } from "../../domain/capability/request.js"
 import {
   getToolId,
   getToolMetadata,
-  isToolToken,
-  type ToolToken,
+  isToolCapability,
+  type ToolCapability,
 } from "../../domain/capability/tool.js"
 import {
   compileExtensionReactions,
@@ -59,7 +59,7 @@ export interface SlashCommand {
 // Resolved snapshot — the immutable compiled state
 
 export interface ResolvedExtensions {
-  readonly modelCapabilities: ReadonlyMap<string, ToolToken>
+  readonly modelCapabilities: ReadonlyMap<string, ToolCapability>
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
@@ -75,24 +75,25 @@ export interface ResolvedExtensions {
 interface RegisteredToolEntry {
   readonly kind: "tool"
   readonly extensionId: ExtensionId
-  readonly capability: ToolToken
+  readonly capability: ToolCapability
 }
 
 interface RegisteredCommandEntry {
   readonly kind: "command"
   readonly extensionId: ExtensionId
-  readonly capability: ActionToken
+  readonly capability: ActionCapability
 }
 
 interface RegisteredRpcEntry {
   readonly kind: "rpc"
   readonly extensionId: ExtensionId
-  readonly capability: RequestToken
+  readonly capability: RequestCapability
 }
 
 type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | RegisteredRpcEntry
 
-const isRequestToken = (cap: ActionToken | RequestToken): cap is RequestToken => "public" in cap
+const isRequestCapability = (cap: ActionCapability | RequestCapability): cap is RequestCapability =>
+  "public" in cap
 
 export interface CapabilityRunOptions {
   readonly intent?: "read" | "write"
@@ -197,7 +198,7 @@ const resolveCapabilityEntry = (
 const runExtensionCapability = (
   extensionId: ExtensionId,
   capabilityId: RpcId | CommandId | string,
-  capability: RequestToken | ActionToken,
+  capability: RequestCapability | ActionCapability,
   input: unknown,
   ctx: CapabilityCoreContext,
 ) =>
@@ -293,12 +294,12 @@ const sortExtensionsByScope = (
 
 const capabilityToCommand = (
   extensionId: ExtensionId,
-  cap: ActionToken | RequestToken,
+  cap: ActionCapability | RequestCapability,
 ): SlashCommand => {
   // Prefer cap.description (author-supplied, human-readable) over
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
-  const isRequest = isRequestToken(cap)
+  const isRequest = isRequestCapability(cap)
   const slash = isRequest ? cap.slash : undefined
   const description = slash?.description ?? cap.description ?? cap.promptSnippet
   const displayName = slash?.name ?? (isRequest ? undefined : cap.displayName)
@@ -332,7 +333,7 @@ export const resolveExtensions = (
   const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
-  const modelCapabilities = new Map<string, ToolToken>()
+  const modelCapabilities = new Map<string, ToolCapability>()
   for (const [id, entry] of capabilityWinners) {
     if (entry.kind !== "tool") continue
     modelCapabilities.set(id, entry.capability)
@@ -361,7 +362,7 @@ export const resolveExtensions = (
   // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
-    const prompt = isToolToken(cap) ? getToolMetadata(cap).prompt : cap.prompt
+    const prompt = isToolCapability(cap) ? getToolMetadata(cap).prompt : cap.prompt
     if (prompt) promptSectionsMap.set(prompt.id, prompt)
   }
 
@@ -370,7 +371,7 @@ export const resolveExtensions = (
   // builtin denies.
   const permissionRules: PermissionRule[] = []
   for (const { capability: cap } of capabilityWinners.values()) {
-    const rules = isToolToken(cap) ? getToolMetadata(cap).permissionRules : cap.permissionRules
+    const rules = isToolCapability(cap) ? getToolMetadata(cap).permissionRules : cap.permissionRules
     if (rules) permissionRules.push(...rules)
   }
 
@@ -412,7 +413,7 @@ export const resolveExtensions = (
 // ToolPolicy compiler — unified tool filtering + prompt section collection
 
 export interface CompiledToolPolicy {
-  readonly tools: ReadonlyArray<ToolToken>
+  readonly tools: ReadonlyArray<ToolCapability>
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
@@ -426,7 +427,7 @@ export interface CompiledToolPolicy {
  * 4. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
-  allTools: ReadonlyArray<ToolToken>,
+  allTools: ReadonlyArray<ToolCapability>,
   agent: AgentDefinition,
   runContext: RunContext,
   extensionProjections: ReadonlyArray<TurnProjection>,
@@ -490,8 +491,8 @@ export const compileToolPolicy = (
 
 export interface ExtensionRegistryService {
   // Model capability resolution
-  readonly getModelCapability: (name: string) => Effect.Effect<ToolToken | undefined>
-  readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<ToolToken>>
+  readonly getModelCapability: (name: string) => Effect.Effect<ToolCapability | undefined>
+  readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<ToolCapability>>
   /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
     agent: AgentDefinition,
@@ -638,10 +639,10 @@ export const requireAgent = (name: string) =>
 // Tool filtering — pure helper for agent tool visibility
 
 const filterToolsForAgent = (
-  allTools: ReadonlyArray<ToolToken>,
+  allTools: ReadonlyArray<ToolCapability>,
   agent: AgentDefinition,
-): ToolToken[] => {
-  let tools: ToolToken[]
+): ToolCapability[] => {
+  let tools: ToolCapability[]
 
   if (agent.allowedTools !== undefined) {
     const names = new Set(agent.allowedTools)
@@ -658,7 +659,10 @@ const filterToolsForAgent = (
 }
 
 /** Re-apply deny filter — extensions can't escape agent denials. */
-const applyDenyFilter = (tools: ReadonlyArray<ToolToken>, agent: AgentDefinition): ToolToken[] => {
+const applyDenyFilter = (
+  tools: ReadonlyArray<ToolCapability>,
+  agent: AgentDefinition,
+): ToolCapability[] => {
   if (agent.deniedTools === undefined) return [...tools]
   const denied = new Set(agent.deniedTools)
   return tools.filter((t) => !denied.has(String(getToolId(t))))

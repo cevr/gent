@@ -11,7 +11,7 @@ import {
 import { EventStore } from "../domain/event.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { ToolCapabilityContext, ToolToken } from "../domain/capability/tool.js"
+import type { ToolCapabilityContext, ToolCapability } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -43,7 +43,7 @@ export interface ToolTestLayerConfig {
   /** Extensions to load */
   readonly extensions?: ReadonlyArray<GentExtension>
   /** Extra tools to register (authored via `tool({...})`). */
-  readonly tools?: ReadonlyArray<ToolToken>
+  readonly tools?: ReadonlyArray<ToolCapability>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., GitReader.Test) */

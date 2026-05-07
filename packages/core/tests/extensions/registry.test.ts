@@ -12,9 +12,9 @@ import {
   request,
   tool,
   ToolNeeds,
-  type ActionToken,
-  type RequestToken,
-  type ToolToken,
+  type ActionCapability,
+  type RequestCapability,
+  type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
   ExtensionRegistry,
@@ -27,7 +27,7 @@ import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the
 // lowered Capability literal.
-const makeTool = (name: string): ToolToken =>
+const makeTool = (name: string): ToolCapability =>
   tool({
     id: name,
     description: `test tool ${name}`,
@@ -50,7 +50,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
 })
 // Static prompt sections live on capability leaf `prompt`. Build a synthetic
 // no-op model capability to carry each section through the pipeline.
-const promptSectionAsToolContribution = (section: PromptSection): ToolToken =>
+const promptSectionAsToolContribution = (section: PromptSection): ToolCapability =>
   tool({
     id: `section-carrier-${section.id}`,
     description: `carrier for ${section.id}`,
@@ -62,9 +62,9 @@ const makeExt = (
   id: string,
   scope: "builtin" | "user" | "project",
   opts?: {
-    tools?: ToolToken[]
-    actions?: ActionToken[]
-    requests?: RequestToken[]
+    tools?: ToolCapability[]
+    actions?: ActionCapability[]
+    requests?: RequestCapability[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
@@ -87,7 +87,10 @@ const makeExt = (
     },
   }
 }
-const makeCommand = (id: string, options?: Partial<Parameters<typeof action>[0]>): ActionToken =>
+const makeCommand = (
+  id: string,
+  options?: Partial<Parameters<typeof action>[0]>,
+): ActionCapability =>
   action({
     id,
     name: id,
@@ -104,7 +107,7 @@ const makeRequest = (
     readonly intent?: "read" | "write"
     readonly extensionId?: ExtensionId
   },
-): RequestToken => {
+): RequestCapability => {
   const intent = options?.intent ?? "read"
   const extensionId = options?.extensionId ?? ExtensionId.make("@test/rpc")
   if (intent === "read") {

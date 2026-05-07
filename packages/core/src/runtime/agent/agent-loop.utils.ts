@@ -1,6 +1,6 @@
 import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition, ReasoningEffort as ReasoningEffortType } from "../../domain/agent.js"
-import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
+import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { type Message, type ToolResultPart } from "../../domain/message.js"
 import {
   messagePartsReasoning,
@@ -27,7 +27,7 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<ToolToken>,
+  tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): ReadonlyArray<PromptSection> => {
@@ -121,7 +121,7 @@ export const buildTurnPromptSections = (
 export const buildTurnPrompt = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<ToolToken>,
+  tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): string =>

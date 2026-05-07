@@ -14,7 +14,7 @@ import {
   ExternalDriverRef,
   ModelDriverRef,
 } from "@gent/core/domain/agent"
-import { tool, type ToolToken } from "@gent/core/extensions/api"
+import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -22,7 +22,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
-const fakeTool: ToolToken = tool({
+const fakeTool: ToolCapability = tool({
   id: "echo",
   description: "echo tool",
   params: Schema.Struct({ text: Schema.String }),
@@ -58,7 +58,7 @@ const runHandler = (input: {
   readonly agent: AgentDefinition
   readonly driverSource?: "config" | "default"
   readonly driverToolSurface?: "native" | "codemode"
-  readonly tools?: ReadonlyArray<ToolToken>
+  readonly tools?: ReadonlyArray<ToolCapability>
 }) =>
   Effect.gen(function* () {
     const slots = yield* getRuntimeSlots

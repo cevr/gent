@@ -22,7 +22,7 @@ import { type Effect, type Schema } from "effect"
 import { RpcId, type ExtensionId } from "../ids.js"
 import {
   type CapabilityContext,
-  type RequestCapability,
+  type RequestCapability as RequestCapabilityVariant,
   type ErasedCapabilityEffect,
   type CapabilityRef,
   type CapabilityCoreContext,
@@ -35,16 +35,16 @@ import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
 
 /**
- * `RequestToken` — `request({...})` return type. The
+ * `RequestCapability` — `request({...})` return type. The
  * `ExtensionContributions.requests` bucket is the discrimination; non-request
  * leaves (`tool`, `action`) cannot be slotted into `requests:`.
  */
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
-const RequestTokenBrand: unique symbol = Symbol("@gent/core/RequestToken")
-declare const RequestTokenType: unique symbol
-export type RequestToken<Input = unknown, Output = unknown> = RequestCapability & {
-  readonly [RequestTokenBrand]: true
-  readonly [RequestTokenType]?: {
+const RequestCapabilityBrand: unique symbol = Symbol("@gent/core/RequestCapability")
+declare const RequestCapabilityType: unique symbol
+export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityVariant & {
+  readonly [RequestCapabilityBrand]: true
+  readonly [RequestCapabilityType]?: {
     readonly input: Input
     readonly output: Output
   }
@@ -67,7 +67,7 @@ interface RequestInputBase<Input, Output> {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
   /** Owning extension id. Embedded into the typed `CapabilityRef` attached
-   *  to the returned token so callers do not re-state it. */
+   *  to the returned capability so callers do not re-state it. */
   readonly extensionId: ExtensionId
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Schema<Input>
@@ -120,9 +120,9 @@ export interface WriteRequestInput<
 
 /**
  * Lower a `ReadRequestInput | WriteRequestInput` to a typed
- * `RequestToken<Input, Output>` with the chosen `intent`. The returned token
+ * `RequestCapability<Input, Output>` with the chosen `intent`. The returned capability
  * also carries a typed `CapabilityRef<Input, Output>` under a local symbol,
- * read via the `ref(token)` accessor — so callers no longer hand-roll a
+ * read via the `ref(capability)` accessor — so callers no longer hand-roll a
  * parallel `*Ref` const next to every request.
  *
  * Two overloads — one per intent. Read-intent overload constrains R to
@@ -131,10 +131,10 @@ export interface WriteRequestInput<
  */
 export function request<Input, Output, R extends ReadOnlyTag = never>(
   input: ReadRequestInput<Input, Output, R>,
-): RequestToken<Input, Output>
+): RequestCapability<Input, Output>
 export function request<Input, Output, R = never>(
   input: WriteRequestInput<Input, Output, R>,
-): RequestToken<Input, Output>
+): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
   readonly extensionId: ExtensionId
@@ -148,7 +148,7 @@ export function request(input: {
     input: unknown,
     ctx: CapabilityContext,
   ) => Effect.Effect<unknown, CapabilityError, unknown>
-}): RequestToken {
+}): RequestCapability {
   const rpcId = RpcId.make(input.id)
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
   // dispatcher boundary. Author-supplied schemas always satisfy this — the
@@ -175,13 +175,13 @@ export function request(input: {
     effect: input.execute,
     ref: refValue,
   })
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestCapability brand applied at factory boundary
   return Object.assign(capability, {
-    [RequestTokenBrand]: true as const,
+    [RequestCapabilityBrand]: true as const,
     [REQUEST_REF]: refValue,
-  }) as unknown as RequestToken
+  }) as unknown as RequestCapability
 }
 
 export const ref = <Input, Output>(
-  token: RequestToken<Input, Output>,
-): CapabilityRef<Input, Output> => token[REQUEST_REF]
+  capability: RequestCapability<Input, Output>,
+): CapabilityRef<Input, Output> => capability[REQUEST_REF]

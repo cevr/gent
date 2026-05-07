@@ -18,9 +18,9 @@
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
-import type { ActionToken } from "./capability/action.js"
-import type { RequestToken } from "./capability/request.js"
-import type { ToolToken } from "./capability/tool.js"
+import type { ActionCapability } from "./capability/action.js"
+import type { RequestCapability } from "./capability/request.js"
+import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
 import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
@@ -50,22 +50,22 @@ export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. Bucket name IS the
-   * dispatch surface: every entry is a `ToolToken` — no runtime tag check
+   * dispatch surface: every entry is a `ToolCapability` — no runtime tag check
    * needed downstream.
    */
-  readonly tools?: ReadonlyArray<ToolToken>
+  readonly tools?: ReadonlyArray<ToolCapability>
   /**
    * Human-driven UI commands authored via `action({...})`. Bucket name IS the
-   * dispatch surface: every entry is an `ActionToken` — no runtime tag check
+   * dispatch surface: every entry is an `ActionCapability` — no runtime tag check
    * needed downstream.
    */
-  readonly actions?: ReadonlyArray<ActionToken>
+  readonly actions?: ReadonlyArray<ActionCapability>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
-   * Bucket name IS the dispatch surface: every entry is a `RequestToken` — no
+   * Bucket name IS the dispatch surface: every entry is a `RequestCapability` — no
    * runtime tag check needed downstream.
    */
-  readonly requests?: ReadonlyArray<RequestToken>
+  readonly requests?: ReadonlyArray<RequestCapability>
   readonly agents?: ReadonlyArray<AgentDefinition>
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
@@ -84,24 +84,27 @@ export interface ExtensionContributions {
  * IS the dispatch discrimination — every entry in `tools:` is a tool leaf by
  * construction.
  */
-export const modelCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ToolToken> =>
-  contribs.tools ?? []
+export const modelCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<ToolCapability> => contribs.tools ?? []
 
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
  * bag. Bucket name IS the dispatch discrimination — every entry in
  * `actions:` is an action leaf by construction.
  */
-export const humanCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ActionToken> =>
-  contribs.actions ?? []
+export const humanCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<ActionCapability> => contribs.actions ?? []
 
 /**
  * Read all extension-to-extension RPC capabilities from a contributions bag.
  * Bucket name IS the dispatch discrimination — every entry in `requests:` is a
  * request leaf by construction.
  */
-export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<RequestToken> =>
-  contribs.requests ?? []
+export const rpcCapabilities = (
+  contribs: ExtensionContributions,
+): ReadonlyArray<RequestCapability> => contribs.requests ?? []
 
 // ── Smart constructors ──
 //

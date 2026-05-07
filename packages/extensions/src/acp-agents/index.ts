@@ -28,7 +28,7 @@ import {
   resource,
   sectionPatternFor,
   type GentPlatformShape,
-  type ToolToken,
+  type ToolCapability,
 } from "@gent/core/extensions/api"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
@@ -157,7 +157,7 @@ const looksLikeNativeToolSurface = (s: string): boolean =>
 const rewriteCodemodeSystemPrompt = (input: {
   readonly basePrompt: string
   readonly driverToolSurface?: "native" | "codemode"
-  readonly tools?: ReadonlyArray<ToolToken>
+  readonly tools?: ReadonlyArray<ToolCapability>
 }) =>
   Effect.gen(function* () {
     if (input.driverToolSurface !== "codemode") return input.basePrompt

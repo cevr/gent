@@ -14,7 +14,7 @@ import {
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
-import { getToolMetadata, isToolToken } from "../../domain/capability/tool.js"
+import { getToolMetadata, isToolCapability } from "../../domain/capability/tool.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -259,7 +259,7 @@ export const collectValidationFailures = (
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
-    (cap) => (isToolToken(cap) ? getToolMetadata(cap).id : undefined),
+    (cap) => (isToolCapability(cap) ? getToolMetadata(cap).id : undefined),
     "tool",
   )
   collectScopedCollisions(
@@ -293,7 +293,7 @@ export const collectValidationFailures = (
     (cs) =>
       [
         ...(cs.tools ?? []).map((tool) =>
-          isToolToken(tool) ? getToolMetadata(tool).prompt : undefined,
+          isToolCapability(tool) ? getToolMetadata(tool).prompt : undefined,
         ),
         ...(cs.actions ?? []).map((command) => command.prompt),
         ...(cs.requests ?? []).map((rpc) => rpc.prompt),
@@ -307,7 +307,7 @@ export const collectValidationFailures = (
   // becomes "why is the model dumb?" rot later.
   for (const ext of extensions) {
     for (const cap of modelCapabilities(ext.contributions)) {
-      if (!isToolToken(cap)) {
+      if (!isToolCapability(cap)) {
         addFailure(ext, "Tool must be created with `tool({...})` so Gent metadata is attached.")
         continue
       }

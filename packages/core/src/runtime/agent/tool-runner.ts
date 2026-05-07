@@ -3,7 +3,7 @@ import {
   getToolId,
   getToolMetadata,
   type ToolCapabilityContext,
-  type ToolToken,
+  type ToolCapability,
 } from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import type { ToolResultPart } from "../../domain/message.js"
@@ -22,9 +22,11 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 
-export type ToolTokenMap = Record<string, ToolToken>
+export type ToolCapabilityMap = Record<string, ToolCapability>
 
-export function convertTools(tools: ReadonlyArray<ToolToken>): AiToolkit.Toolkit<ToolTokenMap> {
+export function convertTools(
+  tools: ReadonlyArray<ToolCapability>,
+): AiToolkit.Toolkit<ToolCapabilityMap> {
   return AiToolkit.make(...tools)
 }
 
@@ -51,7 +53,7 @@ const provideCapabilityContext = <A, E, R>(
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
 
-type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ToolTokenMap>, "tools"> & {
+type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ToolCapabilityMap>, "tools"> & {
   readonly handle: (
     name: string,
     input: unknown,
@@ -145,7 +147,7 @@ const publishCompleted = (params: {
   })
 
 const makeExecutionToolkit = (params: {
-  tool: ToolToken
+  tool: ToolCapability
   toolCall: ToolCall
   ctx: ToolCapabilityContext
   registry: ExtensionRegistryService
@@ -325,7 +327,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
-            const tool: ToolToken | undefined = yield* activeRegistry.getModelCapability(
+            const tool: ToolCapability | undefined = yield* activeRegistry.getModelCapability(
               toolCall.toolName,
             )
 

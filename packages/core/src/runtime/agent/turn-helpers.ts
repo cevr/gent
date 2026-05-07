@@ -9,7 +9,7 @@ import {
   type AgentName as AgentNameType,
   type RunSpec,
 } from "../../domain/agent.js"
-import { type ToolToken } from "../../domain/capability/tool.js"
+import { type ToolCapability } from "../../domain/capability/tool.js"
 import { calculateCost, type ModelId } from "../../domain/model.js"
 import { ConfigService } from "../config-service.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
@@ -205,7 +205,7 @@ export const recordToolResult = (params: {
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
-  tools: ReadonlyArray<ToolToken>
+  tools: ReadonlyArray<ToolCapability>
 }
 
 export type AssistantResponsePart =

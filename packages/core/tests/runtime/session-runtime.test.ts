@@ -9,7 +9,7 @@ import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
 import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
-import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCapability } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
@@ -52,7 +52,7 @@ import { SessionRuntime, interruptPayloadToSteerCommand } from "../../src/runtim
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
+const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
     name: "cowork" as never,
     model: "test/default" as never,
@@ -79,7 +79,7 @@ const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.Te
   Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolToken> = [],
+  tools: ReadonlyArray<ToolCapability> = [],
   profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
@@ -167,7 +167,7 @@ const makeRuntimeLayerWithEventPublisher = (
 }
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolToken>,
+  tools: ReadonlyArray<ToolCapability>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live

@@ -1,12 +1,12 @@
 /**
- * Asserts the typed-ref accessor invariants for capability tokens:
+ * Asserts the typed-ref accessor invariants for capabilities:
  *
  * 1. `request(...)` attaches a `CapabilityRef` under a private request-local
- *    symbol (private — only `ref(token)` reads it).
- * 2. `ref(requestToken)` returns the typed ref with the same id/intent
+ *    symbol (private — only `ref(capability)` reads it).
+ * 2. `ref(requestCapability)` returns the typed ref with the same id/intent
  *    metadata the author provided.
- * 3. `ref(toolToken)` and `ref(actionToken)` fail at compile time — only
- *    request tokens carry a ref.
+ * 3. `ref(toolCapability)` and `ref(actionCapability)` fail at compile time — only
+ *    request capabilities carry a ref.
  */
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Schema } from "effect"
@@ -15,7 +15,7 @@ import {
   action,
   getToolId,
   getToolMetadata,
-  isToolToken,
+  isToolCapability,
   ref,
   request,
   tool,
@@ -24,15 +24,15 @@ import type { CommandId, RpcId, ToolId } from "@gent/core/domain/ids"
 import { ExtensionId } from "@gent/core/domain/ids"
 import { PermissionRule } from "@gent/core/domain/permission"
 
-describe("ref(token)", () => {
+describe("ref(capability)", () => {
   test("factories brand emitted bucket ids while accepting author strings", () => {
-    const toolToken = tool({
+    const toolCapability = tool({
       id: "test.tool",
       description: "ephemeral",
       params: Schema.Struct({ x: Schema.String }),
       execute: () => Effect.succeed("ok"),
     })
-    const actionToken = action({
+    const actionCapability = action({
       id: "test.action",
       name: "Test Action",
       description: "ephemeral",
@@ -41,7 +41,7 @@ describe("ref(token)", () => {
       output: Schema.Struct({}),
       execute: () => Effect.succeed({}),
     })
-    const requestToken = request({
+    const requestCapability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
       intent: "read",
@@ -50,9 +50,9 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed({ n: 1 }),
     })
 
-    const toolId: ToolId = getToolId(toolToken)
-    const commandId: CommandId = actionToken.id
-    const rpcId: RpcId = requestToken.id
+    const toolId: ToolId = getToolId(toolCapability)
+    const commandId: CommandId = actionCapability.id
+    const rpcId: RpcId = requestCapability.id
     expect([String(toolId), String(commandId), String(rpcId)]).toEqual([
       "test.tool",
       "test.action",
@@ -64,7 +64,7 @@ describe("ref(token)", () => {
     const params = Schema.Struct({ x: Schema.String })
     const rule = new PermissionRule({ tool: "test.tool", action: "deny" })
     const prompt = { id: "tool.prompt", content: "Use carefully.", priority: 42 }
-    const token = tool({
+    const capability = tool({
       id: "test.tool",
       description: "ephemeral",
       intent: "read",
@@ -79,12 +79,12 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed("ok"),
     })
 
-    expect(isToolToken(token)).toBe(true)
-    expect(Context.get(token.annotations, AiTool.Readonly)).toBe(true)
-    expect(Context.get(token.annotations, AiTool.Destructive)).toBe(true)
+    expect(isToolCapability(capability)).toBe(true)
+    expect(Context.get(capability.annotations, AiTool.Readonly)).toBe(true)
+    expect(Context.get(capability.annotations, AiTool.Destructive)).toBe(true)
 
-    const metadata = getToolMetadata(token)
-    expect(metadata.id).toBe(getToolId(token))
+    const metadata = getToolMetadata(capability)
+    expect(metadata.id).toBe(getToolId(capability))
     expect(metadata.intent).toBe("read")
     expect(metadata.input).toBe(params)
     expect(metadata.needs).toEqual([{ tag: "fs", access: "read" }])
@@ -96,21 +96,21 @@ describe("ref(token)", () => {
   })
 
   test("write intent is not marked destructive unless requested", () => {
-    const token = tool({
+    const capability = tool({
       id: "test.write",
       description: "write without destructive side effects",
       params: Schema.Struct({}),
       execute: () => Effect.succeed("ok"),
     })
 
-    expect(Context.get(token.annotations, AiTool.Readonly)).toBe(false)
-    expect(Context.get(token.annotations, AiTool.Destructive)).toBe(false)
+    expect(Context.get(capability.annotations, AiTool.Readonly)).toBe(false)
+    expect(Context.get(capability.annotations, AiTool.Destructive)).toBe(false)
   })
 
-  test("returns the typed ref for a request token, preserving id + intent + schema identity", () => {
+  test("returns the typed ref for a request capability, preserving id + intent + schema identity", () => {
     const inputSchema = Schema.Struct({ q: Schema.String })
     const outputSchema = Schema.Struct({ n: Schema.Number })
-    const token = request({
+    const capability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
       intent: "read",
@@ -119,7 +119,7 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed({ n: 1 }),
     })
 
-    const r = ref(token)
+    const r = ref(capability)
     const capabilityId: RpcId = r.capabilityId
     expect(String(capabilityId)).toBe("test.read")
     expect(r.extensionId as string).toBe("ext-test")
@@ -131,14 +131,14 @@ describe("ref(token)", () => {
     expect(r.output).toBe(outputSchema)
   })
 
-  test("ref accessor only accepts request tokens", () => {
-    const token = tool({
+  test("ref accessor only accepts request capabilities", () => {
+    const capability = tool({
       id: "test.tool",
       description: "ephemeral",
       params: Schema.Struct({ x: Schema.String }),
       execute: () => Effect.succeed("ok"),
     })
-    const actionToken = action({
+    const actionCapability = action({
       id: "test.action",
       name: "Test Action",
       description: "ephemeral",
@@ -148,9 +148,9 @@ describe("ref(token)", () => {
       execute: () => Effect.succeed({}),
     })
 
-    // @ts-expect-error Tool tokens are not request refs.
-    ref(token)
-    // @ts-expect-error Action tokens are not request refs.
-    ref(actionToken)
+    // @ts-expect-error Tool capabilities are not request refs.
+    ref(capability)
+    // @ts-expect-error Action capabilities are not request refs.
+    ref(actionCapability)
   })
 })

@@ -51,7 +51,7 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
-import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
+import { getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
@@ -179,13 +179,13 @@ const externalAgent = AgentDefinition.make({
   allowedTools: ["context_probe"],
   driver: ExternalDriverRef.make({ id: "test-runner" }),
 })
-const contextProbeTool: ToolToken = tool({
+const contextProbeTool: ToolCapability = tool({
   id: "context_probe",
   description: "Probe tool context",
   params: Schema.Struct({ value: Schema.String }),
   execute: () => Effect.succeed({ ok: true }),
 })
-const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolToken> = []) =>
+const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolCapability> = []) =>
   resolveExtensions([
     {
       manifest: { id: ExtensionId.make("test-ext") },
@@ -198,9 +198,9 @@ const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolToken> = 
       },
     },
   ])
-const makeExtRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolToken>) =>
+const makeExtRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolCapability>) =>
   ExtensionRegistry.fromResolved(makeResolved(executor, tools))
-const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolToken>) =>
+const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolCapability>) =>
   DriverRegistry.fromResolved({
     modelDrivers: makeResolved(executor, tools).modelDrivers,
     externalDrivers: makeResolved(executor, tools).externalDrivers,
@@ -226,7 +226,7 @@ const makeLayerWithEvents = (
   executor: TurnExecutor,
   eventsRef: Ref.Ref<AgentEvent[]>,
   options?: {
-    readonly tools?: ReadonlyArray<ToolToken>
+    readonly tools?: ReadonlyArray<ToolCapability>
   },
 ) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
