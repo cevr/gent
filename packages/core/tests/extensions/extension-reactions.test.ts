@@ -15,17 +15,13 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core/domain/agent"
 
-const stubHostCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionHostContext
+const stubHostCtx = testExtensionHostContext()
 
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),

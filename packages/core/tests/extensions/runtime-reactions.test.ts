@@ -6,7 +6,7 @@ import type {
   LoadedExtension,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import {
   compileExtensionReactions,
@@ -14,12 +14,7 @@ import {
 } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core/domain/agent"
 
-const stubCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionHostContext
+const stubCtx = testExtensionHostContext()
 
 const stubEvent: TurnAfterInput = {
   sessionId: SessionId.make("019da5c0-0000-7000-0000-000000000001"),

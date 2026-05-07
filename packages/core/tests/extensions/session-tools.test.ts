@@ -10,12 +10,11 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/extensions/session-tools"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { testSetupCtx } from "@gent/core/test-utils"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
 import { AgentName } from "@gent/core/domain/agent"
-const stubCtx = {} as unknown as ExtensionHostContext
+const stubCtx = testExtensionHostContext()
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),

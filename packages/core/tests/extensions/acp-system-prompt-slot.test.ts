@@ -18,7 +18,7 @@ import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
@@ -29,7 +29,7 @@ const fakeTool: ToolCapability = tool({
   output: Schema.Struct({ ok: Schema.Boolean }),
   execute: () => Effect.succeed({ ok: true }),
 })
-const stubHostCtx = {} as ExtensionHostContext
+const stubHostCtx = testExtensionHostContext()
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),

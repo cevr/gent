@@ -1084,6 +1084,24 @@ Definition of done:
 - No `as unknown as ExtensionHostContext` in core extension tests.
 - Focused tests pass.
 
+Status: complete.
+
+Implementation notes:
+
+- Added `testExtensionHostContext` in `packages/core/src/test-utils` with
+  die-stubbed `agent`, `session`, and `interaction` facets.
+- Migrated prompt/reaction/session extension tests off erased host-context
+  casts; tests now opt into real facet behavior explicitly.
+- Reused the same fixture for the ACP codemode boundary host context.
+
+Verification on 2026-05-07:
+
+- `rg -n "as unknown as ExtensionHostContext|\\{\\} as ExtensionHostContext|ExtensionHostContext\\[\\\"agent\\\"\\]|ExtensionHostContext\\[\\\"session\\\"\\]|ExtensionHostContext\\[\\\"interaction\\\"\\]" packages/core/tests/extensions packages/core/src/test-utils`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/prompt-slots.test.ts packages/core/tests/extensions/runtime-reactions.test.ts packages/core/tests/extensions/scope-precedence.test.ts packages/core/tests/extensions/extension-reactions.test.ts packages/core/tests/extensions/session-tools.test.ts packages/core/tests/extensions/acp-system-prompt-slot.test.ts packages/core/tests/extensions/acp-agents.test.ts`
+- `bun run lint`
+- `bun run gate`; test wall `4233ms`
+
 #### C50: test(tui): centralize extension lifecycle fake runtime/setup
 
 Create typed TUI test helpers for client runtime, transport, and builtin setup

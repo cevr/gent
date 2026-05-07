@@ -4,15 +4,10 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 import { AgentName } from "@gent/core/domain/agent"
 
-const stubHostCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionHostContext
+const stubHostCtx = testExtensionHostContext()
 
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),

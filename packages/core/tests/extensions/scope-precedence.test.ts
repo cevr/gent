@@ -22,16 +22,11 @@ import { compileExtensionReactions } from "../../src/runtime/extensions/extensio
 import { PermissionRule } from "@gent/core/domain/permission"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 import type { AgentDefinition } from "@gent/core/domain/agent"
 import { AgentName } from "@gent/core/domain/agent"
 
-const stubCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionHostContext
+const stubCtx = testExtensionHostContext()
 
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),

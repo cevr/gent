@@ -10,8 +10,8 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { ToolRunner, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
-import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
 import type { ToolCapabilityContext } from "../../src/domain/capability/tool.js"
+import { testExtensionHostContext } from "../../src/test-utils/index.js"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
@@ -377,13 +377,12 @@ describe("codemode proxy", () => {
 // `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
 const makeStubHostCtx = (): Omit<ToolCapabilityContext, "toolCallId"> => ({
-  sessionId: SessionId.make("ses-acp-boundary-test"),
-  branchId: BranchId.make("br-acp-boundary-test"),
-  cwd: "/tmp/gent-acp-boundary-test",
-  home: "/tmp/gent-acp-boundary-test-home",
-  agent: {} as ExtensionHostContext["agent"],
-  session: {} as ExtensionHostContext["session"],
-  interaction: {} as ExtensionHostContext["interaction"],
+  ...testExtensionHostContext({
+    sessionId: SessionId.make("ses-acp-boundary-test"),
+    branchId: BranchId.make("br-acp-boundary-test"),
+    cwd: "/tmp/gent-acp-boundary-test",
+    home: "/tmp/gent-acp-boundary-test-home",
+  }),
 })
 describe("codemode proxy via makeAcpRunTool", () => {
   it.scopedLive("runs through the boundary helper and reaches ToolRunner", () =>

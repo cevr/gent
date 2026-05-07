@@ -26,16 +26,10 @@ import type { ExtensionSetupContext } from "../../src/domain/extension.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { testSetupCtx } from "@gent/core/test-utils"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
 import { AgentName } from "@gent/core/domain/agent"
 
-const stubHostCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionHostContext
+const stubHostCtx = testExtensionHostContext()
 
 const stubProjectionCtx = {
   sessionId: SessionId.make("test-session"),
