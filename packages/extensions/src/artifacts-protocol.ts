@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { ExtensionId, ArtifactId, BranchId, request } from "@gent/core/extensions/api"
+import {
+  ExtensionId,
+  ArtifactId,
+  BranchId,
+  TaggedEnumClass,
+  request,
+} from "@gent/core/extensions/api"
 import { ArtifactsRead, ArtifactsWrite } from "./artifacts/store.js"
 
 export const ARTIFACTS_EXTENSION_ID = ExtensionId.make("@gent/artifacts")
@@ -34,12 +40,13 @@ export type ContentPatch = typeof ContentPatch.Type
 
 // ── Read discriminated union: by id OR by sourceTool ──
 
-export const ReadById = Schema.TaggedStruct("ById", { id: ArtifactId })
-export const ReadBySource = Schema.TaggedStruct("BySource", {
-  sourceTool: Schema.String,
-  branchId: Schema.optional(BranchId),
+export const ReadQuery = TaggedEnumClass("ArtifactReadQuery", {
+  ById: { id: ArtifactId },
+  BySource: {
+    sourceTool: Schema.String,
+    branchId: Schema.optional(BranchId),
+  },
 })
-export const ReadQuery = Schema.Union([ReadById, ReadBySource])
 export type ReadQuery = typeof ReadQuery.Type
 
 // ── UI snapshot ──

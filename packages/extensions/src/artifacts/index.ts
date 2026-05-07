@@ -14,7 +14,7 @@ import {
   ToolNeeds,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
-import { ARTIFACTS_EXTENSION_ID, ArtifactRpc } from "../artifacts-protocol.js"
+import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
 
 export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
@@ -55,8 +55,8 @@ const ArtifactReadTool = tool({
   execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const query =
       params.id !== undefined
-        ? { _tag: "ById" as const, id: ArtifactId.make(params.id) }
-        : { _tag: "BySource" as const, sourceTool: params.sourceTool ?? "", branchId: ctx.branchId }
+        ? ReadQuery.ById.make({ id: ArtifactId.make(params.id) })
+        : ReadQuery.BySource.make({ sourceTool: params.sourceTool ?? "", branchId: ctx.branchId })
     const artifacts = yield* ArtifactsRead
     const artifact = yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
     if (artifact === null) return { found: false }
