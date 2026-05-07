@@ -6,6 +6,7 @@
  */
 
 import { type Effect, Schema } from "effect"
+import type { AgentName } from "./agent.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import {
@@ -63,6 +64,7 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
 export interface CapabilityCoreContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly agentName?: AgentName
   /** Present only when this Capability was invoked as a tool by the LLM. */
   readonly toolCallId?: ToolCallId
   readonly cwd: string

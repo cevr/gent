@@ -9,6 +9,7 @@ import {
   ToolNeeds,
   type Branch,
   type Message,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 
 // Read Session Error
@@ -101,7 +102,10 @@ export const ReadSessionTool = tool({
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
   output: ReadSessionResult,
-  execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("ReadSessionTool.execute")(function* (
+    params: typeof ReadSessionParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     const tree = yield* ctx.session.getDetail(SessionId.make(params.sessionId)).pipe(
       Effect.mapError(
         (e) =>

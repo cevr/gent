@@ -6,7 +6,7 @@ import { createHash } from "node:crypto"
 import * as path from "node:path"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, InteractionRequestId } from "@gent/core/domain/ids"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { ApprovalService } from "../../src/runtime/approval-service"
@@ -34,7 +34,7 @@ const InteractionProbeExtension: LoadedExtension = {
           approved: Schema.Boolean,
           notes: Schema.String,
         }),
-        execute: Effect.fn("approval_probe")(function* (params, ctx) {
+        execute: Effect.fn("approval_probe")(function* (params, ctx: ToolCapabilityContext) {
           const decision = yield* ctx.interaction.approve({ text: params.text })
           return {
             approved: decision.approved,

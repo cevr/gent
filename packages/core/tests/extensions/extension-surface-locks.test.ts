@@ -98,6 +98,27 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("tool({...}) defaults to minimal ctx unless wide ctx is explicit", () => {
+    tool({
+      id: "minimal-tool-context",
+      description: "ok",
+      params: NoInput,
+      output: StringOutput,
+      execute: (_params, ctx) => {
+        void ctx.sessionId
+        void ctx.branchId
+        void ctx.toolCallId
+        // @ts-expect-error — agent runner is wide host authority, not default tool ctx
+        void ctx.agent
+        // @ts-expect-error — session mutation is wide host authority, not default tool ctx
+        void ctx.session
+        return Effect.succeed("ok")
+      },
+    })
+
+    expect(true).toBe(true)
+  })
+
   test("request({ intent: 'read' }) — happy path compiles with ReadOnly Tag", () => {
     const ok = request({
       id: "ok-read",

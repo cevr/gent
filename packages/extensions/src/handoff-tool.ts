@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { AgentName, makeRunSpec, tool, ToolNeeds } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  makeRunSpec,
+  tool,
+  ToolNeeds,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 
 // Handoff Tool Error
 
@@ -45,7 +51,10 @@ export const HandoffTool = tool({
   ],
   params: HandoffParams,
   output: HandoffResult,
-  execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("HandoffTool.execute")(function* (
+    params: typeof HandoffParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     // Use summarizer agent to refine context if it's large
     let summary = params.context
     if (params.context.length > 2000) {

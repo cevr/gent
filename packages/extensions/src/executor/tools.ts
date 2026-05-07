@@ -11,7 +11,7 @@
 import { Effect, Schema } from "effect"
 import { tool } from "@gent/core/extensions/api"
 import { ExecutorRead } from "./controller.js"
-import { type ExecutorMcpToolResult, type ResumeAction, ExecutorMcpError } from "./domain.js"
+import { type ExecutorMcpToolResult, ResumeAction, ExecutorMcpError } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 
 // ── Helpers ──
@@ -48,6 +48,20 @@ const ExecuteResult = Schema.Struct({
 const ResumeResult = Schema.Struct({
   text: Schema.String,
   structuredContent: Schema.optional(Schema.Unknown),
+})
+
+const ResumeParams = Schema.Struct({
+  executionId: Schema.String.annotate({
+    description: "The executionId from execute's result.",
+  }),
+  action: ResumeAction.annotate({
+    description: "How to respond to the pending interaction.",
+  }),
+  content: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "Optional JSON string with additional content for the interaction.",
+    }),
+  ),
 })
 
 // ── Execute Tool ──
@@ -88,21 +102,9 @@ export const ResumeTool = tool({
     "Use the exact executionId returned by execute.",
     "action: 'accept' to approve, 'decline' to reject, 'cancel' to abort.",
   ],
-  params: Schema.Struct({
-    executionId: Schema.String.annotate({
-      description: "The executionId from execute's result.",
-    }),
-    action: Schema.Literals(["accept", "decline", "cancel"]).annotate({
-      description: "How to respond to the pending interaction.",
-    }),
-    content: Schema.optionalKey(
-      Schema.String.annotate({
-        description: "Optional JSON string with additional content for the interaction.",
-      }),
-    ),
-  }),
+  params: ResumeParams,
   output: ResumeResult,
-  execute: Effect.fn("ResumeTool.execute")(function* (params) {
+  execute: Effect.fn("ResumeTool.execute")(function* (params: typeof ResumeParams.Type) {
     const baseUrl = yield* requireReadyBaseUrl("resume")
     const bridge = yield* ExecutorMcpBridge
     const contentStr = params.content
@@ -119,12 +121,7 @@ export const ResumeTool = tool({
           ),
         )
       : undefined
-    const result = yield* bridge.resume(
-      baseUrl,
-      params.executionId,
-      params.action as ResumeAction,
-      parsed,
-    )
+    const result = yield* bridge.resume(baseUrl, params.executionId, params.action, parsed)
     const checked = yield* failIfError(result, "resume")
     return {
       text: checked.text,

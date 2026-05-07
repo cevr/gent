@@ -10,6 +10,7 @@ import {
   toolCallPart,
   type LanguageModelStreamPart,
 } from "@gent/core/test-utils/language-model"
+import type { ToolCapabilityContext } from "@gent/core/extensions/api"
 import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
@@ -1151,7 +1152,7 @@ describe("ephemeral service propagation", () => {
         description: "Tests approval",
         params: Schema.Struct({ text: Schema.String }),
         output: Schema.Struct({ approved: Schema.Boolean }),
-        execute: Effect.fn("approve_test")(function* (_params, ctx) {
+        execute: Effect.fn("approve_test")(function* (_params, ctx: ToolCapabilityContext) {
           const decision = yield* ctx.interaction.approve({
             text: "approve this?",
             metadata: { type: "prompt", mode: "confirm" },

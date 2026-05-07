@@ -1,5 +1,10 @@
 import { Clock, Effect, Schema } from "effect"
-import { dateFromMillis, tool, ToolNeeds } from "@gent/core/extensions/api"
+import {
+  dateFromMillis,
+  tool,
+  ToolNeeds,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
@@ -83,7 +88,10 @@ export const SearchSessionsTool = tool({
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",
   params: SearchSessionsParams,
   output: SearchSessionsResult,
-  execute: Effect.fn("SearchSessionsTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("SearchSessionsTool.execute")(function* (
+    params: typeof SearchSessionsParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     if (params.query === undefined && params.file === undefined) {
       return yield* new SearchSessionsError({
         message: "Provide at least one of: query, file",

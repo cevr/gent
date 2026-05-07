@@ -20,6 +20,7 @@ import { Context, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import {
   Capability,
+  type CapabilityCoreContext,
   type CapabilityEffect,
   type ModelCapabilityContext,
   type ToolCapability as ToolCapabilityVariant,
@@ -147,11 +148,17 @@ export const getToolEffect = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
 
-/** Context passed to `tool({...}).execute`. Same shape as the wide
- *  `ModelCapabilityContext` but with `toolCallId` narrowed to required.
- *  Tools are always invoked from the agent loop with a real call id;
- *  the optional shape on `CapabilityCoreContext` only exists for the
- *  audience-neutral case where no tool call is in flight. */
+/** Minimal context passed to `tool({...}).execute` unless the author opts into
+ *  the wider `ToolCapabilityContext`. Tools are always invoked from the agent
+ *  loop with a real call id; the optional shape on `CapabilityCoreContext`
+ *  only exists for the audience-neutral case where no tool call is in flight. */
+export interface ToolCoreContext extends CapabilityCoreContext {
+  readonly toolCallId: ToolCallId
+}
+
+/** Wide context for tools that explicitly need model host authority
+ *  (agent runner, session mutation, interaction). Authors opt in by annotating
+ *  the second execute parameter as `ToolCapabilityContext`. */
 export interface ToolCapabilityContext extends ModelCapabilityContext {
   readonly toolCallId: ToolCallId
 }
@@ -169,6 +176,7 @@ export interface ToolInput<
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
+  Ctx extends ToolCoreContext = ToolCoreContext,
 > {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
@@ -208,12 +216,12 @@ export interface ToolInput<
   /** Static system-prompt section bundled with this tool. For dynamic
    *  prompt fragments resolved per-turn from services, use a turn projection reaction. */
   readonly prompt?: PromptSection
-  /** The tool body. Receives decoded `params` and a `ToolCapabilityContext`
-   *  (the wide host context — subagents, interaction, follow-ups all reachable —
-   *  with `toolCallId` narrowed to required). */
+  /** The tool body. Receives decoded `params` and the minimal
+   *  `ToolCoreContext` by default. Tools that need subagents, interaction, or
+   *  session mutation must annotate `ctx: ToolCapabilityContext` explicitly. */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
-    ctx: ToolCapabilityContext,
+    ctx: Ctx,
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
 }
 
@@ -227,8 +235,9 @@ export const tool = <
   Output extends Schema.Encoder<any, never>,
   Error,
   Deps,
+  Ctx extends ToolCoreContext = ToolCoreContext,
 >(
-  input: ToolInput<Params, Output, Error, Deps>,
+  input: ToolInput<Params, Output, Error, Deps, Ctx>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
@@ -252,7 +261,7 @@ export const tool = <
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as CapabilityEffect<
+    effect: input.execute as unknown as CapabilityEffect<
       Schema.Schema.Type<Params>,
       Schema.Schema.Type<Output>,
       never,

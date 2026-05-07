@@ -12,6 +12,7 @@ import {
   type SessionId,
   type Task,
   type TaskId,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
 
@@ -78,7 +79,10 @@ export const DelegateTool = tool({
   ],
   params: DelegateParams,
   output: DelegateResult,
-  execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("DelegateTool.execute")(function* (
+    params: typeof DelegateParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTasks = (params.tasks?.length ?? 0) > 0
     const hasSingle = params.agent !== undefined && params.task !== undefined

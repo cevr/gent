@@ -1,5 +1,10 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds, type Question } from "@gent/core/extensions/api"
+import {
+  tool,
+  ToolNeeds,
+  type Question,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 
 const parseAnswers = (notes: string): string[][] => {
   try {
@@ -75,7 +80,10 @@ export const AskUserTool = tool({
   promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
   output: AskUserResult,
-  execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("AskUserTool.execute")(function* (
+    params: typeof AskUserParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     const decision = yield* ctx.interaction.approve({
       text: formatQuestionsText(params.questions),
       metadata: { type: "ask-user", questions: params.questions },

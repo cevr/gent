@@ -24,7 +24,13 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
-import { action, CapabilityError, request, tool } from "@gent/core/extensions/api"
+import {
+  action,
+  CapabilityError,
+  request,
+  tool,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 class ProfileToken extends Context.Service<
@@ -530,7 +536,7 @@ describe("extension command RPCs", () => {
               description: "Create a branch through the extension host session API.",
               params: Schema.Struct({}),
               output: Schema.String,
-              execute: (_input, ctx) =>
+              execute: (_input, ctx: ToolCapabilityContext) =>
                 ctx.session
                   .createBranch({ name: "from extension rpc" })
                   .pipe(Effect.map(({ branchId }) => branchId)),

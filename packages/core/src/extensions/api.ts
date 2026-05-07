@@ -212,6 +212,7 @@ export {
 export {
   getToolId,
   tool,
+  type ToolCoreContext,
   type ToolCapabilityContext,
   type GentToolMetadata,
   type ToolInput,

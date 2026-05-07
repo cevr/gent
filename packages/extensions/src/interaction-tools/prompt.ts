@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
 
 // Prompt Params — single object shape because Anthropic rejects top-level anyOf tool inputs.
 
@@ -46,7 +46,10 @@ export const PromptTool = tool({
     "mode=review for content that should be persisted and can be edited by the user.",
   params: PromptParams,
   output: PromptResult,
-  execute: Effect.fn("PromptTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("PromptTool.execute")(function* (
+    params: typeof PromptParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     if (params.mode === "present") {
       yield* ctx.interaction.present({
         content: params.content,

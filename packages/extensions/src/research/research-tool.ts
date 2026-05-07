@@ -100,7 +100,10 @@ export const ResearchTool = tool({
   ],
   params: ResearchParams,
   output: ResearchResult,
-  execute: Effect.fn("ResearchTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ResearchTool.execute")(function* (
+    params: typeof ResearchParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }
     }

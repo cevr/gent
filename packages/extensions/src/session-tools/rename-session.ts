@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
 
 export const RenameSessionParams = Schema.Struct({
   name: Schema.String.annotate({
@@ -21,7 +21,7 @@ export const RenameSessionTool = tool({
   output: RenameSessionResult,
   execute: Effect.fn("RenameSessionTool.execute")(function* (
     params: typeof RenameSessionParams.Type,
-    ctx,
+    ctx: ToolCapabilityContext,
   ) {
     return yield* ctx.session.renameCurrent(params.name)
   }),

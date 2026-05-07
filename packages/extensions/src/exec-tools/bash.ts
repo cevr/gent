@@ -7,6 +7,7 @@ import {
   PermissionRule,
   saveFullOutput,
   type SessionId,
+  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
 
@@ -138,7 +139,10 @@ export const BashTool = tool({
   ],
   params: BashParams,
   output: BashResult,
-  execute: Effect.fn("BashTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("BashTool.execute")(function* (
+    params: typeof BashParams.Type,
+    ctx: ToolCapabilityContext,
+  ) {
     const timeout = Math.min(params.timeout ?? 120000, 600000)
 
     // Strip background operator

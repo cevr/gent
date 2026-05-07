@@ -1,6 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCoreContext } from "@gent/core/extensions/api"
 import { $ } from "bun"
 import * as esGit from "es-git"
 
@@ -396,7 +396,10 @@ export const RepoTool = tool({
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
   params: RepoExplorerParams,
   output: RepoExplorerResult,
-  execute: Effect.fn("RepoExplorerTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("RepoExplorerTool.execute")(function* (
+    params: typeof RepoExplorerParams.Type,
+    ctx: ToolCoreContext,
+  ) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const gitReader = yield* GitReader

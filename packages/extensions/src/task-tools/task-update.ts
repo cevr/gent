@@ -25,10 +25,10 @@ export const TaskUpdateTool = tool({
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
   output: TaskUpdateResult,
-  execute: Effect.fn("TaskUpdateTool.execute")(function* (params) {
+  execute: Effect.fn("TaskUpdateTool.execute")(function* (params: typeof TaskUpdateParams.Type) {
     const taskService = yield* TaskService
     const updated = yield* taskService.update(TaskId.make(params.taskId), {
-      status: params.status as TaskStatus | undefined,
+      status: params.status,
       description: params.description,
     })
 
