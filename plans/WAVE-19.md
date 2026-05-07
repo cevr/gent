@@ -603,7 +603,7 @@ Why effect-encore and not raw `Entity.make`:
    `Entity.make` + handler wiring + client service quintet with one object.
 2. Built-in dedup via `id(payload) → primaryKey`. Each loop op (Submit,
    Steer, QueueFollowUp) gets persisted-and-deduped semantics by returning
-   `{ entityId: \`${sessionId} ${branchId}\`, primaryKey: opPrimaryKey }`from`id`. This replaces gent's hand-rolled
+   `{ entityId: \`${sessionId}${branchId}\`, primaryKey: opPrimaryKey }`from`id`. This replaces gent's hand-rolled
 `agent_loop_checkpoints` dedup logic.
 3. `peek` / `watch` / `waitFor` on `ExecId` is exactly the
    `awaitIdleStateSince` / `awaitTurnFailure` / `failIfTurnFailedSince`
@@ -1685,19 +1685,73 @@ C32 + C33 + C34 land green.
 
 ### Implementation Ledger
 
-(empty — populate as commits land)
+- `7d53b94f` — `refactor(extensions): type codemode startup errors`
+- `c8235b8b` — `refactor(storage): prove branch sql model insert`
+- `740f9459` — `refactor(storage): route session inserts through sql model`
+- `95ef9fff` — `refactor(storage): route message inserts through sql model`
+- `523b8d3d` — `refactor(storage): route event inserts through sql model`
+- `66a791c5` — `test(sdk): avoid server lock subprocesses`
+- `81979a60` — `refactor(extensions): model artifact read query as tagged enum`
+- `44accf4d` — `refactor(extensions): model acp connection state as tagged enum`
+- `f8af7d34` — `refactor(extensions): model sidecar records as tagged enum`
+- `16becc61` — `refactor(runtime): remove committed event discriminator`
+- `d9893a05` — `refactor(tui): type bootstrap fatal states`
+- `c9295eec` — `refactor(extensions): route git read errors through effect`
+- `9fc9d083` — `refactor(tui): type headless startup failures`
+- `b7bb2faf` — `refactor(extensions): type disabled task service create`
+- `c7ac12b5` — `test(sdk): run test files in parallel`
+- `b3ce9a10` — `refactor(runtime): type host context guard failures`
+- `0e4b4039` — `refactor(runtime): type extension registry failures`
+- `dcba354c` — `refactor(runtime): type sql client config failure`
+- `8fd6b256` — `refactor(runtime): type extension reaction halt`
+- `6981520c` — `refactor(tui): yield before scroll sync retry`
+- `0a95f8fb` — `test(sdk): speed up server lock attach coverage`
+- `44742ec3` — `refactor(sdk): drop session runtime alias`
+- `5b25c245` — `refactor(runtime): remove session runtime test stub`
+- `dbe91d21` — `test(extensions): audit runtime extension substrate`
+- `73cccf43` — `refactor(tui): consolidate builtin tool client modules`
+- `7b581701` — `test(core): reduce test runner tail latency`
+- `e68e8c93` — `refactor(extensions): move auto feature into folder`
+- `d444bde2` — `refactor(extensions): fold git reader into librarian repo tool`
+- `c1faa4ed` — `test(tooling): run workspace tests directly`
+- `680b810f` — `feat(headless): render named tool output`
+- `7138afac` — `feat(tooling): enable no bun outside adapter lint`
+- `f154286e` — `test(audit): extend deleted platform guards`
+- `5d99b23d` — `test(tooling): close lint rule fixture gaps`
+- `f24a1c6d` — `docs: refresh platform-native architecture notes`
+- `b6100972` — `refactor(runtime): inline ephemeral runtime composition`
+- `d4d3cc0d` — `test(tooling): reduce small-suite process fanout`
+- `1fdfef45` — `test(audit): guard deleted runtime composer surfaces`
+- `460336d4` — `refactor(ai): move response projection out of transcript`
+- `74a495b8` — `refactor(storage): serialize prompt parts directly`
+- `293bdd9e` — `refactor(ai): drop domain part aliases`
 
 ### Accepted Review Findings
 
-(empty — populate as reviews complete)
+- Counsel was unavailable during the closeout pass because the org monthly
+  usage limit was reached; no new counsel findings were accepted in this
+  closeout segment.
 
 ### Rejected Or Deferred Findings
 
-(empty — populate as reviews complete)
+- Deferred: C32's planned blanket guard for all `TextPart` / `ToolCallPart`
+  references in `domain/` was narrowed in implementation because Effect exposes
+  the part schemas as `Prompt.TextPart`, `Prompt.ToolCallPart`, etc.; the
+  completed code removes gent-owned part alias exports/imports while retaining
+  upstream schema references where message validation needs them.
 
 ### Verification Receipts
 
-(empty — populate as gates pass)
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/providers/ai-transcript.test.ts tests/domain/message-part-projection.test.ts tests/runtime/agent-turn-response-collectors.test.ts`:
+  24 pass, 0 fail.
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/storage/sqlite-storage.test.ts tests/providers/ai-transcript.test.ts tests/domain/message-part-projection.test.ts`:
+  58 pass, 0 fail.
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/domain/message-part-projection.test.ts tests/runtime/agent-loop.test.ts tests/runtime/agent-turn-response-collectors.test.ts tests/storage/sqlite-storage.test.ts`:
+  94 pass, 0 fail.
+- `bun run gate`: green after the C6 closeout; test budget reporter
+  `3798ms / 5000ms`.
+- `bun run test:e2e`: green after C6.4 verification; `@gent/tui` 24 pass,
+  `@gent/e2e` 36 pass, total `51.026s`.
 
 ## Current Source Trail
 
