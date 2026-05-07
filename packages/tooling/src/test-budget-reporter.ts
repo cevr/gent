@@ -46,8 +46,10 @@ const durationMs = (value: string): number | undefined => {
 
 const formatMs = (ms: number): string => `${Math.round(ms)}ms`
 
+const testOutput = `${stdout}\n${stderr}`
+
 const bunRuns = [
-  ...stdout.matchAll(/^(?:(?<packageName>@[^:]+):test:\s*)?Ran .* \[(?<time>[^\]]+)\]$/gm),
+  ...testOutput.matchAll(/^(?:(?<packageName>@[^:]+):test:\s*)?Ran .* \[(?<time>[^\]]+)\]$/gm),
 ]
   .map((match) => {
     const ms = durationMs(match.groups?.["time"] ?? "")
