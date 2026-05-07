@@ -83,7 +83,6 @@ import {
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
-  LoopDriverEvent,
   type LoopHandle,
   awaitIdleStateSince,
   awaitTurnFailure,
@@ -508,7 +507,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     )
     if (reservedStart !== undefined) {
       yield* handle
-        .dispatch(LoopDriverEvent.Start.make({ item }))
+        .startTurn(item)
         .pipe(
           Effect.catchEager((error) =>
             cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
@@ -604,7 +603,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     )
     if (reservedStart !== undefined) {
       yield* handle
-        .dispatch(LoopDriverEvent.Start.make({ item }))
+        .startTurn(item)
         .pipe(
           Effect.catchEager((error) =>
             cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
@@ -641,7 +640,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     if (start === undefined) return
 
     yield* handle
-      .dispatch(LoopDriverEvent.Start.make({ item }))
+      .startTurn(item)
       .pipe(
         Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
       )
@@ -664,29 +663,34 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     yield* markWrite
     const projectedState = yield* currentRuntimeState(handle)
 
-    const wrapDispatch = (event: LoopDriverEvent) =>
-      handle
-        .dispatch(event)
-        .pipe(
-          Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-        )
-
     switch (command._tag) {
       case "SwitchAgent":
-        yield* wrapDispatch(LoopDriverEvent.SwitchAgent.make({ agent: command.agent }))
+        yield* handle
+          .switchAgent(command.agent)
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
         return
 
       case "Cancel":
       case "Interrupt":
         if (projectedState._tag === "Running" || projectedState._tag === "WaitingForInteraction") {
-          yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
+          yield* handle.interrupt.pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
           return
         }
         const loopState = yield* handle.snapshot
         if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-          yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
+          yield* handle.interrupt.pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
         }
         return
 
@@ -748,9 +752,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
               if (state._tag !== "WaitingForInteraction") return
             }
             yield* handle
-              .dispatch(
-                LoopDriverEvent.InteractionResponded.make({ requestId: operation.requestId }),
-              )
+              .respondInteraction(operation.requestId)
               .pipe(
                 Effect.catchEager((error) =>
                   cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
