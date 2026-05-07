@@ -16,7 +16,7 @@ const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe
  * Compute a build fingerprint from local sources (no env).
  * Priority: compiled binary mtime → gent source git hash → "unknown"
  */
-export const computeLocalFingerprint: Effect.Effect<
+const computeLocalFingerprintUncached: Effect.Effect<
   string,
   never,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
@@ -53,18 +53,17 @@ export const computeLocalFingerprint: Effect.Effect<
   return "unknown"
 })
 
+export const computeLocalFingerprint = Effect.runSync(
+  Effect.cached(computeLocalFingerprintUncached),
+)
+
 /** Resolve the build fingerprint. Env var takes precedence, then local computation. */
 export const resolveBuildFingerprint: Effect.Effect<
   string,
   never,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
-> = computeLocalFingerprint.pipe(
-  Effect.flatMap((local) =>
-    Effect.gen(function* () {
-      const opt: Option.Option<string> = yield* Config.option(
-        Config.string("GENT_BUILD_FINGERPRINT"),
-      )
-      return Option.isSome(opt) && opt.value !== "" ? opt.value : local
-    }).pipe(Effect.catchEager(() => Effect.succeed(local))),
-  ),
-)
+> = Effect.gen(function* () {
+  const opt: Option.Option<string> = yield* Config.option(Config.string("GENT_BUILD_FINGERPRINT"))
+  if (Option.isSome(opt) && opt.value !== "") return opt.value
+  return yield* computeLocalFingerprint
+}).pipe(Effect.catchEager(() => computeLocalFingerprint))

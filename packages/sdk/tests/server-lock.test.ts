@@ -134,19 +134,36 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const dbPath = `${home}/data.db`
-        const server1 = yield* Gent.server({
-          cwd: process.cwd(),
-          state: Gent.state.sqlite({ home, dbPath }),
-          provider: Gent.provider.mock(),
+        const buildFingerprint = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
+        const entry = makeEntry({ dbPath, buildFingerprint })
+        const fakeOwner = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.serve({
+              port: 0,
+              fetch: (request) => {
+                if (new URL(request.url).pathname !== "/_gent/identity") {
+                  return new Response("not found", { status: 404 })
+                }
+                return Response.json(serverLockIdentityOf(entry))
+              },
+            }),
+          ),
+          (server) => Effect.promise(() => server.stop(true)),
+        )
+        const fakeOwnerUrl = new URL(fakeOwner.url)
+        const entryWithEndpoint = new ServerLockEntry({
+          ...entry,
+          rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        const server2 = yield* Gent.server({
+        yield* writeServerLock(home, entryWithEndpoint)
+
+        const server = yield* Gent.server({
           cwd: `${process.cwd()}/other-workspace`,
           state: Gent.state.sqlite({ home, dbPath: `${home}/other.db` }),
           provider: Gent.provider.mock(),
         })
-        expect(server1._tag).toBe("owned")
-        expect(server2._tag).toBe("attached")
-        expect(server2.url).toBe(server1.url)
+        expect(server._tag).toBe("attached")
+        expect(server.url).toBe(entryWithEndpoint.rpcUrl)
       }),
     ),
   )
