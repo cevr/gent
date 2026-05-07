@@ -12,6 +12,7 @@ import {
   Fiber,
   FileSystem,
   Schema,
+  Schedule,
   Scope,
   Stream,
 } from "effect"
@@ -238,7 +239,6 @@ interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }, R
     launched: StartedWorker<Proc>,
   ) => Effect.Effect<void, WorkerSupervisorError>
   readonly stop: (proc: Proc) => Effect.Effect<void>
-  readonly sleep: (delayMs: number) => Effect.Effect<void>
   readonly setCurrent: (proc: Proc | undefined) => void
   readonly isCurrent: (proc: Proc) => boolean
   readonly isStopped: () => boolean
@@ -255,50 +255,63 @@ const launchWorkerUntilReady = <Proc extends { readonly pid: number }, R = never
   Effect.gen(function* () {
     const maxAttempts = options.maxAttempts ?? STARTUP_MAX_ATTEMPTS
     const retryDelayMs = options.retryDelayMs ?? STARTUP_RETRY_DELAY_MS
-    let launched: StartedWorker<Proc> | undefined
-    let startupError: WorkerSupervisorError | undefined
+    let lastFailure: { readonly pid: number; readonly error: WorkerSupervisorError } | undefined
+    const retryPolicy = Schedule.fromStepWithMetadata<
+      WorkerSupervisorError,
+      number,
+      never,
+      never,
+      never,
+      never
+    >(
+      Effect.succeed((meta: Schedule.InputMetadata<WorkerSupervisorError>) => {
+        if (meta.attempt >= maxAttempts || !isRetryableStartupError(meta.input)) {
+          return Cause.done(meta.attempt)
+        }
+        options.logRetry({
+          attempt: meta.attempt,
+          pid: lastFailure?.pid ?? 0,
+          error: meta.input.message,
+        })
+        return Effect.succeed([meta.attempt, Duration.millis(retryDelayMs * meta.attempt)] as [
+          number,
+          Duration.Duration,
+        ])
+      }),
+    )
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      launched = yield* options.spawn
+    const launchWithCleanup: Effect.Effect<
+      StartedWorker<Proc> | undefined,
+      WorkerSupervisorError,
+      R
+    > = Effect.gen(function* () {
+      const launched = yield* options.spawn
       options.setCurrent(launched.proc)
       const readyExit = yield* options.waitForReady(launched).pipe(Effect.exit)
-      if (Exit.isSuccess(readyExit)) {
-        startupError = undefined
-        break
-      }
+      if (Exit.isSuccess(readyExit)) return launched
 
-      startupError = startupErrorFromCause(readyExit.cause)
+      const startupError = startupErrorFromCause(readyExit.cause)
+      lastFailure = { pid: launched.proc.pid, error: startupError }
       yield* options.stop(launched.proc)
       if (options.isCurrent(launched.proc)) options.setCurrent(undefined)
-      if (
-        options.isStopped() ||
-        !isRetryableStartupError(startupError) ||
-        attempt === maxAttempts
-      ) {
-        break
-      }
 
-      options.logRetry({
-        attempt,
-        pid: launched.proc.pid,
-        error: startupError.message,
-      })
-      yield* options.sleep(retryDelayMs * attempt)
-    }
+      if (options.isStopped()) return undefined
+      return yield* startupError
+    })
 
-    if (options.isStopped()) return undefined
-    if (launched === undefined) {
-      return yield* new WorkerSupervisorError({ message: "worker launch did not start" })
-    }
-    if (startupError !== undefined) {
-      return yield* new WorkerSupervisorError({
-        message: isRetryableStartupError(startupError)
-          ? `worker did not become ready after ${maxAttempts} attempts: ${startupError.message}`
-          : startupError.message,
-      })
-    }
-
-    return launched
+    return yield* Effect.retry(launchWithCleanup, {
+      schedule: retryPolicy,
+      while: isRetryableStartupError,
+    }).pipe(
+      Effect.mapError(
+        (startupError) =>
+          new WorkerSupervisorError({
+            message: isRetryableStartupError(startupError)
+              ? `worker did not become ready after ${maxAttempts} attempts: ${startupError.message}`
+              : startupError.message,
+          }),
+      ),
+    )
   })
 
 import { getLogPaths } from "@gent/core/runtime/log-paths"
@@ -550,7 +563,6 @@ export const startWorkerSupervisor = (
           spawn: spawnWorkerProcess(options, assignedPort),
           waitForReady: (launched) => waitForWorkerReady(launched.proc, startupTimeoutMs),
           stop: stopWorker,
-          sleep: (delayMs) => Effect.sleep(`${delayMs} millis`),
           setCurrent: (proc) => {
             current = proc
           },

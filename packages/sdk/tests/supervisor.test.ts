@@ -165,13 +165,17 @@ describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
   it.live("retries retryable pre-ready failures on the same assigned port", () =>
     Effect.gen(function* () {
       const stopped: number[] = []
-      const slept: number[] = []
+      const retries: Array<{
+        readonly attempt: number
+        readonly pid: number
+        readonly error: string
+      }> = []
       let current: { readonly pid: number } | undefined
       let attempts = 0
 
       const launched = yield* WorkerSupervisorInternal.launchWorkerUntilReady({
         maxAttempts: 3,
-        retryDelayMs: 5,
+        retryDelayMs: 1,
         spawn: Effect.sync(() => {
           attempts += 1
           return { port: 44123, url: "http://127.0.0.1:44123/rpc", proc: { pid: attempts } }
@@ -186,16 +190,14 @@ describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
           Effect.sync(() => {
             stopped.push(proc.pid)
           }),
-        sleep: (delayMs) =>
-          Effect.sync(() => {
-            slept.push(delayMs)
-          }),
         setCurrent: (proc) => {
           current = proc
         },
         isCurrent: (proc) => current?.pid === proc.pid,
         isStopped: () => false,
-        logRetry: () => undefined,
+        logRetry: (input) => {
+          retries.push(input)
+        },
       })
 
       expect(launched?.port).toBe(44123)
@@ -203,7 +205,7 @@ describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
       expect(current?.pid).toBe(2)
       expect(attempts).toBe(2)
       expect(stopped).toEqual([1])
-      expect(slept).toEqual([5])
+      expect(retries).toEqual([{ attempt: 1, pid: 1, error: "worker stdout closed before ready" }])
     }),
   )
 
@@ -227,7 +229,6 @@ describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
             Effect.sync(() => {
               stopped.push(proc.pid)
             }),
-          sleep: () => Effect.void,
           setCurrent: (proc) => {
             current = proc
           },
