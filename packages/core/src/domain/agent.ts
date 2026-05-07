@@ -123,8 +123,8 @@ export interface ResolvedAgentDriver {
  *      driver from `agent.model`.
  *
  * Pure function — no Effect, no service dependency. Callers thread the
- * `overrides` map in from `ConfigService` (the loop yields it once at
- * `resolveTurnPhase`; auth-guard takes it as a param).
+ * `overrides` map in from `ConfigService` (the loop yields it during turn
+ * context resolution; auth-guard takes it as a param).
  */
 export const resolveAgentDriver = (
   agent: AgentDefinition,

@@ -32,7 +32,6 @@ import {
   StreamStarted,
   ToolCallFailed,
   ToolCallSucceeded,
-  TurnCompleted,
   type EventEnvelope,
 } from "../../../domain/event.js"
 import type { EventPublisherService } from "../../../domain/event-publisher.js"
@@ -592,46 +591,6 @@ export const executeToolCalls = (params: {
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
   )
 
-export const resolveTurnPhase = (params: {
-  message: Message
-  agentOverride?: AgentNameType
-  runSpec?: RunSpec
-  currentAgent?: AgentNameType
-  storage: TurnStorage
-  branchId: BranchId
-  extensionRegistry: ExtensionRegistryService
-  driverRegistry: DriverRegistryService
-  sessionId: SessionId
-  publishEvent: PublishEvent
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  baseSections: ReadonlyArray<PromptSection>
-  interactive?: boolean
-  hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    yield* persistMessageReceived({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
-      message: params.message,
-    })
-
-    const resolved = yield* resolveTurnContext(params)
-    if (resolved === undefined) return undefined
-
-    return {
-      currentTurnAgent: resolved.currentTurnAgent,
-      messages: resolved.messages,
-      systemPrompt: resolved.systemPrompt,
-      modelId: resolved.modelId,
-      tools: resolved.tools,
-      agent: resolved.agent,
-      ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
-      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-      ...(resolved.driver !== undefined ? { driver: resolved.driver } : {}),
-      ...(resolved.driverSource !== undefined ? { driverSource: resolved.driverSource } : {}),
-    } satisfies ResolvedTurn
-  })
-
 export const runTurnBeforeHook = (
   extensionRegistry: ExtensionRegistryService,
   resolved: ResolvedTurn,
@@ -1091,99 +1050,4 @@ export const invokeToolPhase = (params: {
       messageId: params.toolResultMessageId,
       parts: toolResults,
     })
-  })
-
-export const finalizeTurnPhase = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  sessionId: SessionId
-  branchId: BranchId
-  startedAtMs: number
-  messageId: MessageId
-  turnInterrupted: boolean
-  streamFailed?: boolean
-  currentAgent: AgentNameType
-  extensionRegistry: ExtensionRegistryService
-  turnMetrics?: Ref.Ref<TurnMetrics>
-  hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    const existingMessage = yield* params.storage.messages.getMessage(params.messageId)
-    if (existingMessage?.turnDurationMs !== undefined) {
-      const envelope = yield* findPersistedEvent({
-        storage: params.storage,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        match: (candidate) =>
-          candidate.event._tag === "TurnCompleted" &&
-          candidate.event.messageId === params.messageId,
-      })
-      if (envelope !== undefined) {
-        yield* params.eventPublisher.deliver(envelope)
-      }
-      return
-    }
-
-    const turnEndTime = yield* DateTime.now
-    const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
-
-    const envelope = yield* params.storage.transaction.withTransaction(
-      Effect.gen(function* () {
-        yield* params.storage.messages.updateMessageTurnDuration(params.messageId, turnDurationMs)
-        return yield* params.eventPublisher.append(
-          TurnCompleted.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: params.messageId,
-            durationMs: Number(turnDurationMs),
-            ...(params.turnInterrupted ? { interrupted: true } : {}),
-          }),
-        )
-      }),
-    )
-    yield* params.eventPublisher.deliver(envelope)
-
-    yield* Effect.logDebug("finalize.turn-after.start")
-    yield* params.extensionRegistry.extensionReactions.emitTurnAfter(
-      {
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        durationMs: Number(turnDurationMs),
-        agentName: params.currentAgent,
-        interrupted: params.turnInterrupted,
-      },
-      params.hostCtx,
-    )
-    yield* Effect.logDebug("finalize.turn-after.done")
-
-    yield* Effect.logInfo("turn.completed").pipe(
-      Effect.annotateLogs({
-        durationMs: Number(turnDurationMs),
-        interrupted: params.turnInterrupted,
-      }),
-    )
-
-    // Emit turn-level wide event with accumulated metrics
-    if (params.turnMetrics !== undefined) {
-      const metrics = yield* Ref.get(params.turnMetrics)
-      let status: "ok" | "error" | "interrupted" = "ok"
-      if (params.turnInterrupted) status = "interrupted"
-      else if (params.streamFailed === true) status = "error"
-      yield* Effect.logInfo("wide-event").pipe(
-        Effect.annotateLogs({
-          service: "agent-loop",
-          method: "turn",
-          actor: metrics.agent,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          model: metrics.model,
-          inputTokens: metrics.inputTokens,
-          outputTokens: metrics.outputTokens,
-          toolCallCount: metrics.toolCallCount,
-          durationMs: Number(turnDurationMs),
-          interrupted: params.turnInterrupted,
-          status,
-        }),
-      )
-    }
   })
