@@ -3,6 +3,7 @@ import { Migrator, SqlClient } from "effect/unstable/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { StorageError } from "../domain/storage-error.js"
 import { SESSION_PARENT_BRANCH_CHECK } from "./sqlite/rows.js"
+import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 
 const isStorageError = Schema.is(StorageError)
 
@@ -168,6 +169,37 @@ const agentLoopQueueMigration = Effect.gen(function* () {
   `)
 })
 
+const sessionWorkspaceMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(
+    `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
+  )
+  yield* sql.unsafe(`CREATE INDEX idx_sessions_workspace ON sessions(workspace_id, updated_at)`)
+})
+
+const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE agent_loop_queues_next (
+      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      queue_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, session_id, branch_id)
+    )
+  `)
+  yield* sql.unsafe(`
+    INSERT INTO agent_loop_queues_next (workspace_id, session_id, branch_id, queue_json, updated_at)
+    SELECT '${DefaultWorkspaceId}', session_id, branch_id, queue_json, updated_at
+    FROM agent_loop_queues
+  `)
+  yield* sql.unsafe(`DROP TABLE agent_loop_queues`)
+  yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
+})
+
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
 
@@ -182,6 +214,8 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
     loader: Migrator.fromRecord({
       "001_init": initialMigration,
       "002_agent_loop_queue": agentLoopQueueMigration,
+      "003_session_workspace": sessionWorkspaceMigration,
+      "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

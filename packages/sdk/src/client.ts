@@ -330,8 +330,10 @@ export const Gent = {
             Effect.provide(internal.handlerContext),
           )
           const services = yield* Effect.context<Scope.Scope>()
+          const headers =
+            options?.cwd !== undefined ? workspaceHeadersForCwd(options.cwd) : internal.headers
           return {
-            client: makeNamespacedClient(rpcClient, internal.headers),
+            client: makeNamespacedClient(rpcClient, headers),
             runtime: makeRuntime(
               services,
               staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),

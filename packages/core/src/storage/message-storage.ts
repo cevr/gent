@@ -17,6 +17,7 @@ import {
   insertMessageContent,
   type MessageChunkRow,
 } from "./sqlite/rows.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
@@ -48,17 +49,34 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
       const indexSearch = (
         message: Pick<Message, "id" | "sessionId" | "branchId" | "role" | "parts">,
       ) => indexMessageSearch(message).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+      const ensureMessageWorkspace = Effect.fn("MessageStorage.ensureMessageWorkspace")(function* (
+        message: Pick<Message, "sessionId" | "branchId">,
+      ) {
+        const workspaceId = yield* CurrentWorkspaceId
+        const rows = yield* sql<{ id: BranchId }>`SELECT b.id
+            FROM branches b
+            JOIN sessions s ON s.id = b.session_id
+            WHERE b.id = ${message.branchId}
+              AND b.session_id = ${message.sessionId}
+              AND s.workspace_id = ${workspaceId}`
+        if (rows.length === 0) {
+          return yield* new StorageError({
+            message: `Branch not found in current workspace: ${message.branchId}`,
+          })
+        }
+      })
 
       return {
         createMessage: Effect.fn("MessageStorage.createMessage")(
           function* (message) {
+            yield* ensureMessageWorkspace(message)
             const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
             yield* sql.withTransaction(
               Effect.gen(function* () {
                 yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
                 yield* insertContent(message.id, partJsons)
                 yield* indexSearch(message)
-                yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+                yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
               }),
             )
             return message
@@ -68,6 +86,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 
         createMessageIfAbsent: Effect.fn("MessageStorage.createMessageIfAbsent")(
           function* (message) {
+            yield* ensureMessageWorkspace(message)
             const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
             yield* sql.withTransaction(
               Effect.gen(function* () {
@@ -78,7 +97,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                 if ((rows[0]?.changed ?? 0) > 0) {
                   yield* insertContent(message.id, partJsons)
                   yield* indexSearch(message)
-                  yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+                  yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
                 }
               }),
             )
@@ -89,6 +108,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 
         getMessage: Effect.fn("MessageStorage.getMessage")(
           function* (id) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<MessageChunkRow>`SELECT
               m.id,
               m.session_id,
@@ -103,7 +123,8 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             FROM messages m
             LEFT JOIN message_chunks mc ON mc.message_id = m.id
             LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            WHERE m.id = ${id}
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.id = ${id} AND s.workspace_id = ${workspaceId}
             ORDER BY mc.ordinal ASC`
             const grouped = groupMessageChunkRows(rows)
             const entry = grouped[0]
@@ -115,6 +136,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 
         listMessages: Effect.fn("MessageStorage.listMessages")(
           function* (branchId) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<MessageChunkRow>`SELECT
               m.id,
               m.session_id,
@@ -129,7 +151,8 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             FROM messages m
             LEFT JOIN message_chunks mc ON mc.message_id = m.id
             LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            WHERE m.branch_id = ${branchId}
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
             return yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
               decodeStoredMessage(row, partJsons),
@@ -140,6 +163,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 
         deleteMessages: Effect.fn("MessageStorage.deleteMessages")(
           function* (branchId, afterMessageId) {
+            const workspaceId = yield* CurrentWorkspaceId
             yield* sql.withTransaction(
               Effect.gen(function* () {
                 const messageIds: MessageId[] = []
@@ -147,18 +171,29 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                   const msgs = yield* sql<{
                     id: MessageId
                     created_at: number
-                  }>`SELECT id, created_at FROM messages WHERE id = ${afterMessageId}`
+                  }>`SELECT m.id, m.created_at
+                    FROM messages m
+                    JOIN sessions s ON s.id = m.session_id
+                    WHERE m.id = ${afterMessageId} AND s.workspace_id = ${workspaceId}`
                   const msg = msgs[0]
                   if (msg !== undefined) {
                     const rows = yield* sql<{
                       id: MessageId
-                    }>`SELECT id FROM messages WHERE branch_id = ${branchId} AND (created_at > ${msg.created_at} OR (created_at = ${msg.created_at} AND id > ${msg.id}))`
+                    }>`SELECT m.id
+                      FROM messages m
+                      JOIN sessions s ON s.id = m.session_id
+                      WHERE m.branch_id = ${branchId}
+                        AND s.workspace_id = ${workspaceId}
+                        AND (m.created_at > ${msg.created_at} OR (m.created_at = ${msg.created_at} AND m.id > ${msg.id}))`
                     messageIds.push(...rows.map((row) => row.id))
                   }
                 } else {
                   const rows = yield* sql<{
                     id: MessageId
-                  }>`SELECT id FROM messages WHERE branch_id = ${branchId}`
+                  }>`SELECT m.id
+                    FROM messages m
+                    JOIN sessions s ON s.id = m.session_id
+                    WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}`
                   messageIds.push(...rows.map((row) => row.id))
                 }
                 if (messageIds.length === 0) return
@@ -172,12 +207,17 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           Effect.mapError(mapError("Failed to delete messages")),
         ),
 
-        updateMessageTurnDuration: (messageId, durationMs) =>
-          sql`UPDATE messages SET turn_duration_ms = ${durationMs} WHERE id = ${messageId}`.pipe(
-            Effect.asVoid,
-            Effect.mapError(mapError("Failed to update message turn duration")),
-            Effect.withSpan("MessageStorage.updateMessageTurnDuration"),
-          ),
+        updateMessageTurnDuration: Effect.fn("MessageStorage.updateMessageTurnDuration")(
+          function* (messageId, durationMs) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE messages
+              SET turn_duration_ms = ${durationMs}
+              WHERE id = ${messageId}
+                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+          },
+          Effect.asVoid,
+          Effect.mapError(mapError("Failed to update message turn duration")),
+        ),
       } satisfies MessageStorageService
     }),
   )

@@ -210,30 +210,26 @@ export function ensureStorageParents(input: {
 
     const session = yield* sessionStorage.getSession(sessionId)
     if (session === undefined) {
-      yield* sessionStorage
-        .createSession(
-          new Session({
-            id: sessionId,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        .pipe(Effect.ignore)
+      yield* sessionStorage.createSession(
+        new Session({
+          id: sessionId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
     }
 
     if (branchId !== undefined) {
       const branchStorage = yield* BranchStorage
       const branch = yield* branchStorage.getBranch(branchId)
       if (branch === undefined) {
-        yield* branchStorage
-          .createBranch(
-            new Branch({
-              id: branchId,
-              sessionId,
-              createdAt: now,
-            }),
-          )
-          .pipe(Effect.ignore)
+        yield* branchStorage.createBranch(
+          new Branch({
+            id: branchId,
+            sessionId,
+            createdAt: now,
+          }),
+        )
       }
     }
   })

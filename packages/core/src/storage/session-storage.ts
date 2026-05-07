@@ -11,6 +11,7 @@ import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
 import { sessionFromRow, type SessionRow } from "./sqlite/rows.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
@@ -39,6 +40,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
       return {
         createSession: Effect.fn("SessionStorage.createSession")(
           function* (session) {
+            const workspaceId = yield* CurrentWorkspaceId
             if (session.parentBranchId !== undefined && session.parentSessionId === undefined) {
               return yield* new StorageError({
                 message: "Cannot create session with parentBranchId without parentSessionId",
@@ -47,14 +49,19 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             if (session.parentBranchId !== undefined && session.parentSessionId !== undefined) {
               const parentRows = yield* sql<{
                 id: BranchId
-              }>`SELECT id FROM branches WHERE id = ${session.parentBranchId} AND session_id = ${session.parentSessionId}`
+              }>`SELECT b.id
+                FROM branches b
+                JOIN sessions s ON s.id = b.session_id
+                WHERE b.id = ${session.parentBranchId}
+                  AND b.session_id = ${session.parentSessionId}
+                  AND s.workspace_id = ${workspaceId}`
               if (parentRows.length === 0) {
                 return yield* new StorageError({
                   message: `Parent branch not found in parent session: ${session.parentBranchId}`,
                 })
               }
             }
-            yield* sql`INSERT INTO sessions (id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
+            yield* sql`INSERT INTO sessions (id, workspace_id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${workspaceId}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
             return session
           },
           Effect.mapError(mapError("Failed to create session")),
@@ -62,8 +69,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
 
         getSession: Effect.fn("SessionStorage.getSession")(
           function* (id) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id}`
+              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}`
             const row = rows[0]
             if (row === undefined) return undefined
             return sessionFromRow(row)
@@ -73,8 +81,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
 
         getLastSessionByCwd: Effect.fn("SessionStorage.getLastSessionByCwd")(
           function* (cwd) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} ORDER BY updated_at DESC LIMIT 1`
+              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} AND workspace_id = ${workspaceId} ORDER BY updated_at DESC LIMIT 1`
             const row = rows[0]
             if (row === undefined) return undefined
             return sessionFromRow(row)
@@ -84,8 +93,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
 
         listSessions: Effect.fn("SessionStorage.listSessions")(
           function* () {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
             return rows.map(sessionFromRow)
           },
           Effect.mapError(mapError("Failed to list sessions")),
@@ -93,23 +103,26 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
 
         updateSession: Effect.fn("SessionStorage.updateSession")(
           function* (session) {
-            yield* sql`UPDATE sessions SET name = ${session.name ?? null}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE sessions SET name = ${session.name ?? null}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
             return session
           },
           Effect.mapError(mapError("Failed to update session")),
         ),
 
-        deleteSession: (id) =>
-          sql
-            .withTransaction(
+        deleteSession: Effect.fn("SessionStorage.deleteSession")(
+          function* (id) {
+            const workspaceId = yield* CurrentWorkspaceId
+            return yield* sql.withTransaction(
               Effect.gen(function* () {
                 const descendantRows = yield* sql<{ id: SessionId }>`
                   WITH RECURSIVE descendants(id) AS (
-                    SELECT id FROM sessions WHERE id = ${id}
+                    SELECT id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
                     UNION
                     SELECT sessions.id
                     FROM sessions
                     JOIN descendants ON sessions.parent_session_id = descendants.id
+                    WHERE sessions.workspace_id = ${workspaceId}
                   )
                   SELECT id FROM descendants
                 `
@@ -122,10 +135,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 return cascadedIds
               }),
             )
-            .pipe(
-              Effect.mapError(mapError("Failed to delete session")),
-              Effect.withSpan("SessionStorage.deleteSession"),
-            ),
+          },
+          Effect.mapError(mapError("Failed to delete session")),
+        ),
       } satisfies SessionStorageService
     }),
   )

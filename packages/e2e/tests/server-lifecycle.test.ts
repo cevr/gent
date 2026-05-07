@@ -4,9 +4,9 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
-import { Gent } from "@gent/sdk"
+import { extractText, Gent } from "@gent/sdk"
 import { createTempDirFixture } from "./seam-fixture"
-import { toTestFailure } from "./transport-harness"
+import { toTestFailure, waitFor } from "./transport-harness"
 import { fromPromise, ignoreSyncDefect, sleepMillis } from "../src/effect-test-adapters"
 import {
   killProcess,
@@ -138,6 +138,66 @@ describe("server lifecycle", () => {
         }),
       ),
     20_000,
+  )
+
+  it.live(
+    "single owned server isolates persisted session reads by client workspace",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwdA = makeTempDir()
+          const cwdB = makeTempDir()
+          const server = yield* Gent.server({
+            cwd: cwdA,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const clientA = (yield* Gent.client(server, { cwd: cwdA })).client
+          const clientB = (yield* Gent.client(server, { cwd: cwdB })).client
+
+          const created = yield* clientA.session
+            .create({ name: "Workspace A", cwd: cwdA })
+            .pipe(Effect.mapError(toTestFailure))
+          yield* clientA.message
+            .send({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+              content: "workspace-a-message",
+            })
+            .pipe(Effect.mapError(toTestFailure))
+
+          yield* waitFor(
+            clientA.message
+              .list({ branchId: created.branchId })
+              .pipe(Effect.mapError(toTestFailure)),
+            (messages) =>
+              messages.some((message) => extractText(message.parts) === "workspace-a-message"),
+          )
+
+          const sessionsB = yield* clientB.session.list().pipe(Effect.mapError(toTestFailure))
+          const sessionB = yield* clientB.session
+            .get({ sessionId: created.sessionId })
+            .pipe(Effect.mapError(toTestFailure))
+          const branchesB = yield* clientB.branch
+            .list({ sessionId: created.sessionId })
+            .pipe(Effect.mapError(toTestFailure))
+          const messagesB = yield* clientB.message
+            .list({ branchId: created.branchId })
+            .pipe(Effect.mapError(toTestFailure))
+          const snapshotB = yield* Effect.result(
+            clientB.session
+              .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
+              .pipe(Effect.mapError(toTestFailure)),
+          )
+
+          expect(sessionsB.map((session) => session.id)).not.toContain(created.sessionId)
+          expect(sessionB).toBeNull()
+          expect(branchesB).toEqual([])
+          expect(messagesB).toEqual([])
+          expect(snapshotB._tag).toBe("Failure")
+        }),
+      ),
+    15_000,
   )
 
   it.live(

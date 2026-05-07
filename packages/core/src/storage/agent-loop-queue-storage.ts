@@ -14,6 +14,7 @@ import {
 } from "../domain/agent-loop-queue-state.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const LoopQueueStateJson = Schema.fromJsonString(LoopQueueState)
 const decodeLoopQueueState = Schema.decodeUnknownEffect(LoopQueueStateJson)
@@ -61,13 +62,16 @@ export class AgentLoopQueueStorage extends Context.Service<
       return {
         getQueueState: Effect.fn("AgentLoopQueueStorage.getQueueState")(
           function* (sessionId, branchId) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<QueueRow>`SELECT
-              session_id,
-              branch_id,
-              queue_json,
-              updated_at
-            FROM agent_loop_queues
-            WHERE session_id = ${sessionId} AND branch_id = ${branchId}
+              q.session_id,
+              q.branch_id,
+              q.queue_json,
+              q.updated_at
+            FROM agent_loop_queues q
+            WHERE q.session_id = ${sessionId}
+              AND q.branch_id = ${branchId}
+              AND q.workspace_id = ${workspaceId}
             LIMIT 1`
             const row = rows[0]
             if (row === undefined) return emptyLoopQueueState()
@@ -78,11 +82,12 @@ export class AgentLoopQueueStorage extends Context.Service<
 
         putQueueState: Effect.fn("AgentLoopQueueStorage.putQueueState")(
           function* (sessionId, branchId, queue) {
+            const workspaceId = yield* CurrentWorkspaceId
             const queueJson = yield* encodeLoopQueueState(queue)
             const updatedAt = yield* Clock.currentTimeMillis
-            yield* sql`INSERT INTO agent_loop_queues (session_id, branch_id, queue_json, updated_at)
-              VALUES (${sessionId}, ${branchId}, ${queueJson}, ${updatedAt})
-              ON CONFLICT(session_id, branch_id) DO UPDATE SET
+            yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at)
+              VALUES (${workspaceId}, ${sessionId}, ${branchId}, ${queueJson}, ${updatedAt})
+              ON CONFLICT(workspace_id, session_id, branch_id) DO UPDATE SET
                 queue_json = excluded.queue_json,
                 updated_at = excluded.updated_at`
           },
@@ -91,8 +96,12 @@ export class AgentLoopQueueStorage extends Context.Service<
 
         clearQueueState: Effect.fn("AgentLoopQueueStorage.clearQueueState")(
           function* (sessionId, branchId) {
+            const workspaceId = yield* CurrentWorkspaceId
             yield* sql`DELETE FROM agent_loop_queues
-              WHERE session_id = ${sessionId} AND branch_id = ${branchId}`
+              WHERE workspace_id = ${workspaceId}
+                AND session_id = ${sessionId}
+                AND branch_id = ${branchId}
+              `
           },
           Effect.mapError(mapError("Failed to clear agent loop queue")),
         ),

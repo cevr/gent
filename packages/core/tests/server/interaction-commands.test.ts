@@ -1,5 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Fiber, Layer, Schema, Stream } from "effect"
+// @effect-diagnostics nodeBuiltinImport:off -- mirrors SDK workspace hashing in a restart fixture.
+import { createHash } from "node:crypto"
 // @effect-diagnostics nodeBuiltinImport:off -- file-backed restart fixture uses a temp SQLite path.
 import * as path from "node:path"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -15,6 +17,7 @@ import { EventStorage } from "@gent/core/storage/event-storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../extensions/helpers/test-preset"
+import { CurrentWorkspaceId } from "../../src/server/workspace-rpc.js"
 
 const InteractionProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("@test/interaction-probe") },
@@ -40,6 +43,8 @@ const InteractionProbeExtension: LoadedExtension = {
 }
 
 const tempDir = createTempDirFixture("gent-interaction-")
+const currentTestWorkspaceId = () =>
+  createHash("sha256").update(path.resolve(process.cwd())).digest("hex")
 
 describe("interaction.respondInteraction", () => {
   it.live(
@@ -61,6 +66,7 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
+                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
             const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
@@ -110,14 +116,17 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
+                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
             const eventStorage = yield* EventStorage
-            const rehydrated = yield* eventStorage.listEvents({
-              sessionId: first.sessionId,
-              branchId: first.branchId,
-              afterId: first.lastEventId,
-            })
+            const rehydrated = yield* eventStorage
+              .listEvents({
+                sessionId: first.sessionId,
+                branchId: first.branchId,
+                afterId: first.lastEventId,
+              })
+              .pipe(Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()))
             const presentedAgain = rehydrated.filter(
               (envelope) => envelope.event._tag === "InteractionPresented",
             )

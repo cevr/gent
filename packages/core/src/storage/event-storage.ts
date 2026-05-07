@@ -17,6 +17,7 @@ import type { SessionId, BranchId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
 import { decodeEvent, encodeEvent, type EventRow } from "./sqlite/rows.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface EventStorageService {
   readonly appendEvent: (
@@ -51,9 +52,19 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
       return {
         appendEvent: Effect.fn("EventStorage.appendEvent")(
           function* (event, options) {
+            const workspaceId = yield* CurrentWorkspaceId
             const sessionId = getEventSessionId(event)
             if (sessionId === undefined) {
               return yield* new StorageError({ message: "Event missing sessionId" })
+            }
+            const sessionRows = yield* sql<{ id: SessionId }>`
+              SELECT id FROM sessions
+              WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            `
+            if (sessionRows.length === 0) {
+              return yield* new StorageError({
+                message: `Session not found in current workspace: ${sessionId}`,
+              })
             }
             const branchId = getEventBranchId(event)
             const createdAt = yield* Clock.currentTimeMillis
@@ -77,11 +88,25 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         ),
         listEvents: Effect.fn("EventStorage.listEvents")(
           function* ({ sessionId, branchId, afterId }) {
+            const workspaceId = yield* CurrentWorkspaceId
             const sinceId = afterId ?? 0
             const rows =
               branchId !== undefined
-                ? yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND id > ${sinceId} ORDER BY id ASC`
-                : yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND id > ${sinceId} ORDER BY id ASC`
+                ? yield* sql<EventRow>`SELECT e.id, e.event_json, e.created_at, e.trace_id
+                    FROM events e
+                    JOIN sessions s ON s.id = e.session_id
+                    WHERE e.session_id = ${sessionId}
+                      AND s.workspace_id = ${workspaceId}
+                      AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                      AND e.id > ${sinceId}
+                    ORDER BY e.id ASC`
+                : yield* sql<EventRow>`SELECT e.id, e.event_json, e.created_at, e.trace_id
+                    FROM events e
+                    JOIN sessions s ON s.id = e.session_id
+                    WHERE e.session_id = ${sessionId}
+                      AND s.workspace_id = ${workspaceId}
+                      AND e.id > ${sinceId}
+                    ORDER BY e.id ASC`
             const envelopes: EventEnvelope[] = []
             for (const row of rows) {
               const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
@@ -103,14 +128,26 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
 
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(
           function* ({ sessionId, branchId }) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
               branchId !== undefined
                 ? yield* sql<{
                     id: number
-                  }>`SELECT id FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) ORDER BY id DESC LIMIT 1`
+                  }>`SELECT e.id
+                    FROM events e
+                    JOIN sessions s ON s.id = e.session_id
+                    WHERE e.session_id = ${sessionId}
+                      AND s.workspace_id = ${workspaceId}
+                      AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                    ORDER BY e.id DESC LIMIT 1`
                 : yield* sql<{
                     id: number
-                  }>`SELECT id FROM events WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`
+                  }>`SELECT e.id
+                    FROM events e
+                    JOIN sessions s ON s.id = e.session_id
+                    WHERE e.session_id = ${sessionId}
+                      AND s.workspace_id = ${workspaceId}
+                    ORDER BY e.id DESC LIMIT 1`
             return rows[0]?.id
           },
           Effect.mapError(mapError("Failed to get latest event id")),
@@ -119,9 +156,17 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         getLatestEvent: Effect.fn("EventStorage.getLatestEvent")(
           function* ({ sessionId, branchId, tags }) {
             if (tags.length === 0) return undefined
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<{
               event_json: string
-            }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
+            }>`SELECT e.event_json
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                AND e.event_tag IN ${sql.in(tags)}
+              ORDER BY e.id DESC LIMIT 1`
             const row = rows[0]
             if (row === undefined) return undefined
             const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)

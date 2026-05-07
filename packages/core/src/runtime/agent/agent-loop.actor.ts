@@ -67,6 +67,7 @@ import {
 } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
+import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import {
   AgentLoopError,
   assistantMessageIdForCommand,
@@ -480,7 +481,7 @@ const failIfTurnFailedAfterEpoch = (
  * build; effect-encore does not re-export it, so import from Effect directly.
  */
 const buildAgentLoopActorHandlers = Effect.gen(function* () {
-  const deps = yield* AgentLoopBehaviorDeps
+  const rawDeps = yield* AgentLoopBehaviorDeps
   const stateRegistry = yield* AgentLoopStateRegistry
   const sessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
@@ -488,6 +489,63 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
     Effect.orDie,
   )
+  const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+  const workspaceEventStorage = {
+    appendEvent: (event, options) =>
+      withWorkspace(rawDeps.turnStorage.events.appendEvent(event, options)),
+    listEvents: (input) => withWorkspace(rawDeps.turnStorage.events.listEvents(input)),
+    getLatestEventId: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEventId(input)),
+    getLatestEvent: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEvent(input)),
+  } satisfies typeof rawDeps.turnStorage.events
+  const workspaceMessageStorage = {
+    createMessage: (message) => withWorkspace(rawDeps.messageStorage.createMessage(message)),
+    createMessageIfAbsent: (message) =>
+      withWorkspace(rawDeps.messageStorage.createMessageIfAbsent(message)),
+    getMessage: (id) => withWorkspace(rawDeps.messageStorage.getMessage(id)),
+    listMessages: (id) => withWorkspace(rawDeps.messageStorage.listMessages(id)),
+    deleteMessages: (id, after) => withWorkspace(rawDeps.messageStorage.deleteMessages(id, after)),
+    updateMessageTurnDuration: (id, duration) =>
+      withWorkspace(rawDeps.messageStorage.updateMessageTurnDuration(id, duration)),
+  } satisfies typeof rawDeps.messageStorage
+  const workspaceQueueStorage = {
+    getQueueState: (sessionId, branchId) =>
+      withWorkspace(rawDeps.queueStorage.getQueueState(sessionId, branchId)),
+    putQueueState: (sessionId, branchId, queue) =>
+      withWorkspace(rawDeps.queueStorage.putQueueState(sessionId, branchId, queue)),
+    clearQueueState: (sessionId, branchId) =>
+      withWorkspace(rawDeps.queueStorage.clearQueueState(sessionId, branchId)),
+  } satisfies typeof rawDeps.queueStorage
+  const workspaceSessionStorage = {
+    createSession: (session) => withWorkspace(rawDeps.sessionStorage.createSession(session)),
+    getSession: (id) => withWorkspace(rawDeps.sessionStorage.getSession(id)),
+    getLastSessionByCwd: (cwd) => withWorkspace(rawDeps.sessionStorage.getLastSessionByCwd(cwd)),
+    listSessions: () => withWorkspace(rawDeps.sessionStorage.listSessions()),
+    updateSession: (session) => withWorkspace(rawDeps.sessionStorage.updateSession(session)),
+    deleteSession: (id) => withWorkspace(rawDeps.sessionStorage.deleteSession(id)),
+  } satisfies typeof rawDeps.sessionStorage
+  const workspaceEventPublisher = {
+    append: (event) => withWorkspace(rawDeps.eventPublisher.append(event)),
+    deliver: (envelope) => rawDeps.eventPublisher.deliver(envelope),
+    publish: (event) => withWorkspace(rawDeps.eventPublisher.publish(event)),
+  } satisfies typeof rawDeps.eventPublisher
+  const workspaceTransaction = {
+    withTransaction: (effect) =>
+      rawDeps.turnStorage.transaction.withTransaction(withWorkspace(effect)),
+  } satisfies typeof rawDeps.turnStorage.transaction
+  const deps = {
+    ...rawDeps,
+    turnStorage: {
+      transaction: workspaceTransaction,
+      events: workspaceEventStorage,
+      messages: workspaceMessageStorage,
+      sessions: workspaceSessionStorage,
+    },
+    eventPublisher: workspaceEventPublisher,
+    messageStorage: workspaceMessageStorage,
+    queueStorage: workspaceQueueStorage,
+    sessionStorage: workspaceSessionStorage,
+  } satisfies typeof rawDeps
   const sideMutationSemaphore = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const operationSeen = yield* Ref.make(false)
@@ -743,7 +801,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     )
   })
 
-  yield* openLoop
+  yield* withWorkspace(openLoop)
   yield* Effect.addFinalizer(() => cleanupLoop(handle))
 
   const ensureStarted = Effect.gen(function* () {
@@ -936,153 +994,172 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
   return {
     Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
-      submitTurn(operation),
-    Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) => runTurn(operation),
+      withWorkspace(submitTurn(operation)),
+    Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
+      withWorkspace(runTurn(operation)),
     QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-      ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
-    Steer: ({ operation }: HandlerRequest<SteerInput>) =>
-      applySteer(operation.commandId, operation.command),
-    Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
-      applySteer(
-        operation.commandId,
-        Schema.decodeSync(SteerCommand)({
-          _tag: "Cancel",
-          sessionId: operation.sessionId,
-          branchId: operation.branchId,
-        }),
+      withWorkspace(
+        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
       ),
-    RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(markWrite),
-        Effect.andThen(
-          Effect.gen(function* () {
-            const projectedState = yield* currentRuntimeState(handle)
-            if (projectedState._tag !== "WaitingForInteraction") {
-              const state = yield* handle.snapshot
-              if (state._tag !== "WaitingForInteraction") {
-                if (state._tag !== "Idle") return
-                const message = yield* latestIncompleteUserTurn
-                if (message === undefined) return
-                yield* handle
-                  .startTurn({ message })
-                  .pipe(
-                    Effect.catchEager((error) =>
-                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                    ),
-                  )
-                return
-              }
-            }
-            yield* handle
-              .respondInteraction(operation.requestId)
-              .pipe(
-                Effect.catchEager((error) =>
-                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                ),
-              )
+    Steer: ({ operation }: HandlerRequest<SteerInput>) =>
+      withWorkspace(applySteer(operation.commandId, operation.command)),
+    Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
+      withWorkspace(
+        applySteer(
+          operation.commandId,
+          Schema.decodeSync(SteerCommand)({
+            _tag: "Cancel",
+            sessionId: operation.sessionId,
+            branchId: operation.branchId,
           }),
         ),
       ),
-    DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(markWrite),
-        Effect.andThen(ensureStarted),
-        Effect.andThen(
-          handle.queueMutationSemaphore.withPermits(1)(
+    RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
             Effect.gen(function* () {
-              const queue = yield* SubscriptionRef.get(handle.loopRef).pipe(
-                Effect.map((s) => s.queue),
-              )
-              const snapshot = queueSnapshotFromQueueState(queue)
-              yield* handle.persistQueueState(emptyLoopQueueState())
-              return snapshot
+              const projectedState = yield* currentRuntimeState(handle)
+              if (projectedState._tag !== "WaitingForInteraction") {
+                const state = yield* handle.snapshot
+                if (state._tag !== "WaitingForInteraction") {
+                  if (state._tag !== "Idle") return
+                  const message = yield* latestIncompleteUserTurn
+                  if (message === undefined) return
+                  yield* handle
+                    .startTurn({ message })
+                    .pipe(
+                      Effect.catchEager((error) =>
+                        cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                      ),
+                    )
+                  return
+                }
+              }
+              yield* handle
+                .respondInteraction(operation.requestId)
+                .pipe(
+                  Effect.catchEager((error) =>
+                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                  ),
+                )
             }),
           ),
         ),
       ),
+    DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const queue = yield* SubscriptionRef.get(handle.loopRef).pipe(
+                  Effect.map((s) => s.queue),
+                )
+                const snapshot = queueSnapshotFromQueueState(queue)
+                yield* handle.persistQueueState(emptyLoopQueueState())
+                return snapshot
+              }),
+            ),
+          ),
+        ),
+      ),
     GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(rejectIfTerminated),
-        Effect.andThen(ensureStarted),
-        Effect.andThen(
-          handle.queueMutationSemaphore.withPermits(1)(
-            SubscriptionRef.get(handle.loopRef).pipe(
-              Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(rejectIfTerminated),
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              SubscriptionRef.get(handle.loopRef).pipe(
+                Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
+              ),
             ),
           ),
         ),
       ),
     GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(rejectIfTerminated),
-        Effect.andThen(ensureStarted),
-        Effect.andThen(
-          handle.queueMutationSemaphore.withPermits(1)(
-            SubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(rejectIfTerminated),
+          Effect.andThen(ensureStarted),
+          Effect.andThen(
+            handle.queueMutationSemaphore.withPermits(1)(
+              SubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
+            ),
           ),
         ),
       ),
     RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(markWrite),
-        Effect.andThen(
-          handle.sideMutationSemaphore.withPermits(1)(
-            recordToolResult({
-              storage: deps.turnStorage,
-              eventPublisher: deps.eventPublisher,
-              toolResultMessageId:
-                operation.commandId !== undefined
-                  ? toolResultMessageIdForCommand(operation.commandId)
-                  : toolResultMessageIdForToolCall(operation.toolCallId),
-              sessionId: operation.sessionId,
-              branchId: operation.branchId,
-              toolCallId: operation.toolCallId,
-              toolName: operation.toolName,
-              output: operation.output,
-              ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
-            }),
-          ),
-        ),
-        Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-      ),
-    InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(markWrite),
-        Effect.andThen(
-          handle.sideMutationSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-              const environment = yield* handle.resolveTurnProfile
-              yield* invokeTool({
-                assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                toolCallId: toolCallIdForCommand(operation.commandId),
-                toolName: operation.toolName,
-                input: operation.input,
-                publishEvent: (event) =>
-                  deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
+            handle.sideMutationSemaphore.withPermits(1)(
+              recordToolResult({
+                storage: deps.turnStorage,
                 eventPublisher: deps.eventPublisher,
+                toolResultMessageId:
+                  operation.commandId !== undefined
+                    ? toolResultMessageIdForCommand(operation.commandId)
+                    : toolResultMessageIdForToolCall(operation.toolCallId),
                 sessionId: operation.sessionId,
                 branchId: operation.branchId,
-                currentTurnAgent,
-                toolRunner: deps.toolRunner,
-                extensionRegistry: environment.turnExtensionRegistry,
-                permission: environment.turnPermission,
-                hostCtx: environment.turnHostCtx,
-                resourceManager: deps.resourceManager,
-                storage: deps.turnStorage,
-              })
-            }),
+                toolCallId: operation.toolCallId,
+                toolName: operation.toolName,
+                output: operation.output,
+                ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+              }),
+            ),
           ),
+          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
         ),
-        Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+      ),
+    InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(markWrite),
+          Effect.andThen(
+            handle.sideMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+                const environment = yield* handle.resolveTurnProfile
+                yield* invokeTool({
+                  assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                  toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                  toolCallId: toolCallIdForCommand(operation.commandId),
+                  toolName: operation.toolName,
+                  input: operation.input,
+                  publishEvent: (event) =>
+                    deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+                  eventPublisher: deps.eventPublisher,
+                  sessionId: operation.sessionId,
+                  branchId: operation.branchId,
+                  currentTurnAgent,
+                  toolRunner: deps.toolRunner,
+                  extensionRegistry: environment.turnExtensionRegistry,
+                  permission: environment.turnPermission,
+                  hostCtx: environment.turnHostCtx,
+                  resourceManager: deps.resourceManager,
+                  storage: deps.turnStorage,
+                })
+              }),
+            ),
+          ),
+          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+        ),
       ),
     EnsureStarted: ({ operation }: HandlerRequest<EnsureStartedInput>) =>
-      ensureTarget(operation).pipe(Effect.andThen(ensureStarted)),
+      withWorkspace(ensureTarget(operation).pipe(Effect.andThen(ensureStarted))),
     TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
-      ensureTarget(operation).pipe(
-        Effect.andThen(sessionGovernance.markTerminated(workspaceId, sessionId)),
-        Effect.andThen(cleanupLoop(handle)),
+      withWorkspace(
+        ensureTarget(operation).pipe(
+          Effect.andThen(sessionGovernance.markTerminated(workspaceId, sessionId)),
+          Effect.andThen(cleanupLoop(handle)),
+        ),
       ),
   }
 })

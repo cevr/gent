@@ -177,7 +177,12 @@ describe("Storage", () => {
           const migrations = yield* sql<{
             name: string
           }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
-          expect(migrations.map((row) => row.name)).toEqual(["init", "agent_loop_queue"])
+          expect(migrations.map((row) => row.name)).toEqual([
+            "init",
+            "agent_loop_queue",
+            "session_workspace",
+            "agent_loop_queue_workspace",
+          ])
         }).pipe(Effect.provide(layer))
 
         // Reboot — migrator must not re-run the init migration.
@@ -189,7 +194,12 @@ describe("Storage", () => {
           const migrations = yield* sql<{
             name: string
           }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
-          expect(migrations.map((row) => row.name)).toEqual(["init", "agent_loop_queue"])
+          expect(migrations.map((row) => row.name)).toEqual([
+            "init",
+            "agent_loop_queue",
+            "session_workspace",
+            "agent_loop_queue_workspace",
+          ])
         }).pipe(Effect.provide(layer))
       }).pipe(Effect.provide(BunServices.layer)),
     )

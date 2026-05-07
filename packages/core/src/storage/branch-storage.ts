@@ -10,6 +10,7 @@ import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
 import { branchFromRow, type BranchRow } from "./sqlite/rows.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface BranchStorageService {
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
@@ -40,10 +41,25 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
       return {
         createBranch: Effect.fn("BranchStorage.createBranch")(
           function* (branch) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const sessionRows = yield* sql<{ id: SessionId }>`
+              SELECT id FROM sessions
+              WHERE id = ${branch.sessionId} AND workspace_id = ${workspaceId}
+            `
+            if (sessionRows.length === 0) {
+              return yield* new StorageError({
+                message: `Session not found in current workspace: ${branch.sessionId}`,
+              })
+            }
             if (branch.parentBranchId !== undefined) {
               const parentRows = yield* sql<{
                 id: BranchId
-              }>`SELECT id FROM branches WHERE id = ${branch.parentBranchId} AND session_id = ${branch.sessionId}`
+              }>`SELECT b.id
+                FROM branches b
+                JOIN sessions s ON s.id = b.session_id
+                WHERE b.id = ${branch.parentBranchId}
+                  AND b.session_id = ${branch.sessionId}
+                  AND s.workspace_id = ${workspaceId}`
               if (parentRows.length === 0) {
                 return yield* new StorageError({
                   message: `Parent branch not found in session: ${branch.parentBranchId}`,
@@ -58,8 +74,12 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
 
         getBranch: Effect.fn("BranchStorage.getBranch")(
           function* (id) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE id = ${id}`
+              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
+              FROM branches b
+              JOIN sessions s ON s.id = b.session_id
+              WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
             const row = rows[0]
             if (row === undefined) return undefined
             return branchFromRow(row)
@@ -69,27 +89,41 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
 
         listBranches: Effect.fn("BranchStorage.listBranches")(
           function* (sessionId) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE session_id = ${sessionId} ORDER BY created_at ASC`
+              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
+              FROM branches b
+              JOIN sessions s ON s.id = b.session_id
+              WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
+              ORDER BY b.created_at ASC`
             return rows.map(branchFromRow)
           },
           Effect.mapError(mapError("Failed to list branches")),
         ),
 
-        updateBranchSummary: (branchId, summary) =>
-          sql`UPDATE branches SET summary = ${summary} WHERE id = ${branchId}`.pipe(
-            Effect.asVoid,
-            Effect.mapError(mapError("Failed to update branch summary")),
-            Effect.withSpan("BranchStorage.updateBranchSummary"),
-          ),
+        updateBranchSummary: Effect.fn("BranchStorage.updateBranchSummary")(
+          function* (branchId, summary) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE branches
+              SET summary = ${summary}
+              WHERE id = ${branchId}
+                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+          },
+          Effect.asVoid,
+          Effect.mapError(mapError("Failed to update branch summary")),
+        ),
 
         deleteBranch: Effect.fn("BranchStorage.deleteBranch")(
           function* (id) {
+            const workspaceId = yield* CurrentWorkspaceId
             yield* sql.withTransaction(
               Effect.gen(function* () {
                 const childBranches = yield* sql<{
                   count: number
-                }>`SELECT COUNT(*) as count FROM branches WHERE parent_branch_id = ${id}`
+                }>`SELECT COUNT(*) as count
+                  FROM branches b
+                  JOIN sessions s ON s.id = b.session_id
+                  WHERE b.parent_branch_id = ${id} AND s.workspace_id = ${workspaceId}`
                 if ((childBranches[0]?.count ?? 0) > 0) {
                   return yield* new StorageError({
                     message: `Cannot delete branch with child branches: ${id}`,
@@ -98,7 +132,9 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
 
                 const childSessions = yield* sql<{
                   count: number
-                }>`SELECT COUNT(*) as count FROM sessions WHERE parent_branch_id = ${id}`
+                }>`SELECT COUNT(*) as count
+                  FROM sessions
+                  WHERE parent_branch_id = ${id} AND workspace_id = ${workspaceId}`
                 if ((childSessions[0]?.count ?? 0) > 0) {
                   return yield* new StorageError({
                     message: `Cannot delete branch with child sessions: ${id}`,
@@ -107,13 +143,20 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
 
                 const messageRows = yield* sql<{
                   id: MessageId
-                }>`SELECT id FROM messages WHERE branch_id = ${id}`
+                }>`SELECT m.id
+                  FROM messages m
+                  JOIN sessions s ON s.id = m.session_id
+                  WHERE m.branch_id = ${id} AND s.workspace_id = ${workspaceId}`
                 const messageIds = messageRows.map((row) => row.id)
                 if (messageIds.length > 0) {
                   yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
                 }
-                yield* sql`DELETE FROM agent_loop_queues WHERE branch_id = ${id}`
-                yield* sql`DELETE FROM branches WHERE id = ${id}`
+                yield* sql`DELETE FROM agent_loop_queues
+                  WHERE branch_id = ${id}
+                    AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+                yield* sql`DELETE FROM branches
+                  WHERE id = ${id}
+                    AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
                 yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
               }),
             )
@@ -123,9 +166,13 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
 
         countMessages: Effect.fn("BranchStorage.countMessages")(
           function* (branchId) {
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<{
               count: number
-            }>`SELECT COUNT(*) as count FROM messages WHERE branch_id = ${branchId}`
+            }>`SELECT COUNT(*) as count
+              FROM messages m
+              JOIN sessions s ON s.id = m.session_id
+              WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}`
             return rows[0]?.count ?? 0
           },
           Effect.mapError(mapError("Failed to count messages")),
@@ -134,10 +181,16 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
         countMessagesByBranches: Effect.fn("BranchStorage.countMessagesByBranches")(
           function* (branchIds) {
             if (branchIds.length === 0) return new Map<BranchId, number>()
+            const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<{
               branch_id: BranchId
               count: number
-            }>`SELECT branch_id, COUNT(*) as count FROM messages WHERE branch_id IN ${sql.in(branchIds)} GROUP BY branch_id`
+            }>`SELECT m.branch_id, COUNT(*) as count
+              FROM messages m
+              JOIN sessions s ON s.id = m.session_id
+              WHERE m.branch_id IN ${sql.in(branchIds)}
+                AND s.workspace_id = ${workspaceId}
+              GROUP BY m.branch_id`
             const result = new Map<BranchId, number>()
             for (const row of rows) {
               result.set(row.branch_id, row.count)
