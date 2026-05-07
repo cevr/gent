@@ -748,6 +748,37 @@ Definition of done:
 - If STM is strictly better, create follow-up implementation commits
   C24-C30; otherwise keep the current model with documented proof.
 
+Status: prototype complete in this Gent commit; follow-up implementation
+reserved for C24-C30.
+
+Implementation notes:
+
+- Added an executable STM prototype in
+  `packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`.
+- `TxRef` proves the important reservation invariant directly: concurrent
+  idle submissions atomically produce exactly one start and enqueue the other.
+- `TxQueue` proves priority dequeue can be transactional across steering and
+  follow-up lanes.
+- `TxQueue` does not replace the durable observable queue state by itself:
+  its public drain API consumes items, so production migration needs either a
+  `TxRef` aggregate or a mirrored queue snapshot for persistence/watchState.
+
+Decision:
+
+- Do not direct-migrate the full actor in C23.
+- Proceed with C24-C30 only as a `TxRef` aggregate migration that preserves the
+  existing durable queue snapshot contract. Treat `TxQueue` as useful for a
+  future in-memory work queue only if it does not become a second source of
+  truth for persisted queue state.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
+- `bun run gate` after splitting `auto-integration.test.ts` into two
+  name-filtered package-test lanes and balancing core chunks at `-n 8 -P 4`;
+  test wall `4899ms / budget 5000ms`.
+
 #### C24-C30: refactor(runtime): adopt STM queue/state model if C23 proves it
 
 Reserved implementation range. Use only if the prototype proves the migration.

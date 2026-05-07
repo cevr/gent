@@ -14,7 +14,7 @@ import type { ToolTestLayerConfig } from "@gent/core/test-utils/extension-harnes
 let memoryVaultLayerIndex = 0
 
 const memoryVaultTestLayer = () =>
-  MemoryVaultTest(`${tmpdir()}/gent-e2e-${memoryVaultLayerIndex++}`).pipe(
+  MemoryVaultTest(`${tmpdir()}/gent-e2e-${process.pid}-${memoryVaultLayerIndex++}`).pipe(
     Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
   ) as Layer.Layer<never>
 
