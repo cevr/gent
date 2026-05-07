@@ -36,7 +36,7 @@ import type {
   InteractionRendererComponent,
   OverlayComponent,
 } from "./client-facets.js"
-import { loadExtensionUi } from "./context-boundary"
+import { loadExtensionUi } from "../services/extension-context-boundary"
 import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,

@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
+import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -15,7 +15,6 @@ import {
   type SessionId,
   type BranchId,
   ExtensionEventSink,
-  GentPlatform,
 } from "@gent/core/extensions/api"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
@@ -67,7 +66,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionEventSink | GentPlatform>
+  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionEventSink>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -121,8 +120,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
                 const eventSink = yield* ExtensionEventSink
-                const platform = yield* GentPlatform
-                const id = TaskId.make(yield* platform.randomId)
+                const id = TaskId.make(yield* Random.nextUUIDv4)
                 const now = yield* DateTime.nowAsDate
                 const task = Task.make({
                   id,

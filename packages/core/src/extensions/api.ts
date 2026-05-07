@@ -262,7 +262,6 @@ export { runProcess, ProcessError } from "../utils/run-process.js"
 export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export type { GentPlatformShape } from "../runtime/gent-platform.js"
-export { readDisabledExtensions } from "../runtime/extensions/disabled.js"
 export { ToolRunner } from "../runtime/agent/tool-runner.js"
 export type { ToolRunnerService } from "../runtime/agent/tool-runner.js"
 

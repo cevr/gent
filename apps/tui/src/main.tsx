@@ -66,7 +66,7 @@ import {
   signalIfIdentityOwned,
 } from "@gent/sdk/server-lock"
 import { builtinClientModules } from "./extensions/builtins/index"
-import { loadExtensionUi } from "./extensions/context-boundary"
+import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"
 import {
   makeClientComposerLayer,

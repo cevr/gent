@@ -317,10 +317,9 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("extension runtime services are public, not privileged", () => {
-    type _ToolRunner = PublicExtensionApi.ToolRunner
-    type _ExtensionEventSink = PublicExtensionApi.ExtensionEventSink
-    type _GentPlatform = PublicExtensionApi.GentPlatform
+  test("public extension api does not expose host extension-loading helpers", () => {
+    // @ts-expect-error — disabled-extension config loading is host UI plumbing
+    type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
 
     expect(true).toBe(true)
   })
