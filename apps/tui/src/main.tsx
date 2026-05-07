@@ -40,6 +40,7 @@ import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
 import {
+  AppBootstrapError,
   resolveInteractiveBootstrap,
   resolveInitialState,
   resolveStartupAuthState,
@@ -68,6 +69,11 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
 
 const ATOM_CACHE_MAX = 256
+
+class CliStartupError extends Schema.TaggedErrorClass<CliStartupError>()("CliStartupError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Platform layer — `BunPlatformLive` bundles `BunServices.layer`
 // (FileSystem, Path, ChildProcessSpawner, …) with `BunGentPlatformLive`
@@ -106,7 +112,10 @@ const runHeadlessTurn = (
     const branchId = state.session.activeBranchId
     if (branchId === undefined) {
       yield* Console.error("Error: session has no branch")
-      return yield* Effect.die("session has no branch")
+      return yield* new AppBootstrapError({
+        sessionId: state.session.id,
+        reason: "missing-branch",
+      })
     }
 
     const parentSpan = yield* resolveParentSpan()
@@ -276,17 +285,24 @@ const main = Command.make(
         if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
           const hint = formatMissingProviders(missingProviders)
           yield* Console.error(`Error: missing required API keys: ${hint}`)
-          return yield* Effect.die(hint)
+          return yield* new CliStartupError({ message: hint })
         }
 
         if (state._tag !== "headless") {
-          return yield* Effect.die("headless startup resolved an interactive state")
+          return yield* new CliStartupError({
+            message: "headless startup resolved an interactive state",
+          })
         }
 
         const decodedRunSpec: RunSpec | undefined = Option.isSome(runSpecJson)
           ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RunSpecSchema))(
               runSpecJson.value,
-            ).pipe(Effect.catchEager((e) => Effect.die(`Invalid --run-spec: ${String(e)}`)))
+            ).pipe(
+              Effect.mapError(
+                (e) =>
+                  new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
+              ),
+            )
           : undefined
 
         yield* runHeadlessTurn(bundle, state, requestedAgent, decodedRunSpec)
