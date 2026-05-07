@@ -1,4 +1,4 @@
-import { Cause, Effect } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import type {
   ContextMessagesInput,
   ExtensionReaction,
@@ -23,6 +23,15 @@ import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
+
+export class ExtensionReactionHaltError extends Schema.TaggedErrorClass<ExtensionReactionHaltError>()(
+  "ExtensionReactionHaltError",
+  {
+    extensionId: Schema.String,
+    message: Schema.String,
+    cause: Schema.Defect,
+  },
+) {}
 
 export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
@@ -62,12 +71,15 @@ export interface CompiledExtensionReactions {
   readonly emitTurnBefore: (
     input: TurnBeforeInput,
     ctx: ExtensionHostContext,
-  ) => Effect.Effect<void>
-  readonly emitTurnAfter: (input: TurnAfterInput, ctx: ExtensionHostContext) => Effect.Effect<void>
+  ) => Effect.Effect<void, ExtensionReactionHaltError>
+  readonly emitTurnAfter: (
+    input: TurnAfterInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<void, ExtensionReactionHaltError>
   readonly emitMessageOutput: (
     input: MessageOutputInput,
     ctx: ExtensionHostContext,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, ExtensionReactionHaltError>
 }
 
 export interface ExtensionTurnProjection {
@@ -160,7 +172,11 @@ const runReaction = <Input>(
             cause: Cause.pretty(cause),
           }),
         )
-        return yield* Effect.die(Cause.squash(cause))
+        return yield* new ExtensionReactionHaltError({
+          extensionId: String(reaction.extensionId),
+          message: String(Cause.squash(cause)),
+          cause: Cause.squash(cause),
+        })
     }
   })
 

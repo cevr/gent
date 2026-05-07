@@ -440,9 +440,7 @@ describe("runtime slots", () => {
         ),
       )
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        expect(Cause.hasDies(exit.cause)).toBe(true)
-      }
+      if (Exit.isFailure(exit)) expect(Cause.hasDies(exit.cause)).toBe(false)
       expect(calls).toEqual(["continue", "isolate", "halt"])
     })
   })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Data, Effect, Exit } from "effect"
+import { Cause, Data, Effect, Exit, Option, Schema } from "effect"
 import type {
   ExtensionContributions,
   ExtensionReactions,
@@ -8,7 +8,10 @@ import type {
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
-import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import {
+  compileExtensionReactions,
+  ExtensionReactionHaltError,
+} from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core/domain/agent"
 
 const stubCtx = {
@@ -101,7 +104,7 @@ describe("runtime reactions", () => {
     }),
   )
 
-  it.live('"halt": failure surfaces as defect; later reactions do not fire', () =>
+  it.live('"halt": failure surfaces as typed error; later reactions do not fire', () =>
     Effect.gen(function* () {
       const calls: string[] = []
       const compiled = compileExtensionReactions([
@@ -123,7 +126,11 @@ describe("runtime reactions", () => {
       const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
-        expect(Cause.hasDies(exit.cause)).toBe(true)
+        const error = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(error)).toBe(true)
+        if (Option.isSome(error)) {
+          expect(Schema.is(ExtensionReactionHaltError)(error.value)).toBe(true)
+        }
       }
       expect(calls).toEqual(["halting"])
     }),
