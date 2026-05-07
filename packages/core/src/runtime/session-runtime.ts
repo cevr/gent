@@ -4,14 +4,8 @@ import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effec
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
 import { ActorAddressResolver } from "effect-encore"
-import {
-  AgentRunError,
-  DEFAULT_AGENT_NAME,
-  RunSpecSchema,
-  type RunSpec,
-  AgentName,
-} from "../domain/agent.js"
-import { emptyQueueSnapshot, QueueSnapshot } from "../domain/queue.js"
+import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
+import { QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
 import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -1001,38 +995,4 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     readonly baseSections: ReadonlyArray<PromptSection>
   }): Layer.Layer<SessionRuntime | AgentLoop, never, SessionRuntimeEntityLayerRequirements> =>
     SessionRuntime.Live(config).pipe(Layer.provideMerge(SessionRuntime.EntityLive(config)))
-
-  static Test = (overrides: Partial<SessionRuntimeService> = {}): Layer.Layer<SessionRuntime> =>
-    Layer.succeed(SessionRuntime, {
-      sendUserMessage: () => Effect.void,
-      recordToolResult: () => Effect.void,
-      invokeTool: () => Effect.void,
-      steer: () => Effect.void,
-      respondInteraction: () => Effect.void,
-      runPrompt: () => Effect.void,
-      queueFollowUp: () => Effect.void,
-      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-      getState: () =>
-        Effect.succeed(
-          SessionRuntimeStateSchema.Idle.make({
-            agent: DEFAULT_AGENT_NAME,
-            queue: emptyQueueSnapshot(),
-          }),
-        ),
-      getMetrics: () =>
-        Effect.succeed({
-          turns: 0,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        }),
-      watchState: () => Effect.succeed(Stream.empty),
-      terminateSession: () => Effect.void,
-      restoreSession: () => Effect.void,
-      ...overrides,
-    })
 }
