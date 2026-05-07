@@ -42,6 +42,13 @@ export const ResearchParams = Schema.Struct({
   ),
 })
 
+export const ResearchResult = Schema.Struct({
+  error: Schema.optional(Schema.String),
+  response: Schema.optional(Schema.String),
+  repos: Schema.optional(Schema.Array(Schema.String)),
+  repoCount: Schema.optional(Schema.Number),
+})
+
 const buildResearchPrompt = (question: string, repoPath: string, spec: string, focus?: string) =>
   [
     `Research the repository at ${repoPath} (${spec}).`,
@@ -92,6 +99,7 @@ export const ResearchTool = tool({
     "Include focus to narrow search to specific modules or patterns",
   ],
   params: ResearchParams,
+  output: ResearchResult,
   execute: Effect.fn("ResearchTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }

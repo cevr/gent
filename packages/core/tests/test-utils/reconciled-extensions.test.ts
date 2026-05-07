@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
 import { testExtensionRegistryLayer } from "@gent/core/test-utils/reconciled-extensions"
@@ -21,6 +21,7 @@ describe("reconcileTestExtensions", () => {
                     id: "conflict",
                     description: "tool a",
                     params: {} as never,
+                    output: Schema.Void,
                     execute: () => undefined as never,
                   }),
                 ],
@@ -36,6 +37,7 @@ describe("reconcileTestExtensions", () => {
                     id: "conflict",
                     description: "tool b",
                     params: {} as never,
+                    output: Schema.Void,
                     execute: () => undefined as never,
                   }),
                 ],

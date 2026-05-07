@@ -55,6 +55,7 @@ const echoCapability: ToolCapability = tool({
   id: "echo",
   description: "Echo input",
   params: EchoParams,
+  output: Schema.String,
   execute: () => Effect.succeed("echoed"),
 })
 const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({

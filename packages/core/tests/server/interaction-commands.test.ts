@@ -30,6 +30,10 @@ const InteractionProbeExtension: LoadedExtension = {
         description: "Request approval and report the result",
         needs: [ToolNeeds.write("interaction")],
         params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({
+          approved: Schema.Boolean,
+          notes: Schema.String,
+        }),
         execute: Effect.fn("approval_probe")(function* (params, ctx) {
           const decision = yield* ctx.interaction.approve({ text: params.text })
           return {

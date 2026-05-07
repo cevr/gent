@@ -1238,6 +1238,7 @@ describe("concurrency", () => {
           needs: [ToolNeeds.write("test-serial")],
           description: `Serial tool ${name}`,
           params: Schema.Struct({}),
+          output: Schema.Struct({ ok: Schema.Boolean }),
           execute: () =>
             Effect.gen(function* () {
               yield* Effect.sync(() => {
@@ -1322,6 +1323,7 @@ describe("continuation", () => {
     id: "echo",
     description: "Echoes input",
     params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
     execute: (_params) => Effect.succeed({ text: _params.text }),
   })
   test("tool call auto-continues to next LLM call", () =>
@@ -1606,6 +1608,10 @@ describe("interaction", () => {
       description: "Tool that triggers an interaction",
       needs: [ToolNeeds.write("interaction")],
       params: Schema.Struct({ value: Schema.String }),
+      output: Schema.Struct({
+        resolved: Schema.Boolean,
+        value: Schema.String,
+      }),
       execute: (
         params: {
           value: string

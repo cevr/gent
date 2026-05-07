@@ -60,6 +60,20 @@ export const ReviewParams = Schema.Struct({
   ),
 })
 
+export const ReviewResult = Schema.Struct({
+  mode: Schema.Literals(["report", "fix"]),
+  comments: ReviewOutput,
+  summary: Schema.Struct({
+    critical: Schema.Number,
+    high: Schema.Number,
+    medium: Schema.Number,
+    low: Schema.Number,
+  }),
+  raw: Schema.String,
+  session: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
+})
+
 const REVIEW_AGENT_PROMPT = `
 Reviewer agent. Examine code changes for bugs, security issues, and improvements.
 Run git diff or read specified files, then produce a structured review.
@@ -303,6 +317,7 @@ export const ReviewTool = tool({
     "Pass description to guide review focus",
   ],
   params: ReviewParams,
+  output: ReviewResult,
   execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "report"
 

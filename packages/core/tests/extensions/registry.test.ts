@@ -34,6 +34,7 @@ const makeTool = (name: string): ToolCapability =>
     id: name,
     description: `test tool ${name}`,
     params: Schema.Struct({}),
+    output: Schema.Void,
     execute: () => Effect.void,
   })
 const makeAgent = (
@@ -57,6 +58,7 @@ const promptSectionAsToolContribution = (section: PromptSection): ToolCapability
     id: `section-carrier-${section.id}`,
     description: `carrier for ${section.id}`,
     params: Schema.Struct({}),
+    output: Schema.Void,
     prompt: section,
     execute: () => Effect.void,
   })
@@ -664,6 +666,7 @@ describe("resolveExtensions — slash command discovery", () => {
       id: "echo",
       description: "Echo input back as output.",
       params: Schema.String,
+      output: Schema.Void,
       execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { tools: [cap] })])
@@ -690,6 +693,7 @@ describe("resolveExtensions — slash command discovery", () => {
       id: "run",
       description: "project run override",
       params: Schema.Unknown,
+      output: Schema.Void,
       execute: () => Effect.void,
     })
     const project = makeExt("@test/shadow", "project", { tools: [projectCap] })
@@ -702,6 +706,7 @@ describe("resolveExtensions — slash command discovery", () => {
       id: "rich",
       description: "rich tool",
       params: Schema.Unknown,
+      output: Schema.Void,
       needs: [ToolNeeds.write("fs"), ToolNeeds.read("network")],
       promptSnippet: "Snippet here.",
       promptGuidelines: ["use carefully", "log result"],

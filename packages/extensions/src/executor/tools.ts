@@ -39,6 +39,17 @@ const failIfError = (result: ExecutorMcpToolResult, phase: "execute" | "resume")
     ? Effect.fail(new ExecutorMcpError({ phase, message: result.text }))
     : Effect.succeed(result)
 
+const ExecuteResult = Schema.Struct({
+  text: Schema.String,
+  structuredContent: Schema.optional(Schema.Unknown),
+  executionId: Schema.optional(Schema.String),
+})
+
+const ResumeResult = Schema.Struct({
+  text: Schema.String,
+  structuredContent: Schema.optional(Schema.Unknown),
+})
+
 // ── Execute Tool ──
 
 export const ExecuteTool = tool({
@@ -54,6 +65,7 @@ export const ExecuteTool = tool({
       description: "TypeScript code to execute in the Executor runtime.",
     }),
   }),
+  output: ExecuteResult,
   execute: Effect.fn("ExecuteTool.execute")(function* (params) {
     const baseUrl = yield* requireReadyBaseUrl("execute")
     const bridge = yield* ExecutorMcpBridge
@@ -89,6 +101,7 @@ export const ResumeTool = tool({
       }),
     ),
   }),
+  output: ResumeResult,
   execute: Effect.fn("ResumeTool.execute")(function* (params) {
     const baseUrl = yield* requireReadyBaseUrl("resume")
     const bridge = yield* ExecutorMcpBridge

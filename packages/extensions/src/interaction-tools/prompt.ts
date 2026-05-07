@@ -65,6 +65,7 @@ export const PromptTool = tool({
     "mode=confirm for yes/no decisions, " +
     "mode=review for content that should be persisted and can be edited by the user.",
   params: PromptParams,
+  output: PromptResult,
   execute: Effect.fn("PromptTool.execute")(function* (params, ctx) {
     if (params.mode === "present") {
       yield* ctx.interaction.present({

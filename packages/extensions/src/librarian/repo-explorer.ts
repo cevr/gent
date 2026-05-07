@@ -395,6 +395,7 @@ export const RepoTool = tool({
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
   params: RepoExplorerParams,
+  output: RepoExplorerResult,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path

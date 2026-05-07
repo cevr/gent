@@ -37,6 +37,7 @@ export const WriteTool = tool({
   promptSnippet: "Create or overwrite files",
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],
   params: WriteParams,
+  output: WriteResult,
   execute: Effect.fn("WriteTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path

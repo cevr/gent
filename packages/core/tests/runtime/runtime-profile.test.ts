@@ -57,6 +57,7 @@ const sectionTool = tool({
   id: "rp-test-tool",
   description: "carrier for rp-test-section",
   params: S.Struct({}),
+  output: S.String,
   prompt: { id: "rp-test-section", content: "rp test content", priority: 50 },
   execute: () => Effect.succeed("ok"),
 })

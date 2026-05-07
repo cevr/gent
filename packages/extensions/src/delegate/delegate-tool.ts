@@ -3,6 +3,8 @@ import {
   tool,
   ToolNeeds,
   AgentName,
+  AgentRunResultSchema,
+  AgentRunToolCallSchema,
   getDurableAgentRunSessionId,
   makeRunSpec,
   type AgentRunError,
@@ -36,6 +38,31 @@ export const DelegateParams = Schema.Struct({
   ),
 })
 
+export const DelegateResult = Schema.Struct({
+  error: Schema.optional(Schema.String),
+  taskId: Schema.optional(Schema.String),
+  taskIds: Schema.optional(Schema.Array(Schema.String)),
+  status: Schema.optional(Schema.Literals(["running"])),
+  count: Schema.optional(Schema.Number),
+  output: Schema.optional(Schema.String),
+  metadata: Schema.optional(
+    Schema.Struct({
+      mode: Schema.optional(Schema.Literals(["single", "parallel", "chain"])),
+      results: Schema.optional(Schema.Array(AgentRunResultSchema)),
+      sessionId: Schema.optional(Schema.String),
+      agentName: Schema.optional(AgentName),
+      usage: Schema.optional(
+        Schema.Struct({
+          input: Schema.Number,
+          output: Schema.Number,
+          cost: Schema.optional(Schema.Number),
+        }),
+      ),
+      toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
+    }),
+  ),
+})
+
 export const DelegateTool = tool({
   id: "delegate",
   needs: [ToolNeeds.write("agent")],
@@ -50,6 +77,7 @@ export const DelegateTool = tool({
     "Prefer focused tools: review (code review), counsel (second opinion), research (repo understanding)",
   ],
   params: DelegateParams,
+  output: DelegateResult,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTasks = (params.tasks?.length ?? 0) > 0
@@ -169,7 +197,7 @@ export const DelegateTool = tool({
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
 
       yield* Effect.forkChild(spawnBackgroundTask(task, resolved.agent))
-      return { taskId: task.id, status: "running" }
+      return { taskId: task.id, status: "running" as const }
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {

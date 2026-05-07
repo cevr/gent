@@ -28,6 +28,14 @@ export const PlanParams = Schema.Struct({
   ),
 })
 
+export const PlanResult = Schema.Struct({
+  mode: Schema.Literals(["plan-only", "fix"]),
+  plan: Schema.String,
+  decision: Schema.optional(Schema.Literals(["yes", "no", "edit"])),
+  path: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
+})
+
 const buildPlanPrompt = (
   prompt: string,
   context?: string,
@@ -188,6 +196,7 @@ export const PlanTool = tool({
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
+  output: PlanResult,
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "plan-only"
 

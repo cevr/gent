@@ -61,6 +61,7 @@ const bashTool = tool({
   id: "bash",
   description: "Run shell commands",
   params: Schema.Struct({ command: Schema.String }),
+  output: Schema.String,
   execute: (_params) => Effect.succeed("should not run"),
 })
 
@@ -72,6 +73,7 @@ const permissionSentinel = tool({
   id: "permission-sentinel",
   description: "Carries deny rule for bash — never called by the LLM",
   params: Schema.Struct({}),
+  output: Schema.String,
   permissionRules: [new PermissionRule({ tool: "bash", action: "deny" })],
   execute: () => Effect.succeed("sentinel"),
 })

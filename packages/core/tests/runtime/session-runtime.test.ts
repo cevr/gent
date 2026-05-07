@@ -283,6 +283,10 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
     description: "Tool that triggers an interaction",
     needs: [ToolNeeds.write("interaction")],
     params: Schema.Struct({ value: Schema.String }),
+    output: Schema.Struct({
+      resolved: Schema.Boolean,
+      value: Schema.String,
+    }),
     execute: (params, ctx) =>
       Effect.gen(function* () {
         const count = yield* Ref.getAndUpdate(callCount, (current) => current + 1)

@@ -45,6 +45,7 @@ export const GlobTool = tool({
   promptSnippet: "Find files by glob pattern",
   promptGuidelines: ["Use instead of bash find/ls"],
   params: GlobParams,
+  output: GlobResult,
   execute: Effect.fn("GlobTool.execute")(function* (params, ctx) {
     const pathService = yield* Path.Path
     const fileIndex = yield* FileIndex

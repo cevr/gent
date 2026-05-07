@@ -609,6 +609,26 @@ Definition of done:
 - Compile failures drive all builtins to state their output.
 - Focused extension API type locks.
 
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- `ToolInput` now requires an `output` schema.
+- `tool(...)` stores that schema in Gent metadata and passes it to Effect AI
+  `AiTool.dynamic(... success: output)`.
+- The public extension API re-exports agent-run result schemas needed by
+  extension-owned tool output schemas.
+- Core tests and extension-surface type locks now author explicit output
+  schemas.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun run --cwd packages/extensions typecheck`
+- `bun run typecheck`
+- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/tool-runner.test.ts packages/core/tests/extensions/skills/skills-tool.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/registry.test.ts`
+
 #### C10-C20: refactor(extensions): migrate builtin tools to typed output schemas
 
 Migrate in capability families, one or more commits per family:
@@ -633,6 +653,25 @@ Definition of done:
 - Tool output validation failures are surfaced through Effect AI
   `ToolResultEncodingError` paths.
 - Focused tests per family, then `bun run gate`.
+
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- Migrated builtin extension tools to concrete result schemas across fs,
+  exec, network, interaction, skills, principles, session, task, memory,
+  artifacts, audit/review/counsel/research/delegate/plan, librarian/repo,
+  auto, executor, and handoff.
+- `Schema.Unknown` remains only for genuinely polymorphic payload fields
+  such as MCP executor structured content and repository info blobs.
+- Core test fixtures now declare outputs instead of relying on unknown.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/extensions typecheck`
+- `bun run --cwd packages/core typecheck`
+- `bun run typecheck`
+- `bun run lint`
 
 #### C21: refactor(runtime): let `Toolkit.handle` own result encoding
 

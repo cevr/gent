@@ -137,6 +137,7 @@ export const BashTool = tool({
     new PermissionRule({ tool: "bash", pattern: "rm\\s+-rf\\s+/", action: "deny" }),
   ],
   params: BashParams,
+  output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params, ctx) {
     const timeout = Math.min(params.timeout ?? 120000, 600000)
 

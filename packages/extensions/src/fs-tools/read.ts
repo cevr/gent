@@ -48,6 +48,7 @@ export const ReadTool = tool({
   promptSnippet: "Read file contents with line numbers",
   promptGuidelines: ["Use read instead of bash cat/head/tail"],
   params: ReadParams,
+  output: ReadResult,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path

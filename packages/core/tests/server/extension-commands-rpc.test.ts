@@ -544,6 +544,7 @@ describe("extension command RPCs", () => {
               id: "create-branch",
               description: "Create a branch through the extension host session API.",
               params: Schema.Struct({}),
+              output: Schema.String,
               execute: (_input, ctx) =>
                 ctx.session
                   .createBranch({ name: "from extension rpc" })
@@ -800,6 +801,7 @@ describe("extension command RPCs", () => {
               id: "shadowed",
               description: "shadowed tool",
               params: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
               execute: (input) => Effect.succeed({ value: input.value }),
             }),
           ],

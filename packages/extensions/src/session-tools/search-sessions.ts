@@ -32,6 +32,21 @@ export const SearchSessionsParams = Schema.Struct({
   limit: Schema.optional(Schema.Number),
 })
 
+// Search Sessions Result
+
+export const SearchSessionsResult = Schema.Struct({
+  query: Schema.String,
+  totalMatches: Schema.Number,
+  sessions: Schema.Array(
+    Schema.Struct({
+      sessionId: Schema.String,
+      name: Schema.String,
+      lastActivity: Schema.String,
+      excerpts: Schema.Array(Schema.String),
+    }),
+  ),
+})
+
 // Date parsing
 
 export function parseRelativeDate(s: string, now: number): number | undefined {
@@ -67,6 +82,7 @@ export const SearchSessionsTool = tool({
   description:
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",
   params: SearchSessionsParams,
+  output: SearchSessionsResult,
   execute: Effect.fn("SearchSessionsTool.execute")(function* (params, ctx) {
     if (params.query === undefined && params.file === undefined) {
       return yield* new SearchSessionsError({

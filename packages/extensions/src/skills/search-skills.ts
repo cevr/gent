@@ -19,12 +19,29 @@ export const SearchSkillsParams = Schema.Struct({
   ),
 })
 
+// SearchSkills Result
+
+export const SearchSkillsResult = Schema.Struct({
+  query: Schema.String,
+  count: Schema.Number,
+  results: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      description: Schema.String,
+      filePath: Schema.String,
+      level: Schema.Literals(["local", "global"]),
+      content: Schema.optional(Schema.String),
+    }),
+  ),
+})
+
 export const SearchSkillsTool = tool({
   id: "search_skills",
   needs: [ToolNeeds.read("skills")],
   description:
     "Search loaded skills by name or description. Optionally include the full skill content.",
   params: SearchSkillsParams,
+  output: SearchSkillsResult,
   execute: Effect.fn("SearchSkillsTool.execute")(function* (params) {
     const skills = yield* Skills
     const allSkills = yield* skills.list()

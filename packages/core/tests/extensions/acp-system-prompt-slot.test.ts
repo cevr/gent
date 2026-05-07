@@ -26,6 +26,7 @@ const fakeTool: ToolCapability = tool({
   id: "echo",
   description: "echo tool",
   params: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({ ok: Schema.Boolean }),
   execute: () => Effect.succeed({ ok: true }),
 })
 const stubHostCtx = {} as ExtensionHostContext

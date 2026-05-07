@@ -36,6 +36,14 @@ const RememberParams = Schema.Struct({
   ),
 })
 
+const RememberResult = Schema.Struct({
+  stored: Schema.Boolean,
+  scope: Schema.Literals(["session", "project", "global"]),
+  title: Schema.String,
+  note: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
+})
+
 export const MemoryRememberTool = tool({
   id: "memory_remember",
   needs: [ToolNeeds.write("memory")],
@@ -47,6 +55,7 @@ export const MemoryRememberTool = tool({
     "Session memories are lost on restart — promote important ones to project/global.",
   ],
   params: RememberParams,
+  output: RememberResult,
   execute: Effect.fn("MemoryRememberTool.execute")(function* (params, ctx) {
     const scope = params["scope"]
     const title = params["title"]
@@ -101,12 +110,27 @@ const RecallParams = Schema.Struct({
   ),
 })
 
+const RecallResult = Schema.Struct({
+  count: Schema.Number,
+  memories: Schema.Array(
+    Schema.Struct({
+      title: Schema.String,
+      path: Schema.String,
+      scope: Schema.Literals(["project", "global"]),
+      tags: Schema.Array(Schema.String),
+      content: Schema.optional(Schema.String),
+      summary: Schema.optional(Schema.String),
+    }),
+  ),
+})
+
 export const MemoryRecallTool = tool({
   id: "memory_recall",
   needs: [ToolNeeds.read("memory")],
   description:
     "Search or list stored memories. Without a query, returns the memory index (titles + summaries). With a query, searches memory content.",
   params: RecallParams,
+  output: RecallResult,
   execute: Effect.fn("MemoryRecallTool.execute")(function* (params, _ctx) {
     const vault = yield* MemoryVault
     const query = params["query"]
@@ -162,11 +186,20 @@ const ForgetParams = Schema.Struct({
   ),
 })
 
+const ForgetResult = Schema.Struct({
+  removed: Schema.Boolean,
+  scope: Schema.Literals(["session", "project", "global"]),
+  title: Schema.String,
+  note: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
+})
+
 export const MemoryForgetTool = tool({
   id: "memory_forget",
   needs: [ToolNeeds.write("memory")],
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,
+  output: ForgetResult,
   execute: Effect.fn("MemoryForgetTool.execute")(function* (params, ctx) {
     const scope = params["scope"]
     const title = params["title"]

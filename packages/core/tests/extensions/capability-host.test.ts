@@ -65,6 +65,7 @@ const shadowTool = (params?: { readonly id?: string }): ToolCapability =>
     id: params?.id ?? "tool-shadow",
     description: "Tool shadow",
     params: Schema.Struct({ value: Schema.String }),
+    output: Schema.Struct({ value: Schema.String }),
     execute: (input) => Effect.succeed({ value: input.value }),
   })
 

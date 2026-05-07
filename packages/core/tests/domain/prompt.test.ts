@@ -165,6 +165,7 @@ describe("buildTurnPrompt", () => {
       id,
       description: overrides.description ?? id,
       params: Schema.Struct({}),
+      output: Schema.Void,
       execute: () => Effect.void,
       ...(overrides.promptSnippet !== undefined ? { promptSnippet: overrides.promptSnippet } : {}),
       ...(overrides.promptGuidelines !== undefined

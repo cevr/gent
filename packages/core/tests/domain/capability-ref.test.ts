@@ -30,6 +30,7 @@ describe("ref(capability)", () => {
       id: "test.tool",
       description: "ephemeral",
       params: Schema.Struct({ x: Schema.String }),
+      output: Schema.String,
       execute: () => Effect.succeed("ok"),
     })
     const actionCapability = action({
@@ -70,6 +71,7 @@ describe("ref(capability)", () => {
       intent: "read",
       destructive: true,
       params,
+      output: Schema.String,
       needs: [{ tag: "fs", access: "read" }],
       promptSnippet: "short",
       promptGuidelines: ["be precise"],
@@ -100,6 +102,7 @@ describe("ref(capability)", () => {
       id: "test.write",
       description: "write without destructive side effects",
       params: Schema.Struct({}),
+      output: Schema.String,
       execute: () => Effect.succeed("ok"),
     })
 
@@ -136,6 +139,7 @@ describe("ref(capability)", () => {
       id: "test.tool",
       description: "ephemeral",
       params: Schema.Struct({ x: Schema.String }),
+      output: Schema.String,
       execute: () => Effect.succeed("ok"),
     })
     const actionCapability = action({

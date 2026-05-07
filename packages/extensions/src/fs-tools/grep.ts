@@ -74,6 +74,7 @@ export const GrepTool = tool({
   promptSnippet: "Search file contents with regex",
   promptGuidelines: ["Use instead of bash grep/rg"],
   params: GrepParams,
+  output: GrepResult,
   execute: Effect.fn("GrepTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path

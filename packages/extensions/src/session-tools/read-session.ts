@@ -39,6 +39,18 @@ export const ReadSessionParams = Schema.Struct({
   ),
 })
 
+// Read Session Result
+
+export const ReadSessionResult = Schema.Struct({
+  sessionId: Schema.String,
+  content: Schema.String,
+  extracted: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+  goal: Schema.optional(Schema.String),
+  messageCount: Schema.optional(Schema.Number),
+  branchCount: Schema.optional(Schema.Number),
+})
+
 // Session tree rendering
 
 const MAX_TOOL_ARG_CHARS = 500
@@ -88,6 +100,7 @@ export const ReadSessionTool = tool({
   description:
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
+  output: ReadSessionResult,
   execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
     const tree = yield* ctx.session.getDetail(SessionId.make(params.sessionId)).pipe(
       Effect.mapError(

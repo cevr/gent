@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, AgentName, TaskId } from "@gent/core/extensions/api"
+import { tool, AgentName, TaskId, TaskStatus } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
 
 export const TaskCreateParams = Schema.Struct({
@@ -19,11 +19,19 @@ export const TaskCreateParams = Schema.Struct({
   ),
 })
 
+export const TaskCreateResult = Schema.Struct({
+  taskId: TaskId,
+  subject: Schema.String,
+  status: TaskStatus,
+  blockedBy: Schema.optional(Schema.Array(Schema.String)),
+})
+
 export const TaskCreateTool = tool({
   id: "task_create",
   description:
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,
+  output: TaskCreateResult,
   execute: Effect.fn("TaskCreateTool.execute")(function* (params, ctx) {
     const taskService = yield* TaskService
     const task = yield* taskService.create({

@@ -83,6 +83,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       id: "ok-tool",
       description: "ok",
       params: Schema.Struct({ x: Schema.String }),
+      output: Schema.String,
       execute: (params) => Effect.succeed(`ok: ${params.x}`),
     })
     void ok
@@ -94,6 +95,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       id: "bad-tool",
       description: "x",
       params: NoInput,
+      output: StringOutput,
       // @ts-expect-error — `surface` is an action-only field
       surface: "slash",
       execute: () => Effect.succeed("x"),
@@ -256,6 +258,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "ok",
       description: "ok",
       params: Schema.Struct({}),
+      output: Schema.String,
       // @ts-expect-error — Promise handler must not be assignable to Effect-returning execute
       execute: () => promiseString,
     })
@@ -391,6 +394,7 @@ describe("Effect-purity locks (compile-time)", () => {
           id: "noop",
           description: "noop",
           params: Schema.Struct({}),
+          output: Schema.String,
           execute: () => Effect.succeed("ok"),
         }),
       ],

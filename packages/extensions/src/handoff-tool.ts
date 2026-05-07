@@ -22,6 +22,15 @@ export const HandoffParams = Schema.Struct({
   ),
 })
 
+// Handoff Tool Result
+
+export const HandoffResult = Schema.Struct({
+  handoff: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(Schema.String),
+})
+
 // Handoff Tool
 
 export const HandoffTool = tool({
@@ -35,6 +44,7 @@ export const HandoffTool = tool({
     "Include all essential context — the new session starts fresh",
   ],
   params: HandoffParams,
+  output: HandoffResult,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
     // Use summarizer agent to refine context if it's large
     let summary = params.context

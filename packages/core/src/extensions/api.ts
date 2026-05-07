@@ -86,6 +86,8 @@ export {
   makeRunSpec,
   RunSpecSchema,
   AgentRunOverridesSchema,
+  AgentRunResult as AgentRunResultSchema,
+  AgentRunToolCallSchema,
   type AgentRunOverrides,
   resolveRunPersistence,
   getDurableAgentRunSessionId,

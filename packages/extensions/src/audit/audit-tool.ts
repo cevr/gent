@@ -47,6 +47,13 @@ export const AuditParams = Schema.Struct({
   ),
 })
 
+export const AuditResult = Schema.Struct({
+  mode: Schema.Literals(["fix", "report"]),
+  output: Schema.String,
+  findings: Schema.Array(AuditFindingSchema),
+  paths: Schema.Array(Schema.String),
+})
+
 const resolveAuditPaths = (paths: ReadonlyArray<string> | undefined, cwd: string) => {
   if (paths !== undefined && paths.length > 0) {
     return Effect.succeed([...paths])
@@ -290,6 +297,7 @@ export const AuditTool = tool({
     "Specify paths to scope the audit; defaults to git diff",
   ],
   params: AuditParams,
+  output: AuditResult,
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5

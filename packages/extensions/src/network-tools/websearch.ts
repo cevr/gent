@@ -87,6 +87,7 @@ export const WebSearchTool = tool({
   promptSnippet: "Search the web for information",
   promptGuidelines: ["Prefer webfetch when you already have a specific URL"],
   params: WebSearchParams,
+  output: WebSearchResult,
   execute: Effect.fn("WebSearchTool.execute")(function* (params) {
     const searchRequest: McpRequest = {
       jsonrpc: "2.0",

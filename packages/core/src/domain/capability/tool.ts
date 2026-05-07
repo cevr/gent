@@ -5,7 +5,7 @@
  * The factory enforces the LLM-tool shape at the type level: `params`
  * must be an LLM-JSON-schema-able `Schema.Schema`, `execute` returns an
  * `Effect`, and the action/request-only fields (`surface`, `intent`,
- * `input`, `output`) are forbidden.
+ * `input`) are forbidden.
  *
  * Replaces the previous two-step `tool(defineTool({...}))` pattern.
  *
@@ -165,7 +165,8 @@ export interface ToolCapabilityContext extends ModelCapabilityContext {
 export interface ToolInput<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
-  Result = unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
 > {
@@ -184,6 +185,10 @@ export interface ToolInput<
    * `Schema.Decoder<I, never>` ⊆ `Schema.Schema<I, _, never>`.
    */
   readonly params: Params
+  /** Schema for successful `execute` output. Effect AI owns result encoding
+   *  through this schema, and Gent stores the same schema in metadata for
+   *  lifecycle reactions and direct tool-runner invocation. */
+  readonly output: Output
   /**
    * Service/resource needs this tool touches while running. Read needs can
    * share; write needs exclude both reads and writes for the same tag.
@@ -209,7 +214,7 @@ export interface ToolInput<
   readonly execute: (
     params: Schema.Schema.Type<Params>,
     ctx: ToolCapabilityContext,
-  ) => Effect.Effect<Result, Error, Deps>
+  ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
 }
 
 /**
@@ -218,20 +223,25 @@ export interface ToolInput<
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Decoder<any, never>,
-  Result,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
   Error,
   Deps,
 >(
-  input: ToolInput<Params, Result, Error, Deps>,
-): ToolCapability<Schema.Schema.Type<Params>, Result, Error> => {
+  input: ToolInput<Params, Output, Error, Deps>,
+): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
   const id = ToolId.make(input.id)
-  const metadata: GentToolMetadata<Schema.Schema.Type<Params>, Result, Error> = {
+  const metadata: GentToolMetadata<
+    Schema.Schema.Type<Params>,
+    Schema.Schema.Type<Output>,
+    Error
+  > = {
     id,
     intent: input.intent ?? "write",
     input: input.params,
-    output: Schema.Unknown,
+    output: input.output,
     ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
     ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
@@ -242,13 +252,18 @@ export const tool = <
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as CapabilityEffect<Schema.Schema.Type<Params>, Result, never, Error>,
+    effect: input.execute as CapabilityEffect<
+      Schema.Schema.Type<Params>,
+      Schema.Schema.Type<Output>,
+      never,
+      Error
+    >,
   }
 
   const native = AiTool.dynamic(input.id, {
     description: input.description,
     parameters: params,
-    success: Schema.Unknown,
+    success: input.output,
   })
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.intent === "read")

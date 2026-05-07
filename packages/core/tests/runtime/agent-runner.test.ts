@@ -68,12 +68,14 @@ const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",
   params: Schema.Struct({ command: Schema.String }),
+  output: Schema.Struct({ output: Schema.String }),
   execute: (params) => Effect.succeed({ output: params.command }),
 })
 const readStubTool = tool({
   id: "read",
   description: "Stub read tool for tests",
   params: Schema.Struct({ path: Schema.String }),
+  output: Schema.Struct({ output: Schema.String }),
   execute: (params) => Effect.succeed({ output: params.path }),
 })
 const testRegistryLayer = ExtensionRegistry.fromResolved(
@@ -1148,6 +1150,7 @@ describe("ephemeral service propagation", () => {
         id: "approve_test",
         description: "Tests approval",
         params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ approved: Schema.Boolean }),
         execute: Effect.fn("approve_test")(function* (_params, ctx) {
           const decision = yield* ctx.interaction.approve({
             text: "approve this?",

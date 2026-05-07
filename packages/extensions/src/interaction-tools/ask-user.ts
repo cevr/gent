@@ -74,6 +74,7 @@ export const AskUserTool = tool({
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",
   promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
+  output: AskUserResult,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
     const decision = yield* ctx.interaction.approve({
       text: formatQuestionsText(params.questions),

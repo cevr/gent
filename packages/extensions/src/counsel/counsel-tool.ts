@@ -41,6 +41,12 @@ export const CounselParams = Schema.Struct({
   ),
 })
 
+export const CounselResult = Schema.Struct({
+  error: Schema.optional(Schema.String),
+  mode: Schema.optional(Schema.Literals(["deep", "standard"])),
+  response: Schema.optional(Schema.String),
+})
+
 const buildCounselPrompt = (prompt: string, context?: string) =>
   [
     prompt,
@@ -59,6 +65,7 @@ export const CounselTool = tool({
     "Include relevant context — the counsel agent has no conversation history",
   ],
   params: CounselParams,
+  output: CounselResult,
   execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "standard"
     const [, modelB] = yield* ctx.agent.resolveDualModelPair()

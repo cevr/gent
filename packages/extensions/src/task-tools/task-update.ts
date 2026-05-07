@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, TaskId, type TaskStatus } from "@gent/core/extensions/api"
+import { tool, TaskId, TaskStatus } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
 
 export const TaskUpdateParams = Schema.Struct({
@@ -12,11 +12,19 @@ export const TaskUpdateParams = Schema.Struct({
   description: Schema.optional(Schema.String.annotate({ description: "Updated description" })),
 })
 
+export const TaskUpdateResult = Schema.Struct({
+  error: Schema.optional(Schema.String),
+  id: Schema.optional(TaskId),
+  subject: Schema.optional(Schema.String),
+  status: Schema.optional(TaskStatus),
+})
+
 export const TaskUpdateTool = tool({
   id: "task_update",
   description:
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
+  output: TaskUpdateResult,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params) {
     const taskService = yield* TaskService
     const updated = yield* taskService.update(TaskId.make(params.taskId), {

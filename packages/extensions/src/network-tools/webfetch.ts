@@ -40,6 +40,7 @@ export const WebFetchTool = tool({
     "Fetch a URL and convert HTML to markdown. Use for researching documentation, reading web content, or gathering information from websites.",
   promptSnippet: "Fetch a URL and convert HTML to markdown",
   params: WebFetchParams,
+  output: WebFetchResult,
   execute: Effect.fn("WebFetchTool.execute")(function* (params) {
     const http = yield* HttpClient.HttpClient
     const response = yield* http

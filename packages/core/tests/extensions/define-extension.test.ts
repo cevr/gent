@@ -87,6 +87,7 @@ describe("defineExtension", () => {
         id: "echo",
         description: "echo",
         params: Schema.Struct({}),
+        output: Schema.String,
         permissionRules: [new PermissionRule({ tool: "echo", action: "allow" })],
         prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
@@ -180,6 +181,7 @@ describe("defineExtension", () => {
                 id: "from-effect",
                 description: "from effect",
                 params: Schema.Struct({}),
+                output: Schema.Void,
                 execute: () => Effect.void,
               }),
             ]
@@ -219,6 +221,7 @@ describe("defineExtension", () => {
         id: "from-define",
         description: "test",
         params: Schema.Struct({}),
+        output: Schema.String,
         execute: () => Effect.succeed("hi"),
       })
       const ext = defineExtension({
@@ -298,6 +301,7 @@ describe("defineExtension", () => {
         id: "legit",
         description: "legit",
         params: Schema.Unknown,
+        output: Schema.Void,
         execute: () => Effect.void,
       })
       const ext = defineExtension({
@@ -367,6 +371,7 @@ describe("defineExtension", () => {
             id: "helper-tool-call",
             description: "helper tool",
             params: Schema.Struct({}),
+            output: Schema.String,
             execute: () => Effect.succeed("ok"),
           }),
         ],

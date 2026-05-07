@@ -51,6 +51,7 @@ const toolReturning = (name: string, label: string): ToolCapability<{}, string> 
     id: name,
     description: label,
     params: Schema.Struct({}),
+    output: Schema.String,
     execute: () => Effect.succeed(label),
   })
 
@@ -110,6 +111,7 @@ describe("scope precedence", () => {
         id: "carrier-builtin",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         prompt: { id: "rules", content: "builtin rules", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
@@ -117,6 +119,7 @@ describe("scope precedence", () => {
         id: "carrier-project",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         prompt: { id: "rules", content: "project rules", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
@@ -138,6 +141,7 @@ describe("scope precedence", () => {
         id: "shadow-me",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         prompt: { id: "shadow-prompt", content: "BUILTIN PROMPT", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
@@ -145,6 +149,7 @@ describe("scope precedence", () => {
         id: "shadow-me",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         // NO prompt — should remove the section
         execute: () => Effect.succeed("ok"),
       })
@@ -163,6 +168,7 @@ describe("scope precedence", () => {
         id: "shadow-rules",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         permissionRules: [new PermissionRule({ tool: "shadow-rules", action: "deny" })],
         execute: () => Effect.succeed("ok"),
       })
@@ -170,6 +176,7 @@ describe("scope precedence", () => {
         id: "shadow-rules",
         description: "carrier",
         params: Schema.Struct({}),
+        output: Schema.String,
         // NO permissionRules — should remove the rule
         execute: () => Effect.succeed("ok"),
       })

@@ -14,6 +14,10 @@ export const SkillsParams = Schema.Struct({
   ),
 })
 
+// Skills Result
+
+export const SkillsResult = Schema.String
+
 export const SkillsTool = tool({
   id: "skills",
   needs: [ToolNeeds.read("skills")],
@@ -26,6 +30,7 @@ export const SkillsTool = tool({
     "Use `$skill:local` or `$skill:global` to disambiguate when same name exists at both levels",
   ],
   params: SkillsParams,
+  output: SkillsResult,
   execute: Effect.fn("SkillsTool.execute")(function* (params) {
     const skills = yield* Skills
     const allSkills = yield* skills.list()

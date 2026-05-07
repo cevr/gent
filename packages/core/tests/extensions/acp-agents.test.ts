@@ -314,6 +314,7 @@ describe("codemode proxy", () => {
         id: "echo",
         description: "echo tool",
         params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
         execute: () => Effect.succeed({ echoed: true }),
       })
       const server = yield* startCodemodeServer({
@@ -419,6 +420,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         id: "echo",
         description: "echo tool",
         params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
         execute: () => Effect.succeed({ echoed: true }),
       })
       const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
@@ -457,6 +459,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         id: "echo",
         description: "echo",
         params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
         execute: () => Effect.succeed({ echoed: true }),
       })
       const server = yield* startCodemodeServer({ tools: [mockTool], runTool })

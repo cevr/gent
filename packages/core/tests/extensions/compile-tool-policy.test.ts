@@ -11,6 +11,7 @@ describe("compileToolPolicy", () => {
       id: name,
       description: name,
       params: Schema.Struct({}),
+      output: Schema.Null,
       execute: () => Effect.succeed(null),
     })
 
@@ -19,6 +20,7 @@ describe("compileToolPolicy", () => {
       id: name,
       description: name,
       params: Schema.Struct({}),
+      output: Schema.Null,
       interactive: true,
       execute: () => Effect.succeed(null),
     })

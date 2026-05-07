@@ -144,6 +144,7 @@ export const EditTool = tool({
   promptSnippet: "Apply targeted edits to existing files",
   promptGuidelines: ["Use for partial changes, not full rewrites", "old_string must match exactly"],
   params: EditParams,
+  output: EditResult,
   execute: Effect.fn("EditTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path

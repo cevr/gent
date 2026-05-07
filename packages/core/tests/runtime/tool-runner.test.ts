@@ -37,6 +37,7 @@ describe("ToolRunner", () => {
         id: "echo",
         description: "Echo input",
         params: Schema.Struct({ message: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.String }),
         execute: ({ message }) => Effect.succeed({ echoed: message }),
       })
       const deps = Layer.mergeAll(
@@ -78,6 +79,7 @@ describe("ToolRunner", () => {
         id: "fail",
         description: "Fails on purpose",
         params: Schema.Struct({}),
+        output: Schema.Never,
         execute: () => Effect.fail(new ToolRunnerTestError({ message: "boom" })),
       })
       const deps = Layer.mergeAll(
@@ -125,6 +127,7 @@ describe("ToolRunner", () => {
         id: "strict",
         description: "Requires specific params",
         params: Schema.Struct({ path: Schema.String }),
+        output: Schema.Struct({ ok: Schema.Boolean }),
         execute: () => Effect.succeed({ ok: true }),
       })
       const deps = Layer.mergeAll(
@@ -173,6 +176,7 @@ describe("ToolRunner", () => {
         id: "safe",
         description: "A safe tool",
         params: Schema.Struct({}),
+        output: Schema.Struct({ ok: Schema.Boolean }),
         execute: () => Effect.succeed({ ok: true }),
       })
       const denyAllPermission = Permission.Live(
@@ -224,6 +228,13 @@ describe("ToolRunner", () => {
         id: "inspect",
         description: "Reads the provided execution context",
         params: Schema.Struct({}),
+        output: Schema.Struct({
+          cwd: Schema.String,
+          home: Schema.String,
+          sessionId: Schema.String,
+          branchId: Schema.String,
+          agentName: Schema.NullOr(Schema.String),
+        }),
         execute: (_, ctx) =>
           Effect.succeed({
             cwd: ctx.cwd,
@@ -278,6 +289,7 @@ describe("ToolRunner", () => {
         id: "context_tool",
         description: "Reads profile-scoped context",
         params: Schema.Struct({}),
+        output: Schema.Struct({ value: Schema.String }),
         execute: () =>
           Effect.gen(function* () {
             const token = yield* ToolProfileToken
@@ -328,6 +340,7 @@ describe("ToolRunner", () => {
         id: "pending",
         description: "Requests interaction",
         params: Schema.Struct({}),
+        output: Schema.Never,
         execute: (_, ctx) =>
           Effect.fail(
             new InteractionPendingError({

@@ -7,12 +7,18 @@ export const RenameSessionParams = Schema.Struct({
   }),
 })
 
+export const RenameSessionResult = Schema.Struct({
+  renamed: Schema.Boolean,
+  name: Schema.optional(Schema.String),
+})
+
 export const RenameSessionTool = tool({
   id: "rename_session",
   needs: [ToolNeeds.write("session")],
   description:
     "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
   params: RenameSessionParams,
+  output: RenameSessionResult,
   execute: Effect.fn("RenameSessionTool.execute")(function* (
     params: typeof RenameSessionParams.Type,
     ctx,

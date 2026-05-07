@@ -8,6 +8,10 @@ export const PrinciplesParams = Schema.Struct({
   }),
 })
 
+// Principles Result
+
+export const PrinciplesResult = Schema.String
+
 const PRINCIPLES_LIST = `## Principles
 
 The following principles govern architectural and implementation decisions.
@@ -26,6 +30,7 @@ export const PrinciplesTool = tool({
   ],
   prompt: { id: "principles", content: PRINCIPLES_LIST, priority: 55 },
   params: PrinciplesParams,
+  output: PrinciplesResult,
   execute: (params) =>
     Effect.sync(() => {
       const principles = loadPrinciples()

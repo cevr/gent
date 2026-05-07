@@ -17,18 +17,21 @@ const testToolkit = convertTools([
     id: "my_tool",
     description: "Test tool",
     params: Schema.Record(Schema.String, Schema.Unknown),
+    output: Schema.Void,
     execute: () => Effect.void,
   }),
   tool({
     id: "tool_a",
     description: "Test tool A",
     params: Schema.Record(Schema.String, Schema.Unknown),
+    output: Schema.Void,
     execute: () => Effect.void,
   }),
   tool({
     id: "tool_b",
     description: "Test tool B",
     params: Schema.Record(Schema.String, Schema.Unknown),
+    output: Schema.Void,
     execute: () => Effect.void,
   }),
 ])

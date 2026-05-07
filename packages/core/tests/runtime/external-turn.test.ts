@@ -222,6 +222,7 @@ const contextProbeTool: ToolCapability = tool({
   id: "context_probe",
   description: "Probe tool context",
   params: Schema.Struct({ value: Schema.String }),
+  output: Schema.Struct({ ok: Schema.Boolean }),
   execute: () => Effect.succeed({ ok: true }),
 })
 const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolCapability> = []) =>

@@ -116,7 +116,7 @@ describe("SearchSkillsTool", () => {
     narrowR(
       getToolEffect(SearchSkillsTool)({ query: "effect" }, ctx).pipe(
         Effect.map((result) => {
-          const r = result as { count: number; results: Array<{ name: string }> }
+          const r = result as { count: number; results: ReadonlyArray<{ name: string }> }
           expect(r.count).toBe(2)
           expect(r.results.every((s) => s.name === "effect-v4")).toBe(true)
         }),
@@ -129,7 +129,7 @@ describe("SearchSkillsTool", () => {
     narrowR(
       getToolEffect(SearchSkillsTool)({ query: "react" }, ctx).pipe(
         Effect.map((result) => {
-          const r = result as { results: Array<{ level: string }> }
+          const r = result as { results: ReadonlyArray<{ level: string }> }
           expect(r.results[0]?.level).toBe("global")
         }),
         Effect.provide(skillsLayer),

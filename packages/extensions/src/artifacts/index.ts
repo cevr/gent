@@ -21,21 +21,30 @@ export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
 
 // ── Agent-facing tools ──
 
+const ArtifactSaveParams = Schema.Struct({
+  label: Schema.String.annotate({ description: "Short label for display" }),
+  sourceTool: Schema.String.annotate({ description: "Tool that produced this artifact" }),
+  content: Schema.String.annotate({ description: "Full artifact content" }),
+  path: Schema.optional(Schema.String.annotate({ description: "File path if saved to disk" })),
+  metadata: Schema.optional(
+    Schema.Record(Schema.String, Schema.Unknown).annotate({
+      description: "Tool-specific structured data",
+    }),
+  ),
+})
+
+const ArtifactSaveResult = Schema.Struct({
+  id: ArtifactId,
+  label: Schema.String,
+  sourceTool: Schema.String,
+})
+
 const ArtifactSaveTool = tool({
   id: "artifact_save",
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
-  params: Schema.Struct({
-    label: Schema.String.annotate({ description: "Short label for display" }),
-    sourceTool: Schema.String.annotate({ description: "Tool that produced this artifact" }),
-    content: Schema.String.annotate({ description: "Full artifact content" }),
-    path: Schema.optional(Schema.String.annotate({ description: "File path if saved to disk" })),
-    metadata: Schema.optional(
-      Schema.Record(Schema.String, Schema.Unknown).annotate({
-        description: "Tool-specific structured data",
-      }),
-    ),
-  }),
+  params: ArtifactSaveParams,
+  output: ArtifactSaveResult,
   execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const artifacts = yield* ArtifactsWrite
     const artifact = yield* artifacts.save(ctx.sessionId, ctx.branchId, params)
@@ -43,15 +52,32 @@ const ArtifactSaveTool = tool({
   }),
 })
 
+const ArtifactReadParams = Schema.Struct({
+  id: Schema.optional(Schema.String.annotate({ description: "Artifact ID (if known)" })),
+  sourceTool: Schema.optional(
+    Schema.String.annotate({ description: "Source tool name to look up by" }),
+  ),
+})
+
+const ArtifactReadResult = Schema.Struct({
+  found: Schema.Boolean,
+  id: Schema.optional(ArtifactId),
+  label: Schema.optional(Schema.String),
+  sourceTool: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Literals(["active", "resolved"])),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  branchId: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.Number),
+  updatedAt: Schema.optional(Schema.Number),
+})
+
 const ArtifactReadTool = tool({
   id: "artifact_read",
   description: "Read the full content of an artifact by label/source or ID.",
-  params: Schema.Struct({
-    id: Schema.optional(Schema.String.annotate({ description: "Artifact ID (if known)" })),
-    sourceTool: Schema.optional(
-      Schema.String.annotate({ description: "Source tool name to look up by" }),
-    ),
-  }),
+  params: ArtifactReadParams,
+  output: ArtifactReadResult,
   execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const query =
       params.id !== undefined
@@ -64,28 +90,38 @@ const ArtifactReadTool = tool({
   }),
 })
 
+const ArtifactUpdateParams = Schema.Struct({
+  id: Schema.String.annotate({ description: "Artifact ID to update" }),
+  find: Schema.optional(Schema.String.annotate({ description: "Text to find in content" })),
+  replace: Schema.optional(Schema.String.annotate({ description: "Replacement text" })),
+  replaceAll: Schema.optional(
+    Schema.Boolean.annotate({ description: "Replace all occurrences (default: first only)" }),
+  ),
+  status: Schema.optional(
+    Schema.Literals(["active", "resolved"]).annotate({ description: "New status" }),
+  ),
+  label: Schema.optional(Schema.String.annotate({ description: "New label" })),
+  metadata: Schema.optional(
+    Schema.Record(Schema.String, Schema.Unknown).annotate({
+      description: "New metadata (replaces existing)",
+    }),
+  ),
+})
+
+const ArtifactUpdateResult = Schema.Struct({
+  found: Schema.Boolean,
+  id: Schema.optional(ArtifactId),
+  label: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Literals(["active", "resolved"])),
+})
+
 const ArtifactUpdateTool = tool({
   id: "artifact_update",
   needs: [ToolNeeds.write("artifact")],
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
-  params: Schema.Struct({
-    id: Schema.String.annotate({ description: "Artifact ID to update" }),
-    find: Schema.optional(Schema.String.annotate({ description: "Text to find in content" })),
-    replace: Schema.optional(Schema.String.annotate({ description: "Replacement text" })),
-    replaceAll: Schema.optional(
-      Schema.Boolean.annotate({ description: "Replace all occurrences (default: first only)" }),
-    ),
-    status: Schema.optional(
-      Schema.Literals(["active", "resolved"]).annotate({ description: "New status" }),
-    ),
-    label: Schema.optional(Schema.String.annotate({ description: "New label" })),
-    metadata: Schema.optional(
-      Schema.Record(Schema.String, Schema.Unknown).annotate({
-        description: "New metadata (replaces existing)",
-      }),
-    ),
-  }),
+  params: ArtifactUpdateParams,
+  output: ArtifactUpdateResult,
   execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const patch =
       params.find !== undefined && params.replace !== undefined
@@ -104,12 +140,19 @@ const ArtifactUpdateTool = tool({
   }),
 })
 
+const ArtifactClearParams = Schema.Struct({
+  id: Schema.String.annotate({ description: "Artifact ID to remove" }),
+})
+
+const ArtifactClearResult = Schema.Struct({
+  cleared: Schema.Boolean,
+})
+
 const ArtifactClearTool = tool({
   id: "artifact_clear",
   description: "Remove an artifact by ID.",
-  params: Schema.Struct({
-    id: Schema.String.annotate({ description: "Artifact ID to remove" }),
-  }),
+  params: ArtifactClearParams,
+  output: ArtifactClearResult,
   execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const artifacts = yield* ArtifactsWrite
     yield* artifacts.clear(ctx.sessionId, ctx.branchId, ArtifactId.make(params.id))
