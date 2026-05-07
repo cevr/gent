@@ -29,9 +29,16 @@ import {
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
-import { AgentSwitched, ErrorOccurred, TurnCompleted, type AgentEvent } from "../../domain/event.js"
+import {
+  AgentSwitched,
+  ErrorOccurred,
+  StreamEnded,
+  StreamStarted,
+  TurnCompleted,
+  type AgentEvent,
+} from "../../domain/event.js"
 import type { EventPublisher } from "../../domain/event-publisher.js"
-import type { MessageMetadata, ToolCallPart } from "../../domain/message.js"
+import type { MessageMetadata, ToolCallPart, ToolResultPart } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -70,18 +77,27 @@ import {
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
 import { AgentLoopError } from "./agent-loop.commands.js"
-import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response/collectors.js"
+import {
+  collectExternalTurnResponse,
+  collectModelTurnResponse,
+  emptyTurnMetrics,
+  type ActiveStreamHandle,
+} from "./turn-response/collectors.js"
 import {
   ToolInteractionPending,
+  computeStreamEndedCost,
   executeToolCalls,
   findPersistedEvent,
+  persistAssistantParts,
   persistMessageReceived,
   persistToolParts,
   resolveTurnContext,
+  resolveTurnSource,
   runTurnBeforeHook,
-  runTurnStreamPhase,
   toolCallsFromResponseParts,
+  type AssistantResponsePart,
   type PricingLookup,
+  type ResolvedTurnContext,
   type TurnStorage,
 } from "./phases/turn.js"
 
@@ -482,6 +498,158 @@ export const makeAgentLoopBehavior = (
       })
     })
 
+    const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {
+      messageId: RunningState["message"]["id"]
+      step: number
+      resolved: ResolvedTurnContext
+      extensionRegistry: ExtensionRegistryService
+      driverRegistry: DriverRegistryService
+      hostCtx: ExtensionHostContext
+      activeStream: ActiveStreamHandle
+    }) {
+      const persistAssistantPartsLocal = (
+        parts: ReadonlyArray<AssistantResponsePart>,
+        createdAt?: Date,
+      ) =>
+        persistAssistantParts({
+          storage: turnStorage,
+          eventPublisher,
+          sessionId,
+          branchId,
+          messageId: assistantMessageIdForTurn(params.messageId, params.step),
+          parts,
+          createdAt,
+          agentName: params.resolved.currentTurnAgent,
+          extensionRegistry: params.extensionRegistry,
+          hostCtx: params.hostCtx,
+        })
+
+      const persistToolPartsLocal = (parts: ReadonlyArray<ToolResultPart>, createdAt?: Date) =>
+        persistToolParts({
+          storage: turnStorage,
+          eventPublisher,
+          sessionId,
+          branchId,
+          messageId: toolResultMessageIdForTurn(params.messageId, params.step),
+          parts,
+          createdAt,
+        })
+
+      const source = yield* resolveTurnSource({
+        resolved: params.resolved,
+        provider,
+        driverRegistry: params.driverRegistry,
+        publishEvent: publishEventOrDie,
+        sessionId,
+        branchId,
+        activeStream: params.activeStream,
+        hostCtx: params.hostCtx,
+      })
+
+      if (source === undefined) {
+        return {
+          responseParts: [],
+          messageProjection: { assistant: [], tool: [] },
+          interrupted: false,
+          streamFailed: true,
+          driverKind: params.resolved.driver?._tag === "external" ? "external" : "model",
+        }
+      }
+
+      yield* publishEventOrDie(StreamStarted.make({ sessionId, branchId }))
+
+      yield* Effect.logInfo("turn-stream.start").pipe(
+        Effect.annotateLogs({
+          agent: params.resolved.currentTurnAgent,
+          driverKind: source.driverKind,
+          model: params.resolved.modelId,
+          ...(source.driverId !== undefined ? { driverId: source.driverId } : {}),
+        }),
+      )
+
+      const collected =
+        source.driverKind === "model"
+          ? yield* source.collect(
+              collectModelTurnResponse({
+                turnStream: source.stream,
+                publishEvent: publishEventOrDie,
+                sessionId,
+                branchId,
+                modelId: params.resolved.modelId,
+                activeStream: params.activeStream,
+                formatStreamError: source.formatStreamError,
+                retryPreOutputFailures: true,
+              }),
+            )
+          : yield* source.collect(
+              collectExternalTurnResponse({
+                turnStream: source.stream,
+                publishEvent: publishEventOrDie,
+                sessionId,
+                branchId,
+                activeStream: params.activeStream,
+                formatStreamError: source.formatStreamError,
+              }),
+            )
+
+      if (collected.interrupted) {
+        yield* publishEventOrDie(
+          StreamEnded.make({
+            sessionId,
+            branchId,
+            interrupted: true,
+          }),
+        )
+        yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
+        return collected
+      }
+
+      if (collected.streamFailed) {
+        yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
+        yield* persistToolPartsLocal(collected.messageProjection.tool)
+        return collected
+      }
+
+      const streamEndedCost = yield* computeStreamEndedCost({
+        modelId: params.resolved.modelId,
+        usage: collected.messageProjection.usage,
+        getPricing,
+      })
+      yield* publishEventOrDie(
+        StreamEnded.make({
+          sessionId,
+          branchId,
+          ...(collected.messageProjection.usage !== undefined
+            ? { usage: collected.messageProjection.usage }
+            : {}),
+          model: params.resolved.modelId,
+          ...(streamEndedCost !== undefined ? { costUsd: streamEndedCost } : {}),
+        }),
+      )
+      yield* Effect.logInfo("stream.end").pipe(
+        Effect.annotateLogs({
+          driverKind: source.driverKind,
+          inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
+          outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
+          toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
+        }),
+      )
+
+      yield* Ref.update(turnMetricsRef, (m) => ({
+        ...m,
+        agent: params.resolved.currentTurnAgent,
+        model: params.resolved.modelId,
+        inputTokens: m.inputTokens + (collected.messageProjection.usage?.inputTokens ?? 0),
+        outputTokens: m.outputTokens + (collected.messageProjection.usage?.outputTokens ?? 0),
+        toolCallCount: m.toolCallCount + toolCallsFromResponseParts(collected.responseParts).length,
+      }))
+
+      yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
+      yield* persistToolPartsLocal(collected.messageProjection.tool)
+
+      return collected
+    })
+
     const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (params: {
       messageId: RunningState["message"]["id"]
       startedAtMs: number
@@ -684,22 +852,14 @@ export const makeAgentLoopBehavior = (
         }
         yield* Ref.set(activeStreamRef, activeStream)
 
-        const collected = yield* runTurnStreamPhase({
+        const collected = yield* collectTurnStream({
           messageId: state.message.id,
           step,
           resolved,
-          provider,
           extensionRegistry: turnExtensionRegistry,
           driverRegistry: turnDriverRegistry,
           hostCtx: turnHostCtx,
-          publishEvent: publishEventOrDie,
-          eventPublisher,
-          storage: turnStorage,
-          sessionId,
-          branchId,
           activeStream,
-          turnMetrics: turnMetricsRef,
-          getPricing,
         }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
 
         if (collected.interrupted) {
