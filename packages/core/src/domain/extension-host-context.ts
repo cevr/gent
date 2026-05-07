@@ -54,7 +54,7 @@ export interface ExtensionHostContext {
 export declare namespace ExtensionHostContext {
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
-    readonly require: (name: AgentName) => Effect.Effect<AgentDefinition>
+    readonly require: (name: AgentName) => Effect.Effect<AgentDefinition, ExtensionHostError>
 
     readonly run: (params: {
       agent: AgentDefinition

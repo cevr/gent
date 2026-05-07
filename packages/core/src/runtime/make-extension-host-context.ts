@@ -106,6 +106,9 @@ const toHostError =
       cause: error,
     })
 
+const hostFailure = (operation: string, message: string): ExtensionHostError =>
+  new ExtensionHostError({ operation, message })
+
 export const HostPlatformRef = Context.Reference<RuntimePlatformShape>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
   {
@@ -394,7 +397,9 @@ export const makeExtensionHostContext = (
             Effect.flatMap((agent) =>
               agent !== undefined
                 ? Effect.succeed(agent)
-                : Effect.die(`Agent "${name}" not found in registry`),
+                : Effect.fail(
+                    hostFailure("agent.require", `Agent "${name}" not found in registry`),
+                  ),
             ),
           ),
       run: (params) =>
@@ -514,24 +519,27 @@ export const makeExtensionHostContext = (
           .pipe(Effect.mapError(toHostError("session.getSessionAncestors"))),
 
       deleteSession: (sessionId) =>
-        Effect.gen(function* () {
-          if (sessionId === runInfo.sessionId) {
-            return yield* Effect.die("Cannot delete the current session from within it")
-          }
-          yield* deps.sessionMutations.deleteSession(sessionId)
-        }).pipe(Effect.mapError(toHostError("session.deleteSession"))),
+        sessionId === runInfo.sessionId
+          ? Effect.fail(
+              hostFailure(
+                "session.deleteSession",
+                "Cannot delete the current session from within it",
+              ),
+            )
+          : deps.sessionMutations
+              .deleteSession(sessionId)
+              .pipe(Effect.mapError(toHostError("session.deleteSession"))),
 
       deleteBranch: (branchId) =>
-        Effect.gen(function* () {
-          if (branchId === runInfo.branchId) {
-            return yield* Effect.die("Cannot delete the current branch")
-          }
-          yield* deps.sessionMutations.deleteBranch({
-            sessionId: runInfo.sessionId,
-            currentBranchId: runInfo.branchId,
-            branchId,
-          })
-        }).pipe(Effect.mapError(toHostError("session.deleteBranch"))),
+        branchId === runInfo.branchId
+          ? Effect.fail(hostFailure("session.deleteBranch", "Cannot delete the current branch"))
+          : deps.sessionMutations
+              .deleteBranch({
+                sessionId: runInfo.sessionId,
+                currentBranchId: runInfo.branchId,
+                branchId,
+              })
+              .pipe(Effect.mapError(toHostError("session.deleteBranch"))),
 
       deleteMessages: (params) =>
         deps.sessionMutations

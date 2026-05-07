@@ -1,12 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Effect } from "effect"
+import { Cause, Effect, Option, Schema, type Exit } from "effect"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
+import { AgentName } from "@gent/core/domain/agent"
+import { ExtensionHostError } from "@gent/core/domain/extension-host-context"
 import { InvalidStateError, NotFoundError } from "../../src/domain/business-errors"
 import {
   dateFromMillis,
@@ -289,6 +291,23 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
+
+const expectExtensionHostError = (
+  exit: Exit.Exit<unknown, unknown>,
+  operation: string,
+  message: string,
+) => {
+  expect(exit._tag).toBe("Failure")
+  if (exit._tag !== "Failure") return
+  const error = Cause.findErrorOption(exit.cause)
+  expect(Option.isSome(error)).toBe(true)
+  if (!Option.isSome(error)) return
+  expect(Schema.is(ExtensionHostError)(error.value)).toBe(true)
+  if (!Schema.is(ExtensionHostError)(error.value)) return
+  expect(error.value.operation).toBe(operation)
+  expect(error.value.message).toBe(message)
+}
+
 const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutations"] => {
   const fail = () => Effect.fail(new EventStoreError({ message: "publish failed" }))
   return {
@@ -338,6 +357,26 @@ const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: 
   return msgs
 }
 describe("session mutation primitives", () => {
+  it.live("agent.require returns typed host error for missing agents", () =>
+    Effect.gen(function* () {
+      const testStorage = createTestStorage()
+      seedSession(testStorage)
+      const { deps } = makeTestDeps(testStorage)
+      const ctx = makeExtensionHostContext(
+        { sessionId: SESSION_ID, branchId: BRANCH_ID },
+        {
+          ...deps,
+          extensionRegistry: {
+            ...deps.extensionRegistry,
+            getAgent: () => Effect.sync(() => undefined),
+          },
+        },
+      )
+      const exit = yield* Effect.exit(ctx.agent.require(AgentName.make("missing-agent")))
+      expectExtensionHostError(exit, "agent.require", 'Agent "missing-agent" not found in registry')
+    }),
+  )
+
   it.live("listBranches returns branches for current session", () =>
     Effect.gen(function* () {
       const testStorage = createTestStorage()
@@ -537,7 +576,11 @@ describe("session mutation primitives", () => {
       const { deps } = makeTestDeps(testStorage)
       const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
       const exit = yield* Effect.exit(ctx.session.deleteSession(SESSION_ID))
-      expect(String(exit)).toContain("Cannot delete the current session")
+      expectExtensionHostError(
+        exit,
+        "session.deleteSession",
+        "Cannot delete the current session from within it",
+      )
     }),
   )
   it.live("deleteBranch deletes a non-current branch", () =>
@@ -560,7 +603,7 @@ describe("session mutation primitives", () => {
       const { deps } = makeTestDeps(testStorage)
       const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
       const exit = yield* Effect.exit(ctx.session.deleteBranch(BRANCH_ID))
-      expect(String(exit)).toContain("Cannot delete the current branch")
+      expectExtensionHostError(exit, "session.deleteBranch", "Cannot delete the current branch")
     }),
   )
   it.live("deleteMessages removes messages after cursor", () =>
