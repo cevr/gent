@@ -4,7 +4,8 @@ import { Deferred, Effect, Stream } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
 import { AgentEvent, EventEnvelope, EventId, type ActiveInteraction } from "@gent/core/domain/event"
 import { BranchId, ExtensionId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
-import { emptyQueueSnapshot, type SessionRuntime, type SessionSnapshot } from "@gent/sdk"
+import type { SessionRuntimeState } from "@gent/core/server/transport-contract"
+import { emptyQueueSnapshot, type SessionSnapshot } from "@gent/sdk"
 import { useSessionFeed } from "../src/hooks/use-session-feed"
 import type { Session } from "../src/client"
 import { createMockClient, createMockRuntime } from "./render-harness"
@@ -37,7 +38,7 @@ const snapshotFor = (
   },
 })
 
-const runtimeSnapshot = (): SessionRuntime => ({
+const runtimeSnapshot = (): SessionRuntimeState => ({
   _tag: "Idle",
   agent: AgentName.make("cowork"),
   queue: emptyQueueSnapshot(),

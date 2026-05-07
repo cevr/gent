@@ -22,7 +22,7 @@ export type {
   SteerCommand,
   SessionTreeNode,
 } from "@gent/core/server/transport-contract.js"
-export type { SessionRuntime, CreateSessionResult } from "./client.js"
+export type { CreateSessionResult } from "./client.js"
 
 // Client constructors
 export {

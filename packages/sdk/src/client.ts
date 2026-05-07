@@ -18,7 +18,6 @@ import {
   type Branch,
   type BranchTreeNode,
   type SessionSnapshot,
-  type SessionRuntimeState,
   type SessionTreeNode,
   type ExtensionHealth,
   type ExtensionHealthIssue,
@@ -79,7 +78,6 @@ export type {
   ProjectedMessage,
   ToolInteraction,
 }
-export type SessionRuntime = SessionRuntimeState
 export type CreateSessionResult = Effect.Success<
   ReturnType<GentNamespacedClient["session"]["create"]>
 >

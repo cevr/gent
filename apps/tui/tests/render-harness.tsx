@@ -15,7 +15,8 @@ import { ClientProvider } from "../src/client"
 import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import { ConnectionState, emptyQueueSnapshot, type SessionRuntime } from "@gent/sdk"
+import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
+import type { SessionRuntimeState } from "@gent/core/server/transport-contract"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
 import { dateFromMillis } from "@gent/core/domain/message"
@@ -83,7 +84,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
         }),
       updateReasoningLevel: () => noRpcError({ reasoningLevel: undefined }),
       events: () => Stream.empty,
-      watchRuntime: () => Stream.empty as Stream.Stream<SessionRuntime>,
+      watchRuntime: () => Stream.empty as Stream.Stream<SessionRuntimeState>,
     },
     branch: {
       list: () => noRpcError([]),
