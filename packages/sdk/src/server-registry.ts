@@ -4,7 +4,6 @@
  * Components:
  * - BuildFingerprint: identifies gent executable/source version
  * - ServerRegistry: per-DB registry file at ~/.gent/servers/<hash>.json
- * - CrossProcessLock: mkdir-based lock for startup serialization
  *
  * Filesystem and path operations route through Effect's `FileSystem`
  * and `Path` services. The boundary is the `FileSystem.FileSystem`
@@ -15,7 +14,7 @@
 import { hostname } from "node:os"
 import { createHash } from "node:crypto"
 
-import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Effect, FileSystem, Path, Schema } from "effect"
 
 // Re-export fingerprint from core (single source of truth)
 export {
@@ -159,99 +158,6 @@ export const listRegistryEntries = (
     return entries
   })
 
-// ── Cross-Process Lock ──
-
-const LockInfoSchema = Schema.Struct({
-  pid: Schema.Number,
-  hostname: Schema.String,
-  createdAt: Schema.Number,
-})
-
-const LockInfoJson = Schema.fromJsonString(LockInfoSchema)
-const decodeLockInfo = Schema.decodeUnknownOption(LockInfoJson)
-const encodeLockInfo = Schema.encodeSync(LockInfoJson)
-
-const lockPaths = (
-  home: string,
-  dbPath: string,
-): Effect.Effect<{ lockDir: string; infoPath: string }, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    const dir = yield* ensureRegistryDir(home)
-    const lockDir = path.join(dir, `${registryHash(path, dbPath)}.lock`)
-    const infoPath = path.join(lockDir, "info.json")
-    return { lockDir, infoPath }
-  })
-
-/** Acquire a cross-process lock via mkdir. Returns true on success. */
-export const acquireLock = (
-  home: string,
-  dbPath: string,
-  createdAt: number = 0,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const { lockDir, infoPath } = yield* lockPaths(home, dbPath)
-
-    const cleanupAndRetry = Effect.gen(function* () {
-      yield* fs.remove(infoPath).pipe(Effect.ignore)
-      yield* fs.remove(lockDir, { recursive: true }).pipe(Effect.ignore)
-      return yield* fs.makeDirectory(lockDir).pipe(
-        Effect.as(true),
-        Effect.catchEager(() => Effect.succeed(false)),
-      )
-    })
-
-    // Try to create lock directory (atomic on local FS)
-    const createdFresh = yield* fs.makeDirectory(lockDir).pipe(
-      Effect.as(true),
-      Effect.catchEager(() => Effect.succeed(false)),
-    )
-
-    if (!createdFresh) {
-      // Lock dir exists — check if stale
-      const infoText = yield* fs.readFileString(infoPath).pipe(Effect.option)
-      const info =
-        infoText._tag === "Some"
-          ? decodeLockInfo(infoText.value).pipe(Option.getOrUndefined)
-          : undefined
-
-      if (info === undefined) {
-        // Missing or corrupt info.json (crash between mkdir and write) — treat as stale
-        const recovered = yield* cleanupAndRetry
-        if (!recovered) return false
-      } else {
-        const isLocal = info.hostname === hostname()
-        const isAlive = isLocal && isPidAlive(info.pid)
-        if (isAlive) return false
-
-        // Dead PID, different host, or age exceeded — stale
-        const recovered = yield* cleanupAndRetry
-        if (!recovered) return false
-      }
-    }
-
-    // Write lock info
-    const wrote = yield* fs
-      .writeFileString(
-        infoPath,
-        encodeLockInfo({
-          pid: process.pid,
-          hostname: hostname(),
-          createdAt,
-        }),
-      )
-      .pipe(
-        Effect.as(true),
-        Effect.catchEager(() => Effect.succeed(false)),
-      )
-    if (!wrote) {
-      yield* fs.remove(lockDir, { recursive: true }).pipe(Effect.ignore)
-      return false
-    }
-    return true
-  })
-
 export interface ServerRegistryIdentity {
   readonly serverId: string
   readonly pid: number
@@ -303,43 +209,3 @@ export const signalIfIdentityOwned = <E, R>(
     )
     return sent ? ("signaled" as const) : ("skipped" as const)
   })
-
-/** Release a cross-process lock. Only releases if we own it (PID match). */
-export const releaseLock = (
-  home: string,
-  dbPath: string,
-): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const { lockDir, infoPath } = yield* lockPaths(home, dbPath)
-    const infoText = yield* fs.readFileString(infoPath).pipe(Effect.option)
-    if (infoText._tag === "None") return
-    const info = decodeLockInfo(infoText.value).pipe(Option.getOrUndefined)
-    if (info === undefined) return
-    if (info.pid !== process.pid || info.hostname !== hostname()) return
-    yield* fs.remove(infoPath).pipe(Effect.ignore)
-    yield* fs.remove(lockDir, { recursive: true }).pipe(Effect.ignore)
-  })
-
-/** Effect wrapper for lock acquire + body + release. */
-export const withLock = <A, E, R>(
-  home: string,
-  dbPath: string,
-  body: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | LockAcquireError, R | FileSystem.FileSystem | Path.Path> =>
-  Effect.acquireUseRelease(
-    Effect.gen(function* () {
-      const createdAt = yield* Clock.currentTimeMillis
-      const acquired = yield* acquireLock(home, dbPath, createdAt)
-      if (!acquired) {
-        return yield* new LockAcquireError({ dbPath })
-      }
-    }),
-    () => body,
-    () => releaseLock(home, dbPath),
-  )
-
-export class LockAcquireError extends Schema.TaggedErrorClass<LockAcquireError>()(
-  "LockAcquireError",
-  { dbPath: Schema.String },
-) {}

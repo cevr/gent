@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 // @effect-diagnostics nodeBuiltinImport:off
@@ -18,9 +18,6 @@ import {
   registryIdentityOf,
   canSignalRegistryEntry,
   signalIfIdentityOwned,
-  acquireLock,
-  releaseLock,
-  withLock,
 } from "../src/server-registry"
 
 const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
@@ -401,137 +398,6 @@ describe("isPidAlive", () => {
     Effect.sync(() => {
       expect(isPidAlive(99999999)).toBe(false)
     }),
-  )
-})
-
-describe("Cross-Process Lock", () => {
-  it.scopedLive("acquireLock succeeds on first call", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const acquired = yield* acquireLock(home, "/tmp/test.db")
-        expect(acquired).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("acquireLock fails on second call (already held)", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        yield* acquireLock(home, "/tmp/test.db")
-        const second = yield* acquireLock(home, "/tmp/test.db")
-        expect(second).toBe(false)
-      }),
-    ),
-  )
-
-  it.scopedLive("releaseLock allows re-acquire", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        yield* acquireLock(home, "/tmp/test.db")
-        yield* releaseLock(home, "/tmp/test.db")
-        const reacquired = yield* acquireLock(home, "/tmp/test.db")
-        expect(reacquired).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("different dbPaths have independent locks", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const a = yield* acquireLock(home, "/tmp/a.db")
-        const b = yield* acquireLock(home, "/tmp/b.db")
-        expect(a).toBe(true)
-        expect(b).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("withLock acquires and releases", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        let inside = false
-        yield* withLock(
-          home,
-          "/tmp/test.db",
-          Effect.gen(function* () {
-            inside = true
-            // Lock should be held during body
-            const blocked = yield* acquireLock(home, "/tmp/test.db")
-            expect(blocked).toBe(false)
-          }),
-        )
-        expect(inside).toBe(true)
-        // Lock should be released after body
-        const reacquired = yield* acquireLock(home, "/tmp/test.db")
-        expect(reacquired).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("withLock releases on error", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.fail("boom")))
-        expect(result._tag).toBe("Failure")
-        // Lock should still be released
-        const reacquired = yield* acquireLock(home, "/tmp/test.db")
-        expect(reacquired).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("withLock fails with LockAcquireError when lock is held", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        yield* acquireLock(home, "/tmp/test.db")
-        const result = yield* Effect.exit(withLock(home, "/tmp/test.db", Effect.succeed("ok")))
-        expect(result._tag).toBe("Failure")
-      }),
-    ),
-  )
-
-  it.scopedLive("stale lock from dead PID is cleaned up", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const home = yield* makeTmpHomeScoped
-        const dir = path.join(home, ".gent", "servers")
-        yield* fs.makeDirectory(dir, { recursive: true })
-        // Use the same hash logic — acquire first, then tamper
-        yield* acquireLock(home, "/tmp/stale.db")
-        // Find the lock dir and rewrite the info with a dead PID
-        const lockDirs = (yield* fs.readDirectory(dir)).filter((f) => f.endsWith(".lock"))
-        // Release first, then manually create stale lock
-        yield* releaseLock(home, "/tmp/stale.db")
-
-        // Now manually create a stale lock
-        const hash = lockDirs[0] ?? "fallback.lock"
-        const lockDir = path.join(dir, hash)
-        yield* fs.makeDirectory(lockDir, { recursive: true })
-        const createdAt = yield* Clock.currentTimeMillis
-        yield* fs.writeFileString(
-          path.join(lockDir, "info.json"),
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          JSON.stringify({
-            pid: 99999999,
-            hostname: hostname(),
-            createdAt,
-          }),
-        )
-
-        // Should succeed because the existing lock has a dead PID
-        const acquired = yield* acquireLock(home, "/tmp/stale.db")
-        expect(acquired).toBe(true)
-      }),
-    ),
   )
 })
 

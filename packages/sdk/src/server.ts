@@ -37,7 +37,6 @@ import {
   writeRegistryEntry,
   removeRegistryEntry,
   ServerRegistryEntry,
-  withLock,
   computeLocalFingerprint,
   registryIdentityOf,
   signalIfIdentityOwned,
@@ -401,60 +400,25 @@ const resolveServerInternal = (
       yield* removeRegistryEntry(home, dbPath, existing.serverId)
     }
 
-    // Acquire lock, build owned server, write registry
-    return yield* withLock(
-      home,
-      dbPath,
-      Effect.gen(function* () {
-        const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
-        const internal = getOwnedInternal(server)
-        if (internal !== undefined) {
-          yield* writeRegistryEntry(
-            home,
-            new ServerRegistryEntry({
-              serverId: internal.serverId,
-              pid: process.pid,
-              hostname: os.hostname(),
-              rpcUrl: server.url,
-              dbPath,
-              buildFingerprint: fingerprint,
-              startedAt: yield* Clock.currentTimeMillis,
-            }),
-          )
-          // Clean up registry on scope close
-          yield* Effect.addFinalizer(() =>
-            removeRegistryEntry(home, dbPath, internal.serverId).pipe(Effect.ignore),
-          )
-        }
-        return server
-      }),
-    ).pipe(
-      Effect.catchTag("LockAcquireError", (lockErr) =>
-        // Lock contention — another process started. Retry registry with probe.
-        Effect.gen(function* () {
-          const retryEntry = yield* readRegistryEntry(home, dbPath)
-          if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
-            const alive = yield* probeServer(retryEntry.rpcUrl, {
-              serverId: retryEntry.serverId,
-              pid: retryEntry.pid,
-              hostname: retryEntry.hostname,
-              dbPath,
-              buildFingerprint: fingerprint,
-            })
-            if (alive) {
-              return GentServer.Attached.make({
-                url: retryEntry.rpcUrl,
-                workspaceId: workspaceHeadersForCwd(options.cwd)["x-gent-workspace-id"],
-              })
-            }
-            return yield* new GentConnectionError({
-              message: "Lock contention: new server did not pass identity probe",
-            })
-          }
-          return yield* new GentConnectionError({
-            message: `Failed to acquire server lock: ${String(lockErr)}`,
-          })
+    const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
+    const internal = getOwnedInternal(server)
+    if (internal !== undefined) {
+      yield* writeRegistryEntry(
+        home,
+        new ServerRegistryEntry({
+          serverId: internal.serverId,
+          pid: process.pid,
+          hostname: os.hostname(),
+          rpcUrl: server.url,
+          dbPath,
+          buildFingerprint: fingerprint,
+          startedAt: yield* Clock.currentTimeMillis,
         }),
-      ),
-    )
+      )
+      // Clean up registry on scope close.
+      yield* Effect.addFinalizer(() =>
+        removeRegistryEntry(home, dbPath, internal.serverId).pipe(Effect.ignore),
+      )
+    }
+    return server
   })
