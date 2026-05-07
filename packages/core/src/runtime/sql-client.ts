@@ -2,7 +2,7 @@ import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { PgClient } from "@effect/sql-pg"
 import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
-import type { Config } from "effect"
+import { Config, ConfigProvider } from "effect"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 
@@ -25,7 +25,15 @@ export const SqlClientLive = (config: {
 }): Layer.Layer<SqlClient, Config.ConfigError | SqlError> => {
   if (config.backend === "postgres") {
     if (config.postgres === undefined) {
-      return Layer.effectContext(Effect.die("SqlClientLive: postgres config required"))
+      return Layer.effectContext(
+        Effect.fail(
+          new Config.ConfigError(
+            new ConfigProvider.SourceError({
+              message: "SqlClientLive: postgres config required",
+            }),
+          ),
+        ),
+      )
     }
     return PostgresClientLive(config.postgres)
   }
