@@ -10,26 +10,18 @@
  * `NoActiveSessionError` that the popup adapter normalizes to `[]`.
  */
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Layer, ManagedRuntime, Schema } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { Effect, Schema } from "effect"
 import { ExtensionId, ref, request } from "@gent/core/extensions/api"
 import { type AutocompleteItem, autocompleteContribution } from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
   type ClientTransportShape,
-  makeClientTransportLayer,
   NoActiveSessionError,
   requestExtension,
 } from "../src/extensions/client-transport"
-import {
-  makeClientComposerLayer,
-  makeClientLifecycleLayer,
-  makeClientShellLayer,
-  makeClientWorkspaceLayer,
-} from "../src/extensions/client-services"
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
-import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { makeClientExtensionRuntime, makeClientTestTransport } from "./extension-test-harness"
 class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestError>()(
   "AutocompleteTestError",
   { message: Schema.String },
@@ -51,56 +43,21 @@ const makeFakeTransport = (
         }
       | undefined
     readonly requestReply?: unknown
+    readonly requestEffect?: () => Effect.Effect<unknown, Error>
   } = {},
-): ClientTransportShape => {
-  const extension = {
-    request: ((): Effect.Effect<unknown, unknown> => Effect.succeed(opts.requestReply ?? [])) as (
-      ...args: unknown[]
-    ) => Effect.Effect<unknown, unknown>,
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  const fakeClient = {
-    extension,
-  } as unknown as GentNamespacedClient
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  const fakeRuntime = { run: Effect.runPromise } as unknown as GentRuntime
-  return {
-    client: fakeClient,
-    runtime: fakeRuntime,
+): ClientTransportShape =>
+  makeClientTestTransport({
     currentSession:
       opts.currentSession ??
       (() => ({
         sessionId: SessionId.make("sess-1"),
         branchId: BranchId.make("branch-1"),
       })),
-    onExtensionStateChanged: () => () => {},
-    onSessionEvent: () => () => {},
-  }
-}
+    requestEffect: opts.requestEffect,
+    requestReply: opts.requestReply ?? [],
+  })
 const makeTestRuntime = (transport: ClientTransportShape) =>
-  ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      BunServices.layer,
-      makeClientTransportLayer(transport),
-      makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
-      makeClientShellLayer({
-        sendMessage: () => {},
-        openOverlay: () => {},
-        closeOverlay: () => {},
-      }),
-      makeClientComposerLayer({
-        state: () => ({
-          draft: "",
-          mode: "editing" as const,
-          inputFocused: false,
-          autocompleteOpen: false,
-        }),
-      }),
-      makeClientLifecycleLayer({ addCleanup: () => {} }),
-    ),
-  )
+  makeClientExtensionRuntime({ transport })
 describe("autocomplete Effect items() through ClientTransport", () => {
   it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>
     Effect.gen(function* () {
@@ -201,12 +158,9 @@ describe("autocomplete Effect items() through ClientTransport", () => {
   })
   it.live("requestExtension seals transport failures to ClientTransportRequestError", () =>
     Effect.gen(function* () {
-      const transport = makeFakeTransport()
-      ;(
-        transport.client.extension as unknown as {
-          request: () => Effect.Effect<unknown, unknown>
-        }
-      ).request = () => Effect.fail(new AutocompleteTestError({ message: "transport boom" }))
+      const transport = makeFakeTransport({
+        requestEffect: () => Effect.fail(new AutocompleteTestError({ message: "transport boom" })),
+      })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
         runtime.runPromiseExit(requestExtension(ref(ListThingsRpc), {})),

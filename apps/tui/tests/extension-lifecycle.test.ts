@@ -1,83 +1,16 @@
 import { describe, it, expect, test } from "effect-bun-test"
-import { Deferred, Effect, Layer, ManagedRuntime } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import {
-  makeClientWorkspaceLayer,
-  makeClientShellLayer,
-  makeClientComposerLayer,
-  makeClientLifecycleLayer,
-} from "../src/extensions/client-services"
-import { makeClientTransportLayer } from "../src/extensions/client-transport"
-import type { ClientContribution } from "../src/extensions/client-facets.js"
+import { Deferred, Effect } from "effect"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
 import tasksBuiltin from "../src/extensions/builtins/tool-renderers.client"
 import { AgentEvent, EventId, type EventEnvelope } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
-const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.await(deferred)
-const buildRuntime = (
-  activeSession: {
-    value:
-      | {
-          sessionId: SessionId
-          branchId: BranchId
-        }
-      | undefined
-  },
-  opts: {
-    readonly requestDeferred?: Deferred.Deferred<unknown, never>
-    readonly requestEffect?: () => Effect.Effect<unknown, never>
-    readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
-  },
-): ManagedRuntime.ManagedRuntime<never, never> =>
-  ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      BunServices.layer,
-      makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
-      makeClientShellLayer({
-        sendMessage: () => {},
-        openOverlay: () => {},
-        closeOverlay: () => {},
-      }),
-      makeClientComposerLayer({
-        state: () => ({
-          draft: "",
-          mode: "editing" as const,
-          inputFocused: false,
-          autocompleteOpen: false,
-        }),
-      }),
-      makeClientTransportLayer({
-        client: {
-          extension: {
-            request: () => {
-              if (opts.requestEffect !== undefined) return opts.requestEffect()
-              if (opts.requestDeferred === undefined) return Effect.void
-              return waitForDeferred(opts.requestDeferred)
-            },
-            listSlashCommands: () => Effect.succeed([]),
-          },
-        } as unknown as Parameters<typeof makeClientTransportLayer>[0]["client"],
-        runtime: {
-          cast: <A, E>(effect: Effect.Effect<A, E, never>): void => {
-            Effect.runFork(effect)
-          },
-          fork: Effect.runFork,
-          run: <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect),
-        } as unknown as Parameters<typeof makeClientTransportLayer>[0]["runtime"],
-        currentSession: () => activeSession.value,
-        onExtensionStateChanged: () => () => {},
-        onSessionEvent: (cb) => {
-          opts.sessionEventSubscribers?.add(cb)
-          return () => {
-            opts.sessionEventSubscribers?.delete(cb)
-          }
-        },
-      }),
-      makeClientLifecycleLayer({ addCleanup: () => {} }),
-    ),
-  )
+import {
+  findBorderLabel,
+  makeActiveSessionRef,
+  makeClientExtensionRuntime,
+  runClientExtensionSetup,
+} from "./extension-test-harness"
 describe("transport-only extension widgets", () => {
   test("cleanups fire in registration order", () => {
     const calls: string[] = []
@@ -107,36 +40,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("auto widget drops a stale refetch after the session changes", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            autoBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "top-left",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
+        const borderLabel = findBorderLabel(contributions, "top-left")
         expect(borderLabel).toBeDefined()
         activeSession.value = {
           sessionId: SessionId.make("session-B"),
@@ -150,36 +62,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("auto widget renders a decoded snapshot", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            autoBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "top-left",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
+        const borderLabel = findBorderLabel(contributions, "top-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, {
           active: true,
@@ -194,36 +85,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("auto widget rejects undecodable snapshots at the client seam", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            autoBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "top-left",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
+        const borderLabel = findBorderLabel(contributions, "top-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, { active: "yes" })
         yield* Effect.sleep("0 millis")
@@ -233,36 +103,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("artifacts widget drops a stale refetch after the branch changes", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            artifactsBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "bottom-right",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, artifactsBuiltin)
+        const borderLabel = findBorderLabel(contributions, "bottom-right")
         expect(borderLabel).toBeDefined()
         activeSession.value = {
           sessionId: SessionId.make("session-A"),
@@ -287,36 +136,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("artifacts widget renders decoded artifacts", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            artifactsBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "bottom-right",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, artifactsBuiltin)
+        const borderLabel = findBorderLabel(contributions, "bottom-right")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [
           {
@@ -337,36 +165,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("artifacts widget rejects undecodable artifacts at the client seam", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            artifactsBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "bottom-right",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, artifactsBuiltin)
+        const borderLabel = findBorderLabel(contributions, "bottom-right")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ status: "active" }])
         yield* Effect.sleep("0 millis")
@@ -376,36 +183,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("tasks widget renders decoded task list responses", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            tasksBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "bottom-left",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+        const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [
           {
@@ -458,40 +244,17 @@ describe("transport-only extension widgets", () => {
       ]
       yield* Effect.forEach(tags, (tag, index) =>
         Effect.gen(function* () {
-          const activeSession = {
-            value: { sessionId, branchId } as
-              | {
-                  sessionId: SessionId
-                  branchId: BranchId
-                }
-              | undefined,
-          }
+          const activeSession = makeActiveSessionRef({ sessionId, branchId })
           let tasks: readonly unknown[] = []
           const sessionEventSubscribers = new Set<(envelope: EventEnvelope) => void>()
-          const runtime = buildRuntime(activeSession, {
+          const runtime = makeClientExtensionRuntime({
+            activeSession,
             sessionEventSubscribers,
             requestEffect: () => Effect.succeed(tasks),
           })
           yield* Effect.gen(function* () {
-            const contributions = yield* Effect.promise(() =>
-              runtime.runPromise(
-                tasksBuiltin.setup as unknown as Effect.Effect<
-                  readonly ClientContribution[],
-                  never,
-                  never
-                >,
-              ),
-            )
-            const borderLabel = contributions.find(
-              (
-                entry,
-              ): entry is Extract<
-                ClientContribution,
-                {
-                  _tag: "border-label"
-                }
-              > => entry._tag === "border-label" && entry.position === "bottom-left",
-            )
+            const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+            const borderLabel = findBorderLabel(contributions, "bottom-left")
             expect(borderLabel).toBeDefined()
             yield* Effect.sleep("0 millis")
             expect(borderLabel?.produce()).toEqual([])
@@ -517,36 +280,15 @@ describe("transport-only extension widgets", () => {
   )
   it.live("tasks widget rejects undecodable task lists at the client seam", () =>
     Effect.gen(function* () {
-      const activeSession = {
-        value: { sessionId: SessionId.make("session-A"), branchId: BranchId.make("branch-A") } as
-          | {
-              sessionId: SessionId
-              branchId: BranchId
-            }
-          | undefined,
-      }
+      const activeSession = makeActiveSessionRef({
+        sessionId: SessionId.make("session-A"),
+        branchId: BranchId.make("branch-A"),
+      })
       const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = buildRuntime(activeSession, { requestDeferred })
+      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* Effect.promise(() =>
-          runtime.runPromise(
-            tasksBuiltin.setup as unknown as Effect.Effect<
-              readonly ClientContribution[],
-              never,
-              never
-            >,
-          ),
-        )
-        const borderLabel = contributions.find(
-          (
-            entry,
-          ): entry is Extract<
-            ClientContribution,
-            {
-              _tag: "border-label"
-            }
-          > => entry._tag === "border-label" && entry.position === "bottom-left",
-        )
+        const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+        const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }])
         yield* Effect.sleep("0 millis")

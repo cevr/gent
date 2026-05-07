@@ -1112,6 +1112,27 @@ Definition of done:
 - Repeated casts in `apps/tui/tests/extension-lifecycle.test.ts` removed.
 - Autocomplete/lifecycle tests use the helper.
 
+Status: complete.
+
+Implementation notes:
+
+- Added `apps/tui/tests/extension-test-harness.ts` for typed client transport,
+  runtime composition, extension setup execution, active-session refs, and
+  border-label lookup.
+- Migrated lifecycle widget tests off local runtime/setup casts and repeated
+  contribution filtering.
+- Migrated autocomplete transport tests onto the same runtime/transport helper;
+  failure injection is now an explicit harness option instead of mutating a
+  cast client.
+
+Verification on 2026-05-07:
+
+- `rg -n "as unknown as|as Parameters<typeof makeClientTransportLayer>|makeClientTransportLayer|ManagedRuntime\\.make|BunFileSystem|BunServices|makeClientWorkspaceLayer|makeClientShellLayer|makeClientComposerLayer|makeClientLifecycleLayer|ClientContribution|contributions\\.find|value: \\{ sessionId" apps/tui/tests/extension-lifecycle.test.ts apps/tui/tests/autocomplete-effect-items.test.ts apps/tui/tests/extension-test-harness.ts`
+- `bun run --cwd apps/tui typecheck`
+- `bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-lifecycle.test.ts tests/autocomplete-effect-items.test.ts`
+- `bun run lint`
+- `bun run gate`; test wall `4396ms`
+
 #### C51: test(extensions): add Claude SDK message builders
 
 Replace partial `SDKMessage` casts with typed variant fixture constructors.
