@@ -7,7 +7,6 @@ import {
   ToolNeeds,
   type AgentDefinition,
   type ToolCapabilityContext,
-  type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText } from "./workflow-helpers.js"
@@ -125,7 +124,7 @@ const buildExecutePrompt = (plan: string) =>
   ].join("\n")
 
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
-  ctx: ExtensionHostContext
+  ctx: ToolCapabilityContext
   architect: AgentDefinition
   toolCallId?: ToolCallId
   mode: "plan-only" | "fix"

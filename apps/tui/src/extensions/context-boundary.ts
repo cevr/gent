@@ -14,7 +14,7 @@
  */
 
 import { Effect } from "effect"
-import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
+import { readDisabledExtensions } from "@gent/core/extensions/api"
 import type { AnyExtensionClientModule, ClientRuntime } from "./client-facets.js"
 import { loadTuiExtensions } from "./loader-boundary"
 import type { ResolvedTuiExtensions } from "./resolve"

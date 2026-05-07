@@ -133,7 +133,10 @@ export type {
 export { DriverError } from "../domain/driver.js"
 export {
   AgentEvent,
+  EventEnvelope,
+  type ActiveInteraction,
   type AgentEventTag,
+  type ApprovalResult,
   type Question,
   QuestionSchema,
   QuestionOptionSchema,
@@ -187,11 +190,7 @@ export {
 } from "../domain/message-part-projection.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
-export {
-  ExtensionHostError,
-  ExtensionHostSearchResult,
-  type ExtensionHostContext,
-} from "../domain/extension-host-context.js"
+export { ExtensionHostError, ExtensionHostSearchResult } from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 export { FileIndex } from "../domain/file-index.js"
@@ -264,6 +263,7 @@ export { runProcess, ProcessError } from "../utils/run-process.js"
 export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export type { GentPlatformShape } from "../runtime/gent-platform.js"
+export { readDisabledExtensions } from "../runtime/extensions/disabled.js"
 export { ToolRunner } from "../runtime/agent/tool-runner.js"
 export type { ToolRunnerService } from "../runtime/agent/tool-runner.js"
 

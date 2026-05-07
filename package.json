@@ -22,7 +22,6 @@
     "prepare": "lefthook install && effect-tsgo patch"
   },
   "dependencies": {
-    "effect-machine": "catalog:",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"
   },
@@ -57,7 +56,6 @@
     "@effect/sql-pg": "4.0.0-beta.59",
     "@effect/sql-sqlite-bun": "4.0.0-beta.59",
     "effect-encore": "file:/Users/cvr/Developer/personal/effect-encore",
-    "effect-machine": "file:/Users/cvr/Developer/personal/effect-machine",
     "effect-wide-event": "file:/Users/cvr/Developer/personal/effect-wide-event",
     "msgpackr": "^1.11.10",
     "multipasta": "^0.2.7",

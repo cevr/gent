@@ -17,7 +17,7 @@
 
 import { Effect } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent.js"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/extensions/api"
 import { ClientShell } from "../client-services"
 import { ClientTransport } from "../client-transport"
 

@@ -7,7 +7,6 @@ import {
   ToolNeeds,
   type AgentDefinition,
   type ToolCapabilityContext,
-  type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand } from "../workflow-helpers.js"
@@ -214,7 +213,7 @@ Summarize what changed, which findings are resolved, and what remains.`
 }
 
 const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
-  ctx: ExtensionHostContext
+  ctx: ToolCapabilityContext
   architect: AgentDefinition
   auditor: AgentDefinition
   toolCallId?: ToolCallId

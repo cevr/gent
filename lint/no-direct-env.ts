@@ -379,7 +379,8 @@ const plugin: Plugin = {
      *     `@gent/core/server/*`, `@gent/core/providers/*`
      *   - Relative paths that escape into domain/, runtime/, storage/, etc.
      *
-     * Applies to: packages/core/src/extensions/** and packages/extensions/src/**
+     * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
+     * and apps/tui/src/extensions/**
      * Exempt: extensions/api.ts (the builder implementation)
      */
     "no-extension-internal-imports": {
@@ -389,7 +390,8 @@ const plugin: Plugin = {
         // Scope: only extension implementation files
         const inCoreExtensions = filename.includes("packages/core/src/extensions/")
         const inExtensionsPackage = filename.includes("packages/extensions/src/")
-        if (!inCoreExtensions && !inExtensionsPackage) return {}
+        const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
+        if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
 
         // Exempt: api.ts is the public bridge implementation.
         if (filename.endsWith("/extensions/api.ts")) {

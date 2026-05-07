@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Ref } from "effect"
 import {
   defineExtension,
   defineResource,
-  type ExtensionHostContext,
+  type ExtensionReactions,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -12,6 +12,7 @@ import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
 import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
+type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
 
 // ── Cooldown service ──
 //
@@ -56,7 +57,7 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
+const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 

@@ -51,15 +51,7 @@ const provideCapabilityContext = <A, E, R>(
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
 
-type ToolRunnerToolkit = Pick<AiToolkit.WithHandler<ToolCapabilityMap>, "tools"> & {
-  readonly handle: (
-    name: string,
-    input: unknown,
-  ) => Effect.Effect<
-    Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>,
-    AiError.AiError
-  >
-}
+type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
 export interface ToolRunnerService {
   readonly run: (
@@ -154,8 +146,7 @@ const makeExecutionToolkit = (params: {
   const toolkit = convertTools([params.tool])
   const toolName = String(getToolId(params.tool))
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns computed toolkit handler boundary
-  const handlerMap = {
+  const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
       Effect.gen(function* () {
         const executeResult = yield* params.registry.extensionReactions.executeTool(
@@ -203,18 +194,23 @@ const makeExecutionToolkit = (params: {
             ),
           )
       }),
-  } as unknown as AiToolkit.HandlersFrom<ToolCapabilityMap>
+  }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased toolkit handler boundary
   return Effect.gen(function* () {
     const handlers = yield* toolkit.toHandlers(handlerMap)
     return yield* toolkit.asEffect().pipe(Effect.provideContext(handlers))
-  }) as unknown as Effect.Effect<ToolRunnerToolkit>
+  })
 }
 
 const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
   Effect.gen(function* () {
-    const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input)
+    const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input).pipe(
+      Effect.map(
+        (stream) =>
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect AI handler stream carries services in the registered handler context; ToolRunner closes it when building the toolkit.
+          stream as unknown as Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>,
+      ),
+    )
     const terminal = yield* resultStream.pipe(
       Stream.filter((result) => result.preliminary === false),
       Stream.run(Sink.last()),

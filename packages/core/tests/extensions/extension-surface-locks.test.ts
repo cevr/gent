@@ -22,21 +22,14 @@ import {
   ReadOnlyBrand,
   type ReadOnlyTag,
   type ReadRequestInput,
-  type ExtensionHostContext,
-  ExtensionHostError,
-  ExtensionHostSearchResult,
   makeRunSpec,
   request,
   resource,
-  BranchId,
-  SessionId,
   tool,
   ToolCallId,
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
-import type { SearchResult as StorageSearchResult } from "../../src/storage/search-storage"
-import { StorageError } from "../../src/storage/sqlite-storage"
 
 class WriteCapableService extends Context.Service<
   WriteCapableService,
@@ -266,44 +259,22 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("session.queueFollowUp is exposed for slot handlers and extension authors", () => {
-    const ok = (_ctx: ExtensionHostContext) => _ctx.session.queueFollowUp({ content: "x" })
+    defineExtension({
+      id: "queue-follow-up-compile-lock",
+      reactions: {
+        turnAfter: {
+          failureMode: "continue",
+          handler: (_input, ctx) => ctx.session.queueFollowUp({ content: "x" }),
+        },
+      },
+    })
 
-    void ok
     expect(true).toBe(true)
   })
 
-  test("host session facet exposes host-domain errors/results, not storage types", () => {
-    type MethodReturn<T> = T extends (...args: infer _Args) => infer R ? R : never
-    type EffectSuccess<T> =
-      MethodReturn<T> extends Effect.Effect<infer A, unknown, unknown> ? A : never
-    type EffectError<T> =
-      MethodReturn<T> extends Effect.Effect<unknown, infer E, unknown> ? E : never
-    type SessionErrors = {
-      readonly [K in keyof ExtensionHostContext.SessionFacet]: EffectError<
-        ExtensionHostContext.SessionFacet[K]
-      >
-    }[keyof ExtensionHostContext.SessionFacet]
-    type SearchResult = EffectSuccess<ExtensionHostContext.SessionFacet["search"]>
-
-    const error: SessionErrors = new ExtensionHostError({
-      operation: "session.search",
-      message: "failed",
-    })
-    const result = ExtensionHostSearchResult.make({
-      sessionId: SessionId.make("session-id"),
-      sessionName: null,
-      branchId: BranchId.make("branch-id"),
-      snippet: "match",
-      createdAt: 1,
-    }) satisfies SearchResult[number]
-    const storageResult: StorageSearchResult = {
-      sessionId: "session-id",
-      sessionName: null,
-      branchId: "branch-id",
-      snippet: "match",
-      createdAt: 1,
-    }
-
+  test("private host and storage shapes stay out of the public API", () => {
+    // @ts-expect-error — raw host context is runtime plumbing; authors use typed handlers
+    type _BadHostContext = PublicExtensionApi.ExtensionHostContext
     // @ts-expect-error — storage-layer errors are not public extension authoring API
     type _BadStorageError = PublicExtensionApi.StorageError
     // @ts-expect-error — storage-layer search rows are not public extension authoring API
@@ -332,15 +303,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadValidatePackageShape = typeof PublicExtensionApi.validatePackageShape
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
-    // @ts-expect-error — all session facet methods must map storage failures to host errors
-    const badSessionError: SessionErrors = new StorageError({ message: "storage failed" })
-    // @ts-expect-error — search results must expose branded host-domain ids, not raw storage rows
-    const badSearchResult: SearchResult = [storageResult]
-
-    void error
-    void result
-    void badSessionError
-    void badSearchResult
     expect(true).toBe(true)
   })
 

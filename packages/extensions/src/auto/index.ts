@@ -11,7 +11,7 @@ import {
   defineExtension,
   defineResource,
   isRecord,
-  type ExtensionHostContext,
+  type ExtensionReactions,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -50,6 +50,8 @@ const CheckpointOutput = Schema.Struct({
   nextIdea: Schema.optional(Schema.String),
 })
 const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointOutput)
+type ToolResultContext = Parameters<NonNullable<ExtensionReactions["toolResult"]>>[1]
+type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -85,7 +87,7 @@ const readSnapshot = Effect.fn("Auto.readSnapshot")(function* () {
 })
 
 const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* (
-  ctx: ExtensionHostContext,
+  ctx: ToolResultContext,
 ) {
   const auto = yield* Effect.serviceOption(AutoWrite)
   if (auto._tag === "None") return
@@ -194,7 +196,7 @@ const journalInterceptorImpl = (
     return result
   })
 
-const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
+const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 

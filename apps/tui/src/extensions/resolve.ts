@@ -18,10 +18,9 @@ import type {
   OverlayComponent,
   WidgetComponent,
 } from "./client-facets.js"
-import {
-  SCOPE_PRECEDENCE,
-  type ExtensionScope as CoreExtensionScope,
-} from "@gent/core/runtime/extensions/disabled"
+
+const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } as const
+type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 /**
  * Surfaces invariant violations in the TUI extension resolver: a same-scope

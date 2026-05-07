@@ -9,7 +9,6 @@ import {
   ToolNeeds,
   type AgentDefinition,
   type ToolCapabilityContext,
-  type ExtensionHostContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
@@ -240,7 +239,7 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
   ].join("\n")
 
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
-  ctx: ExtensionHostContext
+  ctx: ToolCapabilityContext
   worker: AgentDefinition
   toolCallId?: ToolCallId
   reviewInput: string

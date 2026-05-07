@@ -1430,6 +1430,36 @@ Definition of done:
 
 - No P0/P1/P2 remains, or this plan is extended before closure.
 
+Status: in progress.
+
+Recursive audit findings accepted on 2026-05-07:
+
+- P2: `ExtensionHostContext` was still exported through
+  `@gent/core/extensions/api`, making raw host plumbing part of the public
+  authoring API.
+- P2: TUI client extensions had a private import hole because
+  `apps/tui/src/extensions/**` was not covered by the extension-internal
+  import lint guard.
+- P2: root package metadata still carried stale `effect-machine` dependency
+  wiring even though runtime no longer uses it.
+- P2: `ToolRunner` still owned an avoidable local Effect AI handler erasure
+  bridge.
+
+Completed sub-commits:
+
+- C97.1 removed raw host-context export from the public extension API, moved
+  shipped extensions to typed handler/tool contexts, widened the internal
+  import lint guard to TUI extensions, routed TUI extension imports through
+  `@gent/core/extensions/api`, removed stale `effect-machine` root wiring, and
+  reduced `ToolRunner` handler erasure to the remaining upstream stream
+  service-boundary cast.
+
+Verification on 2026-05-07:
+
+- `bun run lint`
+- `bun run typecheck`
+- `bun test packages/core/tests/extensions/extension-surface-locks.test.ts`
+
 #### C98: docs: update architecture and AGENTS receipts
 
 Update `ARCHITECTURE.md`, `docs/extensions.md`, and AGENTS test guidance if the
