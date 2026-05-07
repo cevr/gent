@@ -170,6 +170,65 @@ describe("ToolRunner", () => {
       expect(error).toContain("path")
     }),
   )
+  it.live("returns structured error when a transformed result violates the output schema", () =>
+    Effect.gen(function* () {
+      const StrictOutputTool = tool({
+        id: "strict_output",
+        description: "Requires structured output",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ ok: Schema.Boolean }),
+        execute: () => Effect.succeed({ ok: true }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("tool-owner") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [StrictOutputTool] },
+            },
+            {
+              manifest: { id: ExtensionId.make("result-transformer") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: {
+                reactions: {
+                  toolResult: () => Effect.succeed({ ok: "bad" }),
+                },
+              },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: ToolCallId.make("tc-output"), toolName: "strict_output", input: {} },
+          testToolContext({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+            toolCallId: ToolCallId.make("tc-output"),
+            agentName: AgentName.make("cowork"),
+          }),
+        )
+      }).pipe(Effect.provide(layer))
+      expect(result.isFailure).toBe(true)
+      const error =
+        (
+          result.result as {
+            error?: string
+          }
+        ).error ?? ""
+      expect(error).toContain("Tool 'strict_output' failed:")
+      expect(error).toContain("ok")
+    }),
+  )
   it.live("returns 'Permission denied' error when tool is denied by permission rules", () =>
     Effect.gen(function* () {
       const SafeTool = tool({

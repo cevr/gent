@@ -686,6 +686,25 @@ Definition of done:
 - Failure/result schema behavior is covered by behavioral tests.
 - `bun run gate` and `bun run test:e2e`.
 
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- `ToolRunner` now builds an Effect AI toolkit with handlers and delegates
+  parameter decoding plus successful-result encoding to `Toolkit.asEffect()`.
+- Gent still owns permission checks, resource-needs scoping, lifecycle events,
+  wide-event annotations, capability context injection, and extension
+  execute/result reactions.
+- The invalid-output regression is behavioral: a result reaction mutates a
+  valid output into a schema-invalid value, and the runner returns the
+  structured tool failure from Effect AI encoding.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/tool-runner.test.ts packages/core/tests/providers/provider-resolution.test.ts`
+
 #### C22: refactor(runtime): replace ResourceManager semaphores with Effect locks
 
 Spike `TxReentrantLock` against current read/write needs. If it fits, migrate.
