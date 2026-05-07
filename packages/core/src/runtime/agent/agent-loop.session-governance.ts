@@ -10,10 +10,6 @@
  * entity scope so the same `terminatedSessionsRef` Set is consulted
  * by every entity instance for the session.
  *
- * Introduced in C5.4.4.a as architectural scaffolding (current
- * `agent-loop.ts` still owns the actual Set). C5.4.4.b moves the Set
- * here and deletes the in-`agent-loop.ts` reference.
- *
  * @module
  */
 

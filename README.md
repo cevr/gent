@@ -74,7 +74,7 @@ packages/
 ```
 
 `@gent/core` uses subpath exports — no barrels. Import from specific files
-(`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.).
+(`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop.actor`, etc.).
 
 ## Configuration
 

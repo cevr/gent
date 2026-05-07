@@ -43,7 +43,7 @@ bun run --cwd apps/tui dev sessions
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 - **No `any` casts** - ESLint enforces. Causes type drift bugs. Import types from `@gent/core/domain/<file>`, don't redeclare.
-- **No barrels** - `@gent/core` uses subpath exports. Import from specific files: `@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.
+- **No barrels** - `@gent/core` uses subpath exports. Import from specific files: `@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop.actor`, etc.
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
@@ -75,7 +75,7 @@ Use `effect` skill. Key patterns:
 - Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
 - **Tagged/discriminated unions ALWAYS use `TaggedEnumClass`** (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Never hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions, even for internal driver/state events. Construct via `Variant.make({...})`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
-- **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
+- **File naming**: kebab-case everywhere (`agent-loop.actor.ts`, `message-list.tsx`)
 
 ## Package Structure
 
@@ -149,22 +149,22 @@ assertSequence(calls, [
 
 ## Key Files
 
-| File                                                  | Purpose                                             |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`         | SQLite layer composition for focused storage tags   |
-| `packages/core/src/storage/schema.ts`                 | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`               | `SequenceRecorder`, recording layers                |
-| `packages/core/src/server/dependencies.ts`            | startup wiring + dependency graph                   |
-| `packages/core/src/server/transport-contract.ts`      | shared client contract                              |
-| `packages/core/src/runtime/agent/agent-loop.ts`       | AgentLoop service facade over the actor             |
-| `packages/core/src/runtime/agent/agent-loop.actor.ts` | actor protocol, entity id, and mailbox handlers     |
-| `packages/core/src/runtime/wide-event-boundary.ts`    | `effect-wide-event` integration + context factories |
-| `packages/core/src/test-utils/in-process-layer.ts`    | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/debug/provider.ts`                 | step builders for `LanguageModelLayers.sequence`    |
-| `packages/core/src/test-utils/language-model.ts`      | `LanguageModelLayers` + stream-part helpers         |
-| `packages/extensions/src/auto/index.ts`               | auto loop modality extension                        |
-| `packages/extensions/src/auto/checkpoint.ts`          | signal tool for auto loop iteration                 |
-| `apps/tui/tsconfig.json`                              | `jsxImportSource: "@opentui/solid"` required        |
+| File                                                     | Purpose                                             |
+| -------------------------------------------------------- | --------------------------------------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`            | SQLite layer composition for focused storage tags   |
+| `packages/core/src/storage/schema.ts`                    | SQLite schema, migration, and initialization logic  |
+| `packages/core/src/test-utils/index.ts`                  | `SequenceRecorder`, recording layers                |
+| `packages/core/src/server/dependencies.ts`               | startup wiring + dependency graph                   |
+| `packages/core/src/server/transport-contract.ts`         | shared client contract                              |
+| `packages/core/src/runtime/agent/agent-loop.actor.ts`    | actor protocol, entity id, and mailbox handlers     |
+| `packages/core/src/runtime/agent/agent-loop.behavior.ts` | per-branch turn engine used by the actor            |
+| `packages/core/src/runtime/wide-event-boundary.ts`       | `effect-wide-event` integration + context factories |
+| `packages/core/src/test-utils/in-process-layer.ts`       | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
+| `packages/core/src/debug/provider.ts`                    | step builders for `LanguageModelLayers.sequence`    |
+| `packages/core/src/test-utils/language-model.ts`         | `LanguageModelLayers` + stream-part helpers         |
+| `packages/extensions/src/auto/index.ts`                  | auto loop modality extension                        |
+| `packages/extensions/src/auto/checkpoint.ts`             | signal tool for auto loop iteration                 |
+| `apps/tui/tsconfig.json`                                 | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
 

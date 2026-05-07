@@ -140,7 +140,6 @@ Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call
 Core orchestration lives in:
 
 - `packages/core/src/runtime/session-runtime.ts`
-- `packages/core/src/runtime/agent/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.actor.ts`
 - `packages/core/src/runtime/agent/agent-loop.behavior.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
@@ -556,13 +555,13 @@ Key files:
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary     | Service       | File                                            |
-| ------------ | ------------- | ----------------------------------------------- |
-| Agent turn   | `agent-loop`  | `runtime/agent/agent-loop.ts` (TurnMetrics ref) |
-| Tool call    | `tool-runner` | `runtime/agent/tool-runner.ts`                  |
-| Model stream | `model`       | `runtime/agent/agent-loop.behavior.ts`          |
-| RPC request  | `rpc`         | `server/rpc-handlers.ts`                        |
-| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts`                 |
+| Boundary     | Service       | File                                   |
+| ------------ | ------------- | -------------------------------------- |
+| Agent turn   | `agent-loop`  | `runtime/agent/agent-loop.behavior.ts` |
+| Tool call    | `tool-runner` | `runtime/agent/tool-runner.ts`         |
+| Model stream | `model`       | `runtime/agent/agent-loop.behavior.ts` |
+| RPC request  | `rpc`         | `server/rpc-handlers.ts`               |
+| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts`        |
 
 Logging conventions:
 

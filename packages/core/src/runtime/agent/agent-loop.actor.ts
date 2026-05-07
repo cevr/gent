@@ -478,10 +478,9 @@ const failIfTurnFailedAfterEpoch = (
 /**
  * `Actor.toLayer` handler layer for `AgentLoop`.
  *
- * C5.4.4.c.1.b transfers per-(sessionId, branchId) loop ownership from the
- * legacy `AgentLoop.Live` map into the actor entity instance. Encore exposes
- * `CurrentAddress` while keeping that entity-provided service out of the
- * resulting layer requirements.
+ * Per-(sessionId, branchId) loop ownership lives in the actor entity instance.
+ * Encore exposes `CurrentAddress` while keeping that entity-provided service
+ * out of the resulting layer requirements.
  */
 const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const rawDeps = yield* AgentLoopBehaviorDeps

@@ -1,12 +1,9 @@
 /**
  * Per-(sessionId, branchId) loop behavior factory.
  *
- * Extracted from the legacy `AgentLoop.Live` factory closure as the first
- * step of C5.4.4.c.1 (the γ-shaped split). Pure code-move: same primitives,
- * same turn flow, with the service-level recursive `queueFollowUp`
- * reference replaced by an explicit `enqueueFollowUp` callback parameter.
- * C5.4.4.c.1.b relocates the call site from the legacy `getLoop` to
- * `Actor.toLayer(...)` build (per-entity scoping by encore).
+ * Built by the `AgentLoop` actor for each (sessionId, branchId). Same turn
+ * flow as the public `SessionRuntime` boundary, with recursive follow-up
+ * queueing supplied as an explicit callback.
  *
  * @module
  */
@@ -208,9 +205,7 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
 
 /**
  * Dependencies for `makeAgentLoopBehavior`. Captures the layer-level services
- * the legacy `AgentLoop.Live` factory closed over, lifted to an explicit
- * record so the per-entity factory can be invoked outside the legacy layer
- * (e.g. from `Actor.toLayer` build in C5.4.4.c.1.b).
+ * needed by the per-entity actor factory.
  */
 export type AgentLoopBehaviorDeps = {
   readonly turnStorage: TurnStorage

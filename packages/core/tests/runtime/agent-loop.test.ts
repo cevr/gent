@@ -5,11 +5,7 @@ import { Clock, Deferred, Duration, Effect, Fiber, Layer, Ref, Schema, Stream } 
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
-import {
-  AgentLoop,
-  type AgentLoopService,
-  type SteerCommand,
-} from "../../src/runtime/agent/agent-loop"
+import type { AgentLoopError, SteerCommand } from "../../src/runtime/agent/agent-loop.commands"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -62,13 +58,14 @@ import {
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, type StorageError } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
+import { emptyQueueSnapshot, type QueueSnapshot } from "@gent/core/domain/queue"
+import type { SessionRuntimeState } from "../../src/runtime/agent/agent-loop.state"
 import {
   ActorCommandId,
   BranchId,
@@ -122,6 +119,68 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     parts: [Prompt.textPart({ text })],
     createdAt: dateFromMillis(1_767_225_600_000),
   })
+interface AgentLoopService {
+  readonly runOnce: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly agentName: AgentName
+    readonly prompt: string
+    readonly interactive?: boolean
+    readonly runSpec?: RunSpec
+  }) => Effect.Effect<void, AgentLoopError | StorageError, BranchStorage | SessionStorage>
+  readonly getQueue: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<QueueSnapshot, AgentLoopError>
+  readonly getState: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<SessionRuntimeState, AgentLoopError>
+}
+const makeAgentLoopService = Effect.gen(function* () {
+  const actorClientFactory = yield* AgentLoopActor.Context
+  const platform = yield* GentPlatform
+  const refFor = (sessionId: SessionId, branchId: BranchId) =>
+    actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+  return {
+    runOnce: (input) =>
+      Effect.gen(function* () {
+        const message = Message.Regular.make({
+          id: MessageId.make(yield* platform.randomId),
+          sessionId: input.sessionId,
+          branchId: input.branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: input.prompt })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+        yield* ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId })
+        const ref = yield* refFor(input.sessionId, input.branchId)
+        yield* ref.execute(
+          AgentLoopActor.Run.make({
+            workspaceId: DefaultWorkspaceId,
+            message,
+            agentOverride: input.agentName,
+            runSpec: input.runSpec,
+            interactive: input.interactive,
+          }),
+        )
+      }),
+    getQueue: (input) =>
+      Effect.gen(function* () {
+        const ref = yield* refFor(input.sessionId, input.branchId)
+        return yield* ref.execute(
+          AgentLoopActor.GetQueue.make({ ...input, workspaceId: DefaultWorkspaceId }),
+        )
+      }),
+    getState: (input) =>
+      Effect.gen(function* () {
+        const ref = yield* refFor(input.sessionId, input.branchId)
+        return yield* ref.execute(
+          AgentLoopActor.GetState.make({ ...input, workspaceId: DefaultWorkspaceId }),
+        )
+      }),
+  } satisfies AgentLoopService
+})
 const runAgentLoop = (
   _agentLoop: AgentLoopService,
   message: Message,
@@ -227,10 +286,8 @@ const makeLayer = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -253,10 +310,8 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     eventStoreLayer,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -302,10 +357,8 @@ const makeLiveToolLayer = (
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -345,10 +398,8 @@ const makeLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -371,10 +422,8 @@ const makeLayerWithEventPublisher = (
     GentPlatform.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(
       Layer.mergeAll(deps, providedEventPublisherLayer, AgentLoopSessionGovernance.Live),
     ),
@@ -440,10 +489,8 @@ const makeExternalLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -473,7 +520,7 @@ describe("run completion", () => {
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("fast reply")])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const sessionId = SessionId.make("fast-run-session")
         const branchId = BranchId.make("fast-run-branch")
         yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "fast")).pipe(
@@ -508,7 +555,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const messageA = makeMessage("s1", "b1", "hello")
           const messageB = makeMessage("s2", "b2", "world")
           const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
@@ -572,17 +619,15 @@ describe("streaming", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const fiberA = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeMessage("s1", "b1", "first")),
           )
@@ -624,7 +669,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const messageA = makeMessage("s1", "b1", "alpha")
           const messageB = makeMessage("s2", "b2", "beta")
           const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
@@ -670,7 +715,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const first = makeMessage("s1", "b1", "first")
           const second = makeMessage("s1", "b1", "second")
@@ -703,7 +748,7 @@ describe("streaming", () => {
       const layer = makeRecordingLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const recorder = yield* SequenceRecorder
           yield* runAgentLoop(agentLoop, makeMessage("s1", "b1", "inspect me"))
           const calls = yield* recorder.getCalls()
@@ -746,7 +791,7 @@ describe("streaming", () => {
         publish: () => Effect.void,
       })
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
@@ -776,7 +821,7 @@ describe("streaming", () => {
         publish: () => Effect.void,
       })
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
@@ -789,7 +834,7 @@ describe("streaming", () => {
   test("persists assistant image parts from provider response streams", () =>
     Effect.gen(function* () {
       const messageStorage = yield* MessageStorage
-      const agentLoop = yield* AgentLoop
+      const agentLoop = yield* makeAgentLoopService
       const message = makeMessage("image-session", "image-branch", "show image")
       yield* runAgentLoop(agentLoop, message)
       const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
@@ -851,7 +896,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const first = makeMessage("s1", "b1", "first")
           const queued = makeMessage("s1", "b1", "queued")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
@@ -897,7 +942,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const first = makeMessage("s1", "b1", "first")
           const queuedA = makeMessage("s1", "b1", "queued a")
           const queuedB = makeMessage("s1", "b1", "queued b")
@@ -982,7 +1027,7 @@ describe("streaming", () => {
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const first = makeMessage("s1", "b1", "first")
           const queued = makeMessage("s1", "b1", "queued after failure")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
@@ -1024,7 +1069,7 @@ describe("streaming", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("stream-retry-session", "stream-retry-branch", "retry")
         yield* runAgentLoop(agentLoop, message)
@@ -1065,7 +1110,7 @@ describe("streaming", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           "stream-metadata-retry-session",
@@ -1093,7 +1138,7 @@ describe("streaming", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           "stream-retry-exhausted-session",
@@ -1132,7 +1177,7 @@ describe("streaming", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("stream-no-retry-session", "stream-no-retry-branch", "retry")
         yield* runAgentLoop(agentLoop, message)
@@ -1158,7 +1203,7 @@ describe("streaming", () => {
         ),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("native-error-session", "native-error-branch", "fail natively")
         yield* runAgentLoop(agentLoop, message)
@@ -1224,7 +1269,7 @@ describe("concurrency", () => {
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const branchStorage = yield* BranchStorage
-        const loop = yield* AgentLoop
+        const loop = yield* makeAgentLoopService
         const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("serial-session"),
@@ -1286,7 +1331,7 @@ describe("continuation", () => {
         textStep("Done with tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
@@ -1298,7 +1343,7 @@ describe("continuation", () => {
         textStep("Just text, no tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("text only"))
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone()
@@ -1313,7 +1358,7 @@ describe("continuation", () => {
         textStep("Finally done."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone()
@@ -1328,7 +1373,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("turn-events"))
         expect(yield* controls.callCount).toBe(3)
         const events = yield* Ref.get(eventsRef)
@@ -1344,7 +1389,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const fiber = yield* Effect.forkChild(
           runAgentLoop(agentLoop, makeContMessage("interrupt test")),
         )
@@ -1374,7 +1419,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("structural guard"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
@@ -1390,7 +1435,7 @@ describe("continuation", () => {
         textStep("Final answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const msg = makeContMessage("multi-hop persistence")
         yield* runAgentLoop(agentLoop, msg)
@@ -1424,7 +1469,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const first = makeContMessage("first message")
         const followUp = makeContMessage("follow-up after interrupt")
         // Start first turn — tool call auto-continues to gated step
@@ -1484,7 +1529,7 @@ describe("turn stream parity", () => {
       const modelEventsRef = yield* Ref.make<AgentEvent[]>([])
       const externalEventsRef = yield* Ref.make<AgentEvent[]>([])
       const modelDraft = yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("model-parity-session", "model-parity-branch", "hello")
         yield* runAgentLoop(agentLoop, message)
@@ -1509,7 +1554,7 @@ describe("turn stream parity", () => {
         ),
       )
       const externalDraft = yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
+        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage("external-parity-session", "external-parity-branch", "hello")
         yield* runAgentLoop(agentLoop, message, { agentOverride: "test-external-parity" as never })
@@ -1634,10 +1679,8 @@ describe("interaction", () => {
     )
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return AgentLoop.Live({ baseSections: [] }).pipe(
-      Layer.provideMerge(
-        AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-      ),
+    return AgentLoopTestActor.pipe(
+      Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
       Layer.provideMerge(
         Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
       ),
@@ -1651,7 +1694,7 @@ describe("interaction", () => {
       const layer = makeInteractionRecordingLayer([tool])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const recorder = yield* SequenceRecorder
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeIntMessage("trigger interaction")),
@@ -1695,7 +1738,7 @@ describe("interaction", () => {
       const layer = makeInteractionRecordingLayer([tool])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeIntMessage("stale interaction")),
           )
@@ -1738,7 +1781,7 @@ describe("interaction", () => {
       const layer = makeLiveToolLayer(makeInteractionProviderLayer(), [tool])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeIntMessage("interrupt test")),
           )
@@ -1785,17 +1828,15 @@ describe("interaction", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const loopLayer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeIntMessage("no interaction"))
           yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
@@ -1843,7 +1884,7 @@ describe("interaction", () => {
       const layer = makeLiveToolLayer(separateCallProvider, [tool])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeIntMessage("guard interaction")),
           )
@@ -1927,19 +1968,15 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            AgentLoopTestActor.pipe(
-              Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
-            ),
-          ),
+        const layer = AgentLoopTestActor.pipe(
+          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
           Layer.provideMerge(
             Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),
         )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* AgentLoop
+            const agentLoop = yield* makeAgentLoopService
             // `interactive: true` disables follow-up batching in
             // `canBatchQueuedFollowUp` — without it, multiple plain-text
             // user submits collapse into a single combined turn before

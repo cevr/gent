@@ -15,7 +15,6 @@ import type { ToolCapabilityContext, ToolCapability } from "../domain/capability
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { AgentLoopTestActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopBehaviorDeps } from "../runtime/agent/agent-loop.behavior-deps.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
@@ -136,10 +135,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         eventPublisherLayer,
         AgentLoopSessionGovernance.Live,
       )
-      const agentLoopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const agentLoopLayer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(baseWithRuntimeLayer),
       )
       const baseLayer = Layer.merge(baseWithRuntimeLayer, agentLoopLayer)

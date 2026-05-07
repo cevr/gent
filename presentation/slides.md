@@ -362,7 +362,7 @@ export const AgentModels: Record<AgentName, ModelId> = {
 effect-machine actor: **Idle → Running → Interrupted**
 
 ```ts {all|1-5|7-10|12-20|all}
-// packages/runtime/src/agent/agent-loop.ts
+// packages/core/src/runtime/agent/agent-loop.state.ts
 
 const AgentLoopState = State({
   Idle: {},
@@ -409,29 +409,15 @@ export interface AgentLoopService {
 The Live layer declares its exact requirements via Effect's type system
 
 ```ts
-// packages/runtime/src/agent/agent-loop.ts
+// packages/core/src/runtime/agent/agent-loop.actor.ts
 
-export class AgentLoop extends Context.Tag("@gent/runtime/.../AgentLoop")<...>() {
-  static Live = (config: { systemPrompt: string }): Layer.Layer<
-    AgentLoop,        // provides
-    never,            // no construction errors
-    | Storage         // requires ↓
-    | Provider
-    | ToolRegistry
-    | AgentRegistry
-    | EventStore
-    | CheckpointService
-    | FileSystem.FileSystem
-    | ToolRunner
-  > => Layer.effect(AgentLoop, Effect.gen(function* () {
-      const storage = yield* Storage
-      const provider = yield* Provider
-      const toolRegistry = yield* ToolRegistry
-      const agentRegistry = yield* AgentRegistry
-      const eventStore = yield* EventStore
-      // ... all services resolved from context
-    }))
-}
+export const AgentLoopLiveActor = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
+  concurrency: "unbounded",
+})
+
+const SessionRuntimeLive = SessionRuntime.LiveWithEntity({
+  baseSections,
+})
 ```
 
 <v-click>
@@ -474,7 +460,7 @@ sequenceDiagram
 The core loop: stream from provider, handle chunks, recurse on tool calls
 
 ```ts {all|1-6|8-14|16-26|all}
-// packages/runtime/src/agent/agent-loop.ts (simplified)
+// packages/core/src/runtime/agent/agent-loop.behavior.ts (simplified)
 
 const runLoop: (...) => Effect<boolean, ...> =
   Effect.fn("AgentLoop.runLoop")(function* (initialMessage, bypass) {
@@ -958,7 +944,7 @@ export interface GentCoreService {
 // packages/server/src/index.ts
 
 const CoreServicesLive = Layer.mergeAll(
-  AgentLoop.Live({ systemPrompt }),
+  SessionRuntime.LiveWithEntity({ baseSections }),
   AgentRegistry.Live,
   EventStore.Live,
   ToolRegistry.Live(allTools),
@@ -1209,10 +1195,10 @@ Services compose like LEGO. Type system enforces completeness.
 // Each layer declares what it provides and requires
 const StorageLive: Layer<Storage>
 const ProviderLive: Layer<Provider, never, HttpClient>
-const AgentLoopLive: Layer<AgentLoop, never, Storage | Provider | ToolRegistry | ...>
+const SessionRuntimeLive: Layer<SessionRuntime, never, Storage | Provider | ToolRegistry | ...>
 
 // Compose at the boundary
-const AppLayer = AgentLoop.Live({ systemPrompt }).pipe(
+const AppLayer = SessionRuntime.LiveWithEntity({ baseSections }).pipe(
   Layer.provide(Layer.mergeAll(
     Storage.Live,
     Provider.Live,
@@ -1350,7 +1336,7 @@ sequenceDiagram
 
 5. `packages/tools/src/read.ts` — concrete tool example (108 lines)
 
-6. `packages/runtime/src/agent/agent-loop.ts` — the execution engine
+6. `packages/core/src/runtime/agent/agent-loop.behavior.ts` — the execution engine
 
 7. `apps/tui/src/hooks/use-machine.ts` — Solid ↔ effect-machine bridge
 

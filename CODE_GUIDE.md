@@ -123,11 +123,15 @@ The agent's brain.
 
 ### 4.1 Agent Loop
 
-**Read:** `packages/runtime/src/agent/agent-loop.ts`
+**Read:** `packages/core/src/runtime/session-runtime.ts`,
+`packages/core/src/runtime/agent/agent-loop.actor.ts`, and
+`packages/core/src/runtime/agent/agent-loop.behavior.ts`
 
 This is the heart. Study it carefully.
 
-**Entry:** `AgentLoop.Live` creates the service. `run(message)` is the public API.
+**Entry:** `SessionRuntime.LiveWithEntity` creates the public runtime service and
+the cluster entity. Agent turn execution lives behind `AgentLoop` actor
+operations; there is no separate `AgentLoop.Live` service facade.
 
 **Core algorithm:** `runLoop` (line ~187) is a recursive generator:
 
@@ -416,8 +420,8 @@ Provider layer:
 
 Runtime:
 
-- [ ] `packages/runtime/src/agent-loop.ts`
-- [ ] `packages/runtime/src/context-estimation.ts`
+- [ ] `packages/core/src/runtime/session-runtime.ts`
+- [ ] `packages/core/src/runtime/context-estimation.ts`
 
 Tools:
 

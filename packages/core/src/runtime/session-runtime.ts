@@ -1,9 +1,9 @@
-import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Clock, Context, DateTime, Effect, Layer, Option, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
-import { ActorAddressResolver, type ActorStateRegistry } from "effect-encore"
+import { ActorAddressResolver, ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
@@ -24,9 +24,8 @@ import { EventStorage } from "../storage/event-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
-import { AgentLoop } from "./agent/agent-loop.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
-import { entityIdOf } from "./agent/agent-loop.entity-id.js"
+import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -42,6 +41,7 @@ import {
   resolveExistingSessionBranch,
   resolveSessionEnvironmentOrFail,
 } from "./session-runtime-context.js"
+import { AgentLoopError } from "./agent/agent-loop.commands.js"
 import { SessionRuntimeStateSchema, type SessionRuntimeState } from "./agent/agent-loop.state.js"
 export { SessionRuntimeStateSchema, type SessionRuntimeState }
 
@@ -253,13 +253,9 @@ type SessionRuntimeEntityLayerRequirements =
   | DriverRegistry
   | ModelRegistry
   | GentPlatform
-  | Exclude<
-      LayerRequirements<ReturnType<typeof AgentLoop.Live>>,
-      | ActorAddressResolver
-      | ActorStateRegistry
-      | AgentLoopSessionGovernance
-      | Context.Service.Identifier<typeof AgentLoopActor.Context>
-    >
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
   | LayerRequirements<ReturnType<typeof AgentLoopBehaviorDeps.Live>>
 
 export interface SessionRuntimeService {
@@ -377,13 +373,13 @@ interface RunPromptInput {
 }
 
 const makeLiveSessionRuntime = Effect.gen(function* () {
-  const agentLoop = yield* AgentLoop
   // Resolve the actor client factory once at construction time. Per-method
   // dispatch uses `ActorRef.execute(op)`, which carries no requirement,
   // instead of the `OperationHandle.execute(payload)` form (which would
   // re-introduce the actor client requirement at each call site).
   const actorClientFactory = yield* AgentLoopActor.Context
   const actorAddressResolver = yield* ActorAddressResolver
+  const actorStateRegistry = yield* ActorStateRegistry
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
@@ -474,6 +470,127 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       })
       yield* loop
     })
+
+  const provideActorStateServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(ActorAddressResolver, actorAddressResolver),
+      Effect.provideService(ActorStateRegistry, actorStateRegistry),
+    )
+  const provideActorStateServicesToStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
+    stream.pipe(
+      Stream.provideService(ActorAddressResolver, actorAddressResolver),
+      Stream.provideService(ActorStateRegistry, actorStateRegistry),
+    )
+  const toAgentLoopError = (error: unknown) =>
+    Schema.is(AgentLoopError)(error)
+      ? error
+      : new AgentLoopError({
+          message: "AgentLoop state unavailable",
+          cause: error,
+        })
+
+  const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
+    input: RunPromptInput,
+  ) {
+    const userMessage = Message.Regular.make({
+      id: MessageId.make(yield* platform.randomId),
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text: input.prompt })],
+      createdAt: yield* DateTime.nowAsDate,
+    })
+
+    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+    return yield* ref
+      .execute(
+        AgentLoopActor.Run.make({
+          workspaceId: yield* CurrentWorkspaceId,
+          message: userMessage,
+          agentOverride: input.agentName,
+          runSpec: input.runSpec,
+          interactive: input.interactive,
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentRunError({
+              message: cause.message,
+              cause,
+            }),
+        ),
+      )
+  })
+
+  const getRuntimeState = Effect.fn("SessionRuntime.getRuntimeState")(function* (
+    input: SessionRuntimeTarget,
+  ) {
+    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+    const workspaceId = yield* CurrentWorkspaceId
+    return yield* provideActorStateServices(
+      AgentLoopActor.getState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
+        entityIdOf(workspaceId, input.sessionId, input.branchId),
+        {
+          materialize: ref.execute(AgentLoopActor.EnsureStarted.make({ ...input, workspaceId })),
+        },
+      ).pipe(Effect.mapError(toAgentLoopError)),
+    )
+  })
+
+  const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
+    input: SessionRuntimeTarget,
+  ) {
+    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+    const workspaceId = yield* CurrentWorkspaceId
+    return provideActorStateServicesToStream(
+      AgentLoopActor.watchState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
+        entityIdOf(workspaceId, input.sessionId, input.branchId),
+        {
+          materialize: ref.execute(AgentLoopActor.EnsureStarted.make({ ...input, workspaceId })),
+        },
+      ).pipe(Stream.mapError(toAgentLoopError)),
+    )
+  })
+
+  const terminateRuntimeSession = Effect.fn("SessionRuntime.terminateRuntimeSession")(function* (
+    sessionId: SessionId,
+  ) {
+    const workspaceId = yield* CurrentWorkspaceId
+    const branchIds = yield* provideActorStateServices(
+      AgentLoopActor.listStateEntityIds().pipe(
+        Effect.flatMap((entityIds) =>
+          Effect.forEach(entityIds, (entityId) => parseEntityId(entityId).pipe(Effect.option), {
+            concurrency: "unbounded",
+          }),
+        ),
+        Effect.map((targets) =>
+          targets.flatMap((target) =>
+            Option.isSome(target) &&
+            target.value.workspaceId === workspaceId &&
+            target.value.sessionId === sessionId
+              ? [target.value.branchId]
+              : [],
+          ),
+        ),
+      ),
+    )
+    yield* Effect.forEach(
+      branchIds,
+      (branchId) =>
+        Effect.gen(function* () {
+          const ref = yield* agentLoopActorRefFor(sessionId, branchId)
+          yield* ref.execute(
+            AgentLoopActor.TerminateBranch.make({
+              workspaceId,
+              sessionId,
+              branchId,
+            }),
+          )
+        }).pipe(Effect.ignore),
+      { concurrency: "unbounded", discard: true },
+    )
+  })
 
   const queueFollowUpThroughActor = Effect.fn("SessionRuntime.queueFollowUpThroughActor")(
     function* (input: QueueFollowUpPayload) {
@@ -738,7 +855,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     runPrompt: (input: RunPromptInput) =>
-      agentLoop.runOnce(input).pipe(
+      runPromptThroughActor(input).pipe(
         Effect.mapError(
           (cause) =>
             new AgentRunError({
@@ -790,7 +907,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
         yield* redeliverPendingActorMessages(input)
-        const loopState = yield* agentLoop.getState(input)
+        const loopState = yield* getRuntimeState(input)
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
@@ -849,7 +966,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     watchState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
-        return (yield* agentLoop.watchState(input)).pipe(
+        return (yield* watchRuntimeState(input)).pipe(
           Stream.mapError((error) => wrapEntitySessionRuntimeError("watchState", error)),
         )
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
@@ -858,12 +975,16 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         const workspaceId = yield* CurrentWorkspaceId
         yield* agentLoopSessionGovernance.markTerminated(workspaceId, sessionId)
-        yield* agentLoop.terminateSession(sessionId)
+        yield* terminateRuntimeSession(sessionId)
       }).pipe(
         Effect.catchCause((cause) => Effect.fail(wrapError("terminateSession failed", cause))),
       ),
 
-    restoreSession: (sessionId) => agentLoop.restoreSession(sessionId),
+    restoreSession: (sessionId) =>
+      Effect.gen(function* () {
+        const workspaceId = yield* CurrentWorkspaceId
+        yield* agentLoopSessionGovernance.clearTerminated(workspaceId, sessionId)
+      }),
   } satisfies SessionRuntimeService
 })
 
@@ -950,7 +1071,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
 
   static EntityLive = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<AgentLoop, never, SessionRuntimeEntityLayerRequirements> =>
+  }): Layer.Layer<never, never, SessionRuntimeEntityLayerRequirements> =>
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.
     SessionRuntimeEntity.toLayer(
       makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
@@ -961,25 +1082,20 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         concurrency: "unbounded",
       },
     ).pipe(
-      Layer.provideMerge(AgentLoop.Live(config)),
-      // `AgentLoopLiveActor` provides the `AgentLoop` actor client consumed
-      // by both `makeLiveSessionRuntime` and the legacy `AgentLoop` facade.
-      // Provide it after merging those two consumers so the actor client is
-      // shared and not re-exported from `LiveWithEntity`.
+      // `AgentLoopLiveActor` provides the internal actor client consumed by
+      // `makeLiveSessionRuntime`.
       Layer.provide(AgentLoopLiveActor),
       // `AgentLoopSessionGovernance` is a runtime-internal shared service.
       // Encore owns actor state registration; session governance remains a
       // Gent policy boundary shared by the facade and actor handler.
       Layer.provide(AgentLoopSessionGovernance.Live),
-      // `AgentLoopBehaviorDeps` (C5.4.4.c.1.b.1) is the layer-level service
-      // snapshot the per-entity actor build will consume in c.1.b.2. Provided
-      // here so it co-exists with legacy `AgentLoop.Live` until the actor
-      // build replaces the legacy factory in c.1.b.2.
+      // `AgentLoopBehaviorDeps` is the layer-level service snapshot the
+      // per-entity actor build consumes when the entity first materializes.
       Layer.provide(AgentLoopBehaviorDeps.Live(config)),
     )
 
   static LiveWithEntity = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<SessionRuntime | AgentLoop, never, SessionRuntimeEntityLayerRequirements> =>
+  }): Layer.Layer<SessionRuntime, never, SessionRuntimeEntityLayerRequirements> =>
     SessionRuntime.Live(config).pipe(Layer.provideMerge(SessionRuntime.EntityLive(config)))
 }

@@ -9,7 +9,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
-import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
+import type { AgentLoopError } from "../../src/runtime/agent/agent-loop.commands"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -41,8 +41,10 @@ import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage, type StorageError } from "@gent/core/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
+import type { BranchStorage } from "@gent/core/storage/branch-storage"
+import type { SessionStorage } from "@gent/core/storage/session-storage"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -73,6 +75,44 @@ const makeMessageWithParts = (parts: Message["parts"]) =>
     parts,
     createdAt: dateFromMillis(1_767_225_600_000),
   })
+interface AgentLoopService {
+  readonly runOnce: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly agentName: AgentName
+    readonly prompt: string
+    readonly interactive?: boolean
+    readonly runSpec?: RunSpec
+  }) => Effect.Effect<void, AgentLoopError | StorageError, BranchStorage | SessionStorage>
+}
+const makeAgentLoopService = Effect.gen(function* () {
+  const actorClientFactory = yield* AgentLoopActor.Context
+  const refFor = (targetSessionId: SessionId, targetBranchId: BranchId) =>
+    actorClientFactory(entityIdOf(DefaultWorkspaceId, targetSessionId, targetBranchId))
+  return {
+    runOnce: (input) =>
+      Effect.gen(function* () {
+        const message = Message.Regular.make({
+          id: MessageId.make(`${input.sessionId}-${input.branchId}-${input.prompt}`),
+          sessionId: input.sessionId,
+          branchId: input.branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: input.prompt })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+        const ref = yield* refFor(input.sessionId, input.branchId)
+        yield* ref.execute(
+          AgentLoopActor.Run.make({
+            workspaceId: DefaultWorkspaceId,
+            message,
+            agentOverride: input.agentName,
+            runSpec: input.runSpec,
+            interactive: input.interactive,
+          }),
+        )
+      }),
+  } satisfies AgentLoopService
+})
 const runAgentLoop = (
   _agentLoop: AgentLoopService,
   message: Message,
@@ -248,10 +288,8 @@ const makeLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-    ),
+  return AgentLoopTestActor.pipe(
+    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -268,7 +306,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("test"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -293,7 +331,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("read a file"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -325,7 +363,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("run something"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -343,7 +381,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("test error"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -366,7 +404,7 @@ describe("external turn execution", () => {
       const message = makeMessage("external native error")
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           const messages = yield* MessageStorage
           yield* runAgentLoop(agentLoop, message, {
             agentOverride: AgentName.make("test-external"),
@@ -402,7 +440,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("test no tool re-exec"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -453,17 +491,15 @@ describe("external turn execution", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("model turn"))
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
@@ -483,7 +519,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("context check"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -516,7 +552,7 @@ describe("external turn execution", () => {
       ])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, message, {
             agentOverride: AgentName.make("test-external"),
           })
@@ -540,7 +576,7 @@ describe("external turn execution", () => {
       const layer = makeLayerWithEvents(executor, eventsRef)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoop(agentLoop, makeMessage("reason test"), {
             agentOverride: AgentName.make("test-external"),
           })
@@ -612,17 +648,15 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
@@ -698,17 +732,15 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
@@ -799,17 +831,15 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
@@ -899,17 +929,15 @@ describe("ExternalDriverContribution end-to-end", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
-        ),
+      const layer = AgentLoopTestActor.pipe(
+        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
+          const agentLoop = yield* makeAgentLoopService
           yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,

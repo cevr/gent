@@ -2,13 +2,10 @@
  * `AgentLoopBehaviorDeps` Tag — the layer-level services and config that
  * `makeAgentLoopBehavior` (in `agent-loop.behavior.ts`) needs to allocate a
  * per-entity loop. Carved out so `Actor.toLayer` build in
- * `agent-loop.actor.ts` can yield deps directly without reaching into the
- * legacy `AgentLoop.Live` factory closure.
+ * `agent-loop.actor.ts` can yield deps directly.
  *
  * Excludes `enqueueFollowUp`: that's per-entity (constructed inside the
  * actor build closure with `(sessionId, branchId)` already known).
- *
- * Introduced in C5.4.4.c.1.b.1; the c.1.b.2 actor rewrite consumes it.
  *
  * @module
  */
@@ -57,8 +54,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
 >()("@gent/core/src/runtime/agent/agent-loop.behavior-deps/AgentLoopBehaviorDeps") {
   /**
    * Builds deps from ambient services. Layer is parameterized over
-   * `baseSections` since that's a config value passed to `AgentLoop.Live`,
-   * not a Tag.
+   * `baseSections` since it is runtime config, not a Tag.
    */
   static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>

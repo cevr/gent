@@ -16,7 +16,7 @@ tests/            # Integration tests (bun test)
 | `storage`    | SQLite via bun:sqlite         | `SqliteStorage.LiveWithSql(path)`, focused tags       |
 | `tools`      | File/process tools            | `AllTools`, `defineTool`                              |
 | `providers`  | ai-sdk wrapper                | `Provider.Live`, `StreamChunk` variants               |
-| `runtime`    | Agent orchestration           | `AgentLoop.Live(config)`                              |
+| `runtime`    | Agent orchestration           | `SessionRuntime.LiveWithEntity(config)`               |
 | `server`     | Business logic + RPC handlers | `GentCore`, `RpcHandlersLive`                         |
 | `api`        | RPC/HTTP API definitions      | `GentRpcs`, `GentApi`                                 |
 | `test-utils` | Mock layers                   | `createTestLayer`, `createRecordingTestLayer`         |
@@ -34,7 +34,7 @@ tests/            # Integration tests (bun test)
 ```
 TUI → RpcTest.makeClient(GentRpcs) → RpcHandlersLive → GentCore
                                                          ↓
-                                                    AgentLoop.run()
+                                                    SessionRuntime.runPrompt()
                                                          ↓
                                           Provider.stream() → ai-sdk → LLM
                                                          ↓

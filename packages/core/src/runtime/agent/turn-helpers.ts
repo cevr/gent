@@ -410,9 +410,9 @@ export const resolveTurnContext = (params: {
 
     // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
     // then `UserConfig.driverOverrides[agent.name]`, else default.
-    // `ConfigService` is a hard requirement of `AgentLoop.Live` — making
-    // it optional here let test layers omit it and silently fall through
-    // to the default driver, hiding wiring bugs.
+    // `ConfigService` is a hard requirement of the actor behavior deps.
+    // Making it optional here let test layers omit it and silently fall
+    // through to the default driver, hiding wiring bugs.
     const configService = yield* ConfigService
     // Read driver overrides from the session's cwd. Without per-session
     // resolution, a multi-cwd server's project overrides would all

@@ -244,6 +244,11 @@ Receipts:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:724`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:836`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:980`
+
+Status: resolved by C7. The service facade was deleted; `SessionRuntime` now
+owns its remaining local actor helper functions and `LiveWithEntity` exposes
+only `SessionRuntime`.
+
 - `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/agent/src/agent-loop.ts:31`
 - `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/agent/src/agent-loop.ts:155`
 - `/Users/cvr/.cache/repo/anomalyco/opencode/packages/opencode/src/session/processor.ts:35`
@@ -543,6 +548,23 @@ Definition of done:
 - `AgentLoop` is internal actor plumbing only.
 - No runtime callers depend on `AgentLoop.Live` except test-only actor helpers.
 - Focused session/runtime tests and `bun run test:e2e`.
+
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- Deleted `packages/core/src/runtime/agent/agent-loop.ts`.
+- Moved `runPrompt`, runtime state read/watch, and session termination sweep
+  helper logic into `makeLiveSessionRuntime`.
+- `SessionRuntime.EntityLive` / `LiveWithEntity` no longer expose `AgentLoop`.
+- Runtime tests now use direct actor test harnesses plus local helper objects,
+  not a Context service facade.
+- Architecture and runtime comments now point at the actor/behavior modules.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/external-turn.test.ts packages/core/tests/runtime/session-runtime.test.ts`
 
 #### C8: refactor(runtime): adopt Encore SQL storage constructor
 
