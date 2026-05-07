@@ -4,11 +4,12 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer } from "effect"
-import type { Message } from "../domain/message.js"
-import type { BranchId, MessageId } from "../domain/ids.js"
+import { Context, Effect, Layer, Schema } from "effect"
+import { Model } from "effect/unstable/schema"
+import { MessageRole, type Message } from "../domain/message.js"
+import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlModel } from "effect/unstable/sql"
 import {
   decodeStoredMessage,
   encodeStoredMessage,
@@ -18,6 +19,17 @@ import {
   type MessageChunkRow,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+
+class MessageTable extends Model.Class<MessageTable>("MessageTable")({
+  id: Model.GeneratedByApp(MessageId),
+  session_id: SessionId,
+  branch_id: BranchId,
+  kind: Schema.Literals(["regular", "interjection"]),
+  role: MessageRole,
+  created_at: Schema.Number,
+  turn_duration_ms: Schema.NullOr(Schema.Number),
+  metadata: Schema.NullOr(Schema.String),
+}) {}
 
 export interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
@@ -41,6 +53,11 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
     MessageStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+      const messageRepository = yield* SqlModel.makeRepository(MessageTable, {
+        tableName: "messages",
+        spanPrefix: "MessageStorage",
+        idColumn: "id",
+      })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
       const insertContent = (messageId: MessageId, partJsons: ReadonlyArray<string>) =>
         insertMessageContent(messageId, partJsons).pipe(
@@ -73,7 +90,16 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
             yield* sql.withTransaction(
               Effect.gen(function* () {
-                yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+                yield* messageRepository.insertVoid({
+                  id: message.id,
+                  session_id: message.sessionId,
+                  branch_id: message.branchId,
+                  kind: message._tag,
+                  role: message.role,
+                  created_at: message.createdAt.getTime(),
+                  turn_duration_ms: message.turnDurationMs ?? null,
+                  metadata: metadataJson,
+                })
                 yield* insertContent(message.id, partJsons)
                 yield* indexSearch(message)
                 yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
