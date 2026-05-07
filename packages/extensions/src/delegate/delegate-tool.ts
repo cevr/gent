@@ -10,11 +10,10 @@ import {
   type AgentRunError,
   type AgentRunResult,
   type SessionId,
-  type Task,
-  type TaskId,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
+import type { Task, TaskId } from "../task-tools/domain.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4

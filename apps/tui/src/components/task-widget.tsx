@@ -1,5 +1,5 @@
 import { Show, For } from "solid-js"
-import type { Task } from "@gent/core/domain/task.js"
+import type { Task } from "@gent/extensions/task-tools/domain.js"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"

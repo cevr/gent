@@ -143,16 +143,15 @@ export {
 export {
   SessionId,
   BranchId,
-  TaskId,
   ArtifactId,
   MessageId,
   ToolCallId,
   ExtensionId,
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
-export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
 export { AuthMethod, AuthOauth } from "../domain/auth.js"
 export {
+  DateFromNumber,
   dateFromMillis,
   type Message,
   type MessagePart,

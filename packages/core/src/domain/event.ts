@@ -9,7 +9,6 @@ import {
   InteractionRequestId,
   MessageId,
   SessionId,
-  TaskId,
   ToolCallId,
 } from "./ids"
 import { AgentName, ReasoningEffort } from "./agent"
@@ -216,40 +215,6 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
   },
-  TaskCreated: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-    subject: Schema.String,
-  },
-  TaskUpdated: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-    status: Schema.String,
-  },
-  TaskCompleted: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-    owner: Schema.optional(SessionId),
-  },
-  TaskFailed: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-    error: Schema.optional(Schema.String),
-  },
-  TaskStopped: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-  },
-  TaskDeleted: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    taskId: TaskId,
-  },
   AgentRestarted: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -335,18 +300,6 @@ export const AgentRunSucceeded = AgentEvent.AgentRunSucceeded
 export type AgentRunSucceeded = typeof AgentEvent.AgentRunSucceeded.Type
 export const AgentRunFailed = AgentEvent.AgentRunFailed
 export type AgentRunFailed = typeof AgentEvent.AgentRunFailed.Type
-export const TaskCreated = AgentEvent.TaskCreated
-export type TaskCreated = typeof AgentEvent.TaskCreated.Type
-export const TaskUpdated = AgentEvent.TaskUpdated
-export type TaskUpdated = typeof AgentEvent.TaskUpdated.Type
-export const TaskCompleted = AgentEvent.TaskCompleted
-export type TaskCompleted = typeof AgentEvent.TaskCompleted.Type
-export const TaskFailed = AgentEvent.TaskFailed
-export type TaskFailed = typeof AgentEvent.TaskFailed.Type
-export const TaskStopped = AgentEvent.TaskStopped
-export type TaskStopped = typeof AgentEvent.TaskStopped.Type
-export const TaskDeleted = AgentEvent.TaskDeleted
-export type TaskDeleted = typeof AgentEvent.TaskDeleted.Type
 export const AgentRestarted = AgentEvent.AgentRestarted
 export type AgentRestarted = typeof AgentEvent.AgentRestarted.Type
 export const ExtensionStateChanged = AgentEvent.ExtensionStateChanged
@@ -425,12 +378,6 @@ const matchEventSessionId = AgentEvent.match({
   AgentRunSpawned: (e) => e.parentSessionId,
   AgentRunSucceeded: (e) => e.parentSessionId,
   AgentRunFailed: (e) => e.parentSessionId,
-  TaskCreated: (e) => e.sessionId,
-  TaskUpdated: (e) => e.sessionId,
-  TaskCompleted: (e) => e.sessionId,
-  TaskFailed: (e) => e.sessionId,
-  TaskStopped: (e) => e.sessionId,
-  TaskDeleted: (e) => e.sessionId,
   AgentRestarted: (e) => e.sessionId,
   ExtensionStateChanged: (e) => e.sessionId,
 })
@@ -466,12 +413,6 @@ const matchEventBranchId = AgentEvent.match({
   AgentRunSpawned: (e) => e.branchId,
   AgentRunSucceeded: (e) => e.branchId,
   AgentRunFailed: (e) => e.branchId,
-  TaskCreated: (e) => e.branchId,
-  TaskUpdated: (e) => e.branchId,
-  TaskCompleted: (e) => e.branchId,
-  TaskFailed: (e) => e.branchId,
-  TaskStopped: (e) => e.branchId,
-  TaskDeleted: (e) => e.branchId,
   AgentRestarted: (e) => e.branchId,
   ExtensionStateChanged: (e) => e.branchId,
 })

@@ -20,7 +20,6 @@ import {
   MessageId,
   RpcId,
   SessionId,
-  TaskId,
   ToolCallId,
   ToolId,
 } from "@gent/core/domain/ids"
@@ -42,10 +41,9 @@ describe("branded ids — roundtrip", () => {
     expect(String(Schema.decodeUnknownSync(RpcId)("task.list"))).toBe("task.list")
   })
 
-  test("BranchId, MessageId, TaskId, ActorCommandId, ArtifactId all roundtrip", () => {
+  test("BranchId, MessageId, ActorCommandId, ArtifactId all roundtrip", () => {
     expect(String(Schema.decodeUnknownSync(BranchId)("b-1"))).toBe("b-1")
     expect(String(Schema.decodeUnknownSync(MessageId)("m-1"))).toBe("m-1")
-    expect(String(Schema.decodeUnknownSync(TaskId)("t-1"))).toBe("t-1")
     expect(String(Schema.decodeUnknownSync(ActorCommandId)("a-1"))).toBe("a-1")
     expect(String(Schema.decodeUnknownSync(ArtifactId)("art-1"))).toBe("art-1")
   })

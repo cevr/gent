@@ -1,9 +1,8 @@
 import { Schema } from "effect"
-import { SessionId, BranchId, TaskId } from "./ids"
-import { AgentName } from "./agent"
-import { DateFromNumber } from "./message"
+import { AgentName, BranchId, DateFromNumber, SessionId } from "@gent/core/extensions/api"
 
-// Task Status
+export const TaskId = Schema.String.pipe(Schema.brand("TaskId"))
+export type TaskId = typeof TaskId.Type
 
 export const TaskStatus = Schema.Literals([
   "pending",
@@ -14,7 +13,6 @@ export const TaskStatus = Schema.Literals([
 ])
 export type TaskStatus = typeof TaskStatus.Type
 
-/** Legal task status transitions */
 const VALID_TRANSITIONS: ReadonlyMap<TaskStatus, ReadonlySet<TaskStatus>> = new Map([
   ["pending", new Set<TaskStatus>(["in_progress", "failed", "stopped"])],
   ["in_progress", new Set<TaskStatus>(["completed", "failed", "stopped"])],
@@ -23,7 +21,6 @@ const VALID_TRANSITIONS: ReadonlyMap<TaskStatus, ReadonlySet<TaskStatus>> = new 
   ["stopped", new Set<TaskStatus>()],
 ])
 
-/** Returns true if the transition from → to is legal */
 export const isValidTaskTransition = (from: TaskStatus, to: TaskStatus): boolean =>
   VALID_TRANSITIONS.get(from)?.has(to) === true
 
@@ -35,8 +32,6 @@ export class TaskTransitionError extends Schema.TaggedErrorClass<TaskTransitionE
     to: TaskStatus,
   },
 ) {}
-
-// Task
 
 export class Task extends Schema.Class<Task>("Task")({
   id: TaskId,

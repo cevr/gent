@@ -9,7 +9,8 @@
  * @module
  */
 import { Schema } from "effect"
-import { ExtensionId, TaskId, TaskStatus } from "@gent/core/extensions/api"
+import { ExtensionId } from "@gent/core/extensions/api"
+import { TaskId, TaskStatus } from "./domain.js"
 
 export const TASK_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/task-tools")
 

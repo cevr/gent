@@ -6,8 +6,8 @@ import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
 import { dateFromMillis, Session, Branch } from "@gent/core/domain/message"
-import { Task } from "@gent/core/domain/task"
-import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { Task, TaskId } from "@gent/extensions/task-tools/domain"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 

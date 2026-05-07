@@ -347,6 +347,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionEventSink = typeof PublicExtensionApi.ExtensionEventSink
     // @ts-expect-error — task lifecycle events are private; extensions publish state pulses
     type _BadTaskCreated = typeof PublicExtensionApi.TaskCreated
+    // @ts-expect-error — task schemas belong to @gent/task-tools, not core author API
+    type _BadTask = typeof PublicExtensionApi.Task
+    // @ts-expect-error — task ids belong to @gent/task-tools, not core author API
+    type _BadTaskId = typeof PublicExtensionApi.TaskId
 
     expect(true).toBe(true)
   })

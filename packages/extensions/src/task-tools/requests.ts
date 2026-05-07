@@ -8,7 +8,8 @@
  * @module
  */
 import { Effect, Schema } from "effect"
-import { AgentName, CapabilityError, request, Task, TaskId } from "@gent/core/extensions/api"
+import { AgentName, CapabilityError, request } from "@gent/core/extensions/api"
+import { Task, TaskId } from "./domain.js"
 import { TaskService } from "../task-tools-service.js"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"

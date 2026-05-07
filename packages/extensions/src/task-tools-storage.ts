@@ -12,15 +12,13 @@ import {
   AgentName,
   ReadOnlyBrand,
   SessionId,
-  Task,
-  TaskStatus,
   dateFromMillis,
   withReadOnly,
   type BranchId,
   type ReadOnly,
-  type TaskId,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
+import { Task, TaskStatus, type TaskId } from "./task-tools/domain.js"
 
 export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
   "TaskStorageError",

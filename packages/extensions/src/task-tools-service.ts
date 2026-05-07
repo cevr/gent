@@ -1,15 +1,17 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
-  Task,
-  TaskTransitionError,
-  isValidTaskTransition,
-  TaskId,
   ExtensionStatePublisher,
-  type TaskStatus,
   type AgentName,
   type SessionId,
   type BranchId,
 } from "@gent/core/extensions/api"
+import {
+  Task,
+  TaskId,
+  TaskTransitionError,
+  isValidTaskTransition,
+  type TaskStatus,
+} from "./task-tools/domain.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 

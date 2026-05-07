@@ -1,12 +1,6 @@
 import { Effect, Schema } from "effect"
-import {
-  tool,
-  AgentName,
-  SessionId,
-  TaskId,
-  TaskStatus,
-  ToolNeeds,
-} from "@gent/core/extensions/api"
+import { tool, AgentName, SessionId, ToolNeeds } from "@gent/core/extensions/api"
+import { TaskId, TaskStatus } from "./domain.js"
 import { TaskService } from "../task-tools-service.js"
 
 export const TaskListParams = Schema.Struct({

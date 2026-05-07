@@ -147,6 +147,8 @@
     "./task-tools-storage.js": "./src/task-tools-storage.ts",
     "./task-tools/identity": "./src/task-tools/identity.ts",
     "./task-tools/identity.js": "./src/task-tools/identity.ts",
+    "./task-tools/domain": "./src/task-tools/domain.ts",
+    "./task-tools/domain.js": "./src/task-tools/domain.ts",
     "./task-tools/requests": "./src/task-tools/requests.ts",
     "./task-tools/requests.js": "./src/task-tools/requests.ts",
     "./task-tools/task-create": "./src/task-tools/task-create.ts",
