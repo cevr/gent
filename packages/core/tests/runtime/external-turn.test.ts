@@ -9,10 +9,14 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
-import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
+import {
+  AgentLoop as AgentLoopActor,
+  AgentLoopTestActor,
+} from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
+import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -25,7 +29,12 @@ import {
   messagePartsToolCallParts,
   messagePartsToolResultParts,
 } from "@gent/core/domain/message-part-projection"
-import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  ExternalDriverRef,
+  type RunSpec,
+} from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core/domain/driver"
 import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
@@ -63,12 +72,29 @@ const makeMessageWithParts = (parts: Message["parts"]) =>
     createdAt: dateFromMillis(1_767_225_600_000),
   })
 const runAgentLoop = (
-  agentLoop: AgentLoopService,
+  _agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoopService["run"]>[1],
+  options?: {
+    readonly agentOverride?: AgentName
+    readonly runSpec?: RunSpec
+    readonly interactive?: boolean
+  },
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
-    Effect.flatMap(() => agentLoop.run(message, options)),
+    Effect.flatMap(() =>
+      Effect.gen(function* () {
+        const actorClientFactory = yield* AgentLoopActor.Context
+        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        yield* ref.execute(
+          AgentLoopActor.Run.make({
+            message,
+            agentOverride: options?.agentOverride,
+            runSpec: options?.runSpec,
+            interactive: options?.interactive,
+          }),
+        )
+      }),
+    ),
   )
 const runAgentLoopOnce = (
   agentLoop: AgentLoopService,
@@ -217,7 +243,7 @@ const makeLayerWithEvents = (
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -430,7 +456,7 @@ describe("external turn execution", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -594,7 +620,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -684,7 +710,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -789,7 +815,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -893,7 +919,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(

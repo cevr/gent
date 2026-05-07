@@ -3,6 +3,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   Cause,
   Clock,
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -23,11 +24,16 @@ import {
   AgentLoop,
   AgentLoopError,
   type AgentLoopService,
+  type SteerCommand,
 } from "../../src/runtime/agent/agent-loop"
-import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
+import {
+  AgentLoop as AgentLoopActor,
+  AgentLoopTestActor,
+} from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
+import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -36,7 +42,12 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  ExternalDriverRef,
+  type RunSpec,
+} from "@gent/core/domain/agent"
 import {
   Provider,
   finishPart,
@@ -51,6 +62,7 @@ import {
   Branch,
   ImagePart,
   Message,
+  type MessageMetadata,
   Session,
   TextPart,
   ToolResultPart,
@@ -83,6 +95,7 @@ import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import {
+  ActorCommandId,
   BranchId,
   ExtensionId,
   InteractionRequestId,
@@ -146,21 +159,120 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     createdAt: dateFromMillis(1_767_225_600_000),
   })
 const runAgentLoop = (
-  agentLoop: AgentLoopService,
+  _agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoopService["run"]>[1],
+  options?: {
+    readonly agentOverride?: AgentName
+    readonly runSpec?: RunSpec
+    readonly interactive?: boolean
+  },
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
-    Effect.flatMap(() => agentLoop.run(message, options)),
+    Effect.flatMap(() =>
+      Effect.gen(function* () {
+        const actorClientFactory = yield* AgentLoopActor.Context
+        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        yield* ref.execute(
+          AgentLoopActor.Run.make({
+            message,
+            agentOverride: options?.agentOverride,
+            runSpec: options?.runSpec,
+            interactive: options?.interactive,
+          }),
+        )
+      }),
+    ),
   )
 const submitAgentLoop = (
-  agentLoop: AgentLoopService,
+  _agentLoop: AgentLoopService,
   message: Message,
-  options?: Parameters<AgentLoopService["submit"]>[1],
+  options?: {
+    readonly agentOverride?: AgentName
+    readonly runSpec?: RunSpec
+    readonly interactive?: boolean
+  },
 ) =>
   ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
-    Effect.flatMap(() => agentLoop.submit(message, options)),
+    Effect.flatMap(() =>
+      Effect.gen(function* () {
+        const actorClientFactory = yield* AgentLoopActor.Context
+        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        yield* ref.execute(
+          AgentLoopActor.Submit.make({
+            message,
+            agentOverride: options?.agentOverride,
+            runSpec: options?.runSpec,
+            interactive: options?.interactive,
+          }),
+        )
+      }),
+    ),
   )
+const steerAgentLoop = (command: SteerCommand) =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(entityIdOf(command.sessionId, command.branchId))
+    yield* ref.execute(
+      AgentLoopActor.Steer.make({
+        commandId: ActorCommandId.make(yield* platform.randomId),
+        command,
+      }),
+    )
+  })
+const respondAgentLoopInteraction = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly requestId: InteractionRequestId
+}) =>
+  Effect.gen(function* () {
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(entityIdOf(input.sessionId, input.branchId))
+    yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+  })
+const queueAgentLoopFollowUp = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly content: string
+  readonly metadata?: MessageMetadata
+}) =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const message = Message.Regular.make({
+      id: MessageId.make(yield* platform.randomId),
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      role: "user",
+      parts: [new TextPart({ type: "text", text: input.content })],
+      createdAt: yield* DateTime.nowAsDate,
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+    })
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(entityIdOf(input.sessionId, input.branchId))
+    yield* ref.execute(
+      AgentLoopActor.QueueFollowUp.make({
+        message,
+        agentOverride: undefined,
+        runSpec: undefined,
+        interactive: undefined,
+      }),
+    )
+  })
+const drainAgentLoopQueue = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(entityIdOf(input.sessionId, input.branchId))
+    return yield* ref.execute(
+      AgentLoopActor.DrainQueue.make({
+        ...input,
+        commandId: ActorCommandId.make(yield* platform.randomId),
+      }),
+    )
+  })
 const makeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: ReadonlyArray<ToolToken> = [],
@@ -181,7 +293,7 @@ const makeLayer = (
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -213,7 +325,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -291,7 +403,7 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -346,7 +458,7 @@ const makeLiveToolLayer = (
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -395,7 +507,7 @@ const makeLayerWithEvents = (
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -427,7 +539,7 @@ const makeLayerWithEventPublisher = (
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -500,7 +612,7 @@ const makeExternalLayerWithEvents = (
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoop.Live({ baseSections: [] }).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
@@ -638,7 +750,7 @@ describe("streaming", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -701,7 +813,7 @@ describe("streaming", () => {
           const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
           yield* Deferred.await(startedA)
           yield* Deferred.await(startedB)
-          yield* agentLoop.steer({
+          yield* steerAgentLoop({
             _tag: "Interrupt",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
@@ -930,7 +1042,7 @@ describe("streaming", () => {
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, queued)
-          yield* agentLoop.steer({
+          yield* steerAgentLoop({
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
@@ -980,7 +1092,7 @@ describe("streaming", () => {
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, queuedA)
           yield* runAgentLoop(agentLoop, queuedB)
-          yield* agentLoop.steer({
+          yield* steerAgentLoop({
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
@@ -1426,7 +1538,7 @@ describe("continuation", () => {
           runAgentLoop(agentLoop, makeContMessage("interrupt test")),
         )
         yield* controls.waitForCall(1)
-        yield* agentLoop.steer({
+        yield* steerAgentLoop({
           _tag: "Interrupt",
           sessionId: contSessionId,
           branchId: contBranchId,
@@ -1514,7 +1626,7 @@ describe("continuation", () => {
         // `actor.call(Interrupt)` which is serialized request-reply — by the
         // time it returns, the actor has already set `interruptedRef = true`
         // and signalled the active stream. No additional wait needed.
-        yield* agentLoop.steer({
+        yield* steerAgentLoop({
           _tag: "Interrupt",
           sessionId: contSessionId,
           branchId: contBranchId,
@@ -1710,7 +1822,7 @@ describe("interaction", () => {
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return AgentLoop.Live({ baseSections: [] }).pipe(
-      Layer.provide(
+      Layer.provideMerge(
         AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
       ),
       Layer.provideMerge(
@@ -1755,7 +1867,7 @@ describe("interaction", () => {
                 )._tag,
             )
           expect(eventTags).toContain("ToolCallStarted")
-          yield* agentLoop.respondInteraction({
+          yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: InteractionRequestId.make("req-test-1"),
@@ -1784,7 +1896,7 @@ describe("interaction", () => {
             { sessionId: intSessionId, branchId: intBranchId },
             "WaitingForInteraction",
           )
-          yield* agentLoop.respondInteraction({
+          yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: InteractionRequestId.make("req-stale-1"),
@@ -1798,7 +1910,7 @@ describe("interaction", () => {
           expect(yield* Ref.get(callCount)).toBe(1)
           expect(yield* Deferred.isDone(resolution)).toBe(false)
 
-          yield* agentLoop.respondInteraction({
+          yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: InteractionRequestId.make("req-test-1"),
@@ -1827,7 +1939,7 @@ describe("interaction", () => {
             { sessionId: intSessionId, branchId: intBranchId },
             "WaitingForInteraction",
           )
-          yield* agentLoop.steer({
+          yield* steerAgentLoop({
             _tag: "Interrupt",
             sessionId: intSessionId,
             branchId: intBranchId,
@@ -1864,7 +1976,7 @@ describe("interaction", () => {
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -1880,7 +1992,7 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           yield* runAgentLoop(agentLoop, makeIntMessage("no interaction"))
-          yield* agentLoop.respondInteraction({
+          yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: InteractionRequestId.make("nonexistent"),
@@ -1936,7 +2048,7 @@ describe("interaction", () => {
             "WaitingForInteraction",
           )
           expect(Ref.getUnsafe(providerCallsRef)).toBe(1)
-          yield* agentLoop.respondInteraction({
+          yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: InteractionRequestId.make("req-test-1"),
@@ -2012,7 +2124,7 @@ describe("checkpoint persistence", () => {
         GentPlatform.Test(),
       )
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -2067,7 +2179,7 @@ describe("checkpoint persistence", () => {
         GentPlatform.Test(),
       )
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -2131,7 +2243,7 @@ describe("checkpoint persistence", () => {
         GentPlatform.Test(),
       )
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -2151,7 +2263,7 @@ describe("checkpoint persistence", () => {
           )
           yield* Deferred.await(firstStarted)
           const queued = yield* Effect.exit(
-            agentLoop.queueFollowUp({
+            queueAgentLoopFollowUp({
               sessionId: SessionId.make("follow-up-checkpoint-session"),
               branchId: BranchId.make("b1"),
               content: "queued",
@@ -2206,7 +2318,7 @@ describe("checkpoint persistence", () => {
         GentPlatform.Test(),
       )
       const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-        Layer.provide(
+        Layer.provideMerge(
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
@@ -2227,7 +2339,7 @@ describe("checkpoint persistence", () => {
           yield* Deferred.await(firstStarted)
           yield* submitAgentLoop(agentLoop, makeMessage("checkpoint-drain-session", "b1", "queued"))
           const drained = yield* Effect.exit(
-            agentLoop.drainQueue({
+            drainAgentLoopQueue({
               sessionId: SessionId.make("checkpoint-drain-session"),
               branchId: BranchId.make("b1"),
             }),
@@ -2754,7 +2866,7 @@ describe("durable suspension and queue drain regression", () => {
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return AgentLoop.Live({ baseSections: [] }).pipe(
-      Layer.provide(
+      Layer.provideMerge(
         AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
       ),
       Layer.provideMerge(
@@ -2822,7 +2934,7 @@ describe("durable suspension and queue drain regression", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* AgentLoop
-            yield* agentLoop.respondInteraction({
+            yield* respondAgentLoopInteraction({
               sessionId: suspendSessionId,
               branchId: suspendBranchId,
               requestId: InteractionRequestId.make("req-suspend-1"),
@@ -2903,7 +3015,7 @@ describe("durable suspension and queue drain regression", () => {
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoop.Live({ baseSections: [] }).pipe(
-          Layer.provide(
+          Layer.provideMerge(
             AgentLoopTestActor.pipe(
               Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
             ),

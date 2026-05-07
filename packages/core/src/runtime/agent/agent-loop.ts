@@ -7,18 +7,10 @@ import {
 } from "../../domain/agent.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../../domain/queue.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { Message, TextPart, type MessageMetadata } from "../../domain/message.js"
-import {
-  ActorCommandId,
-  type InteractionRequestId,
-  MessageId,
-  type ToolCallId,
-  type BranchId,
-  type SessionId,
-} from "../../domain/ids.js"
+import { Message, TextPart } from "../../domain/message.js"
+import { MessageId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { GentPlatform } from "../gent-platform.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { StorageError } from "../../domain/storage-error.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
@@ -49,58 +41,10 @@ export interface AgentLoopService {
     interactive?: boolean
     runSpec?: RunSpec
   }) => Effect.Effect<void, AgentRunError>
-  readonly submit: (
-    message: Message,
-    options?: {
-      agentOverride?: AgentNameType
-      runSpec?: RunSpec
-      interactive?: boolean
-    },
-  ) => Effect.Effect<void, AgentLoopError>
-  readonly run: (
-    message: Message,
-    options?: {
-      agentOverride?: AgentNameType
-      runSpec?: RunSpec
-      interactive?: boolean
-    },
-  ) => Effect.Effect<void, AgentLoopError>
-  readonly queueFollowUp: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    content: string
-    metadata?: MessageMetadata
-  }) => Effect.Effect<void, AgentLoopError | StorageError>
-  readonly steer: (command: SteerCommand) => Effect.Effect<void, AgentLoopError>
-  readonly drainQueue: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<QueueSnapshot, AgentLoopError>
   readonly getQueue: (input: {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<QueueSnapshot, AgentLoopError>
-  readonly respondInteraction: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    requestId: InteractionRequestId
-  }) => Effect.Effect<void, AgentLoopError>
-  readonly recordToolResult: (input: {
-    commandId?: ActorCommandId
-    sessionId: SessionId
-    branchId: BranchId
-    toolCallId: ToolCallId
-    toolName: string
-    output: unknown
-    isError?: boolean
-  }) => Effect.Effect<void, AgentLoopError>
-  readonly invokeTool: (input: {
-    commandId?: ActorCommandId
-    sessionId: SessionId
-    branchId: BranchId
-    toolName: string
-    input: unknown
-  }) => Effect.Effect<void, AgentLoopError>
   readonly getState: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -149,12 +93,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         }
         const eventPublisher = yield* EventPublisher
         const platform = yield* GentPlatform
-        const nextActorCommandId = Effect.map(platform.randomId, (id) => ActorCommandId.make(id))
         const stateRegistry = yield* AgentLoopStateRegistry
         const sessionGovernance = yield* AgentLoopSessionGovernance
-        let service: AgentLoopService
 
-        service = {
+        return {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
             const userMessage = Message.Regular.make({
               id: MessageId.make(yield* platform.randomId),
@@ -179,12 +121,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               ),
             )
 
-            return yield* service
-              .run(userMessage, {
-                agentOverride: input.agentName,
-                ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
-                ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
-              })
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref
+              .execute(
+                AgentLoopActor.Run.make({
+                  message: userMessage,
+                  agentOverride: input.agentName,
+                  runSpec: input.runSpec,
+                  interactive: input.interactive,
+                }),
+              )
               .pipe(
                 Effect.mapError(
                   (cause) =>
@@ -196,114 +142,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
           }),
 
-          submit: Effect.fn("AgentLoop.submit")(function* (
-            message: Message,
-            options?: {
-              agentOverride?: AgentNameType
-              runSpec?: RunSpec
-              interactive?: boolean
-            },
-          ) {
-            const ref = yield* agentLoopActorRefFor(message.sessionId, message.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.Submit.make({
-                message,
-                agentOverride: options?.agentOverride,
-                runSpec: options?.runSpec,
-                interactive: options?.interactive,
-              }),
-            )
-          }),
-
-          run: Effect.fn("AgentLoop.run")(function* (
-            message: Message,
-            options?: {
-              agentOverride?: AgentNameType
-              runSpec?: RunSpec
-              interactive?: boolean
-            },
-          ) {
-            const ref = yield* agentLoopActorRefFor(message.sessionId, message.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.Run.make({
-                message,
-                agentOverride: options?.agentOverride,
-                runSpec: options?.runSpec,
-                interactive: options?.interactive,
-              }),
-            )
-          }),
-
-          queueFollowUp: Effect.fn("AgentLoop.queueFollowUp")(function* (input) {
-            const message = Message.Regular.make({
-              id: MessageId.make(yield* platform.randomId),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: input.content })],
-              createdAt: yield* DateTime.nowAsDate,
-              ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-            })
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
-              AgentLoopActor.QueueFollowUp.make({
-                message,
-                agentOverride: undefined,
-                runSpec: undefined,
-                interactive: undefined,
-              }),
-            )
-          }),
-
-          steer: Effect.fn("AgentLoop.steer")(function* (command) {
-            const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.execute(
-              AgentLoopActor.Steer.make({
-                commandId: yield* nextActorCommandId,
-                command,
-              }),
-            )
-          }),
-
-          drainQueue: Effect.fn("AgentLoop.drainQueue")(function* (input) {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.DrainQueue.make({
-                ...input,
-                commandId: yield* nextActorCommandId,
-              }),
-            )
-          }),
-
           getQueue: Effect.fn("AgentLoop.getQueue")(function* (input) {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             return yield* ref.execute(AgentLoopActor.GetQueue.make(input))
-          }),
-
-          respondInteraction: Effect.fn("AgentLoop.respondInteraction")(function* (input) {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
-          }),
-
-          recordToolResult: Effect.fn("AgentLoop.recordToolResult")(function* (input) {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
-              AgentLoopActor.RecordToolResult.make({
-                ...input,
-                commandId: input.commandId,
-                isError: input.isError,
-              }),
-            )
-          }),
-
-          invokeTool: Effect.fn("AgentLoop.invokeTool")(function* (input) {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
-              AgentLoopActor.InvokeTool.make({
-                ...input,
-                commandId: input.commandId ?? (yield* nextActorCommandId),
-              }),
-            )
           }),
 
           getState: Effect.fn("AgentLoop.getState")(function* (input) {
@@ -350,23 +191,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }),
           restoreSession: (sessionId) => sessionGovernance.clearTerminated(sessionId),
         }
-
-        return service
       }),
     )
 
   static Test = (overrides: Partial<AgentLoopService> = {}): Layer.Layer<AgentLoop> =>
     Layer.succeed(AgentLoop, {
       runOnce: () => Effect.void,
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      queueFollowUp: () => Effect.void,
-      steer: () => Effect.void,
-      drainQueue: () => Effect.succeed(emptyQueueSnapshot()),
       getQueue: () => Effect.succeed(emptyQueueSnapshot()),
-      respondInteraction: () => Effect.void,
-      recordToolResult: () => Effect.void,
-      invokeTool: () => Effect.void,
       terminateSession: () => Effect.void,
       restoreSession: () => Effect.void,
       getState: () =>

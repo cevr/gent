@@ -15,9 +15,10 @@ import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core/test-utils"
-import { AgentLoop } from "../../src/runtime/agent/agent-loop"
+import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
+import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
@@ -38,6 +39,18 @@ const makeMessage = (text: string) =>
     role: "user",
     parts: [new TextPart({ type: "text", text })],
     createdAt: FIXTURE_DATE,
+  })
+
+const runAgentMessage = (message: Message) =>
+  Effect.gen(function* () {
+    const sessionRuntime = yield* SessionRuntime
+    const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+    yield* sessionRuntime.runPrompt({
+      sessionId: message.sessionId,
+      branchId: message.branchId,
+      agentName: AgentName.make("cowork"),
+      prompt: text,
+    })
   })
 
 // ── Tool definitions ────────────────────────────────────────────────────────
@@ -107,7 +120,6 @@ describe("capability permissionRules E2E", () => {
         })
 
         yield* Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const eventStore = yield* EventStore
           yield* ensureStorageParents({ sessionId, branchId })
 
@@ -120,7 +132,7 @@ describe("capability permissionRules E2E", () => {
             ),
           )
 
-          yield* agentLoop.run(makeMessage("run ls"))
+          yield* runAgentMessage(makeMessage("run ls"))
 
           const envelopes = yield* Ref.get(envelopesRef)
 
@@ -162,7 +174,6 @@ describe("capability permissionRules E2E", () => {
         })
 
         yield* Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const eventStore = yield* EventStore
           yield* ensureStorageParents({ sessionId, branchId })
 
@@ -174,7 +185,7 @@ describe("capability permissionRules E2E", () => {
             ),
           )
 
-          yield* agentLoop.run(makeMessage("run echo"))
+          yield* runAgentMessage(makeMessage("run echo"))
 
           const envelopes = yield* Ref.get(envelopesRef)
 

@@ -14,7 +14,7 @@ import {
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
-import { AgentLoop } from "../../src/runtime/agent/agent-loop"
+import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
@@ -33,6 +33,18 @@ const makeMessage = (text: string) =>
     role: "user",
     parts: [new TextPart({ type: "text", text })],
     createdAt: FIXTURE_DATE,
+  })
+
+const runAgentMessage = (message: Message) =>
+  Effect.gen(function* () {
+    const sessionRuntime = yield* SessionRuntime
+    const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+    yield* sessionRuntime.runPrompt({
+      sessionId: message.sessionId,
+      branchId: message.branchId,
+      agentName: AgentName.make("cowork"),
+      prompt: text,
+    })
   })
 
 /** Mock subagent runner that returns valid review JSON for review tool compatibility */
@@ -55,7 +67,7 @@ const runE2ETest = (
   steps: Parameters<typeof Provider.Sequence>[0],
   test: (
     controls: SequenceProviderControls,
-  ) => Effect.Effect<void, object, AgentLoop | EventStore | AutoRead | AutoWrite>,
+  ) => Effect.Effect<void, object, SessionRuntime | EventStore | AutoRead | AutoWrite>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
@@ -102,10 +114,9 @@ describe("Auto extension E2E", () => {
       ],
       (controls) =>
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const auto = yield* AutoRead
 
-          yield* agentLoop.run(makeMessage("begin"))
+          yield* runAgentMessage(makeMessage("begin"))
 
           const model = yield* auto.snapshot()
           expect(model.active).toBe(false)
@@ -147,10 +158,9 @@ describe("Auto extension E2E", () => {
       ],
       (controls) =>
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const auto = yield* AutoRead
 
-          yield* agentLoop.run(makeMessage("begin"))
+          yield* runAgentMessage(makeMessage("begin"))
 
           const model = yield* auto.snapshot()
           expect(model.active).toBe(false)
@@ -181,7 +191,6 @@ describe("Auto extension E2E", () => {
       ],
       (controls) =>
         Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const eventStore = yield* EventStore
 
           // Subscribe to events before running
@@ -193,7 +202,7 @@ describe("Auto extension E2E", () => {
             ),
           )
 
-          yield* agentLoop.run(makeMessage("begin"))
+          yield* runAgentMessage(makeMessage("begin"))
 
           const envelopes = yield* Ref.get(envelopesRef)
           const toolSucceeded = envelopes.filter((e) => e.event._tag === "ToolCallSucceeded")
@@ -230,7 +239,6 @@ describe("Auto extension E2E", () => {
       const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
         const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
@@ -238,12 +246,12 @@ describe("Auto extension E2E", () => {
         yield* auto.start({ goal: "Fix the bug" })
 
         // Turn 1 (initial) + Turn 2 (auto kickoff follow-up, drained during finalization)
-        yield* agentLoop.run(makeMessage("begin"))
+        yield* runAgentMessage(makeMessage("begin"))
 
         // Turns 3-6: simulate more turns. Each run produces TurnCompleted → TurnTick
         // turnsSinceCheckpoint: 1 (turn 2), 2 (turn 3), 3 (turn 4), 4 (turn 5), 5 (turn 6 → wedge!)
         for (let i = 0; i < 4; i++) {
-          yield* agentLoop.run(makeMessage(`follow-up ${i + 1}`))
+          yield* runAgentMessage(makeMessage(`follow-up ${i + 1}`))
         }
 
         const model = yield* waitForAutoActive(false)
@@ -268,7 +276,6 @@ describe("Auto extension E2E", () => {
       const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
         const autoWrite = yield* AutoWrite
         const autoRead = yield* AutoRead
 
@@ -277,7 +284,7 @@ describe("Auto extension E2E", () => {
         yield* autoWrite.start({ goal: "Verify phases" })
 
         // Fork the run — it will process turn 1, then start turn 2 which blocks on the gate
-        const runFiber = yield* Effect.forkChild(agentLoop.run(makeMessage("begin")))
+        const runFiber = yield* Effect.forkChild(runAgentMessage(makeMessage("begin")))
 
         // Wait for the gated turn to start (model stream call for step index 1)
         yield* controls.waitForCall(1)
@@ -327,14 +334,13 @@ describe("Auto extension E2E", () => {
       })
 
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
         const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
 
         yield* auto.start({ goal: "Test handoff dedup" })
 
-        yield* agentLoop.run(makeMessage("begin"))
+        yield* runAgentMessage(makeMessage("begin"))
 
         expect(yield* Ref.get(presentCalled)).toBe(false)
 
@@ -376,14 +382,13 @@ describe("Auto extension E2E", () => {
       })
 
       yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
         const auto = yield* AutoWrite
 
         yield* ensureStorageParents({ sessionId, branchId })
 
         yield* auto.start({ goal: "Verify no direct handoff" })
 
-        yield* agentLoop.run(makeMessage("begin"))
+        yield* runAgentMessage(makeMessage("begin"))
 
         expect(yield* Ref.get(presentCalled)).toBe(false)
         expect(yield* controls.callCount).toBe(3)
@@ -414,14 +419,13 @@ describe("Auto extension E2E", () => {
         })
 
         yield* Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
           const auto = yield* AutoWrite
 
           yield* ensureStorageParents({ sessionId, branchId })
 
           yield* auto.start({ goal: "Threshold handoff test" })
 
-          yield* agentLoop.run(makeMessage("begin"))
+          yield* runAgentMessage(makeMessage("begin"))
 
           // Auto's interceptor queued a follow-up, NOT a direct HandoffPresented
           expect(yield* Ref.get(presentCalled)).toBe(false)
