@@ -13,7 +13,7 @@
  * `layerFromRef` hoist.
  */
 
-import { Clock, Context, Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Clock, Context, Effect, Layer, Option, Schema, SynchronizedRef } from "effect"
 import {
   ProviderAuthError,
   TaggedEnumClass,
@@ -70,6 +70,18 @@ export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = CredentialCacheCell.Em
   at: 0,
 })
 
+export type CredentialCacheCellRef = SynchronizedRef.SynchronizedRef<CredentialCacheCell>
+
+type CredentialResult =
+  | {
+      readonly creds: OpenAICredentials
+      readonly error?: never
+    }
+  | {
+      readonly error: ProviderAuthError
+      readonly creds?: never
+    }
+
 const durableCell = (
   creds: OpenAICredentials,
   at: number,
@@ -91,6 +103,19 @@ const pendingPersistCell = (
     at,
     invalidated,
   })
+
+const successResult = (creds: OpenAICredentials): CredentialResult => ({
+  creds,
+})
+
+const failureResult = (error: ProviderAuthError): CredentialResult => ({
+  error,
+})
+
+const providerAuthErrorFromCause = (cause: Cause.Cause<ProviderAuthError>): ProviderAuthError => {
+  const error = Cause.findErrorOption(cause)
+  return Option.getOrElse(error, () => new ProviderAuthError({ message: Cause.pretty(cause) }))
+}
 
 // ── Service interface ──
 
@@ -155,7 +180,7 @@ export class OpenAICredentialService extends Context.Service<
    * the cache effectively disables itself.
    */
   static layerFromRef = (
-    cellRef: Ref.Ref<CredentialCacheCell>,
+    cellRef: CredentialCacheCellRef,
     authInfo: ProviderAuthInfo,
   ): Layer.Layer<OpenAICredentialService> =>
     OpenAICredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
@@ -171,13 +196,15 @@ export class OpenAICredentialService extends Context.Service<
     Layer.effect(
       OpenAICredentialService,
       Effect.gen(function* () {
-        const cellRef = yield* Ref.make<CredentialCacheCell>(seedCellFromAuthInfo(authInfo))
+        const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(
+          seedCellFromAuthInfo(authInfo),
+        )
         return yield* OpenAICredentialService.buildShape(cellRef, io, authInfo)
       }),
     )
 
   static layerFromRefAndIO = (
-    cellRef: Ref.Ref<CredentialCacheCell>,
+    cellRef: CredentialCacheCellRef,
     io: OpenAICredentialIO,
     authInfo: ProviderAuthInfo,
   ): Layer.Layer<OpenAICredentialService> =>
@@ -185,9 +212,9 @@ export class OpenAICredentialService extends Context.Service<
       OpenAICredentialService,
       Effect.gen(function* () {
         // First-touch seed: only fill the cell if it is still empty.
-        // Externally-owned Refs may already hold fresher creds from a
+        // Externally-owned cells may already hold fresher creds from a
         // prior `resolveModel` call within the same extension instance.
-        yield* Ref.update(cellRef, (cell) =>
+        yield* SynchronizedRef.update(cellRef, (cell) =>
           cell.creds === null ? seedCellFromAuthInfo(authInfo) : cell,
         )
         return yield* OpenAICredentialService.buildShape(cellRef, io, authInfo)
@@ -195,7 +222,7 @@ export class OpenAICredentialService extends Context.Service<
     )
 
   private static buildShape = (
-    cellRef: Ref.Ref<CredentialCacheCell>,
+    cellRef: CredentialCacheCellRef,
     io: OpenAICredentialIO,
     authInfo: ProviderAuthInfo,
   ): Effect.Effect<OpenAICredentialServiceShape> =>
@@ -224,73 +251,93 @@ export class OpenAICredentialService extends Context.Service<
         )
       }
 
-      const getFresh: Effect.Effect<OpenAICredentials, ProviderAuthError> = Effect.gen(
-        function* () {
-          const now = yield* Clock.currentTimeMillis
-          let cell = yield* Ref.get(cellRef)
+      const getFresh: Effect.Effect<OpenAICredentials, ProviderAuthError> =
+        SynchronizedRef.modifyEffect(
+          cellRef,
+          (
+            cell,
+          ): Effect.Effect<readonly [CredentialResult, CredentialCacheCell], ProviderAuthError> =>
+            Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis
+              let current = cell
 
-          if (cell._tag === "PendingPersist") {
-            yield* persistRefreshed(cell.creds)
-            cell = durableCell(cell.creds, now, cell.invalidated)
-            yield* Ref.set(cellRef, cell)
-          }
+              if (current._tag === "PendingPersist") {
+                const persistExit = yield* Effect.exit(persistRefreshed(current.creds))
+                if (persistExit._tag === "Failure") {
+                  return [failureResult(providerAuthErrorFromCause(persistExit.cause)), current]
+                }
+                current = durableCell(current.creds, now, current.invalidated)
+              }
 
-          // Cache hit: still warm AND >60s before expiry
-          if (
-            cell._tag === "Durable" &&
-            !cell.invalidated &&
-            now - cell.at < CREDENTIAL_CACHE_TTL_MS &&
-            freshEnoughForUse(cell.creds, now)
-          ) {
-            return cell.creds
-          }
+              // Cache hit: still warm AND >60s before expiry
+              if (
+                current._tag === "Durable" &&
+                !current.invalidated &&
+                now - current.at < CREDENTIAL_CACHE_TTL_MS &&
+                freshEnoughForUse(current.creds, now)
+              ) {
+                return [successResult(current.creds), current]
+              }
 
-          // If we still have creds in the cell that are fresh enough
-          // (cache TTL elapsed but not yet stale), update the timestamp
-          // and return them — no need to spend a refresh round-trip.
-          if (cell._tag === "Durable" && !cell.invalidated && freshEnoughForUse(cell.creds, now)) {
-            yield* Ref.set(cellRef, durableCell(cell.creds, now, false))
-            return cell.creds
-          }
+              // If we still have creds in the cell that are fresh enough
+              // (cache TTL elapsed but not yet stale), update the timestamp
+              // and return them — no need to spend a refresh round-trip.
+              if (
+                current._tag === "Durable" &&
+                !current.invalidated &&
+                freshEnoughForUse(current.creds, now)
+              ) {
+                return [successResult(current.creds), durableCell(current.creds, now, false)]
+              }
 
-          // Need to refresh. Always prefer the in-memory refresh token
-          // from the cell — that's the most recently rotated one. Only
-          // fall back to `authInfo.refresh` (the bootstrap token) when
-          // no rotation has happened yet. Dropping the rotated token
-          // on refresh failure or invalidate would silently roll back
-          // to a stale bootstrap that the OAuth server may have
-          // already revoked once the new one was issued.
-          const refreshToken = cell.creds?.refresh ?? authInfo.refresh
-          if (refreshToken === undefined || refreshToken.length === 0) {
-            yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
-            return yield* new ProviderAuthError({
-              message:
-                "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
-            })
-          }
+              // Need to refresh. Always prefer the in-memory refresh token
+              // from the cell — that's the most recently rotated one. Only
+              // fall back to `authInfo.refresh` (the bootstrap token) when
+              // no rotation has happened yet. Dropping the rotated token
+              // on refresh failure or invalidate would silently roll back
+              // to a stale bootstrap that the OAuth server may have
+              // already revoked once the new one was issued.
+              const refreshToken = current.creds?.refresh ?? authInfo.refresh
+              if (refreshToken === undefined || refreshToken.length === 0) {
+                return [
+                  failureResult(
+                    new ProviderAuthError({
+                      message:
+                        "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
+                    }),
+                  ),
+                  EMPTY_CREDENTIAL_CELL,
+                ]
+              }
 
-          // Refresh failure does NOT clear the cell. The rotated refresh
-          // token survives so a subsequent retry can re-attempt with it
-          // (e.g., transient network failure). Only the explicit
-          // "no usable refresh token" branch above resets to empty.
-          const refreshed = yield* io.refresh(refreshToken)
+              // Refresh failure does NOT clear the cell. The rotated refresh
+              // token survives so a subsequent retry can re-attempt with it
+              // (e.g., transient network failure). Only the explicit
+              // "no usable refresh token" branch above resets to empty.
+              const refreshed = yield* io.refresh(refreshToken)
 
-          // Carry the prior accountId forward when the refresh response omits it.
-          const merged: OpenAICredentials = {
-            access: refreshed.access,
-            refresh: refreshed.refresh,
-            expires: refreshed.expires,
-            ...((refreshed.accountId ?? cell.creds?.accountId) !== undefined
-              ? { accountId: refreshed.accountId ?? cell.creds?.accountId }
-              : {}),
-          }
+              // Carry the prior accountId forward when the refresh response omits it.
+              const merged: OpenAICredentials = {
+                access: refreshed.access,
+                refresh: refreshed.refresh,
+                expires: refreshed.expires,
+                ...((refreshed.accountId ?? current.creds?.accountId) !== undefined
+                  ? { accountId: refreshed.accountId ?? current.creds?.accountId }
+                  : {}),
+              }
 
-          yield* Ref.set(cellRef, pendingPersistCell(merged, now, false))
-          yield* persistRefreshed(merged)
-          yield* Ref.set(cellRef, durableCell(merged, now, false))
-          return merged
-        },
-      )
+              const pendingCell = pendingPersistCell(merged, now, false)
+              const persistExit = yield* Effect.exit(persistRefreshed(merged))
+              if (persistExit._tag === "Failure") {
+                return [failureResult(providerAuthErrorFromCause(persistExit.cause)), pendingCell]
+              }
+              return [successResult(merged), durableCell(merged, now, false)]
+            }),
+        ).pipe(
+          Effect.flatMap((result) =>
+            result.error === undefined ? Effect.succeed(result.creds) : Effect.fail(result.error),
+          ),
+        )
 
       // Invalidate must NOT drop the rotated refresh token. Anthropic's
       // invalidate is safe because the next `getFresh` re-reads from
@@ -306,7 +353,7 @@ export class OpenAICredentialService extends Context.Service<
       // token. Pending persisted credentials keep their actual access
       // payload so the next `getFresh` can first make the rotation
       // durable, then honor the invalidation by refreshing before use.
-      const invalidate: Effect.Effect<void> = Ref.update(cellRef, (cell) => {
+      const invalidate: Effect.Effect<void> = SynchronizedRef.update(cellRef, (cell) => {
         if (cell.creds === null) return cell
         if (cell._tag === "PendingPersist") {
           return pendingPersistCell(cell.creds, cell.at, true)

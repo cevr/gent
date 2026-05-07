@@ -1,4 +1,4 @@
-import { Config, Duration, Effect, Fiber, Layer, Option, Redacted, Ref } from "effect"
+import { Config, Duration, Effect, Fiber, Layer, Option, Redacted, SynchronizedRef } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -28,7 +28,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import {
   OpenAICredentialService,
   EMPTY_CREDENTIAL_CELL,
-  type CredentialCacheCell,
+  type CredentialCacheCellRef,
 } from "./credential-service.js"
 import { buildCodexTransformClient } from "./codex-transform.js"
 
@@ -94,7 +94,7 @@ const makeApiKeyOpenAILayer = (
  * `apiKey !== undefined`, so omitting it lets our middleware own the
  * Authorization header without a "scrub-the-placeholder" coupling.
  *
- * The credential cache cell `Ref` is passed in from extension-closure
+ * The credential cache cell is passed in from extension-closure
  * scope (allocated once by the Effectful `modelDrivers()` setup), not
  * allocated per layer build. Without this hoist, every
  * `Provider.stream`/`Provider.generate` call would rebuild the service
@@ -105,7 +105,7 @@ const makeOauthOpenAILayer = (
   modelName: string,
   config: Record<string, unknown>,
   authInfo: ProviderAuthInfo,
-  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  credentialCellRef: CredentialCacheCellRef,
 ) => {
   const credentialLayer = OpenAICredentialService.layerFromRef(credentialCellRef, authInfo)
 
@@ -132,12 +132,12 @@ const makeOauthOpenAILayer = (
 
 /**
  * Build the model-driver contribution given a pre-allocated credential
- * cache cell `Ref`. Extracted from the inline `modelDrivers` factory so
- * tests can inject their own `Ref` and assert that two `resolveModel`
+ * cache cell. Extracted from the inline `modelDrivers` factory so
+ * tests can inject their own cell and assert that two `resolveModel`
  * calls share the same closure-owned cell.
  */
 export const buildOpenAIModelDriver = (
-  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  credentialCellRef: CredentialCacheCellRef,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: string | undefined,
 ): ModelDriverContribution => ({
@@ -266,9 +266,9 @@ export const OpenAIExtension = defineExtension({
       // Credential cache cell hoisted to extension-closure scope so it
       // survives across `resolveModel` calls. One extension instance →
       // one cell that lives until the runtime tears the extension down.
-      // Setup is Effectful, so the cache cell is allocated through Ref.make
-      // instead of an unsafe closure escape hatch.
-      const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      // Setup is Effectful, so the cache cell is allocated through
+      // SynchronizedRef.make instead of an unsafe closure escape hatch.
+      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
       // Pending OAuth callbacks keyed by authorizationId. Entries
       // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
       const pendingCallbacks = new Map<string, PendingCallbackEntry>()

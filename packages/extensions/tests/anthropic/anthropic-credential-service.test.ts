@@ -9,7 +9,7 @@
  */
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Layer, Option, Ref } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import {
   AnthropicCredentialService,
@@ -128,6 +128,47 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
   )
 })
 describe("AnthropicCredentialService — refresh on stale", () => {
+  it.live("concurrent stale calls share one refresh", () =>
+    Effect.gen(function* () {
+      const stale = makeCreds("stale", 30000)
+      const fresh = makeCreds("fresh", FAR_FUTURE)
+      const refreshStarted = yield* Deferred.make<void>()
+      const releaseRefresh = yield* Deferred.make<void>()
+      let refreshCount = 0
+      const state: IOState = {
+        readResult: () => Effect.succeed(stale),
+        refreshResult: () =>
+          Effect.gen(function* () {
+            refreshCount += 1
+            yield* Deferred.succeed(refreshStarted, undefined)
+            yield* Deferred.await(releaseRefresh)
+            return fresh
+          }),
+      }
+      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
+      yield* Effect.promise(() =>
+        runWithTestClock(
+          Effect.gen(function* () {
+            const svc = yield* AnthropicCredentialService
+            const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
+              concurrency: 2,
+            }).pipe(Effect.forkChild)
+            yield* Deferred.await(refreshStarted)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            expect(refreshCount).toBe(1)
+            yield* Deferred.succeed(releaseRefresh, undefined)
+            const results = yield* Fiber.join(fiber)
+            expect(results[0].accessToken).toBe("fresh-access")
+            expect(results[1].accessToken).toBe("fresh-access")
+            expect(refreshCount).toBe(1)
+            expect(persistState.lastWritten?.access).toBe("fresh-access")
+          }).pipe(Effect.provide(layer)),
+        ),
+      )
+    }),
+  )
   it.live("expiring-soon creds trigger refresh; refreshed creds returned + persisted", () =>
     Effect.gen(function* () {
       // Outcome assertions: returned creds are the refreshed ones (not

@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Config, Effect, Layer, Option, Redacted, Ref } from "effect"
+import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -24,7 +24,7 @@ import { keychainClient } from "./keychain-client.js"
 import {
   AnthropicCredentialService,
   EMPTY_CREDENTIAL_CELL,
-  type CredentialCacheCell,
+  type CredentialCacheCellRef,
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
@@ -89,7 +89,7 @@ const makeApiKeyAnthropicLayer = (
  * service and beta cache instances at construction time, and those
  * come from layers that the unwrapped Effect can `yield*`.
  *
- * The cache cell `Ref`s for both services are passed in from
+ * The cache cells for credentials and beta state are passed in from
  * extension-closure scope (allocated once by the Effectful
  * `modelDrivers()` setup), not per layer build. Without this hoist,
  * every `Provider.stream`/`Provider.generate` call rebuilds the service
@@ -106,7 +106,7 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   config: Record<string, unknown>,
   authInfo: ProviderAuthInfo | undefined,
-  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
 ) => {
   const credentialLayer = AnthropicCredentialService.layerFromRef(credentialCellRef, authInfo)
@@ -131,13 +131,13 @@ const makeOauthAnthropicLayer = (
 
 /**
  * Build the model-driver contribution given pre-allocated cache cell
- * Refs. Extracted from the inline `modelDrivers` factory so tests can
- * inject their own Refs and assert that two `resolveModel` calls share
+ * cells. Extracted from the inline `modelDrivers` factory so tests can
+ * inject their own cells and assert that two `resolveModel` calls share
  * the same closure-owned cells (fresh Refs per `resolveModel` would
  * kill cross-request beta learning).
  */
 export const buildAnthropicModelDriver = (
-  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
   envApiKey: string | undefined,
 ): ModelDriverContribution => ({
@@ -249,8 +249,8 @@ export const AnthropicExtension = defineExtension({
       // survive across `resolveModel` calls. Lifetime: one extension
       // instance → one cell that lives until the runtime tears the
       // extension down. Setup is Effectful, so cache cells are allocated
-      // through Ref.make instead of an unsafe closure escape hatch.
-      const credentialCellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+      // through SynchronizedRef.make instead of an unsafe closure escape hatch.
+      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
       return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey)]

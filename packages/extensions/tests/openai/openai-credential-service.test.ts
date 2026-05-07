@@ -11,7 +11,7 @@
  * `auth.openai.com`.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Layer, Option, Ref } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Option, SynchronizedRef } from "effect"
 import { TestClock } from "effect/testing"
 import {
   EMPTY_CREDENTIAL_CELL,
@@ -140,6 +140,52 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
   )
 })
 describe("OpenAICredentialService — refresh on stale", () => {
+  it.live("concurrent stale calls share one refresh", () =>
+    Effect.gen(function* () {
+      const fresh = makeCreds("fresh", FAR_FUTURE)
+      const refreshStarted = yield* Deferred.make<void>()
+      const releaseRefresh = yield* Deferred.make<void>()
+      let refreshCount = 0
+      const state: IOState = {
+        refreshResult: () =>
+          Effect.gen(function* () {
+            refreshCount += 1
+            yield* Deferred.succeed(refreshStarted, undefined)
+            yield* Deferred.await(releaseRefresh)
+            return fresh
+          }),
+      }
+      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const layer = OpenAICredentialService.layerFromIO(
+        makeIO(state),
+        makeAuthInfo(persistState, {
+          access: "seed-access",
+          refresh: "seed-refresh",
+          expires: 30000,
+        }),
+      )
+      yield* Effect.promise(() =>
+        runWithTestClock(
+          Effect.gen(function* () {
+            const svc = yield* OpenAICredentialService
+            const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
+              concurrency: 2,
+            }).pipe(Effect.forkChild)
+            yield* Deferred.await(refreshStarted)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            expect(refreshCount).toBe(1)
+            yield* Deferred.succeed(releaseRefresh, undefined)
+            const results = yield* Fiber.join(fiber)
+            expect(results[0].access).toBe("fresh-access")
+            expect(results[1].access).toBe("fresh-access")
+            expect(refreshCount).toBe(1)
+            expect(persistState.lastWritten?.access).toBe("fresh-access")
+          }).pipe(Effect.provide(layer)),
+        ),
+      )
+    }),
+  )
   it.live("expiring-soon seed triggers refresh; refreshed creds returned + persisted", () =>
     Effect.gen(function* () {
       // Seed expires inside the 60s freshness margin (30s) — getFresh
@@ -580,7 +626,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
       const persistState: PersistState = { lastWritten: undefined, failNext: false }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const cellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
           // Build 1: authInfo with EXPIRING access → forces refresh.
           // After this, cellRef holds {access: "rotated-access", ...}.
           yield* Effect.gen(function* () {
@@ -649,7 +695,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const cellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
           // First "resolveModel" build — refreshes once.
           yield* Effect.gen(function* () {
             const svc = yield* OpenAICredentialService
