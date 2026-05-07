@@ -1268,6 +1268,9 @@ Progress:
   `packages/extensions`.
 - C60 moved self-contained ACP/Claude, auto, executor unit, librarian, MCP
   codemode, and handoff tests into `packages/extensions`.
+- C61 moved ACP and session-tools prompt-slot tests plus ACP transcript tests
+  into `packages/extensions`. These now call the extension reactions directly;
+  core retains the compiler tests.
 
 Verification on 2026-05-07:
 

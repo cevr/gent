@@ -8,16 +8,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
-import {
-  AgentDefinition,
-  AgentName,
-  ExternalDriverRef,
-  ModelDriverRef,
-} from "@gent/core/domain/agent"
-import { tool, type ToolCapability } from "@gent/core/extensions/api"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
-import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { testExtensionHostContext } from "@gent/core/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
@@ -30,29 +23,14 @@ const fakeTool: ToolCapability = tool({
   execute: () => Effect.succeed({ ok: true }),
 })
 const stubHostCtx = testExtensionHostContext()
-const stubProjectionCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/home/x",
-  turn: {
-    sessionId: SessionId.make("test-session"),
-    branchId: BranchId.make("test-branch"),
-    agent: baseAgent,
-    allTools: [],
-    agentName: AgentName.make("cowork"),
-  },
-}
-const getRuntimeSlots = Effect.gen(function* () {
+const getSystemPrompt = Effect.gen(function* () {
   const contributions = yield* AcpAgentsExtension.setup({ cwd: "/tmp", home: "/home/x" } as never)
-  return compileExtensionReactions([
-    {
-      manifest: AcpAgentsExtension.manifest,
-      scope: "builtin",
-      sourcePath: "test",
-      contributions,
-    },
-  ])
+  const systemPrompt = contributions.reactions?.systemPrompt
+  if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt reaction")
+  return systemPrompt as (
+    input: SystemPromptInput,
+    ctx: typeof stubHostCtx,
+  ) => Effect.Effect<string>
 })
 const runHandler = (input: {
   readonly basePrompt: string
@@ -62,11 +40,8 @@ const runHandler = (input: {
   readonly tools?: ReadonlyArray<ToolCapability>
 }) =>
   Effect.gen(function* () {
-    const slots = yield* getRuntimeSlots
-    return yield* slots.resolveSystemPrompt(input, {
-      projection: { ...stubProjectionCtx, turn: { ...stubProjectionCtx.turn, agent: input.agent } },
-      host: stubHostCtx,
-    })
+    const systemPrompt = yield* getSystemPrompt
+    return yield* systemPrompt(input, stubHostCtx)
   })
 describe("ACP systemPrompt slot", () => {
   it.live("appends codemode section when driverToolSurface is codemode", () =>
