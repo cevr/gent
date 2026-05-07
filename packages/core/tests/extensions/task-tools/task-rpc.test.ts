@@ -13,7 +13,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import {
@@ -48,7 +48,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
@@ -129,7 +129,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
@@ -162,7 +162,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
@@ -193,7 +193,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,

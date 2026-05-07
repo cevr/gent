@@ -1,5 +1,5 @@
 import { ReasoningEffort } from "../../domain/agent.js"
-import type { AgentDefinition } from "../../domain/agent.js"
+import type { AgentDefinition, ReasoningEffort as ReasoningEffortType } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolToken } from "../../domain/capability/tool.js"
 import { type Message, type ToolResultPart } from "../../domain/message.js"
 import {
@@ -12,7 +12,6 @@ import {
 } from "../../domain/message-part-projection.js"
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
-import type { ModelRequest } from "../../providers/provider.js"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
@@ -133,7 +132,7 @@ export const buildTurnPrompt = (
 export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
-): ModelRequest["reasoning"] | undefined => {
+): ReasoningEffortType | undefined => {
   if (sessionOverride !== undefined && isReasoningEffort(sessionOverride)) {
     return sessionOverride
   }

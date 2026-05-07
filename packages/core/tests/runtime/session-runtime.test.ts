@@ -1,5 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
+import type { LanguageModel } from "effect/unstable/ai"
 import { Cause, Clock, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -10,13 +11,13 @@ import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
 import {
-  modelResolverFromProvider,
-  Provider,
   finishPart,
+  LanguageModelLayers,
   textDeltaPart,
   toolCallPart,
-  type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+  type LanguageModelStreamPart,
+} from "@gent/core/test-utils/language-model"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
@@ -77,7 +78,7 @@ const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Liv
 const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
   Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
 const makeRuntimeLayer = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolToken> = [],
   profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
@@ -89,7 +90,7 @@ const makeRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,
@@ -121,7 +122,7 @@ const makeRuntimeLayer = (
   return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const makeRuntimeLayerWithEventPublisher = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventPublisherLayer: Layer.Layer<EventPublisher, never, EventStorage>,
 ) => {
   const resolvedExtensions = makeTestExtensions()
@@ -132,7 +133,7 @@ const makeRuntimeLayerWithEventPublisher = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,
@@ -165,7 +166,7 @@ const makeRuntimeLayerWithEventPublisher = (
   )
 }
 const makeLiveToolRuntimeLayer = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolToken>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
@@ -176,7 +177,7 @@ const makeLiveToolRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,
@@ -298,7 +299,7 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
   })
 const makeInteractionProviderLayer = () => {
   let streamCall = 0
-  return Provider.TestStream(() => {
+  return LanguageModelLayers.testStream(() => {
     const call = streamCall++
     if (call === 0) {
       return Effect.succeed(
@@ -309,21 +310,21 @@ const makeInteractionProviderLayer = () => {
             { toolCallId: ToolCallId.make("tc-1") },
           ),
           finishPart({ finishReason: "tool-calls" }),
-        ] satisfies ProviderStreamPart[]),
+        ] satisfies LanguageModelStreamPart[]),
       )
     }
     return Effect.succeed(
       Stream.fromIterable([
         textDeltaPart("done"),
         finishPart({ finishReason: "stop" }),
-      ] satisfies ProviderStreamPart[]),
+      ] satisfies LanguageModelStreamPart[]),
     )
   })
 }
 describe("SessionRuntime", () => {
   it.live("validates branch ownership and idle follow-up persistence", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const layer = makeRuntimeLayer(providerLayer)
       yield* narrowR(
         Effect.gen(function* () {
@@ -403,7 +404,7 @@ describe("SessionRuntime", () => {
   )
   it.live("control-plane writes check session existence without resolving profiles", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const profileCacheLayer = Layer.succeed(SessionProfileCache, {
         resolve: () => Effect.die("control-plane writes must not resolve session profiles"),
       })
@@ -432,7 +433,7 @@ describe("SessionRuntime", () => {
     "sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           {
             ...textStep("override reply"),
             assertRequest: (request) => {
@@ -492,7 +493,7 @@ describe("SessionRuntime", () => {
   )
   it.live("persists tool messages without queueing or duplicating durable results", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const layer = makeRuntimeLayer(providerLayer)
       yield* narrowR(
         Effect.gen(function* () {
@@ -551,7 +552,7 @@ describe("SessionRuntime", () => {
   )
   it.live("recordToolResult rolls back the tool message when durable event append fails", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const failingPublisherLayer = Layer.succeed(EventPublisher, {
         append: (event: AgentEvent) =>
           event._tag === "ToolCallSucceeded"
@@ -594,7 +595,7 @@ describe("SessionRuntime", () => {
   )
   it.live("recordToolResult commands are serialized per session", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const firstDeliveryStarted = yield* Deferred.make<void>()
       const releaseDelivery = yield* Deferred.make<void>()
       let deliveredToolResults = 0
@@ -669,14 +670,14 @@ describe("SessionRuntime", () => {
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
           yield* Deferred.succeed(streamStarted, undefined)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
             textDeltaPart("done"),
             finishPart({ finishReason: "stop" }),
-          ] satisfies ProviderStreamPart[])
+          ] satisfies LanguageModelStreamPart[])
         }),
       )
       const layer = makeRuntimeLayer(providerLayer)
@@ -729,14 +730,14 @@ describe("SessionRuntime", () => {
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
           yield* Deferred.succeed(streamStarted, undefined)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
             textDeltaPart("done"),
             finishPart({ finishReason: "stop" }),
-          ] satisfies ProviderStreamPart[])
+          ] satisfies LanguageModelStreamPart[])
         }),
       )
       const layer = makeRuntimeLayer(providerLayer)
@@ -779,7 +780,7 @@ describe("SessionRuntime", () => {
   )
   it.live("steer interject interrupts the active turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -839,7 +840,7 @@ describe("SessionRuntime", () => {
   )
   it.live("sendUserMessage concurrent with turn completion runs the follow-up once", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -884,7 +885,7 @@ describe("SessionRuntime", () => {
   )
   it.live("drainQueuedMessages atomically clears follow-ups during an active turn", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
           ...textStep("first reply"),
           gated: true,

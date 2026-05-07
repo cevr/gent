@@ -10,6 +10,7 @@
 
 import { Effect, Layer, Ref } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
+import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import {
@@ -30,7 +31,7 @@ import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
-import { modelResolverFromProvider, type Provider } from "../providers/provider.js"
+import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -56,8 +57,8 @@ import {
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
 export interface E2ELayerConfig {
-  /** Provider layer — typically from `Provider.Sequence` */
-  readonly providerLayer: Layer.Layer<Provider>
+  /** Language model layer — typically from `LanguageModelLayers.sequence` */
+  readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extension inputs for setup */
@@ -228,7 +229,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         storageLayer,
         clusterRunnerLive,
         config.providerLayer,
-        modelResolverFromProvider(config.providerLayer),
+        ModelResolver.fromLanguageModel(config.providerLayer),
         extensionRegistryLive,
         driverRegistryLive,
         Permission.Test(),

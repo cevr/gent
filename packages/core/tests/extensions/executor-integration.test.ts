@@ -13,7 +13,7 @@ import { testSetupCtx } from "@gent/core/test-utils"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { Gent } from "@gent/sdk"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
@@ -414,7 +414,7 @@ describe("Executor runtime lifecycle", () => {
       return narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer } = yield* Provider.Sequence([])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [extension] }),
             )

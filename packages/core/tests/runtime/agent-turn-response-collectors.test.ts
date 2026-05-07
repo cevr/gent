@@ -12,7 +12,8 @@ import {
 } from "../../src/runtime/agent/turn-response/collectors"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { TurnError } from "@gent/core/domain/driver"
-import { ProviderError, finishPart, textDeltaPart } from "@gent/core/providers/provider"
+import { ProviderError } from "@gent/core/domain/provider-error"
+import { finishPart, textDeltaPart } from "@gent/core/test-utils/language-model"
 import type { AgentEvent } from "@gent/core/domain/event"
 
 const sessionId = SessionId.make("collector-session")

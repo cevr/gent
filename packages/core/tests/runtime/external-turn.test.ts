@@ -23,7 +23,8 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { modelResolverFromProvider, Provider, finishPart } from "@gent/core/providers/provider"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { finishPart, LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import {
   messagePartsText,
@@ -225,13 +226,13 @@ const makeLayerWithEvents = (
   },
 ) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
-  const providerLayer = Provider.TestStream(() =>
+  const providerLayer = LanguageModelLayers.testStream(() =>
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
@@ -426,7 +427,7 @@ describe("external turn execution", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       // Use the default agent (model-backed) with a simple provider
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const agentsResolved = resolveExtensions([
@@ -440,7 +441,7 @@ describe("external turn execution", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(agentsResolved),
         DriverRegistry.fromResolved({
           modelDrivers: agentsResolved.modelDrivers,
@@ -596,14 +597,14 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -688,14 +689,14 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -794,14 +795,14 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -899,14 +900,14 @@ describe("ExternalDriverContribution end-to-end", () => {
           },
         },
       ])
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,

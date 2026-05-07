@@ -1,5 +1,5 @@
 import { Cause, Effect, Schedule, Duration, Schema } from "effect"
-import { ProviderError } from "../providers/provider.js"
+import { ProviderError } from "../domain/provider-error.js"
 import type { ProviderAuthError } from "../domain/driver.js"
 import * as AiError from "effect/unstable/ai/AiError"
 

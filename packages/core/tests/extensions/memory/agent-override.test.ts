@@ -1,12 +1,14 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
+import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, Layer } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { ExtensionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import type { CallRecord } from "@gent/core/test-utils"
-import { modelResolverFromProvider, Provider } from "@gent/core/providers/provider"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { textStep } from "@gent/core/debug/provider"
 import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { SessionCommands } from "../../../src/server/session-commands"
@@ -44,7 +46,7 @@ const makeTestExtensions = () => {
     },
   ])
 }
-const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
+const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
@@ -57,7 +59,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     storageLayer,
     clusterRunnerLayer,
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
@@ -105,7 +107,7 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
 describe("agent override behavior", () => {
   it.live("sendMessage keeps agentOverride turn-scoped and does not switch the session agent", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
           ...textStep("override reply"),
           assertRequest: (request) => {
@@ -157,7 +159,7 @@ describe("agent override behavior", () => {
     "createSession with initialPrompt uses the override for the first turn without persisting an agent switch",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           {
             ...textStep("seeded reply"),
             assertRequest: (request) => {
@@ -189,7 +191,7 @@ describe("agent override behavior", () => {
   )
   it.live("createSession skips dispatch when initialPrompt is missing or empty", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([])
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
       yield* Effect.gen(function* () {
         const commands = yield* SessionCommands
         const messageStorage = yield* MessageStorage

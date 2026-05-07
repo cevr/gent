@@ -6,8 +6,8 @@
  * primitive is a domain concept; putting the class in `providers/` would
  * force the domain layer to back-import infrastructure.
  *
- * The provider-infra module (`providers/provider.ts`) imports the same class
- * via re-export. One definition; the brand lives in domain.
+ * Model resolution imports the same class from here. One definition; the
+ * brand lives in domain.
  *
  * @module
  */

@@ -4,7 +4,7 @@ import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { EventStoreError } from "../domain/event.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ProviderError } from "../providers/provider.js"
+import { ProviderError } from "../domain/provider-error.js"
 import { SessionRuntimeErrorSchema, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 

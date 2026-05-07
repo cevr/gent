@@ -1,4 +1,5 @@
 import { describe, expect, test, it } from "effect-bun-test"
+import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Deferred, Duration, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -32,14 +33,14 @@ import {
   type RunSpec,
 } from "@gent/core/domain/agent"
 import {
-  modelResolverFromProvider,
-  Provider,
   finishPart,
+  LanguageModelLayers,
   reasoningDeltaPart,
   textDeltaPart,
   toolCallPart,
-  type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+  type LanguageModelStreamPart,
+} from "@gent/core/test-utils/language-model"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import type { TextPart } from "@gent/core/domain/message"
 import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message"
@@ -195,14 +196,14 @@ const respondAgentLoopInteraction = (input: {
     yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
   })
 const makeLayer = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools, resources),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -228,13 +229,13 @@ const makeLayer = (
     ),
   )
 }
-const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
+const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -263,10 +264,10 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
 }
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
-): Layer.Layer<Provider> => {
+  responses: ReadonlyArray<ReadonlyArray<LanguageModelStreamPart>>,
+): Layer.Layer<LanguageModel.LanguageModel> => {
   let index = 0
-  return Provider.TestStream(() =>
+  return LanguageModelLayers.testStream(() =>
     Effect.succeed(
       Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
     ),
@@ -281,7 +282,7 @@ const retryableStreamError = () =>
     }),
   })
 const makeLiveToolLayer = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolToken> = [],
   resources: AnyResourceContribution[] = [],
 ) => {
@@ -289,7 +290,7 @@ const makeLiveToolLayer = (
   const baseDeps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     extRegistry,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -334,14 +335,14 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
     removeSession: () => Effect.void,
   })
 const makeLayerWithEvents = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventsRef: Ref.Ref<AgentEvent[]>,
   tools: ReadonlyArray<ToolToken> = [],
 ) => {
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -368,13 +369,13 @@ const makeLayerWithEvents = (
   )
 }
 const makeLayerWithEventPublisher = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventPublisherLayer: Layer.Layer<EventPublisher>,
 ) => {
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -442,13 +443,13 @@ const makeExternalLayerWithEvents = (
       externalDrivers: resolved.externalDrivers,
     }),
   )
-  const providerLayer = Provider.TestStream(() =>
+  const providerLayer = LanguageModelLayers.testStream(() =>
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -498,7 +499,7 @@ const waitForPhase = (
 describe("run completion", () => {
   test("run returns after a fast turn completes before the caller awaits idle", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("fast reply")])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("fast reply")])
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const sessionId = SessionId.make("fast-run-session")
@@ -517,7 +518,7 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Provider.TestStream(() => {
+      const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
@@ -556,7 +557,7 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Provider.TestStream(() => {
+      const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
@@ -587,7 +588,7 @@ describe("streaming", () => {
       const deps = Layer.mergeAll(
         slowStorage,
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
@@ -639,7 +640,7 @@ describe("streaming", () => {
       const startedA = yield* Deferred.make<void>()
       const startedB = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Provider.TestStream(() => {
+      const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
         const gate = calls === 1 ? gateA : gateB
         const started = calls === 1 ? startedA : startedB
@@ -684,7 +685,7 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Provider.TestStream(() => {
+      const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
@@ -729,7 +730,7 @@ describe("streaming", () => {
   )
   it.live("publishes StreamStarted and TurnCompleted events", () =>
     Effect.gen(function* () {
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       )
       const layer = makeRecordingLayer(providerLayer)
@@ -853,11 +854,10 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       const providerCalls: Array<{
-        model: string
         latestUserText: string
       }> = []
       let streamCount = 0
-      const providerLayer = Provider.TestStream((request, options) => {
+      const providerLayer = LanguageModelLayers.testStream((options) => {
         const latestUserText = [...Prompt.make(options.prompt).content]
           .reverse()
           .find((message) => message.role === "user")
@@ -865,7 +865,6 @@ describe("streaming", () => {
           .map((part) => part.text)
           .join("\n")
         providerCalls.push({
-          model: request.model,
           latestUserText: latestUserText ?? "",
         })
         streamCount += 1
@@ -904,8 +903,6 @@ describe("streaming", () => {
           expect(providerCalls[0]!.latestUserText).toBe("first")
           expect(providerCalls[1]!.latestUserText).toBe("steer now")
           expect(providerCalls[2]!.latestUserText).toBe("queued")
-          expect(providerCalls[1]!.model).not.toBe(providerCalls[0]!.model)
-          expect(providerCalls[2]!.model).toBe(providerCalls[0]!.model)
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -915,7 +912,7 @@ describe("streaming", () => {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
       let calls = 0
-      const providerLayer = Provider.TestStream(() => {
+      const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
@@ -974,7 +971,7 @@ describe("streaming", () => {
       const firstStarted = yield* Deferred.make<void>()
       const providerCalls: string[] = []
       let streamCalls = 0
-      const providerLayer = Provider.TestStream((_request, options) => {
+      const providerLayer = LanguageModelLayers.testStream((options) => {
         const latestUserText =
           Prompt.make(options.prompt)
             .content.slice()
@@ -1047,7 +1044,7 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.sync(() => {
           streamCalls += 1
           if (streamCalls === 1) {
@@ -1077,7 +1074,7 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.sync(() => {
           streamCalls += 1
           if (streamCalls === 1) {
@@ -1122,7 +1119,7 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.sync(() => {
           streamCalls += 1
           return Stream.fail(retryableStreamError())
@@ -1152,7 +1149,7 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.sync(() => {
           streamCalls += 1
           if (streamCalls === 1) {
@@ -1184,7 +1181,7 @@ describe("streaming", () => {
   test("native response error parts fail the stream and preserve partial output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(
           Stream.fromIterable([
             textDeltaPart("partial answer"),
@@ -1317,7 +1314,7 @@ describe("continuation", () => {
   })
   test("tool call auto-continues to next LLM call", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "hello" }),
         textStep("Done with tools."),
       ])
@@ -1330,7 +1327,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("text-only response does not trigger continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("Just text, no tools."),
       ])
       yield* Effect.gen(function* () {
@@ -1342,7 +1339,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("multi-hop tool calls chain until text response", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         toolCallStep("echo", { text: "step 3" }),
@@ -1357,7 +1354,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("TurnCompleted fires once per turn, not per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Done."),
@@ -1374,7 +1371,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("Continuation response."), gated: true },
       ])
@@ -1404,7 +1401,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "tool" }),
         textStep("Continuation reached."),
       ])
@@ -1420,7 +1417,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("GUARD: multi-hop persists distinct messages per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Final answer."),
@@ -1453,7 +1450,7 @@ describe("continuation", () => {
     }).pipe(Effect.runPromise))
   test("queued follow-up executes normally after interrupt", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("gated response"), gated: true },
         textStep("follow-up response"),
@@ -1621,7 +1618,7 @@ describe("interaction", () => {
   // Without this, the loop re-streams the same tool call 199 times until maxTurnSteps.
   const makeInteractionProviderLayer = () => {
     let streamCall = 0
-    return Provider.TestStream(() => {
+    return LanguageModelLayers.testStream(() => {
       const call = streamCall++
       if (call === 0) {
         return Effect.succeed(
@@ -1634,20 +1631,20 @@ describe("interaction", () => {
               },
             ),
             finishPart({ finishReason: "tool-calls" }),
-          ] satisfies ProviderStreamPart[]),
+          ] satisfies LanguageModelStreamPart[]),
         )
       }
       return Effect.succeed(
         Stream.fromIterable([
           textDeltaPart("done"),
           finishPart({ finishReason: "stop" }),
-        ] satisfies ProviderStreamPart[]),
+        ] satisfies LanguageModelStreamPart[]),
       )
     })
   }
   const makeInteractionRecordingLayer = (
     tools: ReadonlyArray<ToolToken>,
-    providerLayer?: Layer.Layer<Provider>,
+    providerLayer?: Layer.Layer<LanguageModel.LanguageModel>,
   ) => {
     const resolvedProviderLayer = providerLayer ?? makeInteractionProviderLayer()
     const recorderLayer = SequenceRecorder.Live
@@ -1655,7 +1652,7 @@ describe("interaction", () => {
     const baseDeps = Layer.mergeAll(
       SqliteStorage.TestWithSql(),
       resolvedProviderLayer,
-      modelResolverFromProvider(resolvedProviderLayer),
+      ModelResolver.fromLanguageModel(resolvedProviderLayer),
       makeExtRegistry(tools),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
@@ -1806,7 +1803,7 @@ describe("interaction", () => {
   )
   it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
     Effect.gen(function* () {
-      const providerLayer = Provider.TestStream(() =>
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(
           Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
         ),
@@ -1814,7 +1811,7 @@ describe("interaction", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
@@ -1864,7 +1861,7 @@ describe("interaction", () => {
       const tool = makeInteractionTool(callCount, resolution)
       const providerCallsRef = yield* Ref.make(0)
       let streamCallIndex = 0
-      const separateCallProvider = Provider.TestStream(() =>
+      const separateCallProvider = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
           yield* Ref.update(providerCallsRef, (n) => n + 1)
           const idx = streamCallIndex++
@@ -1878,12 +1875,12 @@ describe("interaction", () => {
                 },
               ),
               finishPart({ finishReason: "tool-calls" }),
-            ] satisfies ProviderStreamPart[])
+            ] satisfies LanguageModelStreamPart[])
           }
           return Stream.fromIterable([
             textDeltaPart("interaction resolved"),
             finishPart({ finishReason: "stop" }),
-          ] satisfies ProviderStreamPart[])
+          ] satisfies LanguageModelStreamPart[])
         }),
       )
       const layer = makeLiveToolLayer(separateCallProvider, [tool])
@@ -1944,7 +1941,7 @@ describe("queue drain regression", () => {
         ]
         const streamOrder = yield* Ref.make<readonly number[]>([])
         const streamCallRef = yield* Ref.make(0)
-        const gatedProvider = Provider.TestStream(() =>
+        const gatedProvider = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
             const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
             yield* Ref.update(streamOrder, (arr) => [...arr, idx])
@@ -1955,13 +1952,13 @@ describe("queue drain regression", () => {
             return Stream.fromIterable([
               textDeltaPart(`turn-${idx}`),
               finishPart({ finishReason: "stop" }),
-            ] satisfies ProviderStreamPart[])
+            ] satisfies LanguageModelStreamPart[])
           }),
         )
         const deps = Layer.mergeAll(
           SqliteStorage.TestWithSql(),
           gatedProvider,
-          modelResolverFromProvider(gatedProvider),
+          ModelResolver.fromLanguageModel(gatedProvider),
           makeExtRegistry(),
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
           ConfigService.Test(),

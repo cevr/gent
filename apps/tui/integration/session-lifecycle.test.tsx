@@ -11,7 +11,7 @@ import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
-import { Provider } from "@gent/core/providers/provider.js"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
@@ -34,7 +34,7 @@ describe("session lifecycle", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { client, runtime } = yield* Gent.test(
-              baseLocalLayerWithProvider(Provider.Debug({ retries: false })),
+              baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
             let ctx:
               | {
@@ -93,7 +93,7 @@ describe("session lifecycle", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { client, runtime } = yield* Gent.test(
-              baseLocalLayerWithProvider(Provider.Debug({ retries: false })),
+              baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
             let ctx:
               | {
@@ -139,7 +139,7 @@ describe("session lifecycle", () => {
               branchId: session.branchId,
               content: "hello world",
             })
-            // `Provider.Debug` responds with a message containing the user's text
+            // `LanguageModelLayers.debug` responds with a message containing the user's text
             // Wait for the response to appear in the rendered frame
             const frame = yield* waitForFrame(
               setup,

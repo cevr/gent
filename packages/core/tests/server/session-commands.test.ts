@@ -8,7 +8,8 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/c
 import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { Provider } from "@gent/core/providers/provider"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionRuntime, SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
@@ -28,7 +29,7 @@ const datePlusMillis = (date: Date, millis: number): Date => dateFromMillis(date
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* Provider.Sequence([textStep(reply)])
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep(reply)])
     return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
   })
 
@@ -60,7 +61,8 @@ const failingSessionCommandsLayer = () => {
     SessionRuntime.Test(),
     EventStore.Memory,
     failingPublisherLayer,
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -100,7 +102,8 @@ const sendFailingSessionCommandsLayer = () => {
     failingRuntimeLayer,
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -116,7 +119,8 @@ const sessionCommandsLayer = () => {
     SessionRuntime.Test(),
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -149,7 +153,8 @@ const sessionCommandsLayerWithMachineProbe = (
       : sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -166,7 +171,8 @@ const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionI
     runtimeLayer,
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
@@ -193,7 +199,8 @@ const failingDeleteSessionCommandsLayerWithMachineProbe = (
     sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -255,7 +262,8 @@ const racySessionCommandsLayer = (params: {
     sessionRuntimeProbeLayer(params.runtimeTerminated),
     EventStore.Memory,
     EventPublisher.Test(),
-    Provider.Debug(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
   )
   return Layer.provideMerge(
@@ -919,7 +927,8 @@ describe("session.delete", () => {
   it.live("closes runtime streams and interrupts active loops on public delete", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* Provider.Signal("delete me later")
+        const { layer: providerLayer, controls } =
+          yield* LanguageModelLayers.signal("delete me later")
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({ cwd: process.cwd() })
         const runtimeClosed = yield* collectSessionEvents(
@@ -1235,7 +1244,7 @@ describe("message.send", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const assistantText = "runSpec acceptance reply"
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           {
             ...textStep(assistantText),
             assertRequest: (request) => {
@@ -1293,7 +1302,7 @@ describe("message.send", () => {
       Effect.gen(function* () {
         const assistantText = "parent tool call acceptance reply"
         const parentToolCallId = ToolCallId.make("tc-parent-acceptance")
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           {
             ...textStep(assistantText),
             assertOptions: (options) => {
@@ -1343,7 +1352,7 @@ describe("message.send", () => {
   it.live("rejects a deleted session before provider dispatch", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("should not run"),
         ])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
@@ -1439,7 +1448,8 @@ describe("requestId idempotency", () => {
         countingRuntime,
         EventStore.Memory,
         EventPublisher.Test(),
-        Provider.Debug(),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
       )
       const layer = Layer.provideMerge(
@@ -1489,7 +1499,8 @@ describe("requestId idempotency", () => {
         countingRuntime,
         EventStore.Memory,
         EventPublisher.Test(),
-        Provider.Debug(),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
       )
       const layer = Layer.provideMerge(

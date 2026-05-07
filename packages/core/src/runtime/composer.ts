@@ -29,7 +29,7 @@ import type { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { ResourceManager } from "./resource-manager.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
 import type { SessionRuntime } from "./session-runtime.js"
-import type { Provider } from "../providers/provider.js"
+import type { ModelResolver } from "../providers/model-resolver.js"
 import type { ConfigService } from "./config-service.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { RuntimePlatform } from "./runtime-platform.js"
@@ -86,7 +86,7 @@ type EphemeralExtensionRequires =
   | RuntimePlatform
   | FileSystem.FileSystem
   | Path.Path
-  | Provider
+  | ModelResolver
   | ConfigService
   | ModelRegistry
 

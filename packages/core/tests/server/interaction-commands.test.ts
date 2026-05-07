@@ -6,7 +6,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, InteractionRequestId } from "@gent/core/domain/ids"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { createTempDirFixture, waitFor } from "@gent/core/test-utils/fixtures"
@@ -49,7 +49,7 @@ describe("interaction.respondInteraction", () => {
         const dbPath = path.join(tempDir(), "gent.db")
         const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
         const finalReply = "approval resumed after restart"
-        const firstProvider = yield* Provider.Sequence([
+        const firstProvider = yield* LanguageModelLayers.sequence([
           toolCallStep("approval_probe", { text: "approve deploy?" }),
         ])
         const first = yield* Effect.scoped(
@@ -100,7 +100,7 @@ describe("interaction.respondInteraction", () => {
           }).pipe(Effect.timeout("8 seconds")),
         )
 
-        const secondProvider = yield* Provider.Sequence([textStep(finalReply)])
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { client } = yield* Gent.test(
@@ -173,7 +173,7 @@ describe("interaction.respondInteraction", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const finalReply = "approval resumed after stale response"
-          const { layer: providerLayer } = yield* Provider.Sequence([
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             toolCallStep("approval_probe", { text: "approve deploy?" }),
             textStep(finalReply),
           ])

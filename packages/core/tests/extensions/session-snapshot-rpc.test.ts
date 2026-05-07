@@ -4,7 +4,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent, extractText } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -16,7 +16,7 @@ describe("Session snapshot across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })

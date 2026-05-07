@@ -11,9 +11,8 @@
  * The contributing extensions still register through their respective
  * contribution kinds (`model-driver` or `external-driver`); this registry
  * is the read side. Auth flow integration (OAuth + API key resolution)
- * stays in `providers/provider.ts` because it belongs to model drivers
- * specifically — `DriverRegistry.resolveModel` consults `getModel(id)`,
- * then runs the existing auth pipeline.
+ * stays with model resolution because it belongs to model drivers
+ * specifically.
  *
  * @module
  */

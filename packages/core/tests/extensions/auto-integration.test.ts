@@ -3,10 +3,10 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Fiber, type Layer, Ref, Stream } from "effect"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import {
-  Provider,
+  LanguageModelLayers,
   type SequenceStep,
-  type SequenceProviderControls,
-} from "@gent/core/providers/provider"
+  type SequenceLanguageModelControls,
+} from "@gent/core/test-utils/language-model"
 import {
   createE2ELayer,
   withTinyContextWindow,
@@ -65,13 +65,13 @@ const reviewCompatibleRunner = {
 }
 
 const runE2ETest = (
-  steps: Parameters<typeof Provider.Sequence>[0],
+  steps: Parameters<typeof LanguageModelLayers.sequence>[0],
   test: (
-    controls: SequenceProviderControls,
+    controls: SequenceLanguageModelControls,
   ) => Effect.Effect<void, object, SessionRuntime | EventStore | AutoRead | AutoWrite>,
 ) =>
   Effect.gen(function* () {
-    const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
     const e2eLayer = createE2ELayer({
       ...e2ePreset,
       providerLayer,
@@ -236,7 +236,7 @@ describe("Auto extension E2E", () => {
         textStep("Shouldn't reach here."), // Turn 7 — auto is now inactive
       ]
 
-      const { layer: providerLayer } = yield* Provider.Sequence(steps)
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence(steps)
       const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
@@ -268,7 +268,7 @@ describe("Auto extension E2E", () => {
         gated: true,
       }
 
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("Starting."), // Turn 1: initial
         gatedCheckpoint, // Turn 2: gated — held until we release
         textStep("Done."), // Continuation after checkpoint tool result
@@ -312,7 +312,7 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         textStep("Starting auto."),
         toolCallStep("auto_checkpoint", {
           status: "continue",
@@ -367,7 +367,7 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("Working on it."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
@@ -403,7 +403,7 @@ describe("Auto extension E2E", () => {
       Effect.gen(function* () {
         const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-        const { layer: providerLayer, controls } = yield* Provider.Sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("x".repeat(2000)), // ~500 tokens — context over 85%
           toolCallStep("auto_checkpoint", {
             status: "complete",

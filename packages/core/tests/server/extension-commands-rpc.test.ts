@@ -6,7 +6,7 @@ import {
   type LoadedExtension,
 } from "../../src/domain/extension.js"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -154,7 +154,7 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const ext = yield* setupCommandsExt
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
             )
@@ -223,7 +223,7 @@ describe("extension command RPCs", () => {
       yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
             )
@@ -257,7 +257,7 @@ describe("extension command RPCs", () => {
       yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const ext = yield* setupCommandsExt
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
@@ -291,7 +291,7 @@ describe("extension command RPCs", () => {
       yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const ext = yield* setupCommandsExt
             const { client } = yield* Gent.test(
               createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
@@ -327,7 +327,7 @@ describe("extension command RPCs", () => {
       invoked.length = 0
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const ext = yield* setupCommandsExt
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
@@ -398,7 +398,7 @@ describe("extension command RPCs", () => {
             const sessionProfileCacheLayer = SessionProfileCache.Test(
               new Map([[profileCwd, profile]]),
             )
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({
                 ...e2ePreset,
@@ -467,7 +467,7 @@ describe("extension command RPCs", () => {
               Layer.mergeAll(BunPlatformLive, ConfigService.Test(), SqliteStorage.MemoryWithSql()),
             ),
           ) as Layer.Layer<SessionProfileCache>
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -505,7 +505,7 @@ describe("extension command RPCs", () => {
       yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({
                 ...e2ePreset,
@@ -554,7 +554,7 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             toolCallStep("create-branch", {}),
             textStep("done"),
           ])
@@ -633,7 +633,7 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
@@ -685,7 +685,7 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -754,7 +754,7 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -807,7 +807,7 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -839,7 +839,7 @@ describe("extension command RPCs", () => {
                 [betaCwd, betaProfile],
               ]),
             )
-            const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client } = yield* Gent.test(
               createE2ELayer({
                 ...e2ePreset,

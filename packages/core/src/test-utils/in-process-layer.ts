@@ -7,6 +7,7 @@
 
 import { Layer } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
+import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
 import { ExtensionId } from "../domain/ids.js"
@@ -14,11 +15,8 @@ import { Auth, AuthGuard } from "../domain/auth.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import {
-  DebugSlowProviderDelayMs,
-  Provider,
-  modelResolverFromProvider,
-} from "../providers/provider.js"
+import { ModelResolver } from "../providers/model-resolver.js"
+import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "./language-model.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
@@ -61,7 +59,10 @@ export interface InProcessLayerConfig {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
-const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerConfig) => {
+const buildLayer = (
+  languageModelLive: Layer.Layer<LanguageModel.LanguageModel>,
+  config: InProcessLayerConfig,
+) => {
   const { authLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
     config.agents,
   )
@@ -73,8 +74,8 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const baseDeps = Layer.mergeAll(
     memoryStorage,
     clusterRunnerLive,
-    providerLive,
-    modelResolverFromProvider(providerLive),
+    languageModelLive,
+    ModelResolver.fromLanguageModel(languageModelLive),
     extensionRegistryLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunGentPlatformLive,
@@ -133,13 +134,13 @@ export const baseLocalLayer = (
 ) =>
   buildLayer(
     providerMode === "debug-slow"
-      ? Provider.Debug({ delayMs: DebugSlowProviderDelayMs })
-      : Provider.Debug(),
+      ? LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs })
+      : LanguageModelLayers.debug(),
     config,
   )
 
-/** Build a complete in-process test layer with a custom provider layer (e.g. `Provider.Signal`). */
+/** Build a complete in-process test layer with a custom language model layer. */
 export const baseLocalLayerWithProvider = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   config: InProcessLayerConfig,
 ) => buildLayer(providerLayer, config)

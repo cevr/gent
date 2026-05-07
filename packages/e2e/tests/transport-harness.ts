@@ -4,7 +4,10 @@ import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   type InProcessLayerConfig,
 } from "@gent/core/test-utils/in-process-layer.js"
-import { Provider, type SignalProviderControls } from "@gent/core/providers/provider.js"
+import {
+  LanguageModelLayers,
+  type SignalLanguageModelControls,
+} from "@gent/core/test-utils/language-model.js"
 import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
@@ -56,7 +59,7 @@ export interface SignalTransportCase {
     reply: string,
     assertion: (
       bundle: GentClientBundle,
-      controls: SignalProviderControls,
+      controls: SignalLanguageModelControls,
     ) => Effect.Effect<A, Error>,
   ) => Promise<A>
 }
@@ -75,7 +78,7 @@ const makeDirectSignalCase = (): SignalTransportCase => ({
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer, controls } = yield* Provider.Signal(reply)
+          const { layer, controls } = yield* LanguageModelLayers.signal(reply)
           const bundle = yield* Gent.test(baseLocalLayerWithProvider(layer))
           return yield* assertion(bundle, controls)
         }),

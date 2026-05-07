@@ -7,7 +7,7 @@ import {
   DEFAULT_RETRY_CONFIG,
   withRetry,
 } from "../../src/runtime/retry"
-import { ProviderError } from "@gent/core/providers/provider"
+import { ProviderError } from "@gent/core/domain/provider-error"
 
 describe("getRetryAfter", () => {
   test("parses retry-after seconds from Headers", () => {

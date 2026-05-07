@@ -13,7 +13,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, type Layer, Ref, Stream, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
@@ -100,7 +100,7 @@ describe("capability permissionRules E2E", () => {
     () =>
       Effect.gen(function* () {
         // Step 1: model calls bash → step 2: model sends text after seeing error result
-        const { layer: providerLayer } = yield* Provider.Sequence([
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("bash", { command: "ls -la" }),
           textStep("Understood, bash is denied."),
         ])
@@ -161,7 +161,7 @@ describe("capability permissionRules E2E", () => {
     "bash tool call allowed when no deny rule is present (control case)",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("bash", { command: "echo hello" }),
           textStep("Bash ran successfully."),
         ])

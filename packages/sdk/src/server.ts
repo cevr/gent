@@ -26,7 +26,8 @@ import { ServerIdentity } from "@gent/core/server/server-identity.js"
 import { buildServerRoutes } from "@gent/core/server/server-routes.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core/debug/session.js"
-import { Provider } from "@gent/core/providers/provider.js"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
+import type { LanguageModel } from "effect/unstable/ai"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
 import {
@@ -124,16 +125,16 @@ export const provider = {
   }): ProviderSpec => ProviderSpec.Mock.make({ ...(options ?? {}) }),
 } as const
 
-// ── Provider layer from spec ──
+// ── Language model layer from spec ──
 
-/** Build a self-contained provider layer from spec. For "live", returns undefined
+/** Build a self-contained language model layer from spec. For "live", returns undefined
  *  (let createDependencies build its own from auth deps). */
-const resolveProviderLayer = (
+const resolveLanguageModelLayer = (
   spec: ProviderSpec,
-): Layer.Layer<Provider, never, never> | undefined => {
+): Layer.Layer<LanguageModel.LanguageModel, never, never> | undefined => {
   if (spec._tag === "live") return undefined
-  if (spec.failing === true) return Provider.Failing
-  return Provider.Debug({
+  if (spec.failing === true) return LanguageModelLayers.failing
+  return LanguageModelLayers.debug({
     delayMs: spec.delayMs,
     retries: spec.retries,
   })
@@ -188,8 +189,8 @@ const buildOwnedServer = (
         Effect.provide(BunServices.layer),
       )
 
-      // Build provider layer (undefined = let createDependencies resolve from auth deps)
-      const providerLayer = resolveProviderLayer(providerSpec)
+      // Build language model layer (undefined = let createDependencies resolve from auth deps)
+      const languageModelLayer = resolveLanguageModelLayer(providerSpec)
 
       // Build dependency config
       const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(options, stateSpec) : undefined
@@ -203,7 +204,9 @@ const buildOwnedServer = (
         persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
         sharedServerUrl: url,
         extensions: BuiltinExtensions,
-        ...(providerLayer !== undefined ? { providerLayerOverride: providerLayer } : {}),
+        ...(languageModelLayer !== undefined
+          ? { languageModelLayerOverride: languageModelLayer }
+          : {}),
       }).pipe(
         Layer.provide(LocalPlatformLayer),
         Layer.provide(GentLogger),

@@ -4,7 +4,7 @@ import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { ref } from "@gent/core/extensions/api"
 import { ArtifactId, BranchId, type SessionId } from "@gent/core/domain/ids"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
 import { ArtifactsExtension } from "@gent/extensions/artifacts"
 import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol"
@@ -68,7 +68,7 @@ const withArtifactsClient = <A>(
   Effect.scoped(
     Effect.gen(function* () {
       const ext = yield* setupArtifactsExt
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
       const {
         client,
         sessionId,

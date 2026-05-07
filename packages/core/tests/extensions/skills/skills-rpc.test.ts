@@ -8,7 +8,7 @@ import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { ref } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { compileExtensionReactions } from "../../../src/runtime/extensions/extension-reactions"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
@@ -101,7 +101,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
@@ -131,7 +131,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
@@ -161,7 +161,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )

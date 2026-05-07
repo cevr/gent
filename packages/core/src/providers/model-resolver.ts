@@ -28,6 +28,12 @@ export interface ResolveModelRequest {
   readonly driverId?: string
 }
 
+export const CurrentResolveModelAssertion = Context.Reference<
+  ((request: ResolveModelRequest) => Effect.Effect<void, ProviderError>) | undefined
+>("@gent/core/src/providers/model-resolver/CurrentResolveModelAssertion", {
+  defaultValue: () => undefined,
+})
+
 export interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
@@ -126,8 +132,13 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
+        const assertRequest = yield* CurrentResolveModelAssertion
         return {
-          resolve: () => Effect.succeed(model),
+          resolve: (request) =>
+            Effect.gen(function* () {
+              if (assertRequest !== undefined) yield* assertRequest(request)
+              return model
+            }),
         }
       }),
     ).pipe(Layer.provide(layer))

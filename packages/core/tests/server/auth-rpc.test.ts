@@ -14,7 +14,7 @@ import { Effect, FileSystem, Layer, Path } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { Auth, AuthError, AuthMethod, type AuthInfo } from "@gent/core/domain/auth"
 import { AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
@@ -100,7 +100,7 @@ describe("auth.listProviders", () => {
   it.live("returns launch-cwd providers without sessionId", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
@@ -138,7 +138,7 @@ describe("auth.listProviders", () => {
           const configServiceLive = ConfigService.Live.pipe(
             Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
           )
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -168,7 +168,7 @@ describe("auth.listProviders", () => {
   it.live("driver.set followed by no-sessionId listProviders honors launch-cwd override", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const externalDriver = drivers.find((d) => d._tag === "external")
@@ -188,7 +188,7 @@ describe("auth.listProviders", () => {
   it.live("rejects auth provider listing for a deleted session", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const session = yield* client.session.create({})
         yield* client.session.delete({ sessionId: session.sessionId })
@@ -210,7 +210,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.listProviders surfaces auth read failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -229,7 +229,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.setKey surfaces write failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -248,7 +248,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.deleteKey surfaces delete failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -267,7 +267,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.authorize surfaces credentials persisted during authorize", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -293,7 +293,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.callback surfaces callback credential persistence failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,

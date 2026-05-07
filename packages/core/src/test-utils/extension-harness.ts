@@ -33,7 +33,8 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
-import { Provider, modelResolverFromProvider } from "../providers/provider.js"
+import { ModelResolver } from "../providers/model-resolver.js"
+import { LanguageModelLayers } from "./language-model.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 
 export interface ToolTestLayerConfig {
@@ -106,6 +107,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const extensionRegistryLayer = ExtensionRegistry.fromResolved(reconciled.resolved)
       const driverRegistryLayer = DriverRegistry.fromResolved(reconciled.resolved)
+      const languageModelLayer = LanguageModelLayers.debug()
       const baseDepsLayer = Layer.mergeAll(
         storageLayer,
         EventStore.Memory,
@@ -115,8 +117,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         PromptPresenter.Test(),
         Permission.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        languageModelLayer,
+        ModelResolver.fromLanguageModel(languageModelLayer),
         ToolRunner.Test(),
         ResourceManagerLive,
         ConfigService.Test(),

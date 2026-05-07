@@ -1,18 +1,16 @@
 import { Effect, Layer, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
+import type { LanguageModel } from "effect/unstable/ai"
 import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
-import {
-  DebugSlowProviderDelayMs,
-  Provider,
-  modelResolverFromProvider,
-} from "../providers/provider.js"
+import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
+import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -76,9 +74,9 @@ export interface DependenciesConfig {
   scheduledJobCommand?: ScheduledJobCommand
   /** URL of the shared server. Subprocess children pass --connect to reuse it. */
   sharedServerUrl?: string
-  /** Provider layer override. When set, bypasses providerMode string and uses this layer directly.
+  /** Language model layer override. When set, bypasses providerMode string and uses this layer directly.
    *  Must be a fully-provided layer (no requirements, no errors). */
-  providerLayerOverride?: Layer.Layer<Provider, never, never>
+  languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension>
 }
@@ -177,17 +175,18 @@ export const createDependencies = (config: DependenciesConfig) => {
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
-  let providerLive = Layer.provide(Provider.Live, authDeps)
-  if (config.providerLayerOverride !== undefined) {
-    providerLive = config.providerLayerOverride
+  let modelResolverLive = Layer.provide(ModelResolver.Live, authDeps)
+  if (config.languageModelLayerOverride !== undefined) {
+    modelResolverLive = ModelResolver.fromLanguageModel(config.languageModelLayerOverride)
   } else if (providerMode === "debug-scripted") {
-    providerLive = Provider.Debug()
+    modelResolverLive = ModelResolver.fromLanguageModel(LanguageModelLayers.debug())
   } else if (providerMode === "debug-failing") {
-    providerLive = Provider.Failing
+    modelResolverLive = ModelResolver.fromLanguageModel(LanguageModelLayers.failing)
   } else if (providerMode === "debug-slow") {
-    providerLive = Provider.Debug({ delayMs: DebugSlowProviderDelayMs })
+    modelResolverLive = ModelResolver.fromLanguageModel(
+      LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }),
+    )
   }
-  const modelResolverLive = modelResolverFromProvider(providerLive)
 
   const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)
 
@@ -205,7 +204,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.provide(modelRegistryLive, FetchHttpClient.layer),
     extensionRegistryLive,
     fileLockServiceLive,
-    providerLive,
     modelResolverLive,
     Layer.provide(FileIndexLive, runtimePlatformLive),
     FetchHttpClient.layer,

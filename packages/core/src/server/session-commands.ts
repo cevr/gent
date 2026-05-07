@@ -25,9 +25,8 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import type { StorageError } from "../storage/sqlite-storage.js"
 import { StorageTransaction } from "../storage/storage-transaction.js"
-import { Provider } from "../providers/provider.js"
+import { ModelResolver } from "../providers/model-resolver.js"
 import { toPrompt } from "../providers/ai-transcript.js"
-import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -570,7 +569,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const storageTransaction = yield* StorageTransaction
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
-      const provider = yield* Provider
+      const modelResolver = yield* ModelResolver
       const platform = yield* GentPlatform
       // SessionCommands delegates pure-mutation bodies (branch create, branch
       // fork, switch active branch, session/branch/message delete) to
@@ -666,12 +665,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const model = yield* provider.resolve({
-          model: NAME_GEN_MODEL,
-          maxTokens: 400,
+        const model = yield* modelResolver.resolve({
+          modelId: NAME_GEN_MODEL,
+          hints: { maxTokens: 400 },
         })
-        const stream = LanguageModel.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
-          Stream.provide(model),
+        const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
           Stream.mapError(
             (error: unknown) =>
               new ProviderError({
@@ -811,7 +809,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         input: SwitchBranchInput,
       ) {
         // The summarize side-effect lives on SessionCommands because it
-        // depends on `Provider` and is intentionally outside the durable
+        // depends on model resolution and is intentionally outside the durable
         // mutation tx. Once the (best-effort) summary is published, delegate
         // the actual switch to SessionMutations so there is exactly one
         // implementation of "validate branches + update activeBranchId".

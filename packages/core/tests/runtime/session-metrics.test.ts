@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, type Layer } from "effect"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
@@ -7,7 +8,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Model, ModelId, ProviderId } from "@gent/core/domain/model"
 import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
 import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStorage } from "@gent/core/storage/event-storage"
@@ -25,7 +26,7 @@ const modelWithPricing = new Model({
   pricing: { input: 3, output: 15 }, // $3/M in, $15/M out
 })
 const makeLayer = (
-  providerLayer: Layer.Layer<Provider>,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   models: readonly Model[] = [modelWithPricing],
 ) =>
   baseLocalLayerWithProvider(providerLayer, {
@@ -62,7 +63,7 @@ const createSessionBranch = (modelIdLabel = "test/priced") =>
 describe("SessionRuntime metrics", () => {
   it.live("StreamEnded.costUsd is frozen at emit time and summed into metrics.costUsd", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         textStep("reply one"),
         textStep("reply two"),
       ])
@@ -114,7 +115,7 @@ describe("SessionRuntime metrics", () => {
   )
   it.live("metrics.costUsd does not drift when pricing changes after emission", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("reply")])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
       const result = yield* narrowR(
         Effect.gen(function* () {
           const runtime = yield* SessionRuntime
@@ -139,7 +140,7 @@ describe("SessionRuntime metrics", () => {
   )
   it.live("StreamEnded omits costUsd when model has no pricing", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("reply")])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
       const unpriced = new Model({
         id: ModelId.make("test/priced"),
         name: "No Pricing",

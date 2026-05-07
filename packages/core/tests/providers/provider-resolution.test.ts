@@ -2,18 +2,15 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Schema, Stream } from "effect"
 import { tool, type ToolToken } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ModelDriverContribution } from "@gent/core/domain/driver"
+import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core/domain/auth"
 import {
-  Provider,
-  type ProviderError,
-  type ModelRequest,
-  type ProviderResolution,
-  finishPart,
-  toolCallPart,
-} from "@gent/core/providers/provider"
+  DriverRegistry,
+  type DriverRegistryService,
+} from "../../src/runtime/extensions/driver-registry"
+import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core/domain/auth"
+import { finishPart, LanguageModelLayers, toolCallPart } from "@gent/core/test-utils/language-model"
+import type { ProviderError } from "@gent/core/domain/provider-error"
 import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core/domain/driver"
@@ -66,20 +63,16 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
   sourcePath: "test",
   contributions: { modelDrivers },
 })
-const buildProviderLayer = (
-  extensions: LoadedExtension[],
-  authStore: AuthService = testAuthStorage,
-) => {
-  const resolved = resolveExtensions(extensions)
-  const registryLayer = ExtensionRegistry.fromResolved(resolved)
-  const driverRegistryLayer = DriverRegistry.fromResolved({
-    modelDrivers: resolved.modelDrivers,
-    externalDrivers: resolved.externalDrivers,
-  })
-  const authLayer = Layer.succeed(Auth, authStore)
-  return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
+interface ModelRequest {
+  readonly model: string
+  readonly reasoning?: string
+  readonly maxTokens?: number
+  readonly temperature?: number
+  readonly driverRegistry?: DriverRegistryService
+  readonly driverId?: string
 }
-const buildModelResolverLayer = (
+
+const buildProviderLayer = (
   extensions: LoadedExtension[],
   authStore: AuthService = testAuthStorage,
 ) => {
@@ -96,11 +89,6 @@ const buildModelResolverLayer = (
   )
 }
 const resolveModel = (request: ModelRequest) =>
-  Effect.gen(function* () {
-    const provider = yield* Provider
-    return yield* provider.resolve(request)
-  })
-const resolveLanguageModel = (request: ModelRequest) =>
   Effect.gen(function* () {
     const resolver = yield* ModelResolver
     return yield* resolver.resolve({
@@ -122,26 +110,26 @@ const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<s
   },
 ) =>
   Effect.gen(function* () {
-    const provider = yield* Provider
-    const model = yield* provider.resolve(request)
+    const model = yield* resolveModel(request)
     if (request.toolkit !== undefined) {
-      return yield* LanguageModel.streamText({
-        prompt: request.prompt,
-        toolkit: request.toolkit,
-        disableToolCallResolution: true,
-      }).pipe(Stream.provide(model), Stream.runCollect)
+      return yield* model
+        .streamText({
+          prompt: request.prompt,
+          toolkit: request.toolkit,
+          disableToolCallResolution: true,
+        })
+        .pipe(Stream.runCollect)
     }
     if (request.tools !== undefined) {
-      return yield* LanguageModel.streamText({
-        prompt: request.prompt,
-        toolkit: convertTools(request.tools),
-        disableToolCallResolution: true,
-      }).pipe(Stream.provide(model), Stream.runCollect)
+      return yield* model
+        .streamText({
+          prompt: request.prompt,
+          toolkit: convertTools(request.tools),
+          disableToolCallResolution: true,
+        })
+        .pipe(Stream.runCollect)
     }
-    return yield* LanguageModel.streamText({ prompt: request.prompt }).pipe(
-      Stream.provide(model),
-      Stream.runCollect,
-    )
+    return yield* model.streamText({ prompt: request.prompt }).pipe(Stream.runCollect)
   })
 describe("Provider model resolution", () => {
   it.live("resolves model through extension-registered provider", () =>
@@ -160,7 +148,7 @@ describe("Provider model resolution", () => {
       const languageModel = makeLanguageModel({
         streamText: () => Stream.fromIterable([finishPart({ finishReason: "stop" })]),
       })
-      const layer = buildModelResolverLayer([
+      const layer = buildProviderLayer([
         makeExt("direct-ext", [
           {
             id: "direct",
@@ -169,9 +157,7 @@ describe("Provider model resolution", () => {
           },
         ]),
       ])
-      const model = yield* resolveLanguageModel({ model: "direct/gpt-5" }).pipe(
-        Effect.provide(layer),
-      )
+      const model = yield* resolveModel({ model: "direct/gpt-5" }).pipe(Effect.provide(layer))
       const result = yield* model.streamText({ prompt: [] }).pipe(Stream.runCollect)
       expect(Array.from(result)).toEqual([expect.objectContaining({ type: "finish" })])
     }),
@@ -189,16 +175,14 @@ describe("Provider model resolution", () => {
   )
   it.live("failing test provider resolves before failing at stream boundary", () =>
     Effect.gen(function* () {
-      const provider = yield* Provider
-      const model = yield* provider.resolve({ model: "test/failing" })
-      const result = yield* Effect.exit(
-        LanguageModel.streamText({ prompt: [] }).pipe(Stream.provide(model), Stream.runCollect),
-      )
+      const resolver = yield* ModelResolver
+      const model = yield* resolver.resolve({ modelId: "test/failing" })
+      const result = yield* Effect.exit(model.streamText({ prompt: [] }).pipe(Stream.runCollect))
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(Cause.pretty(result.cause)).toContain("provider exploded")
       }
-    }).pipe(Effect.provide(Provider.Failing)),
+    }).pipe(Effect.provide(ModelResolver.fromLanguageModel(LanguageModelLayers.failing))),
   )
   it.live("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {

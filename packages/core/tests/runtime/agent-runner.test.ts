@@ -1,15 +1,16 @@
 import { describe, test, expect, it } from "effect-bun-test"
+import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
-  modelResolverFromProvider,
-  Provider,
   finishPart,
+  LanguageModelLayers,
   textDeltaPart,
   toolCallPart,
-  type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+  type LanguageModelStreamPart,
+} from "@gent/core/test-utils/language-model"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -55,10 +56,10 @@ import {
 import { BunFileSystem } from "@effect/platform-bun"
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
-): Layer.Layer<Provider> => {
+  responses: ReadonlyArray<ReadonlyArray<LanguageModelStreamPart>>,
+): Layer.Layer<LanguageModel.LanguageModel> => {
   let index = 0
-  return Provider.TestStream(() =>
+  return LanguageModelLayers.testStream(() =>
     Effect.succeed(
       Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
     ),
@@ -98,7 +99,7 @@ const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
-const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
+const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
@@ -137,7 +138,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       externalDrivers: resolved.externalDrivers,
     }),
     providerLayer,
-    modelResolverFromProvider(providerLayer),
+    ModelResolver.fromLanguageModel(providerLayer),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
@@ -247,7 +248,7 @@ describe("RunSpec", () => {
   })
   it.live("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
           ...textStep("child result"),
           assertRequest: (request) => {
@@ -316,8 +317,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
         recorderLayer,
@@ -409,8 +410,8 @@ describe("AgentRunner", () => {
         EventStore.Memory,
         failingPublisherLayer,
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -460,8 +461,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
         recorderLayer,
@@ -510,8 +511,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(() => Effect.sleep("50 millis")),
         eventStoreLayer,
@@ -567,7 +568,7 @@ describe("AgentRunner", () => {
         eventPublisherLayer,
         testRegistryLayer,
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -632,7 +633,7 @@ describe("AgentRunner", () => {
         eventPublisherLayer,
         testRegistryLayer,
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -688,8 +689,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
         eventStoreLayer,
@@ -760,8 +761,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         storageLayer,
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -834,8 +835,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         storageLayer,
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -908,8 +909,8 @@ describe("AgentRunner", () => {
       const deps = Layer.mergeAll(
         storageLayer,
         ExtensionRegistry.Test(),
-        Provider.Debug(),
-        modelResolverFromProvider(Provider.Debug()),
+        LanguageModelLayers.debug(),
+        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -1087,7 +1088,7 @@ describe("session depth guard", () => {
   )
 })
 describe("ephemeral service propagation", () => {
-  const makeEphemeralLayer = (providerLayer: Layer.Layer<Provider>) => {
+  const makeEphemeralLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
     const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
     const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -1097,7 +1098,7 @@ describe("ephemeral service propagation", () => {
       eventPublisherLayer,
       testRegistryLayer,
       providerLayer,
-      modelResolverFromProvider(providerLayer),
+      ModelResolver.fromLanguageModel(providerLayer),
       sessionRuntimeStub(),
       ephemeralParentDeps,
     )
@@ -1118,7 +1119,9 @@ describe("ephemeral service propagation", () => {
     })
   test("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ephemeral text output")])
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("ephemeral text output"),
+      ])
       const layer = makeEphemeralLayer(providerLayer)
       yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -1168,7 +1171,7 @@ describe("ephemeral service propagation", () => {
           },
         ]),
       )
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])
@@ -1181,7 +1184,7 @@ describe("ephemeral service propagation", () => {
         eventPublisherLayer,
         toolRegistry,
         providerLayer,
-        modelResolverFromProvider(providerLayer),
+        ModelResolver.fromLanguageModel(providerLayer),
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )

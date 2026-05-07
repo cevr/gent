@@ -7,6 +7,8 @@ import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "../domain/ids.js"
+import { ProviderError } from "../domain/provider-error.js"
+import { CurrentResolveModelAssertion } from "../providers/model-resolver.js"
 
 export type LanguageModelToolMap = Record<string, AiTool.Any>
 export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =
@@ -20,6 +22,10 @@ export interface SignalLanguageModelControls {
 
 export interface SequenceStep {
   readonly parts: ReadonlyArray<LanguageModelStreamPart>
+  readonly assertRequest?: (request: {
+    readonly model: string
+    readonly reasoning?: string
+  }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
 }
@@ -30,6 +36,8 @@ export interface SequenceLanguageModelControls {
   readonly callCount: Effect.Effect<number>
   readonly assertDone: () => Effect.Effect<void>
 }
+
+export const DebugSlowLanguageModelDelayMs = 250
 
 let _streamPartIdCounter = 0
 const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
@@ -290,6 +298,7 @@ const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: 
 const sequence = (steps: ReadonlyArray<SequenceStep>) =>
   Effect.gen(function* () {
     const indexRef = yield* Ref.make(0)
+    const requestIndexRef = yield* Ref.make(0)
     const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
     const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
 
@@ -299,7 +308,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       return Deferred.succeed(gate, void 0)
     })
 
-    const layer = makeLanguageModelLayer({
+    const languageModelLayer = makeLanguageModelLayer({
       streamText: (options) =>
         Effect.gen(function* () {
           const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
@@ -337,6 +346,29 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
         }).pipe(Stream.unwrap),
       generateText: () => Effect.succeed("sequence language model"),
     })
+    const requestAssertionLayer = Layer.succeed(CurrentResolveModelAssertion, (request) =>
+      Effect.gen(function* () {
+        const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
+        const step = steps[idx] ?? steps[0]
+        if (step?.assertRequest === undefined) return
+        yield* Effect.try({
+          try: () =>
+            step.assertRequest?.({
+              model: String(request.modelId),
+              ...(request.hints?.reasoning !== undefined
+                ? { reasoning: request.hints.reasoning }
+                : {}),
+            }),
+          catch: (e) =>
+            new ProviderError({
+              message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
+              model: request.modelId,
+              cause: e,
+            }),
+        })
+      }),
+    )
+    const layer = Layer.merge(languageModelLayer, requestAssertionLayer)
 
     const controls: SequenceLanguageModelControls = {
       waitForCall: (index) => {

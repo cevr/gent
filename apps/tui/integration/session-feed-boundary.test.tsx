@@ -12,7 +12,7 @@ import {
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
-import { Provider } from "@gent/core/providers/provider.js"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
@@ -25,7 +25,7 @@ describe("session feed boundary", () => {
       Effect.gen(function* () {
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { layer: signalLayer, controls } = yield* Provider.Signal(
+            const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
               "cowork debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
             )
             const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
@@ -76,7 +76,7 @@ describe("session feed boundary", () => {
       Effect.gen(function* () {
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { layer: signalLayer, controls } = yield* Provider.Signal(
+            const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
               "cowork debug response. First turn complete.",
             )
             const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
@@ -142,7 +142,7 @@ describe("session feed boundary", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { client, runtime } = yield* Gent.test(
-              baseLocalLayerWithProvider(Provider.Failing),
+              baseLocalLayerWithProvider(LanguageModelLayers.failing),
             )
             const created = yield* client.session.create({ cwd: repoRoot })
             const setup = yield* Effect.promise(() =>

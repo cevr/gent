@@ -26,7 +26,7 @@ import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
 } from "../../../providers/ai-transcript.js"
-import { ProviderError, type ProviderStreamPart } from "../../../providers/provider.js"
+import { ProviderError } from "../../../domain/provider-error.js"
 import { summarizeOutput, stringifyOutput } from "../../../domain/tool-output.js"
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
@@ -157,7 +157,7 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
 }
 
 export const collectModelTurnResponse = (params: {
-  turnStream: Stream.Stream<ProviderStreamPart, ProviderError>
+  turnStream: Stream.Stream<Response.AnyPart, ProviderError>
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
