@@ -718,6 +718,22 @@ Definition of done:
 - Concurrency tests prove read sharing and write exclusion.
 - `bun run gate`.
 
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- `ResourceManager` now stores one `TxReentrantLock` per resource tag instead
+  of one million-permit semaphores.
+- Read needs acquire shared read locks; write needs acquire exclusive write
+  locks.
+- Existing duplicate-need normalization and tag-sorted multi-lock acquisition
+  remain in place.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/resource-manager.test.ts packages/core/tests/runtime/tool-runner.test.ts`
+
 #### C23: design(runtime): STM queue/state prototype
 
 Build a small isolated prototype for `TxRef` / `TxQueue` replacing the current

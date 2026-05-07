@@ -10,18 +10,16 @@
  *   - Fresh ResourceManager per ephemeral run; subagents get their own budget.
  *   - Locks are created lazily on first request — no upfront enumeration.
  *   - `withNeeds([])` is a no-op (parallel by default).
- *   - `withNeeds([{ tag, access: "read" }])` acquires one read permit.
- *   - `withNeeds([{ tag, access: "write" }])` acquires the full write lock.
+ *   - `withNeeds([{ tag, access: "read" }])` acquires a shared read lock.
+ *   - `withNeeds([{ tag, access: "write" }])` acquires an exclusive write lock.
  *   - Multi-need acquisition is ordered by tag to avoid deadlock.
  *
  * Replaces string resources and replay booleans with explicit needs.
  *
  * @module
  */
-import { Context, Effect, Layer, Ref, Semaphore } from "effect"
+import { Context, Effect, Layer, Ref, TxReentrantLock } from "effect"
 import type { ToolNeed } from "../domain/capability/tool.js"
-
-const READ_PERMITS = 1_000_000
 
 /** Service interface — opaque to tools, only `withNeeds` is used. */
 export interface ResourceManagerService {
@@ -37,15 +35,15 @@ export class ResourceManager extends Context.Service<ResourceManager, ResourceMa
 
 /** Build a fresh resource manager — one per session/loop. */
 export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect.gen(function* () {
-  const semaphoresRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
+  const locksRef = yield* Ref.make<ReadonlyMap<string, TxReentrantLock.TxReentrantLock>>(new Map())
 
-  const acquire = (tag: string): Effect.Effect<Semaphore.Semaphore> =>
+  const acquire = (tag: string): Effect.Effect<TxReentrantLock.TxReentrantLock> =>
     Effect.gen(function* () {
-      const existing = (yield* Ref.get(semaphoresRef)).get(tag)
+      const existing = (yield* Ref.get(locksRef)).get(tag)
       if (existing !== undefined) return existing
-      const fresh = yield* Semaphore.make(READ_PERMITS)
+      const fresh = yield* TxReentrantLock.make()
       // Race-safe install: re-check, install only if still missing.
-      const installed = yield* Ref.modify(semaphoresRef, (current) => {
+      const installed = yield* Ref.modify(locksRef, (current) => {
         const found = current.get(tag)
         if (found !== undefined) return [found, current]
         const next = new Map(current)
@@ -72,12 +70,15 @@ export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect
     if (needs.length === 0) return effect
     const sorted = normalizeNeeds(needs)
     return Effect.gen(function* () {
-      const locks: Array<readonly [Semaphore.Semaphore, ToolNeed]> = []
+      const locks: Array<readonly [TxReentrantLock.TxReentrantLock, ToolNeed]> = []
       for (const need of sorted) locks.push([yield* acquire(need.tag), need])
-      // Nest withPermits acquisitions so all are held for the duration.
+      // Nest acquisitions so all locks are held for the duration.
       let wrapped: Effect.Effect<A, E, R> = effect
       for (const [sem, need] of locks) {
-        wrapped = sem.withPermits(need.access === "write" ? READ_PERMITS : 1)(wrapped)
+        wrapped =
+          need.access === "write"
+            ? TxReentrantLock.withWriteLock(sem, wrapped)
+            : TxReentrantLock.withReadLock(sem, wrapped)
       }
       return yield* wrapped
     })
