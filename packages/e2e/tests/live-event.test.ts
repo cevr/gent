@@ -28,8 +28,6 @@ const collectLiveEvents = <A, E>(
 
 describe("live event contracts", () => {
   for (const transport of transportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
-
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
       () =>
@@ -75,7 +73,7 @@ describe("live event contracts", () => {
               const received = yield* waitFor(
                 Ref.get(liveEvents),
                 (current) => current.some((envelope) => envelope.event._tag === "MessageReceived"),
-                timeoutMs,
+                15_000,
               )
 
               expect(received.some((envelope) => envelope.event._tag === "MessageReceived")).toBe(
@@ -84,7 +82,7 @@ describe("live event contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
   }
 

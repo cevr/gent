@@ -29,8 +29,6 @@ const collectSnapshots = <A, E>(
 
 describe("runtime watch contracts", () => {
   for (const transport of transportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
-
     test(
       `${transport.name} watchRuntime emits current runtime and later updates`,
       () =>
@@ -51,7 +49,7 @@ describe("runtime watch contracts", () => {
               const initial = yield* waitFor(
                 Ref.get(runtime),
                 (current) => current[0]?._tag === "Idle",
-                timeoutMs,
+                15_000,
               )
               expect(initial[0]?._tag).toBe("Idle")
               expect(initial[0]?.queue.followUp).toEqual([])
@@ -68,7 +66,7 @@ describe("runtime watch contracts", () => {
               const updated = yield* waitFor(
                 Ref.get(runtime),
                 (current) => current.some((state) => state._tag !== "Idle"),
-                timeoutMs,
+                15_000,
               )
 
               expect(updated.some((state) => state._tag !== "Idle")).toBe(true)
@@ -99,7 +97,7 @@ describe("runtime watch contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
   }
 

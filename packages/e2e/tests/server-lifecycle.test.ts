@@ -5,7 +5,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
-import { startWorkerSupervisor } from "@gent/sdk/supervisor"
 import { createTempDirFixture } from "./seam-fixture"
 import { toTestFailure } from "./transport-harness"
 import { fromPromise, ignoreSyncDefect, sleepMillis } from "../src/effect-test-adapters"
@@ -31,18 +30,18 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const supervisor = yield* startWorkerSupervisor({
-            cwd: repoRoot,
-            mode: "debug",
-            env: { GENT_DATA_DIR: dataDir },
-          })
+          const port = yield* randomLifecyclePort
+          const { url, proc } = yield* Effect.acquireRelease(
+            spawnServerOnPort({ dataDir, port }),
+            ({ proc }) => killProcess(proc),
+          )
 
-          const baseUrl = supervisor.url.replace("/rpc", "")
+          const baseUrl = url.replace("/rpc", "")
           const response = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(response.ok).toBe(true)
 
           const identity = yield* fromPromise(() => response.json())
-          expect(identity.pid).toBe(supervisor.pid())
+          expect(identity.pid).toBe(proc.pid)
           expect(identity.hostname).toBeTruthy()
           expect(identity.dbPath).toBeTruthy()
           expect(identity.serverId).toBeTruthy()
@@ -59,17 +58,17 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const supervisor = yield* startWorkerSupervisor({
-            cwd: repoRoot,
-            mode: "debug",
-            env: { GENT_DATA_DIR: dataDir },
-          })
+          const port = yield* randomLifecyclePort
+          const { url, proc } = yield* Effect.acquireRelease(
+            spawnServerOnPort({ dataDir, port }),
+            ({ proc }) => killProcess(proc),
+          )
 
-          const bundle = yield* Gent.client(supervisor.url)
+          const bundle = yield* Gent.client(url)
           yield* bundle.runtime.lifecycle.waitForReady
           const status = yield* bundle.client.server.status().pipe(Effect.mapError(toTestFailure))
 
-          expect(status.pid).toBe(supervisor.pid() as never)
+          expect(status.pid).toBe(proc.pid)
           expect(status.uptime).toBeGreaterThan(0)
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
           expect(status.buildFingerprint).toBeTruthy()

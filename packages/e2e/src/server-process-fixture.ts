@@ -30,7 +30,7 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
           return
         }
         chunks.push(decoder.decode(value))
-        const match = chunks.join("").match(/GENT_WORKER_READY (.+)/)
+        const match = chunks.join("").match(/GENT_SERVER_READY (.+)/)
         if (match) {
           reader.releaseLock()
           const readyUrl = match[1]
@@ -71,7 +71,7 @@ export const spawnIdleServer = (opts: {
       env: {
         ...Bun.env,
         GENT_PORT: String(opts.port),
-        GENT_SERVER_MODE: "worker",
+        GENT_SERVER_MODE: "shared",
         GENT_PERSISTENCE_MODE: "memory",
         GENT_PROVIDER_MODE: "debug-scripted",
         GENT_DATA_DIR: opts.dataDir,
@@ -94,7 +94,7 @@ export const spawnServerOnPort = (opts: {
       env: {
         ...Bun.env,
         GENT_PORT: String(opts.port),
-        GENT_SERVER_MODE: "worker",
+        GENT_SERVER_MODE: "shared",
         GENT_PERSISTENCE_MODE: "memory",
         GENT_PROVIDER_MODE: "debug-scripted",
         GENT_DATA_DIR: opts.dataDir,

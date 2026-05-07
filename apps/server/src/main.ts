@@ -61,7 +61,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     persistenceMode:
       Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
     providerMode: resolveProviderMode(Option.getOrUndefined(providerOpt)),
-    isWorker: Option.getOrUndefined(serverModeOpt) === "worker",
+    isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
     shell: Option.getOrUndefined(shellOpt),
     serverId: Option.getOrElse(serverIdOpt, () => Bun.randomUUIDv7()),
@@ -89,7 +89,7 @@ const program = Effect.scoped(
     // Dependencies layer
     // Shared server URL: either passed via env or derived from this server's port
     const sharedServerUrl =
-      config.sharedServerUrl ?? (config.isWorker ? `${baseUrl}/rpc` : undefined)
+      config.sharedServerUrl ?? (config.isManaged ? `${baseUrl}/rpc` : undefined)
 
     const depsLive = createDependencies({
       cwd: config.cwd,
@@ -159,7 +159,7 @@ const program = Effect.scoped(
       Layer.provide(BunFileSystem.layer),
     )
 
-    if (config.isWorker && config.isDebug) {
+    if (config.isManaged && config.isDebug) {
       const seeded = yield* Effect.provideContext(seedDebugSession(config.cwd), coreServices)
       yield* Effect.forkScoped(
         Effect.provideContext(
@@ -174,17 +174,17 @@ const program = Effect.scoped(
     }
     yield* Layer.buildWithScope(HttpServerLive, scope)
 
-    // stdout messages parsed by supervisor — must stay as console.log
-    if (config.isWorker) {
+    // stdout messages parsed by process fixtures — must stay as console.log
+    if (config.isManaged) {
       // @effect-diagnostics-next-line globalConsoleInEffect:off
-      console.log(`GENT_WORKER_READY ${baseUrl}`)
+      console.log(`GENT_SERVER_READY ${baseUrl}`)
     } else {
       // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`Gent server ready on ${baseUrl}`)
     }
 
-    // Idle shutdown: worker mode waits for idle, standalone runs forever
-    if (config.isWorker) {
+    // Idle shutdown: managed shared-server mode waits for idle, standalone runs forever.
+    if (config.isManaged) {
       const idleTimeoutMs = Number.isFinite(config.idleTimeoutMs) ? config.idleTimeoutMs : 30_000
       const idleCheckIntervalMs = Math.max(50, Math.min(250, Math.floor(idleTimeoutMs / 4)))
       const shutdownDeferred = yield* Deferred.make<void>()

@@ -62,8 +62,6 @@ const waitForTaggedEvent = (
 
 describe("event stream contracts", () => {
   for (const transport of transportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
-
     test(
       `${transport.name} replays buffered events for a completed turn`,
       () =>
@@ -101,7 +99,7 @@ describe("event stream contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
 
     test(
@@ -164,7 +162,7 @@ describe("event stream contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
 
     test(
@@ -210,7 +208,7 @@ describe("event stream contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
 
     test(
@@ -280,7 +278,7 @@ describe("event stream contracts", () => {
             }),
           ),
         ),
-      timeoutMs,
+      15_000,
     )
   }
 })

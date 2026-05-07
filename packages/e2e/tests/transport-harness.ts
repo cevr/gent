@@ -12,7 +12,6 @@ import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
-import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 
 export class TestFailure extends Schema.TaggedErrorClass<TestFailure>()(
@@ -41,12 +40,6 @@ export const baseLocalLayerWithProvider = (
     RpcHandlersContext,
     HarnessLayerError
   >
-
-const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
-  /\/$/,
-  "",
-)
-const makeWorkerHttpDir = createTempDirFixture("gent-worker-http-")
 
 export interface TransportCase {
   readonly name: string
@@ -86,37 +79,8 @@ const makeDirectSignalCase = (): SignalTransportCase => ({
     ),
 })
 
-const WORKER_TIMEOUT = "25 seconds"
-
-const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
-  name: "worker-http",
-  run: (assertion) =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const root = makeWorkerHttpDir()
-          return yield* startWorkerWithClient({
-            cwd: repoRoot,
-            env: createWorkerEnv(root, { providerMode }),
-          }).pipe(
-            Effect.mapError(toTestFailure),
-            Effect.flatMap(assertion),
-            Effect.timeoutOrElse({
-              duration: WORKER_TIMEOUT,
-              orElse: () =>
-                Effect.fail(
-                  new TestFailure({ message: "worker-http assertion timed out (scope cleanup)" }),
-                ),
-            }),
-          )
-        }),
-      ),
-    ),
-})
-
 const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [
   makeDirectCase(providerMode),
-  makeWorkerCase(providerMode),
 ]
 
 export const transportCases = makeTransportCases()

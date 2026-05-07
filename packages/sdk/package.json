@@ -4,7 +4,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./supervisor": "./src/supervisor.ts",
     "./server-lock": "./src/server-lock.ts"
   },
   "scripts": {

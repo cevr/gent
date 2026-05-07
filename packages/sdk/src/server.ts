@@ -177,6 +177,8 @@ const buildOwnedServer = (
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const platform = yield* GentPlatform
+      const osInfo = yield* platform.osInfo
+      const pid = yield* platform.pid
       const httpServerCtx = yield* Layer.buildWithScope(
         BunHttpServer.layer({ port: 0, idleTimeout: 0 }),
         scope,
@@ -210,8 +212,8 @@ const buildOwnedServer = (
       const depsLive = createDependencies({
         cwd: options.cwd,
         home,
-        platform: process.platform,
-        osVersion: os.release(),
+        platform: osInfo.platform,
+        osVersion: osInfo.release,
         dbPath,
         ...(options.authDirectory !== undefined ? { authDirectory: options.authDirectory } : {}),
         persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
@@ -235,8 +237,8 @@ const buildOwnedServer = (
       // Server identity
       const serverIdentityLive = ServerIdentity.Live({
         serverId,
-        pid: process.pid,
-        hostname: os.hostname(),
+        pid,
+        hostname: osInfo.hostname,
         dbPath: dbPath ?? ":memory:",
         buildFingerprint,
         startedAt: yield* Clock.currentTimeMillis,
@@ -262,8 +264,8 @@ const buildOwnedServer = (
       const AllRoutes = buildServerRoutes(coreServicesLive, {
         identity: {
           serverId,
-          pid: process.pid,
-          hostname: os.hostname(),
+          pid,
+          hostname: osInfo.hostname,
           dbPath: dbPath ?? ":memory:",
           buildFingerprint,
         },
@@ -372,6 +374,9 @@ const resolveServerInternal = (
     const home = resolveHome(options, stateSpec)
     const dbPath = resolveDbPath(options, stateSpec)
     const fingerprint = yield* computeLocalFingerprint
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    const pid = yield* platform.pid
 
     // Check the single shared server lock.
     const existing = yield* readServerLock(home)
@@ -407,8 +412,8 @@ const resolveServerInternal = (
         home,
         new ServerLockEntry({
           serverId: internal.serverId,
-          pid: process.pid,
-          hostname: os.hostname(),
+          pid,
+          hostname: osInfo.hostname,
           rpcUrl: server.url,
           dbPath,
           buildFingerprint: fingerprint,

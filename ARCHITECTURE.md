@@ -239,20 +239,13 @@ Production rule:
 - `--connect <url>` attaches to a remote server via `Gent.client({ url })`
 - `apps/server/src/main.ts` is the standalone durable server boundary
 
-## Worker Supervisor
+## Shared Server Discovery
 
-`packages/sdk/src/supervisor.ts` owns subprocess worker lifecycle for the worker-http topology. It is an actor-style boundary: one supervisor instance owns one assigned port, one current process, one restart counter, and serialized restart state.
+`packages/sdk/src/server-lock.ts` owns shared-server discovery. It stores one host-local identity record at `~/.gent/server.lock`, not one registry file per workspace or database. Clients only attach after probing `/_gent/identity` and matching the full server identity tuple, so stale pidfiles and PID reuse do not signal unrelated processes.
 
-Startup readiness is explicit. The server process writes `GENT_WORKER_READY <url>` to stdout from `apps/server/src/main.ts`; the supervisor does not mark the worker running until that line is observed.
+`packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
-Pre-ready subprocess exits are treated as launch failures, not as successful starts. The supervisor retries bounded, retryable pre-ready failures (`stdout closed`, `exited before ready`, readiness stream read failure). If startup is still inside initial acquisition, exhausted retries fail acquisition; if a supervisor already exists during restart, exhausted retries transition it to `failed`. Readiness timeouts and missing stdout remain terminal startup failures: they indicate wrong configuration or insufficient timeout, not a restartable crash.
-
-After readiness, process exit is normal supervised crash handling:
-
-- manual `restart` serializes through `restartPromise`
-- crash restarts use exponential backoff and crash-loop detection
-- shared-mode exit code `0` means intentional idle shutdown
-- `stop` owns subprocess termination and moves the state to `stopped`
+The old SDK worker supervisor and worker-http transport are deleted. E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 
 ## TUI
 
@@ -406,11 +399,11 @@ Use the smallest honest boundary:
 
 ### Commands
 
-| Command            | Scope                                                 | Target   |
-| ------------------ | ----------------------------------------------------- | -------- |
-| `bun run test`     | product behavior: core + tui + sdk + fast integration | ~2-4s    |
-| `bun run test:e2e` | PTY e2e + supervisor + worker-http transport          | ~60-120s |
-| `bun run gate`     | typecheck + lint + fmt + build + test                 | ~15s     |
+| Command            | Scope                                                 | Target  |
+| ------------------ | ----------------------------------------------------- | ------- |
+| `bun run test`     | product behavior: core + tui + sdk + fast integration | ~2-4s   |
+| `bun run test:e2e` | PTY e2e + focused server-process lifecycle coverage   | ~50-70s |
+| `bun run gate`     | typecheck + lint + fmt + build + test                 | ~15s    |
 
 ### Test structure
 
@@ -433,7 +426,7 @@ One test file per source file. No god tests. Names match source owners.
 `packages/e2e/tests/` separates fast in-process contracts from slow end-to-end:
 
 - `test` — direct-transport contract tests (in-process, no subprocess)
-- `test:e2e` — PTY TUI tests, supervisor lifecycle, worker-http transport
+- `test:e2e` — PTY TUI tests and focused server-process lifecycle coverage
 
 ### Important files
 
@@ -442,7 +435,7 @@ One test file per source file. No god tests. Names match source owners.
 - `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`
 - `packages/core/src/providers/provider.ts` — `Provider.Debug`, `Provider.Sequence`, `Provider.Signal`, `Provider.Failing` + step builders
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
-- `packages/e2e/tests/transport-harness.ts` — shared worker + transport cases
+- `packages/e2e/tests/transport-harness.ts` — direct transport contract harness
 
 ## Interaction Tools Extension
 

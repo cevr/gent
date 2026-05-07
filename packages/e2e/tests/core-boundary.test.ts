@@ -25,8 +25,6 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
 
 describe("session RPC boundary", () => {
   for (const transport of transportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 35_000 : 10_000
-
     test(
       `${transport.name} closes session event streams when a session is deleted`,
       () =>
@@ -55,7 +53,7 @@ describe("session RPC boundary", () => {
             }),
           ),
         ),
-      timeoutMs,
+      10_000,
     )
   }
 })
