@@ -78,15 +78,25 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
     const publish = (change: ChildSessionChange) => PubSub.publish(pubsub, change)
 
+    const updateEntry = (
+      childSessionId: string,
+      f: (entry: ChildSessionEntry) => ChildSessionEntry,
+    ) =>
+      Ref.modify(
+        entries,
+        (current): [ChildSessionEntry | undefined, Map<string, ChildSessionEntry>] => {
+          const entry = current.get(childSessionId)
+          if (entry === undefined) return [undefined, current]
+          const updated = f(entry)
+          return [updated, new Map(current).set(childSessionId, updated)]
+        },
+      )
+
     const handleChildEvent = (childSessionId: string, event: AgentEvent) =>
       Effect.gen(function* () {
-        const current = yield* Ref.get(entries)
-        const entry = current.get(childSessionId)
-        if (entry === undefined) return
-
         switch (event._tag) {
           case "ToolCallStarted": {
-            const updated: ChildSessionEntry = {
+            const updated = yield* updateEntry(childSessionId, (entry) => ({
               ...entry,
               toolCalls: [
                 ...entry.toolCalls,
@@ -97,46 +107,48 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
                   input: event.input,
                 },
               ],
-            }
-            yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
+            }))
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
           case "ToolCallSucceeded": {
-            const updated: ChildSessionEntry = {
+            const updated = yield* updateEntry(childSessionId, (entry) => ({
               ...entry,
               toolCalls: entry.toolCalls.map((tc) =>
                 tc.toolCallId === event.toolCallId ? { ...tc, status: "completed" as const } : tc,
               ),
-            }
-            yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
+            }))
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
           case "ToolCallFailed": {
-            const updated: ChildSessionEntry = {
+            const updated = yield* updateEntry(childSessionId, (entry) => ({
               ...entry,
               toolCalls: entry.toolCalls.map((tc) =>
                 tc.toolCallId === event.toolCallId ? { ...tc, status: "error" as const } : tc,
               ),
-            }
-            yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
+            }))
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
           case "StreamChunk": {
-            const combined = entry.streamText + event.chunk
-            const updated: ChildSessionEntry = {
-              ...entry,
-              streamText:
-                combined.length > STREAM_TEXT_MAX_LENGTH
-                  ? combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
-                  : combined,
-            }
-            yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
+            const updated = yield* updateEntry(childSessionId, (entry) => {
+              const combined = entry.streamText + event.chunk
+              return {
+                ...entry,
+                streamText:
+                  combined.length > STREAM_TEXT_MAX_LENGTH
+                    ? combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
+                    : combined,
+              }
+            })
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
@@ -156,15 +168,18 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
     const interruptChild = (childSessionId: string) =>
       Effect.gen(function* () {
-        const fibers = yield* Ref.get(childFibers)
-        const fiber = fibers.get(childSessionId)
+        const fiber = yield* Ref.modify(
+          childFibers,
+          (fibers): [Fiber.Fiber<void> | undefined, Map<string, Fiber.Fiber<void>>] => {
+            const fiber = fibers.get(childSessionId)
+            if (fiber === undefined) return [undefined, fibers]
+            const next = new Map(fibers)
+            next.delete(childSessionId)
+            return [fiber, next]
+          },
+        )
         if (fiber !== undefined) {
           yield* Fiber.interrupt(fiber).pipe(Effect.catchEager(() => Effect.void))
-          yield* Ref.update(childFibers, (m) => {
-            const next = new Map(m)
-            next.delete(childSessionId)
-            return next
-          })
         }
       })
 
@@ -176,10 +191,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             const toolCallId = event.toolCallId
             if (toolCallId === undefined) return
 
-            // Idempotency: skip if already tracking
-            const current = yield* Ref.get(entries)
-            if (current.has(childId)) return
-
             const entry: ChildSessionEntry = {
               childSessionId: childId,
               childBranchId: event.childBranchId as string | undefined,
@@ -189,7 +200,14 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               toolCalls: [],
               streamText: "",
             }
-            yield* Ref.update(entries, (m) => new Map(m).set(childId, entry))
+            const added = yield* Ref.modify(
+              entries,
+              (current): [boolean, Map<string, ChildSessionEntry>] => {
+                if (current.has(childId)) return [false, current]
+                return [true, new Map(current).set(childId, entry)]
+              },
+            )
+            if (!added) return
             yield* publish({ _tag: "added", entry })
             // Subscribe to child events for tool call hydration.
             // On replay, the subscription replays child history then gets interrupted
@@ -200,18 +218,14 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
           case "AgentRunSucceeded": {
             const childId = event.childSessionId as string
-            const current = yield* Ref.get(entries)
-            const entry = current.get(childId)
-            if (entry === undefined) return
-
-            const updated: ChildSessionEntry = {
+            const updated = yield* updateEntry(childId, (entry) => ({
               ...entry,
               status: "completed" as const,
               usage: event.usage,
               preview: event.preview,
               savedPath: event.savedPath,
-            }
-            yield* Ref.update(entries, (m) => new Map(m).set(childId, updated))
+            }))
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
             yield* interruptChild(childId)
             break
@@ -219,12 +233,11 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
           case "AgentRunFailed": {
             const childId = event.childSessionId as string
-            const current = yield* Ref.get(entries)
-            const entry = current.get(childId)
-            if (entry === undefined) return
-
-            const updated = { ...entry, status: "error" as const }
-            yield* Ref.update(entries, (m) => new Map(m).set(childId, updated))
+            const updated = yield* updateEntry(childId, (entry) => ({
+              ...entry,
+              status: "error" as const,
+            }))
+            if (updated === undefined) return
             yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
             yield* interruptChild(childId)
             break
