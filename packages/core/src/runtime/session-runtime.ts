@@ -481,18 +481,25 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         createdAt: yield* DateTime.nowAsDate,
         ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       })
-      yield* AgentLoopActor.QueueFollowUp.send({
-        message,
-        agentOverride: undefined,
-        runSpec: undefined,
-        interactive: undefined,
-      }).pipe(Effect.provideService(AgentLoopActor.Context, actorClientFactory))
-      yield* waitForSubmittedMessageAccepted({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        messageId: message.id,
-        content: input.content,
-      })
+      const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+      yield* ref
+        .execute(
+          AgentLoopActor.QueueFollowUp.make({
+            message,
+            agentOverride: undefined,
+            runSpec: undefined,
+            interactive: undefined,
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SessionRuntimeError({
+                message: `Failed to queue follow-up ${message.id}`,
+                cause,
+              }),
+          ),
+        )
     },
   )
 
