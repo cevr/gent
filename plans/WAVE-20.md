@@ -1444,6 +1444,9 @@ Recursive audit findings accepted on 2026-05-07:
   wiring even though runtime no longer uses it.
 - P2: `ToolRunner` still owned an avoidable local Effect AI handler erasure
   bridge.
+- P2: session mutation host tests used fake in-memory storage and did not
+  prove `forkBranch`, `deleteBranch`, or `deleteMessages` through the public
+  RPC request boundary.
 
 Completed sub-commits:
 
@@ -1453,12 +1456,17 @@ Completed sub-commits:
   `@gent/core/extensions/api`, removed stale `effect-machine` root wiring, and
   reduced `ToolRunner` handler erasure to the remaining upstream stream
   service-boundary cast.
+- C97.2 added public RPC request acceptance coverage for extension-host
+  session mutation capabilities: fork current branch, create/delete a
+  non-current branch, and delete messages after a cursor.
 
 Verification on 2026-05-07:
 
 - `bun run lint`
 - `bun run typecheck`
 - `bun test packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
 
 #### C98: docs: update architecture and AGENTS receipts
 

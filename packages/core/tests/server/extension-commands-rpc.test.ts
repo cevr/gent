@@ -25,7 +25,7 @@ import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
 import { action, CapabilityError, request, tool } from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 class ProfileToken extends Context.Service<
   ProfileToken,
@@ -583,6 +583,169 @@ describe("extension command RPCs", () => {
           expect(createdBranchId).not.toBe(branchId)
           expect(createdBranchInteraction?.status).toBe("completed")
           expect(createdBranchInteraction?.output).toBe(createdBranchId)
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+  it.live("RPC requests receive live fork/delete session mutation capabilities", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/session-mutation-requests")
+      const mapHostError = (capabilityId: string) => (cause: { readonly message: string }) =>
+        new CapabilityError({ extensionId, capabilityId, reason: cause.message })
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "fork-current-branch",
+              extensionId,
+              intent: "write",
+              input: Schema.String,
+              output: Schema.String,
+              execute: (messageId, ctx) =>
+                ctx.session
+                  .forkBranch({
+                    atMessageId: MessageId.make(messageId),
+                    name: "forked through extension rpc",
+                  })
+                  .pipe(
+                    Effect.map(({ branchId }) => String(branchId)),
+                    Effect.mapError(mapHostError("fork-current-branch")),
+                  ),
+            }),
+            request({
+              id: "create-temporary-branch",
+              extensionId,
+              intent: "write",
+              input: Schema.Void,
+              output: Schema.String,
+              execute: (_input, ctx) =>
+                ctx.session.createBranch({ name: "temporary through extension rpc" }).pipe(
+                  Effect.map(({ branchId }) => String(branchId)),
+                  Effect.mapError(mapHostError("create-temporary-branch")),
+                ),
+            }),
+            request({
+              id: "delete-branch",
+              extensionId,
+              intent: "write",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: (branchId, ctx) =>
+                ctx.session
+                  .deleteBranch(BranchId.make(branchId))
+                  .pipe(Effect.mapError(mapHostError("delete-branch"))),
+            }),
+            request({
+              id: "delete-messages-after",
+              extensionId,
+              intent: "write",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: (messageId, ctx) =>
+                ctx.session
+                  .deleteMessages({ afterMessageId: MessageId.make(messageId) })
+                  .pipe(Effect.mapError(mapHostError("delete-messages-after"))),
+            }),
+          ],
+        },
+      }
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("assistant reply before mutation"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+            cwd: "/tmp",
+          })
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "message copied by fork",
+          })
+          const originalSnapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some((message) =>
+                message.parts.some(
+                  (part) => part.type === "text" && part.text === "assistant reply before mutation",
+                ),
+              ),
+            5000,
+            "seed messages before extension mutation request",
+          )
+          const userMessage = originalSnapshot.messages.find((message) =>
+            message.parts.some(
+              (part) => part.type === "text" && part.text === "message copied by fork",
+            ),
+          )
+          if (userMessage === undefined) throw new Error("expected seeded user message")
+
+          const decodeString = (value: unknown) =>
+            Schema.decodeUnknownEffect(Schema.String)(value).pipe(Effect.orDie)
+          const forkedBranchId = yield* decodeString(
+            yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "fork-current-branch",
+              intent: "write",
+              input: userMessage.id,
+            }),
+          )
+          const forkedSnapshot = yield* client.session.getSnapshot({
+            sessionId,
+            branchId: BranchId.make(forkedBranchId),
+          })
+          expect(forkedSnapshot.messages.map((message) => message.role)).toEqual(["user"])
+          expect(
+            forkedSnapshot.messages[0]?.parts.some(
+              (part) => part.type === "text" && part.text === "message copied by fork",
+            ),
+          ).toBe(true)
+
+          const temporaryBranchId = yield* decodeString(
+            yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "create-temporary-branch",
+              intent: "write",
+              input: undefined,
+            }),
+          )
+          expect((yield* client.branch.list({ sessionId })).map((branch) => branch.id)).toContain(
+            BranchId.make(temporaryBranchId),
+          )
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "delete-branch",
+            intent: "write",
+            input: temporaryBranchId,
+          })
+          expect(
+            (yield* client.branch.list({ sessionId })).map((branch) => branch.id),
+          ).not.toContain(BranchId.make(temporaryBranchId))
+
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "delete-messages-after",
+            intent: "write",
+            input: userMessage.id,
+          })
+          const truncatedSnapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(truncatedSnapshot.messages.map((message) => message.id)).toEqual([userMessage.id])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
