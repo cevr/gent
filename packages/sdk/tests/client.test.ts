@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   Gent,
   extractText,
@@ -10,7 +11,7 @@ import {
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
 describe("sdk client helpers", () => {
@@ -25,12 +26,12 @@ describe("sdk client helpers", () => {
   })
 
   test("extractText extracts text from message parts", () => {
-    const parts = [{ type: "text" as const, text: "Hello world" }]
+    const parts = [Prompt.textPart({ text: "Hello world" })]
     expect(extractText(parts)).toBe("Hello world")
   })
 
   test("extractImages extracts image metadata", () => {
-    const parts = [{ type: "image" as const, image: "base64data", mediaType: "image/png" }]
+    const parts = [Prompt.filePart({ data: "base64data", mediaType: "image/png" })]
     const images = extractImages(parts)
     expect(images.length).toBe(1)
     expect(images[0]?.mediaType).toBe("image/png")
@@ -43,11 +44,11 @@ describe("sdk client helpers", () => {
       branchId: BranchId.make("b1"),
       role: "assistant",
       parts: [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: { path: "/foo" },
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: { path: "/foo" },
+          providerExecuted: false,
         }),
       ],
       createdAt: dateFromMillis(0),
@@ -67,11 +68,11 @@ describe("sdk client helpers", () => {
         branchId: BranchId.make("b1"),
         role: "assistant",
         parts: [
-          ToolCallPart.make({
-            type: "tool-call",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "read",
-            input: { path: "/foo" },
+          Prompt.toolCallPart({
+            id: ToolCallId.make("tc1"),
+            name: "read",
+            params: { path: "/foo" },
+            providerExecuted: false,
           }),
         ],
         createdAt: dateFromMillis(0),
@@ -82,11 +83,11 @@ describe("sdk client helpers", () => {
         branchId: BranchId.make("b1"),
         role: "tool",
         parts: [
-          ToolResultPart.make({
-            type: "tool-result",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "read",
-            output: { type: "json", value: "file contents" },
+          Prompt.toolResultPart({
+            id: ToolCallId.make("tc1"),
+            name: "read",
+            isFailure: false,
+            result: "file contents",
           }),
         ],
         createdAt: dateFromMillis(1),

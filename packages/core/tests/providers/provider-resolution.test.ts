@@ -17,13 +17,7 @@ import {
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
-import {
-  dateFromMillis,
-  ImagePart,
-  Message,
-  ReasoningPart,
-  TextPart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -524,10 +518,9 @@ describe("Provider model resolution", () => {
                 branchId: BranchId.make("prompt-branch"),
                 role: "user",
                 parts: [
-                  new TextPart({ type: "text", text: "inspect" }),
-                  new ImagePart({
-                    type: "image",
-                    image: "data:image/jpeg;base64,abc",
+                  Prompt.textPart({ text: "inspect" }),
+                  Prompt.filePart({
+                    data: "data:image/jpeg;base64,abc",
                     mediaType: "image/jpeg",
                   }),
                 ],
@@ -538,7 +531,7 @@ describe("Provider model resolution", () => {
                 sessionId: SessionId.make("prompt-session"),
                 branchId: BranchId.make("prompt-branch"),
                 role: "assistant",
-                parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
+                parts: [Prompt.reasoningPart({ text: "look at image metadata" })],
                 createdAt: dateFromMillis(0),
               }),
               Message.Regular.make({
@@ -546,7 +539,7 @@ describe("Provider model resolution", () => {
                 sessionId: SessionId.make("prompt-session"),
                 branchId: BranchId.make("prompt-branch"),
                 role: "user",
-                parts: [new TextPart({ type: "text", text: "should not reach model" })],
+                parts: [Prompt.textPart({ text: "should not reach model" })],
                 createdAt: dateFromMillis(0),
                 metadata: { hidden: true },
               }),

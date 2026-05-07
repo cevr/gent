@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ToolToken } from "../../domain/capability/tool.js"
 import {
   AgentName,
@@ -12,7 +13,7 @@ import {
 } from "../../domain/agent.js"
 import type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
 export type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
-import { Message, TextPart, ToolCallPart } from "../../domain/message.js"
+import { Message, ToolCallPart } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import {
   FollowUpQueueEntryInfo,
@@ -60,7 +61,7 @@ const mergeQueuedFollowUp = (
       sessionId: existing.message.sessionId,
       branchId: existing.message.branchId,
       role: existing.message.role,
-      parts: [new TextPart({ type: "text", text: `${existingText}\n${incomingText}` })],
+      parts: [Prompt.textPart({ text: `${existingText}\n${incomingText}` })],
       createdAt: existing.message.createdAt,
       turnDurationMs: existing.message.turnDurationMs,
       metadata: existing.message.metadata,

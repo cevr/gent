@@ -1,8 +1,9 @@
 import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
+import { Branch, Message, Session, copyMessageToBranch } from "../domain/message.js"
 import { messagePartsTextLines } from "../domain/message-part-projection.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../domain/steer.js"
@@ -647,8 +648,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           branchId,
           role: "user",
           parts: [
-            new TextPart({
-              type: "text",
+            Prompt.textPart({
               text: `Summarize this branch concisely. Focus on decisions, open questions, and current state. Keep it short and actionable.\n\nBranch conversation (recent):\n${conversation}`,
             }),
           ],

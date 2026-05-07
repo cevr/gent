@@ -1,4 +1,5 @@
 import { Clock, DateTime, Effect, Ref, Schema } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentSwitched,
   EventStore,
@@ -13,16 +14,7 @@ import {
   ToolCallSucceeded,
   TurnCompleted,
 } from "@gent/core/domain/event.js"
-import {
-  dateFromMillis,
-  Branch,
-  Message,
-  ReasoningPart,
-  Session,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-} from "@gent/core/domain/message.js"
+import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message.js"
 import {
   BranchId,
   ExtensionId,
@@ -57,18 +49,18 @@ export interface DebugScenarioParams {
   cwd: string
 }
 
-const makeText = (text: string) => new TextPart({ type: "text", text })
+const makeText = (text: string) => Prompt.textPart({ text })
 
 const asToolCallId = (value: string) => ToolCallId.make(value)
 const DebugJson = Schema.fromJsonString(Schema.Unknown)
 const encodeDebugJson = Schema.encodeSync(DebugJson)
 
 const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
-  new ToolResultPart({
-    type: "tool-result",
-    toolCallId,
-    toolName,
-    output: { type: "json", value },
+  Prompt.toolResultPart({
+    id: toolCallId,
+    name: toolName,
+    isFailure: false,
+    result: value,
   })
 
 const createParentTurnMessages = (
@@ -88,37 +80,36 @@ const createParentTurnMessages = (
       branchId: params.branchId,
       role: "assistant",
       parts: [
-        new ReasoningPart({
-          type: "reasoning",
+        Prompt.reasoningPart({
           text: "Scripted debug scenario. Exercise child sessions, task chrome, retries, and tool output renderers.",
         }),
         makeText(`Running debug inspection cycle ${iteration}.`),
-        new ToolCallPart({
-          type: "tool-call",
-          toolCallId: delegateToolCallId,
-          toolName: "delegate",
-          input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+        Prompt.toolCallPart({
+          id: delegateToolCallId,
+          name: "delegate",
+          params: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+          providerExecuted: false,
         }),
-        new ToolCallPart({
-          type: "tool-call",
-          toolCallId: reviewToolCallId,
-          toolName: "review",
-          input: { description: `Review debug cycle ${iteration}` },
+        Prompt.toolCallPart({
+          id: reviewToolCallId,
+          name: "review",
+          params: { description: `Review debug cycle ${iteration}` },
+          providerExecuted: false,
         }),
-        new ToolCallPart({
-          type: "tool-call",
-          toolCallId: searchSessionsToolCallId,
-          toolName: "search_sessions",
-          input: { query: "tool renderer" },
+        Prompt.toolCallPart({
+          id: searchSessionsToolCallId,
+          name: "search_sessions",
+          params: { query: "tool renderer" },
+          providerExecuted: false,
         }),
-        new ToolCallPart({
-          type: "tool-call",
-          toolCallId: readSessionToolCallId,
-          toolName: "read_session",
-          input: {
+        Prompt.toolCallPart({
+          id: readSessionToolCallId,
+          name: "read_session",
+          params: {
             sessionId: "019debug1-session",
             goal: "Understand the renderer cleanup thread",
           },
+          providerExecuted: false,
         }),
         makeText("Inspection pass complete. Check the live tool timeline and task widget."),
       ],

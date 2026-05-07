@@ -1,4 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Cause, Context, Data, Effect, Exit, Ref } from "effect"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type {
@@ -15,7 +16,7 @@ import type {
 } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core/domain/agent"
 
@@ -192,7 +193,7 @@ describe("runtime slots", () => {
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "hello" })],
+      parts: [Prompt.textPart({ text: "hello" })],
       createdAt: FIXTURE_DATE,
     })
     const slots = compileExtensionReactions([])
@@ -222,7 +223,7 @@ describe("runtime slots", () => {
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "hello" })],
+      parts: [Prompt.textPart({ text: "hello" })],
       createdAt: FIXTURE_DATE,
     })
     const appendedMessage = Message.Regular.make({
@@ -230,7 +231,7 @@ describe("runtime slots", () => {
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "extra" })],
+      parts: [Prompt.textPart({ text: "extra" })],
       createdAt: FIXTURE_DATE,
     })
     const slots = compileExtensionReactions([
@@ -562,7 +563,7 @@ describe("runtime slots", () => {
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
           agentName: AgentName.make("cowork"),
-          parts: [new TextPart({ type: "text", text: "hello" })],
+          parts: [Prompt.textPart({ text: "hello" })],
         } satisfies MessageOutputInput,
         stubHostCtx,
       )

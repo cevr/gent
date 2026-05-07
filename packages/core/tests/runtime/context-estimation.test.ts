@@ -1,12 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import {
-  dateFromMillis,
-  Message,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-  ImagePart,
-} from "@gent/core/domain/message"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import {
   estimateTokens,
   estimateContextPercent,
@@ -22,7 +16,7 @@ describe("Token Estimation", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "Hello world" })], // 11 chars
+        parts: [Prompt.textPart({ text: "Hello world" })], // 11 chars
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -45,7 +39,7 @@ describe("estimateContextPercent", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(800) })],
+        parts: [Prompt.textPart({ text: "x".repeat(800) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -61,7 +55,7 @@ describe("estimateContextPercent", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
+        parts: [Prompt.textPart({ text: "x".repeat(40_000) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -77,7 +71,7 @@ describe("estimateContextPercent", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(40_000) })],
+        parts: [Prompt.textPart({ text: "x".repeat(40_000) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -92,7 +86,7 @@ describe("estimateContextPercent", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(4_000) })],
+        parts: [Prompt.textPart({ text: "x".repeat(4_000) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
       Message.Regular.make({
@@ -101,12 +95,12 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "assistant",
         parts: [
-          new TextPart({ type: "text", text: "y".repeat(4_000) }),
-          new ToolCallPart({
-            type: "tool-call",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "test",
-            input: { key: "v".repeat(2_000) },
+          Prompt.textPart({ text: "y".repeat(4_000) }),
+          Prompt.toolCallPart({
+            id: ToolCallId.make("tc1"),
+            name: "test",
+            params: { key: "v".repeat(2_000) },
+            providerExecuted: false,
           }),
         ],
         createdAt: dateFromMillis(1_767_225_600_000),
@@ -117,11 +111,11 @@ describe("estimateContextPercent", () => {
         branchId: BranchId.make("b"),
         role: "tool",
         parts: [
-          new ToolResultPart({
-            type: "tool-result",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "test",
-            output: { type: "json", value: { result: "z".repeat(2_000) } },
+          Prompt.toolResultPart({
+            id: ToolCallId.make("tc1"),
+            name: "test",
+            isFailure: false,
+            result: { result: "z".repeat(2_000) },
           }),
         ],
         createdAt: dateFromMillis(1_767_225_600_000),
@@ -161,7 +155,7 @@ describe("estimateTokens", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
+        parts: [Prompt.textPart({ text: "x".repeat(100) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -176,11 +170,11 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "assistant",
         parts: [
-          new ToolCallPart({
-            type: "tool-call",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "test",
-            input: { key: "value" },
+          Prompt.toolCallPart({
+            id: ToolCallId.make("tc1"),
+            name: "test",
+            params: { key: "value" },
+            providerExecuted: false,
           }),
         ],
         createdAt: dateFromMillis(1_767_225_600_000),
@@ -199,11 +193,11 @@ describe("estimateTokens", () => {
         branchId: BranchId.make("b"),
         role: "tool",
         parts: [
-          new ToolResultPart({
-            type: "tool-result",
-            toolCallId: ToolCallId.make("tc1"),
-            toolName: "test",
-            output: { type: "json", value: { data: "hello" } },
+          Prompt.toolResultPart({
+            id: ToolCallId.make("tc1"),
+            name: "test",
+            isFailure: false,
+            result: { data: "hello" },
           }),
         ],
         createdAt: dateFromMillis(1_767_225_600_000),
@@ -220,7 +214,7 @@ describe("estimateTokens", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new ImagePart({ type: "image", image: "data:image/png;base64,abc" })],
+        parts: [Prompt.filePart({ data: "data:image/png;base64,abc", mediaType: "image/png" })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
@@ -234,7 +228,7 @@ describe("estimateTokens", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
+        parts: [Prompt.textPart({ text: "x".repeat(100) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
       Message.Regular.make({
@@ -242,7 +236,7 @@ describe("estimateTokens", () => {
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "assistant",
-        parts: [new TextPart({ type: "text", text: "y".repeat(200) })],
+        parts: [Prompt.textPart({ text: "y".repeat(200) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]

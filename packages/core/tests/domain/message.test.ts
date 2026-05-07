@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis, Message, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
+import { dateFromMillis, Message, copyMessageToBranch } from "@gent/core/domain/message"
 
 describe("copyMessageToBranch", () => {
   test("preserves interjection variant when copying to a new branch", () => {
@@ -9,7 +10,7 @@ describe("copyMessageToBranch", () => {
       sessionId: SessionId.make("source-session"),
       branchId: BranchId.make("source-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "steer now" })],
+      parts: [Prompt.textPart({ text: "steer now" })],
       createdAt: dateFromMillis(0),
     })
 
@@ -30,7 +31,7 @@ describe("copyMessageToBranch", () => {
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
       role: "assistant",
-      parts: [new TextPart({ type: "text", text: "hello" })],
+      parts: [Prompt.textPart({ text: "hello" })],
       createdAt: dateFromMillis(0),
     })
 
@@ -53,7 +54,7 @@ describe("copyMessageToBranch", () => {
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "x" })],
+      parts: [Prompt.textPart({ text: "x" })],
       createdAt: dateFromMillis(0),
     })
 
@@ -72,7 +73,7 @@ describe("copyMessageToBranch", () => {
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
       role: "assistant",
-      parts: [new TextPart({ type: "text", text: "x" })],
+      parts: [Prompt.textPart({ text: "x" })],
       createdAt: dateFromMillis(0),
       turnDurationMs: 1234,
       metadata: { customType: "demo", extensionId: ExtensionId.make("ext-x") },
@@ -94,7 +95,7 @@ describe("copyMessageToBranch", () => {
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "x" })],
+      parts: [Prompt.textPart({ text: "x" })],
       createdAt: dateFromMillis(0),
     })
 

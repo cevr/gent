@@ -4,16 +4,8 @@
  */
 
 import { Clock, Effect } from "effect"
-import {
-  Branch,
-  Message,
-  ReasoningPart,
-  Session,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-  dateFromMillis,
-} from "../domain/message.js"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { Branch, Message, Session, dateFromMillis } from "../domain/message.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -27,17 +19,23 @@ export interface DebugSessionInfo {
   readonly reasoningLevel: undefined
 }
 
-const makeText = (text: string) => new TextPart({ type: "text", text })
+const makeText = (text: string) => Prompt.textPart({ text })
 
 const asToolCallId = (value: string) => ToolCallId.make(value)
 
 const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
-  new ToolResultPart({
-    type: "tool-result",
-    toolCallId,
-    toolName,
-    output: { type: "json", value },
+  Prompt.toolResultPart({
+    id: toolCallId,
+    name: toolName,
+    isFailure: false,
+    result: value,
   })
+
+const makeToolCall = (params: {
+  readonly id: ToolCallId
+  readonly name: string
+  readonly params: unknown
+}) => Prompt.toolCallPart({ ...params, providerExecuted: false })
 
 export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
   const sessions = yield* SessionStorage
@@ -80,50 +78,43 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     branchId,
     role: "assistant",
     parts: [
-      new ReasoningPart({
-        type: "reasoning",
+      Prompt.reasoningPart({
         text: "Need tool chrome parity, queue semantics, and task widget behavior.",
       }),
       makeText("Inspected the relevant files and compared the renderer chrome paths."),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-read"),
-        toolName: "read",
-        input: { path: `${cwd}/apps/tui/src/routes/session.tsx` },
+      makeToolCall({
+        id: asToolCallId("dbg-read"),
+        name: "read",
+        params: { path: `${cwd}/apps/tui/src/routes/session.tsx` },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-grep"),
-        toolName: "grep",
-        input: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
+      makeToolCall({
+        id: asToolCallId("dbg-grep"),
+        name: "grep",
+        params: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-glob"),
-        toolName: "glob",
-        input: { pattern: "**/*.tsx", path: `${cwd}/apps/tui/src` },
+      makeToolCall({
+        id: asToolCallId("dbg-glob"),
+        name: "glob",
+        params: { pattern: "**/*.tsx", path: `${cwd}/apps/tui/src` },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-bash"),
-        toolName: "bash",
-        input: { command: "bun run typecheck" },
+      makeToolCall({
+        id: asToolCallId("dbg-bash"),
+        name: "bash",
+        params: { command: "bun run typecheck" },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-edit"),
-        toolName: "edit",
-        input: {
+      makeToolCall({
+        id: asToolCallId("dbg-edit"),
+        name: "edit",
+        params: {
           path: `${cwd}/apps/tui/src/components/message-list.tsx`,
           oldString: "<text>[ x ] tool_call</text>",
           newString: "<ToolFrame />",
         },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-write"),
-        toolName: "write",
-        input: { path: `${cwd}/apps/server/src/debug/session.ts` },
+      makeToolCall({
+        id: asToolCallId("dbg-write"),
+        name: "write",
+        params: { path: `${cwd}/apps/server/src/debug/session.ts` },
       }),
     ],
     createdAt: nowPlus(-47_000),
@@ -225,47 +216,40 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     role: "assistant",
     parts: [
       makeText("Pulled adjacent context and kicked off review helpers."),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-webfetch"),
-        toolName: "webfetch",
-        input: { url: "https://example.com/docs/tool-renderers" },
+      makeToolCall({
+        id: asToolCallId("dbg-webfetch"),
+        name: "webfetch",
+        params: { url: "https://example.com/docs/tool-renderers" },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-delegate"),
-        toolName: "delegate",
-        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+      makeToolCall({
+        id: asToolCallId("dbg-delegate"),
+        name: "delegate",
+        params: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-explore"),
-        toolName: "delegate",
-        input: { agent: "explore", task: "Where is the double-border coming from?" },
+      makeToolCall({
+        id: asToolCallId("dbg-explore"),
+        name: "delegate",
+        params: { agent: "explore", task: "Where is the double-border coming from?" },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-review"),
-        toolName: "delegate",
-        input: { agent: "explore", task: "Sanity-check the debug session bootstrap." },
+      makeToolCall({
+        id: asToolCallId("dbg-review"),
+        name: "delegate",
+        params: { agent: "explore", task: "Sanity-check the debug session bootstrap." },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-review-tool"),
-        toolName: "review",
-        input: { description: "Review the debug bootstrap" },
+      makeToolCall({
+        id: asToolCallId("dbg-review-tool"),
+        name: "review",
+        params: { description: "Review the debug bootstrap" },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-search-sessions"),
-        toolName: "search_sessions",
-        input: { query: "tool renderer" },
+      makeToolCall({
+        id: asToolCallId("dbg-search-sessions"),
+        name: "search_sessions",
+        params: { query: "tool renderer" },
       }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: asToolCallId("dbg-read-session"),
-        toolName: "read_session",
-        input: {
+      makeToolCall({
+        id: asToolCallId("dbg-read-session"),
+        name: "read_session",
+        params: {
           sessionId: "019debug1-session",
           goal: "Understand the renderer cleanup thread",
         },

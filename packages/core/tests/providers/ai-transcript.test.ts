@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   GENT_MESSAGE_METADATA_FIELDS,
   EFFECT_AI_CONTENT_FIELDS,
@@ -10,15 +11,7 @@ import {
   toPromptMessages,
 } from "@gent/core/providers/ai-transcript"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import {
-  dateFromMillis,
-  ImagePart,
-  Message,
-  ReasoningPart,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 
 const baseMessage = (
@@ -46,7 +39,7 @@ describe("AI transcript projection", () => {
           sessionId: SessionId.make("session"),
           branchId: BranchId.make("branch"),
           role: "system",
-          parts: [new TextPart({ type: "text", text: "Be precise." })],
+          parts: [Prompt.textPart({ text: "Be precise." })],
         }),
         baseInterjectionMessage({
           id: MessageId.make("user-msg"),
@@ -55,10 +48,9 @@ describe("AI transcript projection", () => {
           role: "user",
           metadata: { hidden: false, extensionId: ExtensionId.make("inline-image") },
           parts: [
-            new TextPart({ type: "text", text: "What is this?" }),
-            new ImagePart({
-              type: "image",
-              image: "data:image/jpeg;base64,abc",
+            Prompt.textPart({ text: "What is this?" }),
+            Prompt.filePart({
+              data: "data:image/jpeg;base64,abc",
               mediaType: "image/jpeg",
             }),
           ],
@@ -70,18 +62,17 @@ describe("AI transcript projection", () => {
           role: "assistant",
           turnDurationMs: 12,
           parts: [
-            new ReasoningPart({ type: "reasoning", text: "Inspect image first." }),
-            new TextPart({ type: "text", text: "I see it." }),
-            new ImagePart({
-              type: "image",
-              image: "data:image/png;base64,assistant-image",
+            Prompt.reasoningPart({ text: "Inspect image first." }),
+            Prompt.textPart({ text: "I see it." }),
+            Prompt.filePart({
+              data: "data:image/png;base64,assistant-image",
               mediaType: "image/png",
             }),
-            new ToolCallPart({
-              type: "tool-call",
-              toolCallId: ToolCallId.make("tc-1"),
-              toolName: "describe",
-              input: { image: true },
+            Prompt.toolCallPart({
+              id: ToolCallId.make("tc-1"),
+              name: "describe",
+              params: { image: true },
+              providerExecuted: false,
             }),
           ],
         }),
@@ -91,11 +82,11 @@ describe("AI transcript projection", () => {
           branchId: BranchId.make("branch"),
           role: "tool",
           parts: [
-            new ToolResultPart({
-              type: "tool-result",
-              toolCallId: ToolCallId.make("tc-1"),
-              toolName: "describe",
-              output: { type: "json", value: { label: "diagram" } },
+            Prompt.toolResultPart({
+              id: ToolCallId.make("tc-1"),
+              name: "describe",
+              isFailure: false,
+              result: { label: "diagram" },
             }),
           ],
         }),
@@ -161,14 +152,14 @@ describe("AI transcript projection", () => {
       sessionId: SessionId.make("session"),
       branchId: BranchId.make("branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "send this" })],
+      parts: [Prompt.textPart({ text: "send this" })],
     })
     const hidden = baseMessage({
       id: MessageId.make("hidden"),
       sessionId: SessionId.make("session"),
       branchId: BranchId.make("branch"),
       role: "user",
-      parts: [new TextPart({ type: "text", text: "hide this" })],
+      parts: [Prompt.textPart({ text: "hide this" })],
       metadata: { hidden: true },
     })
 
@@ -205,12 +196,12 @@ describe("AI transcript projection", () => {
       "text",
       "reasoning",
       "tool-call",
-      "image",
+      "file",
     ])
     expect(parts.assistant[3]).toEqual(
       expect.objectContaining({
-        type: "image",
-        image: "data:image/png;base64,aGk=",
+        type: "file",
+        data: "data:image/png;base64,aGk=",
         mediaType: "image/png",
       }),
     )
@@ -218,9 +209,10 @@ describe("AI transcript projection", () => {
     expect(parts.tool[0]).toEqual(
       expect.objectContaining({
         type: "tool-result",
-        toolCallId: ToolCallId.make("tc-2"),
-        toolName: "read",
-        output: { type: "json", value: { ok: true } },
+        id: ToolCallId.make("tc-2"),
+        name: "read",
+        isFailure: false,
+        result: { ok: true },
       }),
     )
   })
@@ -368,9 +360,8 @@ describe("AI transcript projection", () => {
         branchId: BranchId.make("branch"),
         role: "assistant",
         parts: [
-          new ImagePart({
-            type: "image",
-            image: "https://example.com/image.png",
+          Prompt.filePart({
+            data: "https://example.com/image.png",
             mediaType: "image/png",
           }),
         ],

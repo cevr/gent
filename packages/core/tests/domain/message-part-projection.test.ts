@@ -19,16 +19,9 @@ import {
   toolResultPartToResponsePart,
 } from "@gent/core/domain/message-part-projection"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import {
-  dateFromMillis,
-  ImagePart,
-  Message,
-  ReasoningPart,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-} from "@gent/core/domain/message"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import type { TextPart, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("message part projection", () => {
@@ -50,19 +43,22 @@ describe("message part projection", () => {
 
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
-    const textPart = new TextPart({ type: "text", text: "hello" })
-    const imagePart = new ImagePart({ type: "image", image: "data:image/png;base64,abc" })
-    const toolCallPart = new ToolCallPart({
-      type: "tool-call",
-      toolCallId,
-      toolName: "read",
-      input: { path: "README.md" },
+    const textPart = Prompt.textPart({ text: "hello" })
+    const imagePart = Prompt.filePart({
+      data: "data:image/png;base64,abc",
+      mediaType: "image/png",
     })
-    const toolResultPart = new ToolResultPart({
-      type: "tool-result",
-      toolCallId,
-      toolName: "read",
-      output: { type: "json", value: { ok: true } },
+    const toolCallPart = Prompt.toolCallPart({
+      id: toolCallId,
+      name: "read",
+      params: { path: "README.md" },
+      providerExecuted: false,
+    })
+    const toolResultPart = Prompt.toolResultPart({
+      id: toolCallId,
+      name: "read",
+      isFailure: false,
+      result: { ok: true },
     })
     const parts = [textPart, imagePart, toolCallPart, toolResultPart]
 
@@ -72,7 +68,7 @@ describe("message part projection", () => {
     expect(messagePartsReasoning(parts)).toBe("")
     expect(messagePartsReasoningLines(parts)).toEqual([])
     expect(messagePartsImages(parts)).toEqual([
-      { image: "data:image/png;base64,abc", mediaType: "image", rawMediaType: undefined },
+      { image: "data:image/png;base64,abc", mediaType: "image/png", rawMediaType: "image/png" },
     ])
     expect(messagePartsToolCalls(parts)).toEqual([
       { id: "tc-projection", toolName: "read", input: { path: "README.md" } },
@@ -90,17 +86,13 @@ describe("message part projection", () => {
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
     expect(messagePartsToolResultParts(parts)).toEqual([toolResultPart])
     expect(messagePartsSearchText(parts)).toBe(
-      'hello\ndata:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
+      'hello\nimage/png data:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
     )
   })
 
   test("preserves line-oriented text and reasoning projections", () => {
-    const first = new TextPart({ type: "text", text: "one" })
-    const parts = [
-      first,
-      new ReasoningPart({ type: "reasoning", text: "think" }),
-      new TextPart({ type: "text", text: "two" }),
-    ]
+    const first = Prompt.textPart({ text: "one" })
+    const parts = [first, Prompt.reasoningPart({ text: "think" }), Prompt.textPart({ text: "two" })]
 
     expect(messageSingleText([first])).toBe("one")
     expect(messagePartsText(parts)).toBe("onetwo")
@@ -111,9 +103,8 @@ describe("message part projection", () => {
 
   test("maps Gent images to Effect prompt file parts", () => {
     const promptPart = messagePartToPromptPart(
-      new ImagePart({
-        type: "image",
-        image: "data:image/jpeg;base64,abc",
+      Prompt.filePart({
+        data: "data:image/jpeg;base64,abc",
         mediaType: "image/jpeg",
       }),
     )
@@ -128,11 +119,11 @@ describe("message part projection", () => {
   })
 
   test("maps Gent tool calls to Effect prompt and response parts", () => {
-    const part = new ToolCallPart({
-      type: "tool-call",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "search",
-      input: { query: "effect" },
+    const part = Prompt.toolCallPart({
+      id: ToolCallId.make("tc-1"),
+      name: "search",
+      params: { query: "effect" },
+      providerExecuted: false,
     })
 
     expect(messagePartToPromptPart(part)).toEqual(
@@ -156,11 +147,11 @@ describe("message part projection", () => {
   })
 
   test("maps Gent tool results to Effect result fields", () => {
-    const part = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "search",
-      output: { type: "error-json", value: { message: "nope" } },
+    const part = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-1"),
+      name: "search",
+      isFailure: true,
+      result: { message: "nope" },
     })
 
     expect(messagePartToPromptPart(part)).toEqual(
@@ -187,29 +178,29 @@ describe("message part projection", () => {
   })
 
   test("pairs duplicate provider tool ids with the result before the next duplicate call", () => {
-    const firstCall = new ToolCallPart({
-      type: "tool-call",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      input: { path: "first.txt" },
+    const firstCall = Prompt.toolCallPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      params: { path: "first.txt" },
+      providerExecuted: false,
     })
-    const secondCall = new ToolCallPart({
-      type: "tool-call",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      input: { path: "second.txt" },
+    const secondCall = Prompt.toolCallPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      params: { path: "second.txt" },
+      providerExecuted: false,
     })
-    const firstResult = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      output: { type: "json", value: "first result" },
+    const firstResult = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      isFailure: false,
+      result: "first result",
     })
-    const secondResult = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      output: { type: "json", value: "second result" },
+    const secondResult = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      isFailure: false,
+      result: "second result",
     })
 
     const projected = projectMessagesWithToolInteractions([
@@ -238,29 +229,29 @@ describe("message part projection", () => {
   })
 
   test("pairs same-message duplicate provider tool ids by part order", () => {
-    const firstCall = new ToolCallPart({
-      type: "tool-call",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      input: { path: "first.txt" },
+    const firstCall = Prompt.toolCallPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      params: { path: "first.txt" },
+      providerExecuted: false,
     })
-    const secondCall = new ToolCallPart({
-      type: "tool-call",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      input: { path: "second.txt" },
+    const secondCall = Prompt.toolCallPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      params: { path: "second.txt" },
+      providerExecuted: false,
     })
-    const firstResult = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      output: { type: "json", value: "first result" },
+    const firstResult = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      isFailure: false,
+      result: "first result",
     })
-    const secondResult = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.make("tc-1"),
-      toolName: "read",
-      output: { type: "json", value: "second result" },
+    const secondResult = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-1"),
+      name: "read",
+      isFailure: false,
+      result: "second result",
     })
 
     const projected = projectMessagesWithToolInteractions([
@@ -291,7 +282,7 @@ describe("message part projection", () => {
 
   test("projects Effect response parts back to Gent transcript parts", () => {
     expect(responsePartToAssistantMessagePart(Response.makePart("text", { text: "hi" }))).toEqual(
-      new TextPart({ type: "text", text: "hi" }),
+      Prompt.textPart({ text: "hi" }),
     )
 
     expect(
@@ -302,9 +293,8 @@ describe("message part projection", () => {
         }),
       ),
     ).toEqual(
-      new ImagePart({
-        type: "image",
-        image: "data:image/png;base64,YWJj",
+      Prompt.filePart({
+        data: "data:image/png;base64,YWJj",
         mediaType: "image/png",
       }),
     )
@@ -322,26 +312,25 @@ describe("message part projection", () => {
         }),
       ),
     ).toEqual(
-      new ToolResultPart({
-        type: "tool-result",
-        toolCallId: ToolCallId.make("tc-2"),
-        toolName: "read",
-        output: { type: "json", value: { value: "encoded" } },
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc-2"),
+        name: "read",
+        isFailure: false,
+        result: { value: "encoded" },
       }),
     )
   })
 
   test("uses URL-backed images for Prompt and rejects them for Response", () => {
-    const part = new ImagePart({
-      type: "image",
-      image: "https://example.test/image.png",
+    const part = Prompt.filePart({
+      data: "https://example.test/image.png",
       mediaType: "image/png",
     })
 
     expect(messagePartToPromptPart(part)).toEqual(
       expect.objectContaining({
         type: "file",
-        data: new URL("https://example.test/image.png"),
+        data: "https://example.test/image.png",
         mediaType: "image/png",
       } satisfies Partial<Prompt.FilePart>),
     )

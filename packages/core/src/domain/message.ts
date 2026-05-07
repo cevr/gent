@@ -1,4 +1,5 @@
 import { DateTime, Schema, SchemaGetter as Getter } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
@@ -13,43 +14,20 @@ export const DateFromNumber = Schema.DateTimeUtcFromMillis.pipe(
   }),
 )
 
-// Persisted transcript projection. Runtime/model IO uses Effect Prompt/Response
-// as the canonical AI AST; these schemas keep Gent-owned metadata, storage, and
-// UI serialization stable.
+export const TextPart = Prompt.TextPart
+export type TextPart = Prompt.TextPart
 
-export class TextPart extends Schema.Class<TextPart>("TextPart")({
-  type: Schema.Literal("text"),
-  text: Schema.String,
-}) {}
+export const FilePart = Prompt.FilePart
+export type FilePart = Prompt.FilePart
 
-export class ImagePart extends Schema.Class<ImagePart>("ImagePart")({
-  type: Schema.Literal("image"),
-  image: Schema.String, // URL or base64
-  mediaType: Schema.optional(Schema.String),
-}) {}
+export const ToolCallPart = Prompt.ToolCallPart
+export type ToolCallPart = Prompt.ToolCallPart
 
-export class ToolCallPart extends Schema.Class<ToolCallPart>("ToolCallPart")({
-  type: Schema.Literal("tool-call"),
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  input: Schema.Unknown,
-}) {}
+export const ToolResultPart = Prompt.ToolResultPart
+export type ToolResultPart = Prompt.ToolResultPart
 
-// Simplified ToolResultOutput - just JSON for now
-export class ToolResultPart extends Schema.Class<ToolResultPart>("ToolResultPart")({
-  type: Schema.Literal("tool-result"),
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  output: Schema.Struct({
-    type: Schema.Literals(["json", "error-json"]),
-    value: Schema.Unknown,
-  }),
-}) {}
-
-export class ReasoningPart extends Schema.Class<ReasoningPart>("ReasoningPart")({
-  type: Schema.Literal("reasoning"),
-  text: Schema.String,
-}) {}
+export const ReasoningPart = Prompt.ReasoningPart
+export type ReasoningPart = Prompt.ReasoningPart
 
 export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
   id: ToolCallId,
@@ -62,10 +40,12 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
 
 export const MessagePart = Schema.Union([
   TextPart,
-  ImagePart,
+  FilePart,
   ToolCallPart,
   ToolResultPart,
   ReasoningPart,
+  Prompt.ToolApprovalRequestPart,
+  Prompt.ToolApprovalResponsePart,
 ])
 export type MessagePart = typeof MessagePart.Type
 

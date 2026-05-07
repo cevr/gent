@@ -1,19 +1,12 @@
 import { describe, test, expect } from "bun:test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   truncate,
   renderMessageParts,
   renderSessionTree,
 } from "@gent/extensions/session-tools/read-session"
 import { messagePartsDisplayText } from "@gent/core/domain/message-part-projection"
-import {
-  dateFromMillis,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-  Branch,
-  Message,
-  type MessagePart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Message, type MessagePart } from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 
 describe("truncate", () => {
@@ -28,22 +21,22 @@ describe("truncate", () => {
 
 describe("messagePartsDisplayText", () => {
   test("read-session subpath exports renderMessageParts", () => {
-    const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
+    const parts: MessagePart[] = [Prompt.textPart({ text: "hello world" })]
     expect(renderMessageParts(parts)).toBe(messagePartsDisplayText(parts))
   })
 
   test("text part → text content", () => {
-    const parts: MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
+    const parts: MessagePart[] = [Prompt.textPart({ text: "hello world" })]
     expect(messagePartsDisplayText(parts)).toBe("hello world")
   })
 
   test("tool-call part → '### tool: name' header + truncated input", () => {
     const parts: MessagePart[] = [
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        input: { path: "/tmp/test.txt" },
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: { path: "/tmp/test.txt" },
+        providerExecuted: false,
       }),
     ]
     const result = messagePartsDisplayText(parts)
@@ -53,11 +46,11 @@ describe("messagePartsDisplayText", () => {
 
   test("tool-call part with undefined input renders without throwing", () => {
     const parts: MessagePart[] = [
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        input: undefined,
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: undefined,
+        providerExecuted: false,
       }),
     ]
     expect(messagePartsDisplayText(parts)).toBe("### tool: read\nundefined")
@@ -65,11 +58,11 @@ describe("messagePartsDisplayText", () => {
 
   test("tool-result part → 'result: {truncated output}'", () => {
     const parts: MessagePart[] = [
-      new ToolResultPart({
-        type: "tool-result",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "read",
-        output: { type: "json", value: "file contents here" },
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        isFailure: false,
+        result: "file contents here",
       }),
     ]
     const result = messagePartsDisplayText(parts)
@@ -78,12 +71,12 @@ describe("messagePartsDisplayText", () => {
 
   test("mixed parts joined with newline", () => {
     const parts: MessagePart[] = [
-      new TextPart({ type: "text", text: "start" }),
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: ToolCallId.make("tc1"),
-        toolName: "bash",
-        input: { command: "ls" },
+      Prompt.textPart({ text: "start" }),
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "bash",
+        params: { command: "ls" },
+        providerExecuted: false,
       }),
     ]
     const result = messagePartsDisplayText(parts)
@@ -115,7 +108,7 @@ describe("renderSessionTree", () => {
       sessionId: sid,
       branchId,
       role,
-      parts: [new TextPart({ type: "text", text })],
+      parts: [Prompt.textPart({ text })],
       createdAt: now,
     })
 

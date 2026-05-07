@@ -1,4 +1,5 @@
 import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
@@ -21,7 +22,7 @@ import {
   SessionId,
   ToolCallId,
 } from "../domain/ids.js"
-import { Message, MessageMetadata, TextPart } from "../domain/message.js"
+import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
@@ -477,7 +478,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         sessionId: input.sessionId,
         branchId: input.branchId,
         role: "user",
-        parts: [new TextPart({ type: "text", text: input.content })],
+        parts: [Prompt.textPart({ text: input.content })],
         createdAt: yield* DateTime.nowAsDate,
         ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       })
@@ -561,7 +562,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       sessionId: input.sessionId,
       branchId: input.branchId,
       role: "user",
-      parts: [new TextPart({ type: "text", text: content })],
+      parts: [Prompt.textPart({ text: content })],
       createdAt: yield* DateTime.nowAsDate,
     })
 

@@ -157,7 +157,7 @@ describe("interaction.respondInteraction", () => {
                   message.parts.some(
                     (part) =>
                       part.type === "tool-result" &&
-                      JSON.stringify(part.output.value).includes("after restart"),
+                      JSON.stringify(part.result).includes("after restart"),
                   ),
               ),
             ).toBe(true)
@@ -255,7 +255,7 @@ describe("interaction.respondInteraction", () => {
                 message.parts.some(
                   (part) =>
                     part.type === "tool-result" &&
-                    JSON.stringify(part.output.value).includes("real approval"),
+                    JSON.stringify(part.result).includes("real approval"),
                 ),
             ),
           ).toBe(true)

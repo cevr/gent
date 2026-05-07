@@ -17,12 +17,12 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
           chars += part.text.length
           break
         case "tool-call":
-          chars += JSON.stringify(part.input).length
+          chars += JSON.stringify(part.params).length
           break
         case "tool-result":
-          chars += JSON.stringify(part.output).length
+          chars += JSON.stringify(part.result).length
           break
-        case "image":
+        case "file":
           chars += 1000 // ~250 tokens estimate for image references
           break
         case "reasoning":

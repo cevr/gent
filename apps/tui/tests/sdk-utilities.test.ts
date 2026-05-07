@@ -1,40 +1,45 @@
 import { describe, test, expect } from "bun:test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { extractText, extractImages, Message, type Message as DomainMessage } from "@gent/sdk"
-import {
-  dateFromMillis,
-  type MessagePart,
-  ToolCallPart,
-  ToolResultPart,
-  TextPart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, type MessagePart } from "@gent/core/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
-    const parts: MessagePart[] = [{ type: "text", text: "Hello world" }]
+    const parts: MessagePart[] = [Prompt.textPart({ text: "Hello world" })]
     expect(extractText(parts)).toBe("Hello world")
   })
 
   test("returns empty string when no text part", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: {},
+        providerExecuted: false,
+      }),
     ]
     expect(extractText(parts)).toBe("")
   })
 
   test("concatenates all text parts", () => {
     const parts: MessagePart[] = [
-      { type: "text", text: "First" },
-      { type: "text", text: "Second" },
+      Prompt.textPart({ text: "First" }),
+      Prompt.textPart({ text: "Second" }),
     ]
     expect(extractText(parts)).toBe("FirstSecond")
   })
 
   test("handles mixed parts", () => {
     const parts: MessagePart[] = [
-      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
-      { type: "text", text: "Response after tool" },
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: {},
+        providerExecuted: false,
+      }),
+      Prompt.textPart({ text: "Response after tool" }),
     ]
     expect(extractText(parts)).toBe("Response after tool")
   })
@@ -47,9 +52,9 @@ describe("extractText", () => {
 describe("extractImages", () => {
   test("extracts images from parts", () => {
     const parts: MessagePart[] = [
-      { type: "image", image: "data:image/png;base64,abc", mediaType: "image/png" },
-      { type: "text", text: "Some text" },
-      { type: "image", image: "data:image/jpeg;base64,xyz", mediaType: "image/jpeg" },
+      Prompt.filePart({ data: "data:image/png;base64,abc", mediaType: "image/png" }),
+      Prompt.textPart({ text: "Some text" }),
+      Prompt.filePart({ data: "data:image/jpeg;base64,xyz", mediaType: "image/jpeg" }),
     ]
 
     const images = extractImages(parts)
@@ -59,15 +64,15 @@ describe("extractImages", () => {
   })
 
   test("returns empty array when no images", () => {
-    const parts: MessagePart[] = [{ type: "text", text: "Just text" }]
+    const parts: MessagePart[] = [Prompt.textPart({ text: "Just text" })]
     expect(extractImages(parts)).toEqual([])
   })
 
-  test("uses fallback mediaType when not provided", () => {
-    const parts: MessagePart[] = [{ type: "image", image: "data:abc" }]
+  test("uses file mediaType for image parts", () => {
+    const parts: MessagePart[] = [Prompt.filePart({ data: "data:abc", mediaType: "image/png" })]
 
     const images = extractImages(parts)
-    expect(images[0]).toEqual({ mediaType: "image" })
+    expect(images[0]).toEqual({ mediaType: "image/png" })
   })
 
   test("handles empty parts", () => {
@@ -76,10 +81,15 @@ describe("extractImages", () => {
 
   test("handles mixed content with images", () => {
     const parts: MessagePart[] = [
-      { type: "text", text: "Before" },
-      { type: "image", image: "abc", mediaType: "image/gif" },
-      { type: "tool-call", toolCallId: ToolCallId.make("tc1"), toolName: "read", input: {} },
-      { type: "image", image: "xyz", mediaType: "image/webp" },
+      Prompt.textPart({ text: "Before" }),
+      Prompt.filePart({ data: "abc", mediaType: "image/gif" }),
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: {},
+        providerExecuted: false,
+      }),
+      Prompt.filePart({ data: "xyz", mediaType: "image/webp" }),
     ]
 
     const images = extractImages(parts)
@@ -101,29 +111,29 @@ describe("projectMessagesWithToolInteractions", () => {
       turnDurationMs: undefined,
     })
 
-  const toolResult = (toolCallId: string, value: unknown, isError = false): MessagePart =>
-    ToolResultPart.make({
-      type: "tool-result",
-      toolCallId: ToolCallId.make(toolCallId),
-      toolName: "test-tool",
-      output: { type: isError ? "error-json" : "json", value },
+  const toolResult = (id: string, value: unknown, isError = false): MessagePart =>
+    Prompt.toolResultPart({
+      id: ToolCallId.make(id),
+      name: "test-tool",
+      isFailure: isError,
+      result: value,
     })
 
   test("exposes running tool calls on projected messages", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: { path: "/foo" },
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: { path: "/foo" },
+          providerExecuted: false,
         }),
-        TextPart.make({ type: "text", text: "Some text" }),
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc2"),
-          toolName: "edit",
-          input: { path: "/bar" },
+        Prompt.textPart({ text: "Some text" }),
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc2"),
+          name: "edit",
+          params: { path: "/bar" },
+          providerExecuted: false,
         }),
       ]),
     ]
@@ -151,7 +161,7 @@ describe("projectMessagesWithToolInteractions", () => {
 
   test("returns empty interactions when no tool calls", () => {
     const projected = projectMessagesWithToolInteractions([
-      makeMsg("assistant", [TextPart.make({ type: "text", text: "Just text" })]),
+      makeMsg("assistant", [Prompt.textPart({ text: "Just text" })]),
     ])[0]
     expect(projected?.toolInteractions).toEqual([])
   })
@@ -159,11 +169,11 @@ describe("projectMessagesWithToolInteractions", () => {
   test("joins tool calls with tool-message results", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", "file contents here")]),
@@ -183,11 +193,11 @@ describe("projectMessagesWithToolInteractions", () => {
   test("handles error results", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", "File not found", true)]),
@@ -208,11 +218,11 @@ describe("projectMessagesWithToolInteractions", () => {
     const longText = "x".repeat(150)
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", longText)]),
@@ -230,11 +240,11 @@ describe("projectMessagesWithToolInteractions", () => {
     const multiline = "First line\nSecond line\nThird line"
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", multiline)]),
@@ -248,11 +258,11 @@ describe("projectMessagesWithToolInteractions", () => {
   test("handles object output", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", { files: ["a.ts", "b.ts"] })]),
@@ -266,17 +276,17 @@ describe("projectMessagesWithToolInteractions", () => {
   test("handles multiple tool results", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc1"),
-          toolName: "read",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: {},
+          providerExecuted: false,
         }),
-        ToolCallPart.make({
-          type: "tool-call",
-          toolCallId: ToolCallId.make("tc2"),
-          toolName: "edit",
-          input: {},
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc2"),
+          name: "edit",
+          params: {},
+          providerExecuted: false,
         }),
       ]),
       makeMsg("tool", [toolResult("tc1", "result1"), toolResult("tc2", "result2")]),
@@ -290,8 +300,8 @@ describe("projectMessagesWithToolInteractions", () => {
 
   test("ignores tool results without matching message-local calls", () => {
     const messages: DomainMessage[] = [
-      makeMsg("user", [TextPart.make({ type: "text", text: "Hello" })]),
-      makeMsg("assistant", [TextPart.make({ type: "text", text: "Hi there" })]),
+      makeMsg("user", [Prompt.textPart({ text: "Hello" })]),
+      makeMsg("assistant", [Prompt.textPart({ text: "Hi there" })]),
       makeMsg("tool", [toolResult("tc1", "orphan")]),
     ]
 

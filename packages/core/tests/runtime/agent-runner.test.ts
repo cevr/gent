@@ -1,4 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
@@ -17,14 +18,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import {
-  dateFromMillis,
-  Session,
-  Branch,
-  Message,
-  ReasoningPart,
-  TextPart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch, Message } from "@gent/core/domain/message"
 import {
   resolveAgentModel,
   AgentRunnerService,
@@ -750,7 +744,7 @@ describe("AgentRunner", () => {
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "assistant",
-              parts: [new ReasoningPart({ type: "reasoning", text: "I analyzed the repository" })],
+              parts: [Prompt.reasoningPart({ text: "I analyzed the repository" })],
               createdAt: now,
             }),
           )
@@ -821,8 +815,8 @@ describe("AgentRunner", () => {
               branchId: input.branchId,
               role: "assistant",
               parts: [
-                new ReasoningPart({ type: "reasoning", text: "thinking step" }),
-                new TextPart({ type: "text", text: "the actual answer" }),
+                Prompt.reasoningPart({ text: "thinking step" }),
+                Prompt.textPart({ text: "the actual answer" }),
               ],
               createdAt: now,
             }),
@@ -894,8 +888,8 @@ describe("AgentRunner", () => {
               branchId: input.branchId,
               role: "assistant",
               parts: [
-                new ReasoningPart({ type: "reasoning", text: "internal thinking" }),
-                new TextPart({ type: "text", text: "visible answer" }),
+                Prompt.reasoningPart({ text: "internal thinking" }),
+                Prompt.textPart({ text: "visible answer" }),
               ],
               createdAt: now,
             }),

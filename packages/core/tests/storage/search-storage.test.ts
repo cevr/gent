@@ -1,4 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { test as bunTest } from "bun:test"
 import { Effect } from "effect"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
@@ -7,7 +8,7 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
-import { dateFromMillis, Session, Branch, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch, Message } from "@gent/core/domain/message"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
 const test = it.live.layer(SqliteStorage.TestWithSql())
@@ -66,7 +67,7 @@ const addMessage = (
         sessionId,
         branchId,
         role,
-        parts: [new TextPart({ type: "text", text })],
+        parts: [Prompt.textPart({ text })],
         createdAt: createdAt ?? FIXED_NOW,
       }),
     )

@@ -13,7 +13,7 @@ import {
 } from "../../../domain/event.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../../domain/ids.js"
 import type {
-  ImagePart,
+  FilePart,
   ReasoningPart,
   TextPart,
   ToolCallPart,
@@ -53,7 +53,7 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
   toolCallCount: 0,
 })
 
-type AssistantResponsePart = TextPart | ReasoningPart | ImagePart | ToolCallPart
+type AssistantResponsePart = TextPart | ReasoningPart | FilePart | ToolCallPart
 
 export interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
@@ -267,7 +267,7 @@ export const collectFailedModelTurnResponse = (params: {
 
 const externalToolOutput = (
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>,
-): ToolResultPart["output"] => ({
+): { readonly type: "json" | "error-json"; readonly value: unknown } => ({
   type: part.isFailure ? "error-json" : "json",
   value: part.encodedResult,
 })

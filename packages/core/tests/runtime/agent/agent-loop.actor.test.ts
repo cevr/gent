@@ -1,4 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Schema } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.actor"
 import {
@@ -9,7 +10,7 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core/domain/ids"
-import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { SteerCommand } from "@gent/core/domain/steer"
 
 const sessionA = SessionId.make("session-a")
@@ -29,7 +30,7 @@ const userMessage = (params: { id: MessageId; sessionId: SessionId; branchId: Br
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "user",
-    parts: [new TextPart({ type: "text", text: "hi" })],
+    parts: [Prompt.textPart({ text: "hi" })],
     createdAt: fixedNow,
     isPartial: false,
     transient: false,

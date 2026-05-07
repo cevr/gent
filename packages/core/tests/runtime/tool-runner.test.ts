@@ -68,8 +68,8 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("json")
-      expect(result.output.value).toEqual({ echoed: "hello" })
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({ echoed: "hello" })
     }),
   )
   it.live("returns error result when tool fails", () =>
@@ -109,10 +109,10 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("error-json")
+      expect(result.isFailure).toBe(true)
       const error =
         (
-          result.output.value as {
+          result.result as {
             error?: string
           }
         ).error ?? ""
@@ -156,10 +156,10 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("error-json")
+      expect(result.isFailure).toBe(true)
       const error =
         (
-          result.output.value as {
+          result.result as {
             error?: string
           }
         ).error ?? ""
@@ -208,10 +208,10 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("error-json")
+      expect(result.isFailure).toBe(true)
       const error =
         (
-          result.output.value as {
+          result.result as {
             error?: string
           }
         ).error ?? ""
@@ -262,8 +262,8 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("json")
-      expect(result.output.value).toEqual({
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({
         cwd: "/runtime/cwd",
         home: "/runtime/home",
         sessionId: SessionId.make("session-inspect"),
@@ -318,8 +318,8 @@ describe("ToolRunner", () => {
           }),
         )
       }).pipe(Effect.provide(layer))
-      expect(result.output.type).toBe("json")
-      expect(result.output.value).toEqual({ value: "selected-profile" })
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({ value: "selected-profile" })
     }),
   )
   it.live("re-raises interaction pending instead of converting it to a tool result", () =>

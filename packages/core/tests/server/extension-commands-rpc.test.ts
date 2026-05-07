@@ -573,9 +573,7 @@ describe("extension command RPCs", () => {
               current.messages.some((message) =>
                 message.parts.some(
                   (part) =>
-                    part.type === "tool-result" &&
-                    part.toolName === "create-branch" &&
-                    part.output.type === "json",
+                    part.type === "tool-result" && part.name === "create-branch" && !part.isFailure,
                 ),
               ),
             5000,
@@ -583,13 +581,13 @@ describe("extension command RPCs", () => {
           )
           const createdBranchPart = snapshot.messages
             .flatMap((message) => message.parts)
-            .find((part) => part.type === "tool-result" && part.toolName === "create-branch")
+            .find((part) => part.type === "tool-result" && part.name === "create-branch")
           const createdBranchInteraction = snapshot.messages
             .flatMap((message) => message.toolInteractions)
             .find((interaction) => interaction.toolName === "create-branch")
           const createdBranchId =
             createdBranchPart && createdBranchPart.type === "tool-result"
-              ? createdBranchPart.output.value
+              ? createdBranchPart.result
               : undefined
           if (typeof createdBranchId !== "string") {
             throw new Error("expected create-branch tool result to contain branch id")

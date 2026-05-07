@@ -15,15 +15,15 @@ export class UrlBackedImageNotSupportedError extends Schema.TaggedErrorClass<Url
   }
 }
 import {
-  ImagePart,
-  ReasoningPart,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
+  type FilePart,
   type Message,
   type MessagePart,
   type ProjectedMessage,
+  type ReasoningPart,
+  type TextPart,
+  type ToolCallPart,
   type ToolInteraction,
+  type ToolResultPart,
   projectMessage,
 } from "./message.js"
 
@@ -80,6 +80,12 @@ const stringifyDisplayValue = (value: unknown): string => {
   return encoded === undefined ? String(value) : encoded
 }
 
+const filePartDataToDisplay = (part: FilePart): string => {
+  if (typeof part.data === "string") return part.data
+  if (part.data instanceof URL) return part.data.toString()
+  return `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`
+}
+
 export const messagePartText = (part: MessagePart): string | undefined =>
   part.type === "text" ? part.text : undefined
 
@@ -87,10 +93,10 @@ export const messagePartReasoning = (part: MessagePart): string | undefined =>
   part.type === "reasoning" ? part.text : undefined
 
 export const messagePartImage = (part: MessagePart): ImagePartProjection | undefined =>
-  part.type === "image"
+  part.type === "file" && part.mediaType.startsWith("image/")
     ? {
-        image: part.image,
-        mediaType: part.mediaType ?? "image",
+        image: filePartDataToDisplay(part),
+        mediaType: part.mediaType,
         rawMediaType: part.mediaType,
       }
     : undefined
@@ -98,21 +104,24 @@ export const messagePartImage = (part: MessagePart): ImagePartProjection | undef
 export const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined =>
   part.type === "tool-call"
     ? {
-        id: part.toolCallId,
-        toolName: part.toolName,
-        input: part.input,
+        id: part.id,
+        toolName: part.name,
+        input: part.params,
       }
     : undefined
 
 export const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined =>
   part.type === "tool-result"
     ? {
-        id: part.toolCallId,
-        toolName: part.toolName,
-        value: part.output.value,
-        summary: summarizeOutput(part.output),
-        text: stringifyOutput(part.output.value),
-        isError: part.output.type === "error-json",
+        id: part.id,
+        toolName: part.name,
+        value: part.result,
+        summary: summarizeOutput({
+          type: part.isFailure ? "error-json" : "json",
+          value: part.result,
+        }),
+        text: stringifyOutput(part.result),
+        isError: part.isFailure,
       }
     : undefined
 
@@ -370,12 +379,13 @@ export const messagePartsSearchText = (parts: ReadonlyArray<MessagePart>): strin
     .filter((text) => text.length > 0)
     .join("\n")
 
-export const fileDataFromImage = (part: ImagePart): string | URL => {
-  if (part.image.startsWith("data:")) return part.image
+export const fileDataFromImage = (part: FilePart): string | URL | Uint8Array => {
+  if (typeof part.data !== "string") return part.data
+  if (part.data.startsWith("data:")) return part.data
   try {
-    return new URL(part.image)
+    return new URL(part.data)
   } catch {
-    return part.image
+    return part.data
   }
 }
 
@@ -387,14 +397,20 @@ export const dataUrlToBytes = (value: string): Uint8Array | undefined => {
   return Uint8Array.from(Buffer.from(data, "base64"))
 }
 
-export const imagePartToResponseFilePart = (part: ImagePart): Response.FilePart => {
-  const data = dataUrlToBytes(part.image)
+export const imagePartToResponseFilePart = (part: FilePart): Response.FilePart => {
+  let data: Uint8Array | undefined
+  if (typeof part.data === "string") {
+    data = dataUrlToBytes(part.data)
+  } else if (!(part.data instanceof URL)) {
+    data = part.data
+  }
+
   if (data === undefined) {
-    throw new UrlBackedImageNotSupportedError({ image: part.image })
+    throw new UrlBackedImageNotSupportedError({ image: filePartDataToDisplay(part) })
   }
   return Response.makePart("file", {
     data,
-    mediaType: part.mediaType ?? "image/png",
+    mediaType: part.mediaType,
   })
 }
 
@@ -406,127 +422,99 @@ export const messagePartToPromptPart = (
       return Prompt.textPart({ text: part.text })
     case "reasoning":
       return Prompt.reasoningPart({ text: part.text })
-    case "image":
-      return Prompt.filePart({
-        data: fileDataFromImage(part),
-        mediaType: part.mediaType ?? "image/png",
-      })
+    case "file":
+      return part
     case "tool-call":
-      return Prompt.toolCallPart({
-        id: part.toolCallId,
-        name: part.toolName,
-        params: part.input,
-        providerExecuted: false,
-      })
+      return part
     case "tool-result":
-      return Prompt.toolResultPart({
-        id: part.toolCallId,
-        name: part.toolName,
-        isFailure: part.output.type === "error-json",
-        result: part.output.value,
-      })
+      return part
+    case "tool-approval-request":
+    case "tool-approval-response":
+      return part
   }
 }
 
-export const userMessagePartToPromptPart = (part: TextPart | ImagePart): Prompt.UserMessagePart => {
+export const userMessagePartToPromptPart = (part: TextPart | FilePart): Prompt.UserMessagePart => {
   switch (part.type) {
     case "text":
-      return Prompt.textPart({ text: part.text })
-    case "image":
-      return Prompt.filePart({
-        data: fileDataFromImage(part),
-        mediaType: part.mediaType ?? "image/png",
-      })
+      return part
+    case "file":
+      return part
   }
 }
 
 export const assistantMessagePartToPromptPart = (
-  part: TextPart | ReasoningPart | ImagePart | ToolCallPart,
+  part: TextPart | ReasoningPart | FilePart | ToolCallPart,
 ): Prompt.AssistantMessagePart => {
   switch (part.type) {
     case "text":
-      return Prompt.textPart({ text: part.text })
+      return part
     case "reasoning":
-      return Prompt.reasoningPart({ text: part.text })
-    case "image":
-      return Prompt.filePart({
-        data: fileDataFromImage(part),
-        mediaType: part.mediaType ?? "image/png",
-      })
+      return part
+    case "file":
+      return part
     case "tool-call":
-      return Prompt.toolCallPart({
-        id: part.toolCallId,
-        name: part.toolName,
-        params: part.input,
-        providerExecuted: false,
-      })
+      return part
   }
 }
 
-export const toolMessagePartToPromptPart = (part: ToolResultPart): Prompt.ToolMessagePart =>
-  Prompt.toolResultPart({
-    id: part.toolCallId,
-    name: part.toolName,
-    isFailure: part.output.type === "error-json",
-    result: part.output.value,
-  })
+export const toolMessagePartToPromptPart = (part: ToolResultPart): Prompt.ToolMessagePart => part
 
 export const assistantMessagePartToResponsePart = (
-  part: TextPart | ReasoningPart | ImagePart | ToolCallPart,
+  part: TextPart | ReasoningPart | FilePart | ToolCallPart,
 ): Response.AnyPart => {
   switch (part.type) {
     case "text":
       return Response.makePart("text", { text: part.text })
     case "reasoning":
       return Response.makePart("reasoning", { text: part.text })
-    case "image":
+    case "file":
       return imagePartToResponseFilePart(part)
     case "tool-call":
       return Response.makePart("tool-call", {
-        id: part.toolCallId,
-        name: part.toolName,
-        params: part.input,
-        providerExecuted: false,
+        id: part.id,
+        name: part.name,
+        params: part.params,
+        providerExecuted: part.providerExecuted,
       })
   }
 }
 
 export const toolResultPartToResponsePart = (part: ToolResultPart): Response.AnyPart =>
   Response.makePart("tool-result", {
-    id: part.toolCallId,
-    name: part.toolName,
-    isFailure: part.output.type === "error-json",
-    result: part.output.value,
-    encodedResult: part.output.value,
+    id: part.id,
+    name: part.name,
+    isFailure: part.isFailure,
+    result: part.result,
+    encodedResult: part.result,
     providerExecuted: false,
     preliminary: false,
   })
 
-export const responseFilePartToImagePart = (part: Response.FilePart): ImagePart | undefined =>
+export const responseFilePartToImagePart = (part: Response.FilePart): FilePart | undefined =>
   part.mediaType.startsWith("image/")
-    ? new ImagePart({
-        type: "image",
-        image: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
+    ? Prompt.filePart({
+        data: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
         mediaType: part.mediaType,
       })
     : undefined
 
 export const responsePartToAssistantMessagePart = (
   part: Response.AnyPart,
-): TextPart | ReasoningPart | ImagePart | ToolCallPart | undefined => {
+): TextPart | ReasoningPart | FilePart | ToolCallPart | undefined => {
   switch (part.type) {
     case "text":
-      return new TextPart({ type: "text", text: part.text })
+      return Prompt.textPart({ text: part.text })
     case "reasoning":
-      return new ReasoningPart({ type: "reasoning", text: part.text })
+      return Prompt.reasoningPart({ text: part.text })
     case "file":
       return responseFilePartToImagePart(part)
     case "tool-call":
-      return new ToolCallPart({
-        type: "tool-call",
-        toolCallId: ToolCallId.make(part.id),
-        toolName: part.name,
-        input: part.params,
+      return Prompt.toolCallPart({
+        id: part.id,
+        name: part.name,
+        params: part.params,
+        providerExecuted: part.providerExecuted,
       })
     default:
       return undefined
@@ -535,13 +523,10 @@ export const responsePartToAssistantMessagePart = (
 
 export const responsePartToToolResultPart = (part: Response.AnyPart): ToolResultPart | undefined =>
   part.type === "tool-result" && part.preliminary !== true
-    ? new ToolResultPart({
-        type: "tool-result",
-        toolCallId: ToolCallId.make(part.id),
-        toolName: part.name,
-        output: {
-          type: part.isFailure ? "error-json" : "json",
-          value: part.encodedResult,
-        },
+    ? Prompt.toolResultPart({
+        id: part.id,
+        name: part.name,
+        isFailure: part.isFailure,
+        result: part.encodedResult,
       })
     : undefined

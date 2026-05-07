@@ -6,7 +6,7 @@ import {
   type ToolToken,
 } from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { ToolResultPart } from "../../domain/message.js"
+import type { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { formatSchemaError } from "../format-schema-error"
@@ -15,9 +15,10 @@ import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.j
 import type { ResourceManagerService } from "../resource-manager.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import type { ToolCallId } from "../../domain/ids.js"
+import { ToolCallId } from "../../domain/ids.js"
 import type { Option } from "effect"
 import type * as AiTool from "effect/unstable/ai/Tool"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 
@@ -100,14 +101,11 @@ const runPermissionCheck = (params: {
   )
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
-  new ToolResultPart({
-    type: "tool-result",
-    toolCallId: toolCall.toolCallId,
-    toolName: toolCall.toolName,
-    output: {
-      type: "error-json",
-      value: { error: message },
-    },
+  Prompt.toolResultPart({
+    id: toolCall.toolCallId,
+    name: toolCall.toolName,
+    isFailure: true,
+    result: { error: message },
   })
 
 const publishStarted = (params: {
@@ -133,17 +131,16 @@ const publishCompleted = (params: {
   Effect.gen(function* () {
     if (params.publishEvent === undefined) return
     const outputSummary = summarizeToolOutput(params.result)
-    const isError = params.result.output.type === "error-json"
     const fields = {
       sessionId: params.ctx.sessionId,
       branchId: params.ctx.branchId,
-      toolCallId: params.result.toolCallId,
-      toolName: params.result.toolName,
+      toolCallId: ToolCallId.make(params.result.id),
+      toolName: params.result.name,
       summary: outputSummary,
-      output: stringifyOutput(params.result.output.value),
+      output: stringifyOutput(params.result.result),
     }
     yield* params.publishEvent(
-      isError ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
+      params.result.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
     )
   })
 
@@ -280,14 +277,11 @@ const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
       })
       return errorResult(toolCall, message)
     }
-    return new ToolResultPart({
-      type: "tool-result",
-      toolCallId: toolCall.toolCallId,
-      toolName: toolCall.toolName,
-      output: {
-        type: terminal.value.isFailure ? "error-json" : "json",
-        value: terminal.value.encodedResult,
-      },
+    return Prompt.toolResultPart({
+      id: toolCall.toolCallId,
+      name: toolCall.toolName,
+      isFailure: terminal.value.isFailure,
+      result: terminal.value.encodedResult,
     })
   })
 
@@ -346,7 +340,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   Effect.annotateLogs({
                     toolName: toolCall.toolName,
                     toolCallId: toolCall.toolCallId,
-                    isError: result.output.type === "error-json",
+                    isError: result.isFailure,
                   }),
                 )
                 return result
@@ -458,11 +452,11 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       run: (toolCall, ctx, profileOverride) =>
         Effect.gen(function* () {
           yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
-          const result = new ToolResultPart({
-            type: "tool-result",
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            output: { type: "json", value: null },
+          const result = Prompt.toolResultPart({
+            id: toolCall.toolCallId,
+            name: toolCall.toolName,
+            isFailure: false,
+            result: null,
           })
           yield* publishCompleted({ publishEvent: profileOverride?.publishEvent, ctx, result })
           return result

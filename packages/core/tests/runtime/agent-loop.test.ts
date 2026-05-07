@@ -40,14 +40,8 @@ import {
   type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import {
-  dateFromMillis,
-  Branch,
-  ImagePart,
-  Message,
-  Session,
-  TextPart,
-} from "@gent/core/domain/message"
+import type { TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { type ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import {
@@ -124,7 +118,7 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     sessionId,
     branchId,
     role: "user",
-    parts: [new TextPart({ type: "text", text })],
+    parts: [Prompt.textPart({ text })],
     createdAt: dateFromMillis(1_767_225_600_000),
   })
 const runAgentLoop = (
@@ -825,9 +819,8 @@ describe("streaming", () => {
       const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
       expect(assistant).toBeDefined()
       expect(assistant?.parts).toEqual([
-        new ImagePart({
-          type: "image",
-          image: "data:image/png;base64,aGk=",
+        Prompt.filePart({
+          data: "data:image/png;base64,aGk=",
           mediaType: "image/png",
         }),
       ])
@@ -1069,7 +1062,7 @@ describe("streaming", () => {
         expect(tags).toContain("ProviderRetrying")
         expect(tags).not.toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
-        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "after retry" })])
+        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after retry" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
   test("retries retryable provider stream-consumption failures after metadata but before output", () =>
@@ -1114,9 +1107,7 @@ describe("streaming", () => {
         expect(tags).toContain("ProviderRetrying")
         expect(tags).not.toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
-        expect(assistant?.parts).toEqual([
-          new TextPart({ type: "text", text: "after metadata retry" }),
-        ])
+        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after metadata retry" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
   test("emits stream failure events after pre-output retries are exhausted", () =>
@@ -1179,7 +1170,7 @@ describe("streaming", () => {
         expect(tags).not.toContain("ProviderRetrying")
         expect(tags).toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
-        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
+        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
   test("native response error parts fail the stream and preserve partial output", () =>
@@ -1210,7 +1201,7 @@ describe("streaming", () => {
         expect(error).toEqual(expect.objectContaining({ error: "native response part failed" }))
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
-        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
+        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
 })
@@ -1307,7 +1298,7 @@ describe("continuation", () => {
       sessionId: contSessionId,
       branchId: contBranchId,
       role: "user",
-      parts: [new TextPart({ type: "text", text })],
+      parts: [Prompt.textPart({ text })],
       createdAt: dateFromMillis(1_767_225_600_000),
     })
   const echoTool = tool({
@@ -1589,7 +1580,7 @@ describe("interaction", () => {
       sessionId: intSessionId,
       branchId: intBranchId,
       role: "user",
-      parts: [new TextPart({ type: "text", text })],
+      parts: [Prompt.textPart({ text })],
       createdAt: dateFromMillis(1_767_225_600_000),
     })
   const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
@@ -1999,7 +1990,7 @@ describe("queue drain regression", () => {
                   sessionId: drainSessionId,
                   branchId: drainBranchId,
                   role: "user",
-                  parts: [new TextPart({ type: "text", text })],
+                  parts: [Prompt.textPart({ text })],
                   createdAt: dateFromMillis(1_767_225_600_000),
                 }),
                 { interactive: true },

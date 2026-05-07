@@ -1,10 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Cause, Deferred, Effect, Layer, Logger, Option, Ref, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, Branch, Message, Session, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message"
 import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Provider } from "@gent/core/providers/provider"
@@ -361,7 +362,7 @@ describe("session command persistence", () => {
           sessionId,
           branchId,
           role: "user",
-          parts: [new TextPart({ type: "text", text: "seed" })],
+          parts: [Prompt.textPart({ text: "seed" })],
           createdAt: now,
         }),
       )
@@ -762,7 +763,7 @@ describe("session command persistence", () => {
           sessionId,
           branchId,
           role: "user",
-          parts: [new TextPart({ type: "text", text: "first" })],
+          parts: [Prompt.textPart({ text: "first" })],
           createdAt: now,
         }),
       )
@@ -772,7 +773,7 @@ describe("session command persistence", () => {
           sessionId,
           branchId,
           role: "assistant",
-          parts: [new TextPart({ type: "text", text: "second" })],
+          parts: [Prompt.textPart({ text: "second" })],
           createdAt: datePlusMillis(now, 1),
         }),
       )
@@ -820,7 +821,7 @@ describe("session command persistence", () => {
           sessionId: otherSessionId,
           branchId: otherBranchId,
           role: "user",
-          parts: [new TextPart({ type: "text", text: "foreign" })],
+          parts: [Prompt.textPart({ text: "foreign" })],
           createdAt: now,
         }),
       )
@@ -830,7 +831,7 @@ describe("session command persistence", () => {
           sessionId,
           branchId,
           role: "assistant",
-          parts: [new TextPart({ type: "text", text: "owner" })],
+          parts: [Prompt.textPart({ text: "owner" })],
           createdAt: datePlusMillis(now, 1),
         }),
       )
@@ -1648,7 +1649,7 @@ describe("requestId idempotency", () => {
           sessionId,
           branchId,
           role: "user",
-          parts: [new TextPart({ type: "text", text: "seed" })],
+          parts: [Prompt.textPart({ text: "seed" })],
           createdAt: now,
         }),
       )

@@ -51,10 +51,11 @@ import {
 } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
 import { CurrentAddress } from "effect/unstable/cluster/Entity"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { DEFAULTS } from "../../domain/defaults.js"
-import { Message, TextPart, type MessageMetadata } from "../../domain/message.js"
+import { Message, type MessageMetadata } from "../../domain/message.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
   ActorCommandId,
@@ -572,7 +573,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         sessionId,
         branchId,
         role: "user",
-        parts: [new TextPart({ type: "text", text: input.content ?? "" })],
+        parts: [Prompt.textPart({ text: input.content ?? "" })],
         createdAt: yield* DateTime.nowAsDate,
         ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       })
@@ -875,7 +876,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           sessionId: command.sessionId,
           branchId: command.branchId,
           role: "user",
-          parts: [new TextPart({ type: "text", text: command.message })],
+          parts: [Prompt.textPart({ text: command.message })],
           createdAt: yield* DateTime.nowAsDate,
         })
         const item: QueuedTurnItem = {

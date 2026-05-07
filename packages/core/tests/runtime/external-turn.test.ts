@@ -7,6 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { AgentLoop, type AgentLoopService } from "../../src/runtime/agent/agent-loop"
 import {
@@ -23,7 +24,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider, finishPart } from "@gent/core/providers/provider"
-import { dateFromMillis, ImagePart, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import {
   messagePartsText,
   messagePartsToolCallParts,
@@ -59,7 +60,7 @@ const makeMessage = (text: string) =>
     sessionId,
     branchId,
     role: "user",
-    parts: [new TextPart({ type: "text", text })],
+    parts: [Prompt.textPart({ text })],
     createdAt: dateFromMillis(1_767_225_600_000),
   })
 const makeMessageWithParts = (parts: Message["parts"]) =>
@@ -386,9 +387,7 @@ describe("external turn execution", () => {
             }),
           )
           const assistant = yield* messages.getMessage(assistantMessageIdForTurn(message.id, 1))
-          expect(assistant?.parts).toEqual([
-            new TextPart({ type: "text", text: "partial external answer" }),
-          ])
+          expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial external answer" })])
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -514,13 +513,12 @@ describe("external turn execution", () => {
       })
       const layer = makeLayerWithEvents(executor, eventsRef)
       const message = makeMessageWithParts([
-        new TextPart({ type: "text", text: "first text" }),
-        new ImagePart({
-          type: "image",
-          image: "data:image/png;base64,abc",
+        Prompt.textPart({ text: "first text" }),
+        Prompt.filePart({
+          data: "data:image/png;base64,abc",
           mediaType: "image/png",
         }),
-        new TextPart({ type: "text", text: "second text" }),
+        Prompt.textPart({ text: "second text" }),
       ])
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -531,7 +529,7 @@ describe("external turn execution", () => {
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
       const lastUser = capturedCtx!.messages.at(-1)
-      expect(lastUser?.parts.map((part) => part.type)).toEqual(["text", "image", "text"])
+      expect(lastUser?.parts.map((part) => part.type)).toEqual(["text", "file", "text"])
       expect(lastUser?.parts[2]?.type === "text" ? lastUser.parts[2].text : undefined).toBe(
         "second text",
       )
@@ -738,10 +736,10 @@ describe("ExternalDriverContribution end-to-end", () => {
             messagePartsToolResultParts(m.parts),
           )
           expect(toolCallParts.length).toBe(1)
-          expect(toolCallParts[0]?.toolName).toBe("read_file")
+          expect(toolCallParts[0]?.name).toBe("read_file")
           expect(toolResultParts.length).toBe(1)
-          expect(toolResultParts[0]?.toolName).toBe("read_file")
-          expect(toolResultParts[0]?.output.type).toBe("json")
+          expect(toolResultParts[0]?.name).toBe("read_file")
+          expect(toolResultParts[0]?.isFailure).toBe(false)
           // And the observability event records the real tool name
           // rather than the hardcoded "external".
           const events = yield* Ref.get(eventsRef)
@@ -842,11 +840,11 @@ describe("ExternalDriverContribution end-to-end", () => {
             messagePartsToolResultParts(m.parts),
           )
           expect(toolResultParts.length).toBe(1)
-          expect(toolResultParts[0]?.toolName).toBe("bash")
-          expect(toolResultParts[0]?.output.type).toBe("error-json")
+          expect(toolResultParts[0]?.name).toBe("bash")
+          expect(toolResultParts[0]?.isFailure).toBe(true)
           // Failure payload must mirror the model-driver shape: a
           // discriminated `{ error: string }` object, not a bare string.
-          expect(toolResultParts[0]?.output.value).toEqual({ error: "permission denied" })
+          expect(toolResultParts[0]?.result).toEqual({ error: "permission denied" })
           const events = yield* Ref.get(eventsRef)
           const failed = events.find((e) => e._tag === "ToolCallFailed")
           expect(failed).toBeDefined()
@@ -947,9 +945,9 @@ describe("ExternalDriverContribution end-to-end", () => {
             messagePartsToolResultParts(m.parts),
           )
           expect(toolCallParts.length).toBe(1)
-          expect(toolCallParts[0]?.toolName).toBe("write_file")
+          expect(toolCallParts[0]?.name).toBe("write_file")
           expect(toolResultParts.length).toBe(1)
-          expect(toolResultParts[0]?.toolName).toBe("write_file")
+          expect(toolResultParts[0]?.name).toBe("write_file")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

@@ -1,4 +1,5 @@
 import { describe, it, expect, test } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Exit, FileSystem, Layer, Path, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
@@ -8,17 +9,7 @@ import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
-import {
-  dateFromMillis,
-  Session,
-  Branch,
-  Message,
-  TextPart,
-  ImagePart,
-  ReasoningPart,
-  ToolCallPart,
-  ToolResultPart,
-} from "@gent/core/domain/message"
+import { dateFromMillis, Session, Branch, Message } from "@gent/core/domain/message"
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { AgentName } from "@gent/core/domain/agent"
@@ -449,7 +440,7 @@ describe("Storage", () => {
             sessionId,
             branchId,
             role: "user",
-            parts: [new TextPart({ type: "text", text: "cascade projection" })],
+            parts: [Prompt.textPart({ text: "cascade projection" })],
             createdAt: now,
           }),
         )
@@ -459,7 +450,7 @@ describe("Storage", () => {
             sessionId: childSessionId,
             branchId: childBranchId,
             role: "user",
-            parts: [new TextPart({ type: "text", text: "cascade child projection" })],
+            parts: [Prompt.textPart({ text: "cascade child projection" })],
             createdAt: now,
           }),
         )
@@ -789,7 +780,7 @@ describe("Storage", () => {
           sessionId: SessionId.make("msg-session"),
           branchId: BranchId.make("msg-branch"),
           role: "user",
-          parts: [new TextPart({ type: "text", text: "Hello" })],
+          parts: [Prompt.textPart({ text: "Hello" })],
           createdAt: FIXED_NOW,
         })
         yield* messages.createMessage(message)
@@ -826,24 +817,23 @@ describe("Storage", () => {
             branchId: BranchId.make("all-parts-branch"),
             role: "assistant",
             parts: [
-              new TextPart({ type: "text", text: "hello" }),
-              new ReasoningPart({ type: "reasoning", text: "thinking" }),
-              new ImagePart({
-                type: "image",
-                image: "data:image/webp;base64,abc",
+              Prompt.textPart({ text: "hello" }),
+              Prompt.reasoningPart({ text: "thinking" }),
+              Prompt.filePart({
+                data: "data:image/webp;base64,abc",
                 mediaType: "image/webp",
               }),
-              new ToolCallPart({
-                type: "tool-call",
-                toolCallId,
-                toolName: "inspect",
-                input: { target: "image" },
+              Prompt.toolCallPart({
+                id: toolCallId,
+                name: "inspect",
+                params: { target: "image" },
+                providerExecuted: false,
               }),
-              new ToolResultPart({
-                type: "tool-result",
-                toolCallId,
-                toolName: "inspect",
-                output: { type: "json", value: { ok: true } },
+              Prompt.toolResultPart({
+                id: toolCallId,
+                name: "inspect",
+                isFailure: false,
+                result: { ok: true },
               }),
             ],
             createdAt: FIXED_NOW,
@@ -853,31 +843,33 @@ describe("Storage", () => {
         expect(retrieved?.parts.map((part) => part.type)).toEqual([
           "text",
           "reasoning",
-          "image",
+          "file",
           "tool-call",
           "tool-result",
         ])
         expect(retrieved?.parts[2]).toEqual(
           expect.objectContaining({
-            type: "image",
-            image: "data:image/webp;base64,abc",
+            type: "file",
+            data: "data:image/webp;base64,abc",
             mediaType: "image/webp",
           }),
         )
         expect(retrieved?.parts[3]).toEqual(
           expect.objectContaining({
             type: "tool-call",
-            toolCallId,
-            toolName: "inspect",
-            input: { target: "image" },
+            id: toolCallId,
+            name: "inspect",
+            params: { target: "image" },
+            providerExecuted: false,
           }),
         )
         expect(retrieved?.parts[4]).toEqual(
           expect.objectContaining({
             type: "tool-result",
-            toolCallId,
-            toolName: "inspect",
-            output: { type: "json", value: { ok: true } },
+            id: toolCallId,
+            name: "inspect",
+            isFailure: false,
+            result: { ok: true },
           }),
         )
       }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
@@ -888,7 +880,7 @@ describe("Storage", () => {
         const branches = yield* BranchStorage
         const messages = yield* MessageStorage
         const sql = yield* SqlClient.SqlClient
-        const sharedPart = new TextPart({ type: "text", text: "dedupe me" })
+        const sharedPart = Prompt.textPart({ text: "dedupe me" })
         yield* sessions.createSession(
           new Session({
             id: SessionId.make("chunk-s"),
@@ -960,7 +952,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("count-session"),
             branchId: BranchId.make("count-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "one" })],
+            parts: [Prompt.textPart({ text: "one" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -970,7 +962,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("count-session"),
             branchId: BranchId.make("count-branch"),
             role: "assistant",
-            parts: [new TextPart({ type: "text", text: "two" })],
+            parts: [Prompt.textPart({ text: "two" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -1003,7 +995,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("list-msg-session"),
             branchId: BranchId.make("list-msg-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "First" })],
+            parts: [Prompt.textPart({ text: "First" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -1013,7 +1005,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("list-msg-session"),
             branchId: BranchId.make("list-msg-branch"),
             role: "assistant",
-            parts: [new TextPart({ type: "text", text: "Response" })],
+            parts: [Prompt.textPart({ text: "Response" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -1049,7 +1041,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("delete-projection-session"),
             branchId: BranchId.make("delete-projection-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "delete projection alpha" })],
+            parts: [Prompt.textPart({ text: "delete projection alpha" })],
             createdAt: dateFromMillis(1000),
           }),
         )
@@ -1059,7 +1051,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("delete-projection-session"),
             branchId: BranchId.make("delete-projection-branch"),
             role: "assistant",
-            parts: [new TextPart({ type: "text", text: "delete projection beta" })],
+            parts: [Prompt.textPart({ text: "delete projection beta" })],
             createdAt: dateFromMillis(2000),
           }),
         )
@@ -1109,7 +1101,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("session-updated-at"),
             branchId: BranchId.make("branch-updated-at"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "Ping" })],
+            parts: [Prompt.textPart({ text: "Ping" })],
             createdAt: messageTime,
           }),
         )
@@ -1154,7 +1146,7 @@ describe("Storage", () => {
               sessionId: SessionId.make("tx-message-session"),
               branchId: BranchId.make("tx-message-branch"),
               role: "user",
-              parts: [new TextPart({ type: "text", text: "rollback" })],
+              parts: [Prompt.textPart({ text: "rollback" })],
               createdAt: messageTime,
             }),
           ),
@@ -1193,7 +1185,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("if-absent-session"),
             branchId: BranchId.make("if-absent-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "first" })],
+            parts: [Prompt.textPart({ text: "first" })],
             createdAt: firstTime,
           }),
         )
@@ -1203,14 +1195,14 @@ describe("Storage", () => {
             sessionId: SessionId.make("if-absent-session"),
             branchId: BranchId.make("if-absent-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "duplicate" })],
+            parts: [Prompt.textPart({ text: "duplicate" })],
             createdAt: duplicateTime,
           }),
         )
         const session = yield* sessions.getSession(SessionId.make("if-absent-session"))
         expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
         const message = yield* messages.getMessage(MessageId.make("if-absent-message"))
-        expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
+        expect(message?.parts).toEqual([Prompt.textPart({ text: "first" })])
       }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
     it.live("orders messages by createdAt then id", () =>
@@ -1239,7 +1231,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("order-session"),
             branchId: BranchId.make("order-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "Second" })],
+            parts: [Prompt.textPart({ text: "Second" })],
             createdAt: timestamp,
           }),
         )
@@ -1249,7 +1241,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("order-session"),
             branchId: BranchId.make("order-branch"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "First" })],
+            parts: [Prompt.textPart({ text: "First" })],
             createdAt: timestamp,
           }),
         )
@@ -1284,7 +1276,7 @@ describe("Storage", () => {
           sessionId: SessionId.make("meta-s"),
           branchId: BranchId.make("meta-b"),
           role: "user",
-          parts: [new TextPart({ type: "text", text: "hello" })],
+          parts: [Prompt.textPart({ text: "hello" })],
           createdAt: FIXED_NOW,
           metadata: {
             customType: "review-status",
@@ -1334,7 +1326,7 @@ describe("Storage", () => {
           sessionId: SessionId.make("upsert-s"),
           branchId: BranchId.make("upsert-b"),
           role: "user",
-          parts: [new TextPart({ type: "text", text: "follow-up" })],
+          parts: [Prompt.textPart({ text: "follow-up" })],
           createdAt: FIXED_NOW,
           metadata: { hidden: true, extensionId: ExtensionId.make("review-loop") },
         })
@@ -1371,7 +1363,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("no-meta-s"),
             branchId: BranchId.make("no-meta-b"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "plain" })],
+            parts: [Prompt.textPart({ text: "plain" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -1418,7 +1410,7 @@ describe("Storage", () => {
         sessionId: SessionId.make("info-s"),
         branchId: BranchId.make("info-b"),
         role: "assistant",
-        parts: [new TextPart({ type: "text", text: "response" })],
+        parts: [Prompt.textPart({ text: "response" })],
         createdAt: FIXED_NOW,
         metadata: { customType: "review-status", hidden: true },
       })
@@ -1451,7 +1443,7 @@ describe("Storage", () => {
             sessionId: SessionId.make("interjection-s"),
             branchId: BranchId.make("interjection-b"),
             role: "user",
-            parts: [new TextPart({ type: "text", text: "steer now" })],
+            parts: [Prompt.textPart({ text: "steer now" })],
             createdAt: FIXED_NOW,
           }),
         )
@@ -1467,7 +1459,7 @@ describe("Storage", () => {
         sessionId: SessionId.make("plain-s"),
         branchId: BranchId.make("plain-b"),
         role: "user",
-        parts: [new TextPart({ type: "text", text: "hi" })],
+        parts: [Prompt.textPart({ text: "hi" })],
         createdAt: FIXED_NOW,
       })
       expect(message.metadata).toBeUndefined()
@@ -1649,7 +1641,7 @@ describe("Storage", () => {
                   sessionId,
                   branchId,
                   role: "user",
-                  parts: [new TextPart({ type: "text", text: id })],
+                  parts: [Prompt.textPart({ text: id })],
                   createdAt: FIXED_NOW,
                 }),
               ),

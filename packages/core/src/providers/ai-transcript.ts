@@ -1,7 +1,7 @@
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import type {
-  ImagePart,
+  FilePart,
   Message,
   ReasoningPart,
   TextPart,
@@ -38,7 +38,7 @@ export interface PromptTranscriptOptions {
 }
 
 export interface MessagePartProjection {
-  readonly assistant: ReadonlyArray<TextPart | ReasoningPart | ImagePart | ToolCallPart>
+  readonly assistant: ReadonlyArray<TextPart | ReasoningPart | FilePart | ToolCallPart>
   readonly tool: ReadonlyArray<ToolResultPart>
 }
 
@@ -231,7 +231,7 @@ const toUserMessage = (message: Message): Prompt.UserMessage | undefined => {
   for (const part of message.parts) {
     switch (part.type) {
       case "text":
-      case "image":
+      case "file":
         content.push(userMessagePartToPromptPart(part))
         break
       default:
@@ -249,7 +249,7 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
     switch (part.type) {
       case "text":
       case "reasoning":
-      case "image":
+      case "file":
       case "tool-call":
         content.push(assistantMessagePartToPromptPart(part))
         break
@@ -325,7 +325,7 @@ export const responsePartsFromMessages = (
               case "text":
               case "reasoning":
               case "tool-call":
-              case "image":
+              case "file":
                 return [assistantMessagePartToResponsePart(part)]
               default:
                 return []
@@ -346,7 +346,7 @@ export const projectResponsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): MessagePartProjection => {
   const normalized = normalizeResponseParts(parts)
-  const assistant: Array<TextPart | ReasoningPart | ImagePart | ToolCallPart> = []
+  const assistant: Array<TextPart | ReasoningPart | FilePart | ToolCallPart> = []
   const tool: ToolResultPart[] = []
 
   for (const part of normalized) {

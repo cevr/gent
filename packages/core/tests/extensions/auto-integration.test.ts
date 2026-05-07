@@ -1,4 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Fiber, type Layer, Ref, Stream } from "effect"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import {
@@ -16,7 +17,7 @@ import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
-import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AutoRead, AutoWrite } from "@gent/extensions/auto-controller"
@@ -31,7 +32,7 @@ const makeMessage = (text: string) =>
     sessionId,
     branchId,
     role: "user",
-    parts: [new TextPart({ type: "text", text })],
+    parts: [Prompt.textPart({ text })],
     createdAt: FIXTURE_DATE,
   })
 

@@ -1,8 +1,9 @@
 import { Context, DateTime, Deferred, Effect, Layer, Stream, SubscriptionRef } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentRunError, type RunSpec, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { type QueueSnapshot } from "../../domain/queue.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { Message, TextPart } from "../../domain/message.js"
+import { Message } from "../../domain/message.js"
 import { MessageId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { GentPlatform } from "../gent-platform.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -94,7 +95,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
-              parts: [new TextPart({ type: "text", text: input.prompt })],
+              parts: [Prompt.textPart({ text: input.prompt })],
               createdAt: yield* DateTime.nowAsDate,
             })
 

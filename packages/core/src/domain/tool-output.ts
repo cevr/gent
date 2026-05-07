@@ -1,11 +1,16 @@
 import type { ToolResultPart } from "./message"
 
+export type ToolOutput = {
+  readonly type: "json" | "error-json"
+  readonly value: unknown
+}
+
 export const stringifyOutput = (value: unknown): string => {
   if (typeof value === "string") return value
   return JSON.stringify(value, null, 2)
 }
 
-export const summarizeOutput = (output: ToolResultPart["output"]): string => {
+export const summarizeOutput = (output: ToolOutput): string => {
   const value = output.value
   if (typeof value === "string") {
     const firstLine = value.split("\n")[0] ?? ""
@@ -19,4 +24,4 @@ export const summarizeOutput = (output: ToolResultPart["output"]): string => {
 }
 
 export const summarizeToolOutput = (result: ToolResultPart): string =>
-  summarizeOutput(result.output)
+  summarizeOutput({ type: result.isFailure ? "error-json" : "json", value: result.result })

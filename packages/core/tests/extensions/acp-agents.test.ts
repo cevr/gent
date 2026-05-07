@@ -6,10 +6,10 @@
  */
 import { describe, test, expect, it } from "effect-bun-test"
 import { Context, Effect, Schema } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { tool, type ToolToken } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { ToolRunner } from "../../src/extensions/internal.js"
-import { ToolResultPart } from "../../src/domain/message.js"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids.js"
 import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
 import type { ToolCapabilityContext } from "../../src/domain/capability/tool.js"
@@ -389,23 +389,23 @@ describe("codemode proxy via makeAcpRunTool", () => {
   it.scopedLive("runs through the boundary helper and reaches ToolRunner", () =>
     Effect.gen(function* () {
       const calls: Array<{
-        toolCallId: ToolCallId
-        toolName: string
+        id: ToolCallId
+        name: string
         input: unknown
       }> = []
       const recordingToolRunner = ToolRunner.of({
         run: (toolCall) => {
           calls.push({
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
+            id: toolCall.toolCallId,
+            name: toolCall.toolName,
             input: toolCall.input,
           })
           return Effect.succeed(
-            new ToolResultPart({
-              type: "tool-result",
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              output: { type: "json", value: { boundary: "ok" } },
+            Prompt.toolResultPart({
+              id: toolCall.toolCallId,
+              name: toolCall.toolName,
+              isFailure: false,
+              result: { boundary: "ok" },
             }),
           )
         },
@@ -435,11 +435,11 @@ describe("codemode proxy via makeAcpRunTool", () => {
       )
       const result = yield* parseSseResult(response)
       expect(calls.length).toBe(1)
-      expect(calls[0]!.toolName).toBe("echo")
+      expect(calls[0]!.name).toBe("echo")
       expect(calls[0]!.input).toEqual({ text: "via-boundary" })
       // Each invocation generates a fresh toolCallId via crypto.randomUUID().
-      expect(typeof calls[0]!.toolCallId).toBe("string")
-      expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
+      expect(typeof calls[0]!.id).toBe("string")
+      expect(calls[0]!.id.length).toBeGreaterThan(0)
       expect(result).toBeDefined()
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )

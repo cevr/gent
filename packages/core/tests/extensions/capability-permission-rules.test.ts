@@ -11,13 +11,14 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, type Layer, Ref, Stream, Schema } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
-import { dateFromMillis, Message, TextPart } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core/domain/message"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
@@ -37,7 +38,7 @@ const makeMessage = (text: string) =>
     sessionId,
     branchId,
     role: "user",
-    parts: [new TextPart({ type: "text", text })],
+    parts: [Prompt.textPart({ text })],
     createdAt: FIXTURE_DATE,
   })
 

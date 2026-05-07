@@ -1,4 +1,5 @@
 import { DateTime, Effect, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -17,9 +18,9 @@ import { compileSystemPrompt } from "../../domain/prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import {
   Message,
-  ToolCallPart,
-  ToolResultPart,
-  type ImagePart,
+  type FilePart,
+  type ToolCallPart,
+  type ToolResultPart,
   type ReasoningPart,
   type TextPart,
 } from "../../domain/message.js"
@@ -149,12 +150,11 @@ export const recordToolResult = (params: {
   isError?: boolean
 }) =>
   Effect.gen(function* () {
-    const outputType = params.isError === true ? "error-json" : "json"
-    const part = new ToolResultPart({
-      type: "tool-result",
-      toolCallId: params.toolCallId,
-      toolName: params.toolName,
-      output: { type: outputType, value: params.output },
+    const part = Prompt.toolResultPart({
+      id: params.toolCallId,
+      name: params.toolName,
+      isFailure: params.isError === true,
+      result: params.output,
     })
 
     const message = Message.Regular.make({
@@ -173,7 +173,7 @@ export const recordToolResult = (params: {
       toolCallId: params.toolCallId,
       toolName: params.toolName,
       summary: summarizeToolOutput(part),
-      output: stringifyOutput(part.output.value),
+      output: stringifyOutput(part.result),
     }
 
     yield* commitWithEvent({
@@ -212,7 +212,7 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   tools: ReadonlyArray<ToolToken>
 }
 
-export type AssistantResponsePart = TextPart | ReasoningPart | ImagePart | ToolCallPart
+export type AssistantResponsePart = TextPart | ReasoningPart | FilePart | ToolCallPart
 
 export const toolCallsFromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>,
@@ -221,11 +221,11 @@ export const toolCallsFromResponseParts = (
     (part): ReadonlyArray<ToolCallPart> =>
       part.type === "tool-call"
         ? [
-            new ToolCallPart({
-              type: "tool-call",
-              toolCallId: ToolCallId.make(part.id),
-              toolName: part.name,
-              input: part.params,
+            Prompt.toolCallPart({
+              id: part.id,
+              name: part.name,
+              params: part.params,
+              providerExecuted: part.providerExecuted,
             }),
           ]
         : [],
@@ -566,16 +566,24 @@ export const executeToolCalls = (params: {
         const ctx = {
           ...params.hostCtx,
           agentName: params.currentTurnAgent,
-          toolCallId: toolCall.toolCallId,
+          toolCallId: ToolCallId.make(toolCall.id),
         }
         const run = params.toolRunner
-          .run(toolCall, ctx, {
-            registry: params.extensionRegistry,
-            ...(params.permission !== undefined ? { permission: params.permission } : {}),
-            resourceManager: params.resourceManager,
-            publishEvent: params.publishEvent,
-          })
-          .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
+          .run(
+            {
+              toolCallId: ToolCallId.make(toolCall.id),
+              toolName: toolCall.name,
+              input: toolCall.params,
+            },
+            ctx,
+            {
+              registry: params.extensionRegistry,
+              ...(params.permission !== undefined ? { permission: params.permission } : {}),
+              resourceManager: params.resourceManager,
+              publishEvent: params.publishEvent,
+            },
+          )
+          .pipe(Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))))
         return yield* run
       }),
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
@@ -789,11 +797,11 @@ export const invokeTool = (params: {
 }) =>
   Effect.gen(function* () {
     const toolCalls = [
-      new ToolCallPart({
-        type: "tool-call",
-        toolCallId: params.toolCallId,
-        toolName: params.toolName,
-        input: params.input,
+      Prompt.toolCallPart({
+        id: params.toolCallId,
+        name: params.toolName,
+        params: params.input,
+        providerExecuted: false,
       }),
     ] as const
 

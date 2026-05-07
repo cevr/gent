@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect } from "effect"
 import {
   makeExtensionHostContext,
@@ -12,7 +13,6 @@ import {
   Message,
   Session,
   Branch,
-  TextPart,
   copyMessageToBranch,
 } from "@gent/core/domain/message"
 import type { BranchStorageService } from "@gent/core/storage/branch-storage"
@@ -329,7 +329,7 @@ const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: 
       sessionId: SESSION_ID,
       branchId: BRANCH_ID,
       role: i % 2 === 0 ? "user" : "assistant",
-      parts: [new TextPart({ type: "text", text: `message ${i}` })],
+      parts: [Prompt.textPart({ text: `message ${i}` })],
       createdAt: dateFromMillis(i * 1000),
     })
     msgs.push(msg)
@@ -371,7 +371,7 @@ describe("session mutation primitives", () => {
         sessionId: SESSION_ID,
         branchId: BRANCH_ID,
         role: "user",
-        parts: [new TextPart({ type: "text", text: "steer" })],
+        parts: [Prompt.textPart({ text: "steer" })],
         createdAt: msgs[1]!.createdAt,
       })
       testStorage.messages.set(BRANCH_ID, msgs)
