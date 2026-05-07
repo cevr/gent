@@ -759,17 +759,21 @@ Implementation notes:
   idle submissions atomically produce exactly one start and enqueue the other.
 - `TxQueue` proves priority dequeue can be transactional across steering and
   follow-up lanes.
+- `TxSubscriptionRef` is the right production aggregate primitive: it gives the
+  actor one transactional state cell plus a committed change stream for
+  `Actor.registerState`, without a local `TxRef`/`SubscriptionRef` mirror.
 - `TxQueue` does not replace the durable observable queue state by itself:
-  its public drain API consumes items, so production migration needs either a
-  `TxRef` aggregate or a mirrored queue snapshot for persistence/watchState.
+  its public drain API consumes items, so production migration must keep the
+  queue snapshot inside the aggregate unless a future worker queue is purely
+  private and derived.
 
 Decision:
 
 - Do not direct-migrate the full actor in C23.
-- Proceed with C24-C30 only as a `TxRef` aggregate migration that preserves the
-  existing durable queue snapshot contract. Treat `TxQueue` as useful for a
-  future in-memory work queue only if it does not become a second source of
-  truth for persisted queue state.
+- Proceed with C24-C30 as a `TxSubscriptionRef` aggregate migration that
+  preserves the existing durable queue snapshot contract. Treat `TxQueue` as
+  useful for a future in-memory work queue only if it does not become a second
+  source of truth for persisted queue state.
 
 Verification on 2026-05-07:
 
@@ -785,9 +789,29 @@ Reserved implementation range. Use only if the prototype proves the migration.
 
 Definition of done:
 
-- Queue reservation/dequeue/persist invariants are transactional.
+- Aggregate reads, committed-state subscriptions, and reservation writes use
+  Effect's `TxSubscriptionRef`.
+- SQL persistence boundaries remain explicit; no public state/queue transition
+  is published before its durable queue snapshot is committed.
+- Queue reservation/dequeue/persist invariants are narrowed behind one
+  production state-cell API before removing any serialization guard.
 - Runtime queue tests and e2e queue contract tests pass.
 - `bun run gate` and `bun run test:e2e`.
+
+#### C24: refactor(runtime): use Effect transactional subscription ref
+
+Replace the loop aggregate `SubscriptionRef` with Effect's
+`TxSubscriptionRef` while preserving current SQL persistence and
+`queueMutationSemaphore` ordering. This commit intentionally changes the
+primitive, not the persistence protocol.
+
+Definition of done:
+
+- `AgentLoopBehavior.loopRef` is a `TxSubscriptionRef<AgentLoopState>`.
+- `watchState`, waiters, and runtime projections consume
+  `TxSubscriptionRef.changesStream`.
+- The STM prototype includes a `TxSubscriptionRef` committed-change proof.
+- `bun run --cwd packages/core typecheck`.
 
 ### Part D — Extension API Narrowing
 

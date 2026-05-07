@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, TxQueue, TxRef } from "effect"
+import { Effect, TxQueue, TxRef, TxSubscriptionRef } from "effect"
 
 type PrototypeRuntimeState = {
   readonly state: "idle" | "running"
@@ -90,6 +90,41 @@ const drainQueueWithTxRef = (
   )
 
 describe("AgentLoop STM queue prototype", () => {
+  it.live("TxSubscriptionRef provides transactional state with committed change streams", () =>
+    Effect.gen(function* () {
+      const stateRef = yield* TxSubscriptionRef.make<PrototypeRuntimeState>({
+        state: "idle",
+        startingState: undefined,
+        steering: [],
+        followUp: [],
+      })
+
+      const observed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const changes = yield* TxSubscriptionRef.changes(stateRef)
+          const initial = yield* Effect.tx(TxQueue.take(changes))
+          const reserved = yield* TxSubscriptionRef.modify(
+            stateRef,
+            (state): [string, PrototypeRuntimeState] => [
+              "reserved",
+              {
+                ...state,
+                startingState: "reserved",
+              },
+            ],
+          )
+          const next = yield* Effect.tx(TxQueue.take(changes)).pipe(Effect.timeout("1 second"))
+          return { initial, next, reserved }
+        }),
+      )
+
+      expect(observed.reserved).toBe("reserved")
+      expect(observed.initial.startingState ?? observed.initial.state).toBe("idle")
+      expect(observed.next.startingState ?? observed.next.state).toBe("reserved")
+      expect((yield* TxSubscriptionRef.get(stateRef)).startingState).toBe("reserved")
+    }),
+  )
+
   it.live("TxRef atomically reserves exactly one concurrent idle start", () =>
     Effect.gen(function* () {
       const stateRef = yield* TxRef.make<PrototypeRuntimeState>({

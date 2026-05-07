@@ -18,7 +18,7 @@ import {
   Schema,
   Scope,
   Semaphore,
-  SubscriptionRef,
+  TxSubscriptionRef,
 } from "effect"
 import {
   AgentName,
@@ -124,7 +124,7 @@ export const resolveStoredAgent = (params: {
 
 export type AgentLoopBehavior = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
-  loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>
+  loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
   sideMutationSemaphore: Semaphore.Semaphore
   queueMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
@@ -325,7 +325,7 @@ export const makeAgentLoopBehavior = (
       branchId,
     })
     const initialLoopState = buildIdleState({ currentAgent })
-    const loopRef = yield* SubscriptionRef.make<AgentLoopState>(
+    const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
     const queueMutationSemaphore = yield* Semaphore.make(1)
@@ -343,7 +343,7 @@ export const makeAgentLoopBehavior = (
             }),
         ),
         Effect.andThen(
-          SubscriptionRef.update(loopRef, (s) => ({
+          TxSubscriptionRef.update(loopRef, (s) => ({
             ...s,
             state,
             queue,
@@ -354,12 +354,12 @@ export const makeAgentLoopBehavior = (
       )
 
     const persistRuntimeState = (state: LoopState) =>
-      SubscriptionRef.get(loopRef).pipe(
+      TxSubscriptionRef.get(loopRef).pipe(
         Effect.flatMap((s) => persistRuntimeSnapshot(state, s.queue)),
       )
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>) =>
-      SubscriptionRef.update(loopRef, (s) => ({
+      TxSubscriptionRef.update(loopRef, (s) => ({
         ...s,
         turnFailure: {
           epoch: (s.turnFailure?.epoch ?? 0) + 1,
@@ -367,7 +367,7 @@ export const makeAgentLoopBehavior = (
         },
       }))
 
-    const currentLoopState = SubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.state))
+    const currentLoopState = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.state))
 
     const refreshRuntimeState = Effect.gen(function* () {
       if (!started) return
@@ -378,7 +378,7 @@ export const makeAgentLoopBehavior = (
       queueMutationSemaphore.withPermits(1)(
         Effect.gen(function* () {
           if (!started) return
-          const current = yield* SubscriptionRef.get(loopRef)
+          const current = yield* TxSubscriptionRef.get(loopRef)
           const nextQueue = update(current.queue)
           yield* persistRuntimeSnapshot(current.state, nextQueue)
         }),
@@ -394,18 +394,18 @@ export const makeAgentLoopBehavior = (
       persistRuntimeSnapshot(state, nextQueue)
 
     const persistQueueCurrentState = (nextQueue: LoopQueueState) =>
-      SubscriptionRef.get(loopRef).pipe(
+      TxSubscriptionRef.get(loopRef).pipe(
         Effect.flatMap((s) => persistRuntimeSnapshot(s.state, nextQueue)),
       )
 
     const takeNextQueuedTurnSerialized = queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const queuedCreatedAt = yield* DateTime.nowAsDate
-        const taken = yield* SubscriptionRef.modify(loopRef, (s) => {
+        const taken = yield* TxSubscriptionRef.modify(loopRef, (s) => {
           const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
           return [{ nextItem }, { ...s, queue }]
         })
-        const current = yield* SubscriptionRef.get(loopRef)
+        const current = yield* TxSubscriptionRef.get(loopRef)
         yield* queueStorage.putQueueState(sessionId, branchId, current.queue).pipe(
           Effect.mapError(
             (cause) =>
