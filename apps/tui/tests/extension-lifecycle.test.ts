@@ -11,7 +11,7 @@ import { makeClientTransportLayer } from "../src/extensions/client-transport"
 import type { ClientContribution } from "../src/extensions/client-facets.js"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
-import tasksBuiltin from "../src/extensions/builtins/tasks.client"
+import tasksBuiltin from "../src/extensions/builtins/tool-renderers.client"
 import { AgentEvent, EventId, type EventEnvelope } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.await(deferred)

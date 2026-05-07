@@ -8,7 +8,7 @@
  * server-side state subscribe to `ClientTransport.onSessionEvent` or
  * `ClientTransport.onExtensionStateChanged` and call
  * `client.extension.request` directly — see e.g.
- * `builtins/tasks.client.tsx`.
+ * `builtins/tool-renderers.client.tsx`.
  */
 
 import {

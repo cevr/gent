@@ -18,11 +18,16 @@ import {
   defineClientExtension,
   borderLabelContribution,
   clientCommandContribution,
+  interactionRendererContribution,
   overlayContribution,
+  rendererContribution,
   widgetContribution,
 } from "../client-facets.js"
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
+import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
+import { PromptRenderer } from "../../components/interaction-renderers/prompt"
+import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
 import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity.js"
 import { TaskListRequest } from "@gent/extensions/task-tools/requests.js"
@@ -33,7 +38,94 @@ import { useScopedKeyboard } from "../../keyboard/context"
 
 const EXT_ID = TASK_TOOLS_EXTENSION_ID
 
-export default defineClientExtension("@gent/task-tools", {
+export const builtinTools = defineClientExtension("@gent/tools", {
+  setup: Effect.gen(function* () {
+    const shell = yield* ClientShell
+    return [
+      ...BUILTIN_TOOL_RENDERERS.map((entry) =>
+        rendererContribution(entry.toolNames, entry.component),
+      ),
+      clientCommandContribution({
+        id: "tools.review",
+        title: "Review",
+        description: "Run adversarial dual-model code review",
+        category: "Tools",
+        slash: "review",
+        onSelect: () =>
+          shell.sendMessage(
+            "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
+          ),
+        onSlash: (args) =>
+          shell.sendMessage(
+            args.trim().length > 0
+              ? `Use the review tool in report mode: ${args.trim()}`
+              : "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
+          ),
+      }),
+      clientCommandContribution({
+        id: "tools.counsel",
+        title: "Counsel",
+        description: "Get a cross-vendor second opinion",
+        category: "Tools",
+        slash: "counsel",
+        onSelect: () =>
+          shell.sendMessage(
+            "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+          ),
+        onSlash: (args) =>
+          shell.sendMessage(
+            args.trim().length > 0
+              ? `Use the counsel tool: ${args.trim()}`
+              : "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+          ),
+      }),
+      clientCommandContribution({
+        id: "tools.research",
+        title: "Research",
+        description: "Research external repositories",
+        category: "Tools",
+        slash: "research",
+        onSelect: () =>
+          shell.sendMessage(
+            "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+          ),
+        onSlash: (args) =>
+          shell.sendMessage(
+            args.trim().length > 0
+              ? `Use the research tool: ${args.trim()}`
+              : "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+          ),
+      }),
+      clientCommandContribution({
+        id: "tools.loop",
+        title: "Loop",
+        description: "Iterate until condition met",
+        category: "Tools",
+        slash: "loop",
+        onSelect: () =>
+          shell.sendMessage(
+            "Use the loop tool to iterate on the current task until complete or a condition is met.",
+          ),
+        onSlash: (args) =>
+          shell.sendMessage(
+            args.trim().length > 0
+              ? `Use the loop tool: ${args.trim()}`
+              : "Use the loop tool to iterate on the current task until complete or a condition is met.",
+          ),
+      }),
+    ]
+  }),
+})
+
+export const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
+  setup: Effect.succeed([
+    interactionRendererContribution(PromptRenderer),
+    interactionRendererContribution(PromptRenderer, "prompt"),
+    interactionRendererContribution(AskUserRenderer, "ask-user"),
+  ]),
+})
+
+export const builtinTasks = defineClientExtension("@gent/task-tools", {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
@@ -210,3 +302,5 @@ export default defineClientExtension("@gent/task-tools", {
     ]
   }),
 })
+
+export default builtinTasks
