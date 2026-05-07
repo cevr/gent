@@ -1142,6 +1142,26 @@ Definition of done:
 - Claude executor mapper tests use real variant shapes.
 - Drift against SDK message shape becomes compile-visible.
 
+Status: complete.
+
+Implementation notes:
+
+- Added typed SDK message fixture constructors in
+  `packages/core/tests/extensions/claude-code-executor.test.ts` for stream
+  events, assistant messages, user messages, result messages, and system init
+  messages.
+- Removed all `as unknown as SDKMessage` partial mapper inputs.
+- Fixture builders now include upstream-required SDK fields such as UUID shape,
+  Beta usage, text citations, container, and context-management metadata.
+
+Verification on 2026-05-07:
+
+- `rg -n "as unknown as SDKMessage|as .*SDKMessage|SDKMessage" packages/core/tests/extensions/claude-code-executor.test.ts`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/claude-code-executor.test.ts`
+- `bun run lint`
+- `bun run gate`; test wall `4615ms`
+
 #### C52: test(tooling): add suppression inventory guard
 
 Add a guard that fails on:
