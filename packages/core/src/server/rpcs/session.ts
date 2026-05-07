@@ -1,28 +1,27 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
-import { SessionId } from "../../domain/ids.js"
-import { Session } from "../../domain/message.js"
+import { BranchId, SessionId } from "../../domain/ids.js"
+import { Session, SessionTreeNode } from "../../domain/message.js"
+import { ReasoningEffort } from "../../domain/agent.js"
+import { SessionRuntimeStateSchema } from "../../runtime/session-runtime.js"
 import { GentRpcError } from "../errors.js"
 import {
   CreateSessionInput,
-  CreateSessionResult,
-  SessionTreeNodeSchema,
-  GetChildSessionsInput,
-  GetSessionTreeInput,
   GetSessionSnapshotInput,
   SessionSnapshot,
   UpdateSessionReasoningLevelInput,
-  UpdateSessionReasoningLevelResult,
   SubscribeEventsInput,
   EventEnvelope,
-  WatchRuntimeInput,
-  SessionRuntime,
 } from "../transport-contract.js"
 
 export class SessionRpcs extends RpcGroup.make(
   Rpc.make("create", {
     payload: CreateSessionInput.fields,
-    success: CreateSessionResult,
+    success: Schema.Struct({
+      sessionId: SessionId,
+      branchId: BranchId,
+      name: Schema.String,
+    }),
     error: GentRpcError,
   }),
   Rpc.make("list", {
@@ -39,13 +38,13 @@ export class SessionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("getChildren", {
-    payload: GetChildSessionsInput.fields,
+    payload: { parentSessionId: SessionId },
     success: Schema.Array(Session),
     error: GentRpcError,
   }),
   Rpc.make("getTree", {
-    payload: GetSessionTreeInput.fields,
-    success: SessionTreeNodeSchema,
+    payload: { sessionId: SessionId },
+    success: SessionTreeNode,
     error: GentRpcError,
   }),
   Rpc.make("getSnapshot", {
@@ -55,7 +54,9 @@ export class SessionRpcs extends RpcGroup.make(
   }),
   Rpc.make("updateReasoningLevel", {
     payload: UpdateSessionReasoningLevelInput.fields,
-    success: UpdateSessionReasoningLevelResult,
+    success: Schema.Struct({
+      reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+    }),
     error: GentRpcError,
   }),
   Rpc.make("events", {
@@ -65,8 +66,8 @@ export class SessionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("watchRuntime", {
-    payload: WatchRuntimeInput.fields,
-    success: SessionRuntime,
+    payload: { sessionId: SessionId, branchId: BranchId },
+    success: SessionRuntimeStateSchema,
     stream: true,
     error: GentRpcError,
   }),

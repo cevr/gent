@@ -1,32 +1,24 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
-import { Branch } from "../../domain/message.js"
+import { Branch, BranchTreeNode } from "../../domain/message.js"
+import { BranchId, SessionId } from "../../domain/ids.js"
 import { GentRpcError } from "../errors.js"
-import {
-  ListBranchesInput,
-  CreateBranchInput,
-  CreateBranchResult,
-  BranchTreeNodeSchema,
-  GetBranchTreeInput,
-  SwitchBranchInput,
-  ForkBranchInput,
-  ForkBranchResult,
-} from "../transport-contract.js"
+import { CreateBranchInput, SwitchBranchInput, ForkBranchInput } from "../transport-contract.js"
 
 export class BranchRpcs extends RpcGroup.make(
   Rpc.make("list", {
-    payload: ListBranchesInput.fields,
+    payload: { sessionId: SessionId },
     success: Schema.Array(Branch),
     error: GentRpcError,
   }),
   Rpc.make("create", {
     payload: CreateBranchInput.fields,
-    success: CreateBranchResult,
+    success: Schema.Struct({ branchId: BranchId }),
     error: GentRpcError,
   }),
   Rpc.make("getTree", {
-    payload: GetBranchTreeInput.fields,
-    success: Schema.Array(BranchTreeNodeSchema),
+    payload: { sessionId: SessionId },
+    success: Schema.Array(BranchTreeNode),
     error: GentRpcError,
   }),
   Rpc.make("switch", {
@@ -35,7 +27,7 @@ export class BranchRpcs extends RpcGroup.make(
   }),
   Rpc.make("fork", {
     payload: ForkBranchInput.fields,
-    success: ForkBranchResult,
+    success: Schema.Struct({ branchId: BranchId }),
     error: GentRpcError,
   }),
 ).prefix("branch.") {}

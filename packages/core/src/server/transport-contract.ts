@@ -23,6 +23,7 @@ import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
 export { Branch, BranchTreeNode, Session, SessionTreeNode }
+export type { SessionRuntimeState } from "../runtime/session-runtime.js"
 
 /**
  * Client-generated request ID for end-to-end correlation and transport-retry
@@ -46,30 +47,7 @@ export const CreateSessionInput = Schema.Struct({
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 
-export const CreateSessionResult = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  name: Schema.String,
-})
-export type CreateSessionResult = typeof CreateSessionResult.Type
-
-export const SessionTreeNodeSchema = SessionTreeNode
 export type SessionTreeNodeType = Schema.Schema.Type<typeof SessionTreeNode>
-
-export const GetChildSessionsInput = Schema.Struct({
-  parentSessionId: SessionId,
-})
-export type GetChildSessionsInput = typeof GetChildSessionsInput.Type
-
-export const GetSessionTreeInput = Schema.Struct({
-  sessionId: SessionId,
-})
-export type GetSessionTreeInput = typeof GetSessionTreeInput.Type
-
-export const ListBranchesInput = Schema.Struct({
-  sessionId: SessionId,
-})
-export type ListBranchesInput = typeof ListBranchesInput.Type
 
 export const CreateBranchInput = Schema.Struct({
   sessionId: SessionId,
@@ -78,18 +56,6 @@ export const CreateBranchInput = Schema.Struct({
   requestId: Schema.optional(RequestIdSchema),
 })
 export type CreateBranchInput = typeof CreateBranchInput.Type
-
-export const CreateBranchResult = Schema.Struct({
-  branchId: BranchId,
-})
-export type CreateBranchResult = typeof CreateBranchResult.Type
-
-export const BranchTreeNodeSchema = BranchTreeNode
-
-export const GetBranchTreeInput = Schema.Struct({
-  sessionId: SessionId,
-})
-export type GetBranchTreeInput = typeof GetBranchTreeInput.Type
 
 export const SwitchBranchInput = Schema.Struct({
   sessionId: SessionId,
@@ -111,11 +77,6 @@ export const ForkBranchInput = Schema.Struct({
 })
 export type ForkBranchInput = typeof ForkBranchInput.Type
 
-export const ForkBranchResult = Schema.Struct({
-  branchId: BranchId,
-})
-export type ForkBranchResult = typeof ForkBranchResult.Type
-
 export const SendMessageInput = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -128,11 +89,6 @@ export const SendMessageInput = Schema.Struct({
   requestId: Schema.optional(RequestIdSchema),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
-
-export const ListMessagesInput = Schema.Struct({
-  branchId: BranchId,
-})
-export type ListMessagesInput = typeof ListMessagesInput.Type
 
 export const GetSessionSnapshotInput = Schema.Struct({
   sessionId: SessionId,
@@ -149,15 +105,12 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
-  runtime: Schema.suspend(() => SessionRuntime),
+  runtime: Schema.suspend(() => SessionRuntimeStateSchema),
   /** Cumulative usage derived from the event log (turns, tokens, cost, last
    * model). The server is the authority — clients that hydrate from here do
    * not maintain their own cost/model bookkeeping. */
   metrics: SessionRuntimeMetrics,
 }) {}
-
-export const SessionRuntime = SessionRuntimeStateSchema
-export type SessionRuntime = typeof SessionRuntime.Type
 
 export { SteerCommand } from "../domain/steer.js"
 
@@ -174,9 +127,6 @@ export const SubscribeEventsInput = Schema.Struct({
 })
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 
-export const WatchRuntimeInput = QueueTarget
-export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
-
 /** Generic interaction response — replaces RespondPromptInput/RespondHandoffInput/RespondQuestionsInput */
 export const RespondInteractionInput = Schema.Struct({
   requestId: InteractionRequestId,
@@ -192,11 +142,6 @@ export const UpdateSessionReasoningLevelInput = Schema.Struct({
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 export type UpdateSessionReasoningLevelInput = typeof UpdateSessionReasoningLevelInput.Type
-
-export const UpdateSessionReasoningLevelResult = Schema.Struct({
-  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-})
-export type UpdateSessionReasoningLevelResult = typeof UpdateSessionReasoningLevelResult.Type
 
 export const DeletePermissionRuleInput = Schema.Struct({
   tool: Schema.String,
@@ -262,16 +207,6 @@ export const ExtensionRpcRequestInput = Schema.Struct({
   branchId: BranchId,
 })
 export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
-
-export const ListExtensionStatusInput = Schema.Struct({
-  sessionId: Schema.optional(SessionId),
-})
-export type ListExtensionStatusInput = typeof ListExtensionStatusInput.Type
-
-export const ListExtensionSlashCommandsInput = Schema.Struct({
-  sessionId: SessionId,
-})
-export type ListExtensionSlashCommandsInput = typeof ListExtensionSlashCommandsInput.Type
 
 export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
   /** Routing key (capability id). */

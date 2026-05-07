@@ -55,15 +55,8 @@ import {
   type DeletePermissionRuleInput,
   type ExtensionRpcRequestInput,
   type ForkBranchInput,
-  type GetBranchTreeInput,
-  type GetChildSessionsInput,
   type GetSessionSnapshotInput,
-  type GetSessionTreeInput,
   type ListAuthProvidersInput,
-  type ListBranchesInput,
-  type ListExtensionSlashCommandsInput,
-  type ListExtensionStatusInput,
-  type ListMessagesInput,
   type QueueTarget,
   type RespondInteractionInput,
   type SendMessageInput,
@@ -73,7 +66,6 @@ import {
   type SubscribeEventsInput,
   type SwitchBranchInput,
   type UpdateSessionReasoningLevelInput,
-  type WatchRuntimeInput,
 } from "./transport-contract.js"
 
 // ============================================================================
@@ -129,7 +121,11 @@ const invalidateExternalDriversFor = (
     }
   })
 
-const watchRuntimeStream = (deps: RpcHandlerDeps, { sessionId, branchId }: WatchRuntimeInput) =>
+type ParentSessionPayload = { readonly parentSessionId: SessionId }
+type BranchPayload = { readonly branchId: BranchId }
+type OptionalSessionPayload = { readonly sessionId?: SessionId }
+
+const watchRuntimeStream = (deps: RpcHandlerDeps, { sessionId, branchId }: QueueTarget) =>
   Stream.unwrap(
     deps.sessionRuntime.watchState({ sessionId, branchId }).pipe(
       Effect.tap(() =>
@@ -178,10 +174,10 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
       withWideEvent(rpcBoundary("session.delete")),
     ),
 
-  "session.getChildren": ({ parentSessionId }: GetChildSessionsInput) =>
+  "session.getChildren": ({ parentSessionId }: ParentSessionPayload) =>
     deps.queries.getChildSessions(parentSessionId),
 
-  "session.getTree": ({ sessionId }: GetSessionTreeInput) => deps.queries.getSessionTree(sessionId),
+  "session.getTree": ({ sessionId }: SessionIdPayload) => deps.queries.getSessionTree(sessionId),
 
   "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
     deps.queries.getSessionSnapshot({ sessionId, branchId }),
@@ -201,9 +197,9 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
       })
       .pipe(Stream.filter(isPublicTransportEvent)),
 
-  "session.watchRuntime": (input: WatchRuntimeInput) => watchRuntimeStream(deps, input),
+  "session.watchRuntime": (input: QueueTarget) => watchRuntimeStream(deps, input),
 
-  "branch.list": ({ sessionId }: ListBranchesInput) => deps.queries.listBranches(sessionId),
+  "branch.list": ({ sessionId }: SessionIdPayload) => deps.queries.listBranches(sessionId),
 
   "branch.create": ({ sessionId, name }: CreateBranchInput) =>
     deps.commands.createBranch({
@@ -211,7 +207,7 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
       ...(name !== undefined ? { name } : {}),
     }),
 
-  "branch.getTree": ({ sessionId }: GetBranchTreeInput) => deps.queries.getBranchTree(sessionId),
+  "branch.getTree": ({ sessionId }: SessionIdPayload) => deps.queries.getBranchTree(sessionId),
 
   "branch.switch": ({ sessionId, fromBranchId, toBranchId, summarize }: SwitchBranchInput) =>
     deps.commands.switchBranch({
@@ -251,7 +247,7 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
         withWideEvent(rpcBoundary("message.send", requestId)),
       ),
 
-  "message.list": ({ branchId }: ListMessagesInput) => deps.queries.listMessages(branchId),
+  "message.list": ({ branchId }: BranchPayload) => deps.queries.listMessages(branchId),
 
   "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
     deps.commands.steer(command),
@@ -486,7 +482,7 @@ const resolveExtensionSession = (
   })
 
 const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
-  "extension.listStatus": ({ sessionId }: ListExtensionStatusInput) =>
+  "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionServices(sessionId)
       const activationStatuses = yield* registry.listExtensionStatuses()
@@ -554,7 +550,7 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         : request
     }),
 
-  "extension.listSlashCommands": ({ sessionId }: ListExtensionSlashCommandsInput) =>
+  "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionServices(sessionId)
       return listSlashCommands(registry.getResolved().extensions, { publicOnly: true }).map(

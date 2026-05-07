@@ -35,17 +35,28 @@ import { SessionRuntime, type SessionRuntimeService } from "../runtime/session-r
 import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
-  CreateBranchResult,
   CreateSessionInput,
-  CreateSessionResult,
   ForkBranchInput,
   SendMessageInput,
   SwitchBranchInput,
   UpdateSessionReasoningLevelInput,
-  UpdateSessionReasoningLevelResult,
 } from "./transport-contract.js"
 
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
+
+type CreateSessionResult = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly name: string
+}
+
+type CreateBranchResult = {
+  readonly branchId: BranchId
+}
+
+type UpdateSessionReasoningLevelResult = {
+  readonly reasoningLevel: UpdateSessionReasoningLevelInput["reasoningLevel"]
+}
 
 // Dedup cache: bound success entries by both time and count so a
 // long-running shared server does not accumulate one Map entry per user

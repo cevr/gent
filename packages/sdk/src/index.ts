@@ -16,14 +16,13 @@ export {
 export type {
   GentLifecycle,
   BranchTreeNode,
-  SessionRuntime,
-  CreateSessionResult,
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
 } from "@gent/core/server/transport-contract.js"
+export type { SessionRuntime, CreateSessionResult } from "./client.js"
 
 // Client constructors
 export {

@@ -18,9 +18,8 @@ import {
   type Branch,
   type BranchTreeNode,
   type SessionSnapshot,
-  type SessionRuntime,
+  type SessionRuntimeState,
   type SessionTreeNode,
-  type CreateSessionResult,
   type ExtensionHealth,
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
@@ -79,6 +78,12 @@ export type {
   ProjectedMessage,
   ToolInteraction,
 }
+export type SessionRuntime = SessionRuntimeState
+export type CreateSessionResult = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly name: string
+}
 export type {
   GentLifecycle,
   SteerCommand,
@@ -86,9 +91,7 @@ export type {
   Branch,
   BranchTreeNode,
   SessionSnapshot,
-  SessionRuntime,
   SessionTreeNode,
-  CreateSessionResult,
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
