@@ -1,12 +1,32 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { dateFromMillis } from "@gent/core/domain/message"
 import { ProviderId } from "@gent/core/domain/model"
-import { emptyQueueSnapshot } from "@gent/sdk"
-import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
+import { emptyQueueSnapshot, type GentRpcError } from "@gent/sdk"
+import {
+  AppBootstrapError,
+  resolveInitialState,
+  resolveStartupAuthState,
+  type InitialState,
+} from "../src/app-bootstrap"
 import { createMockClient } from "./render-harness"
+
+const expectAppBootstrapFailure = (
+  effect: Effect.Effect<unknown, AppBootstrapError | GentRpcError>,
+) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(effect)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return yield* Effect.die("expected app bootstrap failure")
+    const reason = exit.cause.reasons.find(Cause.isFailReason)
+    if (reason === undefined || !Schema.is(AppBootstrapError)(reason.error)) {
+      return yield* Effect.die("expected AppBootstrapError")
+    }
+    return reason.error
+  })
+
 describe("resolveStartupAuthState", () => {
   it.live("uses the session snapshot agent for interactive startup", () =>
     Effect.gen(function* () {
@@ -254,6 +274,43 @@ describe("resolveStartupAuthState", () => {
       expect(auth.initialAgent).toBeUndefined()
       expect(auth.missingProviders).toEqual([])
       expect(calls).toEqual([])
+    }),
+  )
+})
+
+describe("resolveInitialState", () => {
+  it.live("fails with typed bootstrap error when headless prompt is missing", () =>
+    Effect.gen(function* () {
+      const error = yield* expectAppBootstrapFailure(
+        resolveInitialState({
+          client: createMockClient(),
+          cwd: "/tmp",
+          session: Option.none(),
+          continue_: false,
+          headless: true,
+          prompt: Option.none(),
+          promptArg: Option.none(),
+        }),
+      )
+      expect(error.reason).toBe("headless-missing-prompt")
+    }),
+  )
+
+  it.live("fails with typed bootstrap error when requested session is missing", () =>
+    Effect.gen(function* () {
+      const error = yield* expectAppBootstrapFailure(
+        resolveInitialState({
+          client: createMockClient(),
+          cwd: "/tmp",
+          session: Option.some("missing-session"),
+          continue_: false,
+          headless: false,
+          prompt: Option.none(),
+          promptArg: Option.none(),
+        }),
+      )
+      expect(error.reason).toBe("session-not-found")
+      expect(error.sessionId).toBe(SessionId.make("missing-session"))
     }),
   )
 })

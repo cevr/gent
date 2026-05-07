@@ -22,12 +22,29 @@ import type { AppRoute } from "./router/index"
 export class AppBootstrapError extends Schema.TaggedErrorClass<AppBootstrapError>()(
   "AppBootstrapError",
   {
-    sessionId: SessionId,
-    reason: Schema.Literals(["missing-branch"]),
+    sessionId: Schema.optional(SessionId),
+    reason: Schema.Literals([
+      "created-session-unreadable",
+      "interactive-headless-state",
+      "headless-missing-prompt",
+      "missing-branch",
+      "session-not-found",
+    ]),
   },
 ) {
   override get message(): string {
-    return `Session ${this.sessionId} has no branch — cannot render`
+    switch (this.reason) {
+      case "created-session-unreadable":
+        return `Created session ${this.sessionId ?? "unknown"} was not readable`
+      case "interactive-headless-state":
+        return "Interactive bootstrap resolved a headless state"
+      case "headless-missing-prompt":
+        return "Headless startup requires a prompt argument"
+      case "missing-branch":
+        return `Session ${this.sessionId ?? "unknown"} has no branch — cannot render`
+      case "session-not-found":
+        return `Session ${this.sessionId ?? "unknown"} not found`
+    }
   }
 }
 
@@ -71,7 +88,7 @@ export const toSession = (session: DomainSession): ClientSession | undefined => 
 const createAndLoadSession = (input: {
   client: Pick<GentNamespacedClient, "session">
   cwd: string
-}): Effect.Effect<DomainSession, GentRpcError> =>
+}): Effect.Effect<DomainSession, GentRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const requestId = yield* Random.nextUUIDv4
     const result = yield* input.client.session.create({
@@ -80,7 +97,10 @@ const createAndLoadSession = (input: {
     })
     const session = yield* input.client.session.get({ sessionId: result.sessionId })
     if (session === null) {
-      return yield* Effect.die(`created session ${result.sessionId} was not readable`)
+      return yield* new AppBootstrapError({
+        sessionId: result.sessionId,
+        reason: "created-session-unreadable",
+      })
     }
     return session
   })
@@ -131,7 +151,7 @@ export const resolveInteractiveBootstrap = (input: {
   continue_: boolean
   prompt?: string
   debugMode: boolean
-}): Effect.Effect<InteractiveBootstrapResult, GentRpcError> =>
+}): Effect.Effect<InteractiveBootstrapResult, GentRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const state = yield* resolveInitialState({
       client: input.client,
@@ -144,7 +164,7 @@ export const resolveInteractiveBootstrap = (input: {
     })
 
     if (state._tag === "headless") {
-      return yield* Effect.die("interactive bootstrap resolved a headless state")
+      return yield* new AppBootstrapError({ reason: "interactive-headless-state" })
     }
 
     const startupAuth = yield* resolveStartupAuthState({
@@ -224,7 +244,7 @@ export const resolveInitialState = (input: {
   headless: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
-}): Effect.Effect<InitialState, GentRpcError> =>
+}): Effect.Effect<InitialState, GentRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const { client, cwd, session, continue_, headless, prompt, promptArg } = input
 
@@ -232,13 +252,14 @@ export const resolveInitialState = (input: {
       const promptText = Option.isSome(promptArg) ? promptArg.value : undefined
       if (promptText === undefined || promptText.length === 0) {
         yield* Console.error("Error: --headless requires a prompt argument")
-        return yield* Effect.die("fatal")
+        return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
       }
       if (Option.isSome(session)) {
-        const sess = yield* client.session.get({ sessionId: SessionId.make(session.value) })
+        const sessionId = SessionId.make(session.value)
+        const sess = yield* client.session.get({ sessionId })
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
-          return yield* Effect.die("fatal")
+          return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
         }
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
@@ -252,10 +273,11 @@ export const resolveInitialState = (input: {
     }
 
     if (Option.isSome(session)) {
-      const sess = yield* client.session.get({ sessionId: SessionId.make(session.value) })
+      const sessionId = SessionId.make(session.value)
+      const sess = yield* client.session.get({ sessionId })
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
-        return yield* Effect.die("fatal")
+        return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
       const branches = yield* client.branch.list({ sessionId: sess.id })
