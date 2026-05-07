@@ -56,24 +56,34 @@ import {
  * Discriminating on `_tag` makes the impossible states (handle without
  * handleScope, external with pid, etc.) unrepresentable.
  */
-type SidecarRecord =
-  | {
-      readonly _tag: "owned"
-      readonly cwd: string
-      readonly port: number
-      readonly baseUrl: string
-      readonly pid: number
-      readonly handle: ChildProcessSpawner.ChildProcessHandle
-      readonly handleScope: Scope.Closeable
-      readonly scope: ScopeInfo | undefined
-    }
-  | {
-      readonly _tag: "external"
-      readonly cwd: string
-      readonly port: number
-      readonly baseUrl: string
-      readonly scope: ScopeInfo
-    }
+const ChildProcessHandleSchema = Schema.declare<ChildProcessSpawner.ChildProcessHandle>(
+  (u): u is ChildProcessSpawner.ChildProcessHandle =>
+    isRecord(u) && "kill" in u && "isRunning" in u && "unref" in u,
+  { identifier: "ExecutorChildProcessHandle" },
+)
+const CloseableScopeSchema = Schema.declare<Scope.Closeable>(
+  (u): u is Scope.Closeable => isRecord(u),
+  { identifier: "ExecutorCloseableScope" },
+)
+
+const SidecarRecord = TaggedEnumClass("SidecarRecord", {
+  Owned: TaggedEnumClass.variant("owned", {
+    cwd: Schema.String,
+    port: Schema.Number,
+    baseUrl: Schema.String,
+    pid: Schema.Number,
+    handle: ChildProcessHandleSchema,
+    handleScope: CloseableScopeSchema,
+    scope: Schema.optional(ScopeInfo),
+  }),
+  External: TaggedEnumClass.variant("external", {
+    cwd: Schema.String,
+    port: Schema.Number,
+    baseUrl: Schema.String,
+    scope: ScopeInfo,
+  }),
+})
+type SidecarRecord = Schema.Schema.Type<typeof SidecarRecord>
 
 interface RegisteredSidecar {
   readonly cwd: string
@@ -425,8 +435,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               )
             yield* handle.unref.pipe(Effect.ignore)
 
-            return {
-              _tag: "owned" as const,
+            return SidecarRecord.Owned.make({
               cwd,
               port,
               baseUrl: `http://127.0.0.1:${port}`,
@@ -434,7 +443,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               handle,
               handleScope,
               scope: undefined,
-            } satisfies SidecarRecord
+            })
           })
 
         // Sidecar boots an HTTP server in a separate process; there is no
@@ -499,9 +508,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // Register finalizer to shut down owned sidecars (respects stopLocalOnShutdown)
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            const owned = Array.from(sidecarsByCwd.values()).filter(
-              (r): r is Extract<SidecarRecord, { _tag: "owned" }> => r._tag === "owned",
-            )
+            const owned = Array.from(sidecarsByCwd.values()).filter(SidecarRecord.guards.Owned)
             yield* Effect.all(
               owned.map((record) =>
                 Effect.gen(function* () {
@@ -536,13 +543,12 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             // Scan for a reusable sidecar on known ports
             const scan = yield* scanPorts(normalized)
             if (scan.reusable) {
-              const record: SidecarRecord = {
-                _tag: "external",
+              const record = SidecarRecord.External.make({
                 cwd: normalized,
                 port: scan.reusable.port,
                 baseUrl: `http://127.0.0.1:${scan.reusable.port}`,
                 scope: scan.reusable.scope,
-              }
+              })
               sidecarsByCwd.set(normalized, record)
               return record
             }
@@ -583,7 +589,15 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                 })
               }
 
-              const updated: SidecarRecord = { ...record, scope }
+              const updated = SidecarRecord.Owned.make({
+                cwd: record.cwd,
+                port: record.port,
+                baseUrl: record.baseUrl,
+                pid: record.pid,
+                handle: record.handle,
+                handleScope: record.handleScope,
+                scope,
+              })
               sidecarsByCwd.set(normalized, updated)
               yield* registerSidecar(updated)
               return updated
