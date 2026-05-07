@@ -180,34 +180,48 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
             }),
 
           readFile: (repoPath, filePath, ref) =>
-            Effect.tryPromise({
-              try: () =>
-                esGit.openRepository(repoPath).then((repo) => {
+            Effect.gen(function* () {
+              const repo = yield* Effect.tryPromise({
+                try: () => esGit.openRepository(repoPath),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
+              })
+              const entry = yield* Effect.try({
+                try: () => {
                   const oid = repo.revparseSingle(ref ?? "HEAD")
                   const commit = repo.getCommit(oid)
                   const tree = commit.tree()
-                  const entry = tree.getPath(filePath)
-                  if (entry === null || entry === undefined) {
-                    throw new GitReaderError({
-                      message: `File not found: ${filePath}`,
-                      operation: "readFile",
-                    })
-                  }
-                  const blob = entry.toObject(repo).peelToBlob()
-                  if (blob === null || blob === undefined) {
-                    throw new GitReaderError({
-                      message: `Not a blob: ${filePath}`,
-                      operation: "readFile",
-                    })
-                  }
-                  return {
-                    content: new Uint8Array(blob.content()),
-                    size: Number(blob.size()),
-                    isBinary: blob.isBinary(),
-                  }
-                }),
-              catch: (e) =>
-                new GitReaderError({ message: String(e), operation: "readFile", cause: e }),
+                  return tree.getPath(filePath)
+                },
+                catch: (e) =>
+                  new GitReaderError({
+                    message: String(e),
+                    operation: "readFile.lookup",
+                    cause: e,
+                  }),
+              })
+              if (entry === null || entry === undefined) {
+                return yield* new GitReaderError({
+                  message: `File not found: ${filePath}`,
+                  operation: "readFile",
+                })
+              }
+              const blob = yield* Effect.try({
+                try: () => entry.toObject(repo).peelToBlob(),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
+              })
+              if (blob === null || blob === undefined) {
+                return yield* new GitReaderError({
+                  message: `Not a blob: ${filePath}`,
+                  operation: "readFile",
+                })
+              }
+              return {
+                content: new Uint8Array(blob.content()),
+                size: Number(blob.size()),
+                isBinary: blob.isBinary(),
+              }
             }),
         }
       }),

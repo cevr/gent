@@ -1,8 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { GitReader } from "@gent/extensions/librarian/git-reader"
+import { GitReader, GitReaderError } from "@gent/extensions/librarian/git-reader"
 import { $ } from "bun"
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
@@ -127,7 +127,12 @@ describe("GitReader", () => {
       Effect.gen(function* () {
         const reader = yield* GitReader
         const result = yield* reader.readFile(FIXTURE_DIR, "nonexistent.ts").pipe(Effect.exit)
-        expect(result._tag).toBe("Failure")
+        expect(Exit.isFailure(result)).toBe(true)
+        if (!Exit.isFailure(result)) return yield* Effect.die("expected readFile failure")
+        const reason = result.cause.reasons.find(Cause.isFailReason)
+        expect(reason !== undefined && Schema.is(GitReaderError)(reason.error)).toBe(true)
+        if (reason === undefined || !Schema.is(GitReaderError)(reason.error)) return
+        expect(reason.error.message).toBe("File not found: nonexistent.ts")
       }).pipe(Effect.provide(TestLayer)),
     )
     it.live("content is a copy (safe after GC)", () =>
