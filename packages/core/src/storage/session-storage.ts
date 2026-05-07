@@ -5,13 +5,28 @@
  * all focused storage Tags from one SQLite client.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
+import { Model } from "effect/unstable/schema"
 import type { Session } from "../domain/message.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import { BranchId, SessionId } from "../domain/ids.js"
+import { ReasoningEffort } from "../domain/agent.js"
 import { StorageError } from "../domain/storage-error.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlModel } from "effect/unstable/sql"
 import { sessionFromRow, type SessionRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+
+class SessionTable extends Model.Class<SessionTable>("SessionTable")({
+  id: Model.GeneratedByApp(SessionId),
+  workspace_id: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  cwd: Schema.NullOr(Schema.String),
+  reasoning_level: Schema.NullOr(ReasoningEffort),
+  active_branch_id: Schema.NullOr(BranchId),
+  parent_session_id: Schema.NullOr(SessionId),
+  parent_branch_id: Schema.NullOr(BranchId),
+  created_at: Schema.Number,
+  updated_at: Schema.Number,
+}) {}
 
 export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
@@ -35,6 +50,11 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
     SessionStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+      const sessionRepository = yield* SqlModel.makeRepository(SessionTable, {
+        tableName: "sessions",
+        spanPrefix: "SessionStorage",
+        idColumn: "id",
+      })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
@@ -61,7 +81,18 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 })
               }
             }
-            yield* sql`INSERT INTO sessions (id, workspace_id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${workspaceId}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
+            yield* sessionRepository.insertVoid({
+              id: session.id,
+              workspace_id: workspaceId,
+              name: session.name ?? null,
+              cwd: session.cwd ?? null,
+              reasoning_level: session.reasoningLevel ?? null,
+              active_branch_id: session.activeBranchId ?? null,
+              parent_session_id: session.parentSessionId ?? null,
+              parent_branch_id: session.parentBranchId ?? null,
+              created_at: session.createdAt.getTime(),
+              updated_at: session.updatedAt.getTime(),
+            })
             return session
           },
           Effect.mapError(mapError("Failed to create session")),
