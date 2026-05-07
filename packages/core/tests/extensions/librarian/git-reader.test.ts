@@ -7,7 +7,8 @@ import { $ } from "bun"
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
 // ---------------------------------------------------------------------------
-const FIXTURE_DIR = "/tmp/test-git-reader-fixture"
+const FIXTURE_DIR = `/tmp/test-git-reader-fixture-${Bun.randomUUIDv7()}`
+const CLONE_FAIL_DIR = `/tmp/test-clone-fail-fixture-${Bun.randomUUIDv7()}`
 beforeAll(() =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -144,7 +145,7 @@ describe("GitReader", () => {
       Effect.gen(function* () {
         const reader = yield* GitReader
         const result = yield* reader
-          .clone("https://invalid.example.com/no-repo.git", "/tmp/test-clone-fail-fixture")
+          .clone("https://invalid.example.com/no-repo.git", CLONE_FAIL_DIR)
           .pipe(Effect.exit)
         expect(result._tag).toBe("Failure")
       }).pipe(Effect.provide(TestLayer)),
