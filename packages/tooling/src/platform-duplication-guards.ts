@@ -64,6 +64,11 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
   },
   {
+    pattern:
+      /\b(?:eraseLayer|restoreErasedLayer|ServerProfile|CwdProfile|EphemeralProfile|ServerProfileService)\b/,
+    message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+  },
+  {
     pattern: /\bProvider\.(?:Sequence|Signal|Debug|Failing)\b/,
     message:
       "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
@@ -94,6 +99,10 @@ const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern: /^packages\/core\/src\/domain\/auth-(?:storage|store|method)\.ts$/,
     message: "Legacy auth domain module is deleted; use domain/auth",
+  },
+  {
+    pattern: /^packages\/core\/src\/runtime\/(?:composer|scope-brands)\.ts$/,
+    message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
   },
   {
     pattern: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,

@@ -251,6 +251,82 @@ describe("platform duplication guards", () => {
     ])
   })
 
+  test("flags deleted runtime composer scope brands", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/agent/example.ts",
+        [
+          "const erased = eraseLayer(layer)",
+          "const restored = restoreErasedLayer(erased)",
+          "type Parent = ServerProfile",
+          "type Child = CwdProfile",
+          "type Leaf = EphemeralProfile",
+          "const service = ServerProfileService",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 1,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 2,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 3,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 4,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 5,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 6,
+        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/agent/agent-runner.ts",
+        "const layer = Layer.provideMerge(parent, child)",
+      ),
+    ).toEqual([])
+  })
+
+  test("flags deleted runtime composer module paths", () => {
+    expect(findPlatformDuplicationViolations("packages/core/src/runtime/composer.ts", "")).toEqual([
+      {
+        file: "packages/core/src/runtime/composer.ts",
+        line: 1,
+        message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
+      },
+    ])
+    expect(
+      findPlatformDuplicationViolations("packages/core/src/runtime/scope-brands.ts", ""),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/scope-brands.ts",
+        line: 1,
+        message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
+      },
+    ])
+    expect(
+      findPlatformDuplicationViolations("packages/core/src/runtime/agent/agent-runner.ts", ""),
+    ).toEqual([])
+  })
+
   test("flags deleted provider test statics outside language-model utilities", () => {
     expect(
       findPlatformDuplicationViolations(
