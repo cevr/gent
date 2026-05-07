@@ -44,8 +44,10 @@ import {
   Schema,
   Scope,
   Semaphore,
+  Stream,
   SubscriptionRef,
   Layer,
+  Option,
 } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
 import { CurrentAddress } from "effect/unstable/cluster/Entity"
@@ -80,14 +82,12 @@ import {
   projectRuntimeState,
   queueSnapshotFromQueueState,
   SessionRuntimeStateSchema,
+  type AgentLoopState,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
-  type LoopHandle,
-  awaitIdleStateSince,
-  awaitTurnFailure,
+  type AgentLoopBehavior,
   causeToAgentLoopError,
-  failIfTurnFailedSince,
   interruptActiveStream,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
@@ -375,6 +375,64 @@ const buildQueuedTurnItem = (operation: {
   ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
 })
 
+const waitForIdleAfterEpoch = (
+  behavior: AgentLoopBehavior,
+  baseline: number,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(behavior.loopRef)
+    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
+    yield* SubscriptionRef.changes(behavior.loopRef).pipe(
+      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
+      Stream.runHead,
+    )
+  })
+
+const failTurnFailureState = (failure: { readonly error: unknown }) =>
+  Effect.fail(
+    Schema.is(AgentLoopError)(failure.error)
+      ? failure.error
+      : new AgentLoopError({
+          message: "Agent loop turn failed",
+          cause: failure.error,
+        }),
+  )
+
+const waitForTurnFailureAfterEpoch = (
+  behavior: AgentLoopBehavior,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(behavior.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
+    const hasNewTurnFailure = (
+      state: AgentLoopState,
+    ): state is AgentLoopState & {
+      readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
+    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
+    const next = yield* SubscriptionRef.changes(behavior.loopRef).pipe(
+      Stream.filter(hasNewTurnFailure),
+      Stream.runHead,
+    )
+    if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
+    return yield* new AgentLoopError({
+      message: "Agent loop turn failure stream ended",
+    })
+  })
+
+const failIfTurnFailedAfterEpoch = (
+  behavior: AgentLoopBehavior,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(behavior.loopRef)
+    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+      return yield* failTurnFailureState(current.turnFailure)
+    }
+  })
+
 /**
  * `Actor.toLayer` handler layer for `AgentLoop`.
  *
@@ -394,10 +452,10 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const closed = yield* Ref.make(false)
   const operationSeen = yield* Ref.make(false)
 
-  let handle: LoopHandle
+  let handle: AgentLoopBehavior
   let startupExit: Exit.Exit<void, AgentLoopError>
 
-  const closeLoopHandle = (loop: LoopHandle) =>
+  const closeBehavior = (loop: AgentLoopBehavior) =>
     Effect.gen(function* () {
       if (yield* Ref.get(closed)) return
       yield* Ref.set(closed, true)
@@ -406,12 +464,12 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       yield* Scope.close(loop.scope, Exit.void)
     }).pipe(Effect.ignore)
 
-  const cleanupLoop = (loop: LoopHandle) =>
+  const cleanupLoop = (loop: AgentLoopBehavior) =>
     stateRegistry
       .deregister(sessionId, branchId, loop.loopRef)
-      .pipe(Effect.andThen(closeLoopHandle(loop)), Effect.ignore)
+      .pipe(Effect.andThen(closeBehavior(loop)), Effect.ignore)
 
-  const currentRuntimeState = (loop: LoopHandle) =>
+  const currentRuntimeState = (loop: AgentLoopBehavior) =>
     SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
 
   const markWrite = Effect.gen(function* () {
@@ -647,14 +705,14 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
     yield* Effect.raceFirst(
       Effect.raceFirst(
-        awaitIdleStateSince(handle, start.stateEpochBaseline),
-        awaitTurnFailure(handle, start.turnFailureBaseline),
+        waitForIdleAfterEpoch(handle, start.stateEpochBaseline),
+        waitForTurnFailureAfterEpoch(handle, start.turnFailureBaseline),
       ),
       handle.persistenceFailure,
     ).pipe(
       Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
     )
-    yield* failIfTurnFailedSince(handle, start.turnFailureBaseline)
+    yield* failIfTurnFailedAfterEpoch(handle, start.turnFailureBaseline)
   })
 
   const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (command: SteerCommandType) {

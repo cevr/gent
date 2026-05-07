@@ -3,10 +3,10 @@
  *
  * Extracted from the legacy `AgentLoop.Live` factory closure as the first
  * step of C5.4.4.c.1 (the γ-shaped split). Pure code-move: same primitives,
- * same recovery flow, same `LoopHandle` shape — only the `service.queueFollowUp`
- * recursive reference is replaced by an explicit `enqueueFollowUp` callback
- * parameter. C5.4.4.c.1.b relocates the call site from the legacy `getLoop`
- * to `Actor.toLayer(...)` build (per-entity scoping by encore).
+ * same recovery flow, with the service-level recursive `queueFollowUp`
+ * reference replaced by an explicit `enqueueFollowUp` callback parameter.
+ * C5.4.4.c.1.b relocates the call site from the legacy `getLoop` to
+ * `Actor.toLayer(...)` build (per-entity scoping by encore).
  *
  * @module
  */
@@ -22,7 +22,6 @@ import {
   Schema,
   Scope,
   Semaphore,
-  Stream,
   SubscriptionRef,
 } from "effect"
 import {
@@ -121,7 +120,7 @@ export const resolveStoredAgent = (params: {
     return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
   })
 
-export type LoopHandle = {
+export type AgentLoopBehavior = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>
   sideMutationSemaphore: Semaphore.Semaphore
@@ -159,61 +158,6 @@ export type LoopHandle = {
   closed: Deferred.Deferred<void>
   scope: Scope.Closeable
 }
-
-export const awaitIdleStateSince = (loop: LoopHandle, baseline: number): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
-    yield* SubscriptionRef.changes(loop.loopRef).pipe(
-      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
-      Stream.runHead,
-    )
-  })
-
-const failTurnFailureState = (failure: { readonly error: unknown }) =>
-  Effect.fail(
-    Schema.is(AgentLoopError)(failure.error)
-      ? failure.error
-      : new AgentLoopError({
-          message: "Agent loop turn failed",
-          cause: failure.error,
-        }),
-  )
-
-export const awaitTurnFailure = (
-  loop: LoopHandle,
-  baseline: number,
-): Effect.Effect<void, AgentLoopError> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
-      return yield* failTurnFailureState(current.turnFailure)
-    }
-    const hasNewTurnFailure = (
-      state: AgentLoopState,
-    ): state is AgentLoopState & {
-      readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
-    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
-    const next = yield* SubscriptionRef.changes(loop.loopRef).pipe(
-      Stream.filter(hasNewTurnFailure),
-      Stream.runHead,
-    )
-    if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
-    return yield* new AgentLoopError({
-      message: "Agent loop turn failure stream ended",
-    })
-  })
-
-export const failIfTurnFailedSince = (
-  loop: LoopHandle,
-  baseline: number,
-): Effect.Effect<void, AgentLoopError> =>
-  Effect.gen(function* () {
-    const current = yield* SubscriptionRef.get(loop.loopRef)
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
-      return yield* failTurnFailureState(current.turnFailure)
-    }
-  })
 
 export const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
   Effect.gen(function* () {
@@ -376,10 +320,7 @@ export type AgentLoopBehaviorDeps = {
 /**
  * Per-(sessionId, branchId) loop behavior factory.
  *
- * Returns a `LoopHandle` capturing all per-entity primitives (loopRef, scope,
- * semaphores, etc.) and the dispatch/start/snapshot surface the legacy
- * service uses. Mirrors the original `makeLoop` body 1:1 except for the
- * `enqueueFollowUp` parameterization (formerly `service.queueFollowUp`).
+ * Returns the per-entity behavior primitives used by the actor handlers.
  */
 export const makeAgentLoopBehavior = (
   deps: AgentLoopBehaviorDeps,
@@ -387,7 +328,7 @@ export const makeAgentLoopBehavior = (
   branchId: BranchId,
   sideMutationSemaphore: Semaphore.Semaphore,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
-): Effect.Effect<LoopHandle, never, never> =>
+): Effect.Effect<AgentLoopBehavior, never, never> =>
   Effect.gen(function* () {
     const {
       turnStorage,
@@ -1131,5 +1072,5 @@ export const makeAgentLoopBehavior = (
       resourceManager,
       closed,
       scope: loopScope,
-    } satisfies LoopHandle
+    } satisfies AgentLoopBehavior
   })
