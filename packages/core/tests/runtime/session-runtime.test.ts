@@ -317,99 +317,69 @@ const makeInteractionProviderLayer = () => {
   })
 }
 describe("SessionRuntime", () => {
-  it.live("dispatch rejects a branch that belongs to another session", () =>
+  it.live("validates branch ownership and idle follow-up persistence", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([])
       const layer = makeRuntimeLayer(providerLayer)
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const first = yield* createSessionBranchWithIds({
+          const sendTarget = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-target-first"),
             branchId: BranchId.make("runtime-target-first-branch"),
           })
-          const second = yield* createSessionBranchWithIds({
+          const sendForeign = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-target-second"),
             branchId: BranchId.make("runtime-target-second-branch"),
           })
-          const exit = yield* Effect.exit(
+          const sendExit = yield* Effect.exit(
             sessionRuntime.sendUserMessage({
-              sessionId: first.sessionId,
-              branchId: second.branchId,
+              sessionId: sendTarget.sessionId,
+              branchId: sendForeign.branchId,
               content: "wrong branch",
             }),
           )
-          expect(exit._tag).toBe("Failure")
-          if (exit._tag === "Failure") {
-            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          expect(sendExit._tag).toBe("Failure")
+          if (sendExit._tag === "Failure") {
+            expect(Cause.pretty(sendExit.cause)).toContain("Branch not found for session")
           }
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("runtime reads reject missing branches instead of returning idle state", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
+
           const { sessionId } = yield* createSessionBranch
-          const exit = yield* Effect.exit(
+          const readExit = yield* Effect.exit(
             sessionRuntime.getState({
               sessionId,
               branchId: BranchId.make("runtime-target-missing-branch"),
             }),
           )
-          expect(exit._tag).toBe("Failure")
-          if (exit._tag === "Failure") {
-            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          expect(readExit._tag).toBe("Failure")
+          if (readExit._tag === "Failure") {
+            expect(Cause.pretty(readExit.cause)).toContain("Branch not found for session")
           }
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("queueFollowUp validates the session branch before enqueueing", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const first = yield* createSessionBranchWithIds({
+
+          const queueTarget = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-queue-first"),
             branchId: BranchId.make("runtime-queue-first-branch"),
           })
-          const second = yield* createSessionBranchWithIds({
+          const queueForeign = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-queue-second"),
             branchId: BranchId.make("runtime-queue-second-branch"),
           })
-          const exit = yield* Effect.exit(
+          const queueExit = yield* Effect.exit(
             sessionRuntime.queueFollowUp({
-              sessionId: first.sessionId,
-              branchId: second.branchId,
+              sessionId: queueTarget.sessionId,
+              branchId: queueForeign.branchId,
               content: "wrong branch",
             }),
           )
-          expect(exit._tag).toBe("Failure")
-          if (exit._tag === "Failure") {
-            expect(Cause.pretty(exit.cause)).toContain("Branch not found for session")
+          expect(queueExit._tag).toBe("Failure")
+          if (queueExit._tag === "Failure") {
+            expect(Cause.pretty(queueExit.cause)).toContain("Branch not found for session")
           }
-          const firstQueue = yield* sessionRuntime.getQueuedMessages(first)
-          const secondQueue = yield* sessionRuntime.getQueuedMessages(second)
+          const firstQueue = yield* sessionRuntime.getQueuedMessages(queueTarget)
+          const secondQueue = yield* sessionRuntime.getQueuedMessages(queueForeign)
           expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
           expect(secondQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("queueFollowUp persists a durable follow-up for an idle session branch", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
+
           const target = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-queue-direct"),
             branchId: BranchId.make("runtime-queue-direct-branch"),
@@ -516,7 +486,7 @@ describe("SessionRuntime", () => {
         )
       }),
   )
-  it.live("invokeTool persists assistant and tool messages without queueing a follow-up turn", () =>
+  it.live("persists tool messages without queueing or duplicating durable results", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* Provider.Sequence([])
       const layer = makeRuntimeLayer(providerLayer)
@@ -546,6 +516,31 @@ describe("SessionRuntime", () => {
           expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
           expect(eventTags(calls)).toContain("ToolCallStarted")
           expect(eventTags(calls)).toContain("ToolCallSucceeded")
+
+          const baselineSucceeded = eventTags(calls).filter(
+            (tag) => tag === "ToolCallSucceeded",
+          ).length
+          const retryTarget = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("record-tool-idempotent-session"),
+            branchId: BranchId.make("record-tool-idempotent-branch"),
+          })
+          const commandId = ActorCommandId.make("record-tool-idempotent")
+          const command = {
+            commandId,
+            ...retryTarget,
+            toolCallId: ToolCallId.make("tool-call-idempotent"),
+            toolName: "read",
+            output: { ok: true },
+          }
+          yield* sessionRuntime.recordToolResult(command)
+          yield* sessionRuntime.recordToolResult(command)
+          const retryMessages = yield* messageStorage.listMessages(retryTarget.branchId)
+          const afterRetryCalls = yield* recorder.getCalls()
+          const toolSucceeded = eventTags(afterRetryCalls).filter(
+            (tag) => tag === "ToolCallSucceeded",
+          )
+          expect(retryMessages.filter((message) => message.role === "tool")).toHaveLength(1)
+          expect(toolSucceeded.length - baselineSucceeded).toBe(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -589,36 +584,6 @@ describe("SessionRuntime", () => {
           )
           expect(exit._tag).toBe("Failure")
           expect(message).toBeUndefined()
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("recordToolResult retry does not duplicate the durable event", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const { sessionId, branchId } = yield* createSessionBranch
-          const commandId = ActorCommandId.make("record-tool-idempotent")
-          const command = {
-            commandId,
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("tool-call-idempotent"),
-            toolName: "read",
-            output: { ok: true },
-          }
-          yield* sessionRuntime.recordToolResult(command)
-          yield* sessionRuntime.recordToolResult(command)
-          const messages = yield* messageStorage.listMessages(branchId)
-          const calls = yield* recorder.getCalls()
-          const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
-          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
-          expect(toolSucceeded).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
