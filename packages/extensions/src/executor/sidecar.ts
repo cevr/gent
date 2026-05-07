@@ -25,9 +25,10 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { GentPlatform, isRecord, runProcess, TaggedEnumClass } from "@gent/core/extensions/api"
+import { GentPlatform, isRecord, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
+import { runProcess } from "../run-process.js"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,

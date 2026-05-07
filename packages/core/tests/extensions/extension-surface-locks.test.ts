@@ -351,6 +351,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadTask = typeof PublicExtensionApi.Task
     // @ts-expect-error — task ids belong to @gent/task-tools, not core author API
     type _BadTaskId = typeof PublicExtensionApi.TaskId
+    // @ts-expect-error — process spawning is an extension-owned service, not core author API
+    type _BadRunProcess = typeof PublicExtensionApi.runProcess
+    // @ts-expect-error — process errors are paired with the non-public process runner
+    type _BadProcessError = typeof PublicExtensionApi.ProcessError
 
     expect(true).toBe(true)
   })

@@ -252,8 +252,6 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-export { runProcess, ProcessError } from "../utils/run-process.js"
-export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export type { GentPlatformShape } from "../runtime/gent-platform.js"
 
