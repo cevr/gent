@@ -422,10 +422,7 @@ export const makeAgentLoopBehavior = (
       }),
     )
 
-    const switchAgentOnState = <S extends LoopState>(
-      state: S,
-      next: AgentNameType,
-    ): Effect.Effect<S> =>
+    const switchAgentOnState = (state: LoopState, next: AgentNameType): Effect.Effect<LoopState> =>
       Effect.gen(function* () {
         const previous = state.currentAgent ?? DEFAULT_AGENT_NAME
         if (previous === next) return state
@@ -449,7 +446,7 @@ export const makeAgentLoopBehavior = (
         )
 
         return updateCurrentAgentOnState(state, next)
-      }).pipe(Effect.orDie) as Effect.Effect<S>
+      }).pipe(Effect.orDie)
 
     const TurnOutcome = TaggedEnumClass("TurnOutcome", {
       Done: {},

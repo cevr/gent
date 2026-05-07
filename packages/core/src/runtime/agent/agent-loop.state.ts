@@ -308,20 +308,17 @@ export const toWaitingForInteractionState = (params: {
     pendingToolCallId: params.pendingToolCallId,
   })
 
-export const updateCurrentAgentOnState = <S extends LoopState>(
-  state: S,
+export const updateCurrentAgentOnState = (
+  state: LoopState,
   currentAgent: AgentNameType,
-): S => {
+): LoopState => {
   switch (state._tag) {
     case "Idle":
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
-      return LoopState.Idle.make({ ...state, currentAgent }) as S
+      return LoopState.Idle.make({ ...state, currentAgent })
     case "Running":
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
-      return LoopState.Running.make({ ...state, currentAgent }) as S
+      return LoopState.Running.make({ ...state, currentAgent })
     case "WaitingForInteraction":
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
-      return LoopState.WaitingForInteraction.make({ ...state, currentAgent }) as S
+      return LoopState.WaitingForInteraction.make({ ...state, currentAgent })
   }
 }
 
