@@ -79,11 +79,9 @@ export type {
   ToolInteraction,
 }
 export type SessionRuntime = SessionRuntimeState
-export type CreateSessionResult = {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly name: string
-}
+export type CreateSessionResult = Effect.Success<
+  ReturnType<GentNamespacedClient["session"]["create"]>
+>
 export type {
   GentLifecycle,
   SteerCommand,
