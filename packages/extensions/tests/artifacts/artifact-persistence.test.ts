@@ -29,12 +29,12 @@ import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import {
   ArtifactsWrite,
   type ArtifactSaveInput,
   type ArtifactUpdateInput,
-} from "../../../../extensions/src/artifacts/store"
+} from "../../src/artifacts/store.js"
 
 // ── Spy helpers ──
 

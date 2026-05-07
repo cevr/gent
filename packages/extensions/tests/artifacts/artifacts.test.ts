@@ -1,6 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { ref } from "@gent/core/extensions/api"
 import { ArtifactId, BranchId, type SessionId } from "@gent/core/domain/ids"
 import { textStep } from "@gent/core/debug/provider"
@@ -8,19 +7,9 @@ import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
 import { ArtifactsExtension } from "@gent/extensions/artifacts"
 import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol"
-import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { e2ePreset } from "../helpers/test-preset.js"
 
 const forgedBranchId = BranchId.make("art-test-branch")
-
-const setupArtifactsExt = Effect.provide(
-  setupExtension(
-    { extension: ArtifactsExtension, scope: "builtin", sourcePath: "builtin" },
-    "/test/cwd",
-    "/test/home",
-  ),
-  BunPlatformLive,
-)
 
 const SaveRef = ref(ArtifactRpc.Save)
 const ReadRef = ref(ArtifactRpc.Read)
@@ -67,7 +56,6 @@ const withArtifactsClient = <A>(
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const ext = yield* setupArtifactsExt
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
       const {
         client,
@@ -76,7 +64,7 @@ const withArtifactsClient = <A>(
       } = yield* createRpcHarness({
         ...e2ePreset,
         providerLayer,
-        extensions: [ext],
+        extensionInputs: [ArtifactsExtension],
       })
       return yield* fn({
         branchId: transportBranchId,

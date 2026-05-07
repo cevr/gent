@@ -1254,6 +1254,10 @@ Progress:
   into `packages/extensions/tests`. The task RPC test now loads
   `TaskExtension` through public extension inputs instead of core's private
   extension loader.
+- C56 moved interaction-tools and artifacts tests into `packages/extensions`.
+  The ask-user tests now stub the public interaction facet directly, and the
+  artifacts RPC test loads `ArtifactsExtension` through public extension
+  inputs.
 
 Verification on 2026-05-07:
 
