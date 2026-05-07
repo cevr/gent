@@ -1,12 +1,16 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
+import {
+  AgentName,
+  AgentRunResult,
+  BranchId,
+  ModelId,
+  SessionId,
+  ToolCallId,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
@@ -19,7 +23,7 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 const makeCtx = (overrides: {
   agentRun?: (
-    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
   reviewDecision?: "yes" | "no" | "edit"
 }): ToolCapabilityContext => {

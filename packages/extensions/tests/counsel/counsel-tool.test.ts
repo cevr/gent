@@ -2,10 +2,12 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { CounselTool } from "@gent/extensions/counsel/counsel-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { AgentRunResult } from "@gent/core/domain/agent"
-import { SessionId } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
+import {
+  AgentRunResult,
+  ModelId,
+  SessionId,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
@@ -13,7 +15,7 @@ const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never>
 
 const makeCtx = (overrides: {
   agentRun: (
-    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
 }) =>
   testToolContext({

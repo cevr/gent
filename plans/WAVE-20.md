@@ -1450,6 +1450,8 @@ Recursive audit findings accepted on 2026-05-07:
 - P2: `packages/extensions/tests/task-tools/task-tools.test.ts` remained a
   god test spanning model-facing tools, `TaskService.remove`,
   `TaskStorage` metadata/delete behavior, and delegate background mode.
+- P2: extension package tests still used private `ExtensionHostContext` types
+  for fake tool contexts, teaching the wrong authoring boundary.
 
 Completed sub-commits:
 
@@ -1465,6 +1467,9 @@ Completed sub-commits:
 - C97.3 split the task-tools god test into behavior-owned files:
   task tool execution, task service removal, task storage boundaries, and
   delegate background mode.
+- C97.4 migrated extension tests away from private `ExtensionHostContext`
+  imports and onto public `ToolCapabilityContext` / public extension API
+  exports.
 
 Verification on 2026-05-07:
 
@@ -1475,6 +1480,8 @@ Verification on 2026-05-07:
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
 - `bun run --cwd packages/extensions typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/task-tools/task-tool-execution.test.ts packages/extensions/tests/task-tools/task-service.test.ts packages/extensions/tests/task-tools/task-storage.test.ts packages/extensions/tests/delegate/delegate-background.test.ts`
+- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/plan-tool.test.ts packages/extensions/tests/review/review-tool.test.ts packages/extensions/tests/audit/audit-tool.test.ts packages/extensions/tests/handoff.test.ts packages/extensions/tests/delegate/delegate-tool.test.ts packages/extensions/tests/counsel/counsel-tool.test.ts packages/extensions/tests/research/research-tool.test.ts packages/extensions/tests/artifacts/artifact-persistence.test.ts`
 
 #### C98: docs: update architecture and AGENTS receipts
 

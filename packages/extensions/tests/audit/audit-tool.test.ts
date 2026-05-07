@@ -1,13 +1,15 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
-import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
+import {
+  AgentName,
+  AgentRunResult,
+  ModelId,
+  SessionId,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { SessionId } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
@@ -31,9 +33,9 @@ const makeSuccess = (
 
 const makeCtx = (overrides: {
   agentRun: (
-    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
-  present?: ExtensionHostContext.Interaction["present"]
+  present?: ToolCapabilityContext["interaction"]["present"]
 }): ToolCapabilityContext =>
   testToolContext({
     agentName: AgentName.make("cowork"),

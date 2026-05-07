@@ -84,13 +84,13 @@ export {
   makeRunSpec,
   RunSpecSchema,
   AgentRunOverridesSchema,
+  AgentRunResult,
   AgentRunResult as AgentRunResultSchema,
   AgentRunToolCallSchema,
   type AgentRunOverrides,
   resolveRunPersistence,
   getDurableAgentRunSessionId,
   AgentRunError,
-  type AgentRunResult,
   type RunSpec,
 } from "../domain/agent.js"
 export {

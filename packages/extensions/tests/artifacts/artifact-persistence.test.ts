@@ -12,23 +12,25 @@ import { Effect, Layer } from "effect"
 // call site for it.live compatibility.
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-import { AgentRunResult } from "@gent/core/domain/agent"
+import {
+  AgentRunResult,
+  ModelId,
+  type AgentName,
+  type ToolCapabilityContext,
+} from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import type { AgentName } from "@gent/core/domain/agent"
 import {
   ArtifactId,
   BranchId,
   type BranchId as BranchIdType,
   SessionId,
 } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import {
   ArtifactsWrite,
@@ -76,7 +78,7 @@ const createArtifactSpy = () => {
 
 const stubAgentRun =
   (textFn?: (prompt: string) => string) =>
-  (params: Parameters<ExtensionHostContext.Agent["run"]>[0]) =>
+  (params: Parameters<ToolCapabilityContext["agent"]["run"]>[0]) =>
     Effect.succeed(
       AgentRunResult.Success.make({
         text: textFn?.(params.prompt) ?? "output",

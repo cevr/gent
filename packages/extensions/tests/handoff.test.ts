@@ -2,12 +2,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { HandoffTool } from "@gent/extensions/handoff-tool"
 import { HandoffCooldown, HandoffExtension } from "@gent/extensions/handoff"
-import { AgentRunResult } from "@gent/core/domain/agent"
+import { AgentRunResult, SessionId, type ToolCapabilityContext } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { testSetupCtx } from "@gent/core/test-utils"
-import { SessionId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
@@ -17,9 +15,9 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 const makeCtx = (overrides: {
   agentRun?: (
-    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
-  approve?: ExtensionHostContext.Interaction["approve"]
+  approve?: ToolCapabilityContext["interaction"]["approve"]
 }) =>
   testToolContext({
     agent: {
