@@ -320,6 +320,12 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadIntent = PublicExtensionApi.Intent
     // @ts-expect-error — model tool metadata is internal lowering detail
     type _BadModelAudienceFields = PublicExtensionApi.ModelAudienceFields
+    // @ts-expect-error — raw tool metadata is internal lowering detail
+    type _BadToolMetadataTag = typeof PublicExtensionApi.GentToolMetadataTag
+    // @ts-expect-error — raw tool metadata is internal lowering detail
+    type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
+    // @ts-expect-error — raw tool metadata is internal lowering detail
+    type _BadIsToolCapability = typeof PublicExtensionApi.isToolCapability
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
     // @ts-expect-error — all session facet methods must map storage failures to host errors

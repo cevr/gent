@@ -13,13 +13,12 @@ import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
-  GentToolMetadataTag,
   getToolId,
-  getToolMetadata,
   request,
   tool,
   validatePackageShape,
 } from "@gent/core/extensions/api"
+import { GentToolMetadataTag, getToolMetadata } from "@gent/core/domain/capability/tool"
 import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"

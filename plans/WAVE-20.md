@@ -960,6 +960,25 @@ Definition of done:
 - Extension surface lock tests prove forbidden imports fail.
 - `bun run gate`.
 
+Status: in progress.
+
+Sub-commit C46.1 complete: removed raw tool metadata helpers from the public
+extension API.
+
+Implementation notes:
+
+- `@gent/core/extensions/api` no longer exports `GentToolMetadataTag`,
+  `getToolMetadata`, `getToolMetadataOption`, or `isToolCapability`.
+- Tests that assert metadata lowering now import those helpers from the owning
+  domain module, `@gent/core/domain/capability/tool`.
+- `extension-surface-locks.test.ts` now proves those raw metadata helpers are
+  not public extension API.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/domain/capability-ref.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/activation.test.ts packages/core/tests/extensions/registry.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts`
+
 #### C47: docs(examples): delete or migrate stale pipeline/subscription examples
 
 Migrate examples to reactions or delete them if they no longer teach a live

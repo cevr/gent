@@ -216,11 +216,7 @@ export {
 export {
   getToolId,
   getToolEffect,
-  getToolMetadata,
-  getToolMetadataOption,
-  isToolCapability,
   tool,
-  GentToolMetadataTag,
   type ToolCapabilityContext,
   type GentToolMetadata,
   type ToolInput,

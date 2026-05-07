@@ -16,7 +16,8 @@ import {
 } from "../../src/runtime/extensions/activation"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
-import { GentToolMetadataTag, getToolMetadata, tool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
+import { GentToolMetadataTag, getToolMetadata } from "@gent/core/domain/capability/tool"
 import { ExtensionId } from "@gent/core/domain/ids"
 import type { PromptSection } from "@gent/core/domain/prompt"
 

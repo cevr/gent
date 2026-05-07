@@ -8,7 +8,6 @@ import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
 import {
   action,
   getToolId,
-  getToolMetadata,
   request,
   tool,
   ToolNeeds,
@@ -16,6 +15,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
+import { getToolMetadata } from "@gent/core/domain/capability/tool"
 import {
   ExtensionRegistryError,
   ExtensionRegistry,
