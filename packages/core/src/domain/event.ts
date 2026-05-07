@@ -26,25 +26,6 @@ export const UsageSchema = Schema.Struct({
 })
 export type Usage = typeof UsageSchema.Type
 
-export const RecoveryPhase = Schema.Literals(["Idle", "Running", "WaitingForInteraction"])
-export type RecoveryPhase = typeof RecoveryPhase.Type
-
-export const RecoveryAction = Schema.Literals([
-  "resume-queued-turn",
-  "replay-running",
-  "restore-cold",
-])
-export type RecoveryAction = typeof RecoveryAction.Type
-
-export const RecoveryAbandonReason = Schema.Literals([
-  "checkpoint-read-failed",
-  "checkpoint-version-mismatch",
-  "checkpoint-decode-failed",
-  "checkpoint-remove-failed",
-  "recovery-decision-failed",
-])
-export type RecoveryAbandonReason = typeof RecoveryAbandonReason.Type
-
 export const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
   description: Schema.optional(Schema.String),
@@ -107,19 +88,6 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     messageId: Schema.optional(MessageId),
     durationMs: Schema.Number,
     interrupted: Schema.optional(Schema.Boolean),
-  },
-  TurnRecoveryApplied: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    phase: RecoveryPhase,
-    action: RecoveryAction,
-    detail: Schema.optional(Schema.String),
-  },
-  AgentLoopRecoveryAbandoned: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    reason: RecoveryAbandonReason,
-    detail: Schema.optional(Schema.String),
   },
   ToolCallStarted: {
     sessionId: SessionId,
@@ -331,10 +299,6 @@ export const StreamEnded = AgentEvent.StreamEnded
 export type StreamEnded = typeof AgentEvent.StreamEnded.Type
 export const TurnCompleted = AgentEvent.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.TurnCompleted.Type
-export const TurnRecoveryApplied = AgentEvent.TurnRecoveryApplied
-export type TurnRecoveryApplied = typeof AgentEvent.TurnRecoveryApplied.Type
-export const AgentLoopRecoveryAbandoned = AgentEvent.AgentLoopRecoveryAbandoned
-export type AgentLoopRecoveryAbandoned = typeof AgentEvent.AgentLoopRecoveryAbandoned.Type
 export const ToolCallStarted = AgentEvent.ToolCallStarted
 export type ToolCallStarted = typeof AgentEvent.ToolCallStarted.Type
 export const ToolCallSucceeded = AgentEvent.ToolCallSucceeded
@@ -443,8 +407,6 @@ const matchEventSessionId = AgentEvent.match({
   StreamChunk: (e) => e.sessionId,
   StreamEnded: (e) => e.sessionId,
   TurnCompleted: (e) => e.sessionId,
-  TurnRecoveryApplied: (e) => e.sessionId,
-  AgentLoopRecoveryAbandoned: (e) => e.sessionId,
   ToolCallStarted: (e) => e.sessionId,
   ToolCallSucceeded: (e) => e.sessionId,
   ToolCallFailed: (e) => e.sessionId,
@@ -483,8 +445,6 @@ const matchEventBranchId = AgentEvent.match({
   StreamChunk: (e) => e.branchId,
   StreamEnded: (e) => e.branchId,
   TurnCompleted: (e) => e.branchId,
-  TurnRecoveryApplied: (e) => e.branchId,
-  AgentLoopRecoveryAbandoned: (e) => e.branchId,
   ToolCallStarted: (e) => e.branchId,
   ToolCallSucceeded: (e) => e.branchId,
   ToolCallFailed: (e) => e.branchId,

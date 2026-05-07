@@ -63,7 +63,7 @@ How data persists. Single file, no ORM.
 **Read:** `packages/core/src/storage/schema.ts`
 
 Tables: sessions, branches, messages, content_chunks, message_chunks, events,
-agent_loop_checkpoints, interaction_requests.
+interaction_requests.
 
 ```sql
 -- Message parts are content-addressed chunks, not a JSON blob on messages.

@@ -2,9 +2,9 @@
  * `AgentLoop` as `Actor.fromEntity`.
  *
  * Replaces the per-(sessionId, branchId) hand-rolled fiber map +
- * `LoopState` `TaggedEnumClass` + `agent_loop_checkpoints` table
- * (C5.3 migrates persistence, C5.4 moves the loop body, C5.5
- * replaces `runTurnFiber` with `LanguageModel.streamText`).
+ * `LoopState` `TaggedEnumClass` + actor mailbox persistence
+ * (C5.4 moves the loop body, C5.5 replaces `runTurnFiber` with
+ * `LanguageModel.streamText`).
  *
  * **Op surface (C5.1-followup counsel):** request/reply only.
  * `Subscribe` and `Snapshot` are NOT actor ops:
@@ -156,10 +156,10 @@ const InvokeToolFields = {
 }
 
 /**
- * `EnsureStarted` materializes the entity (runs build, recovers checkpoint,
- * registers state) without performing any other work. Cold `watchState`
- * callers send this before subscribing to the registry's SubscriptionRef so
- * the entity exists when their watcher attaches.
+ * `EnsureStarted` materializes the entity and registers state without
+ * performing any other work. Cold `watchState` callers send this before
+ * subscribing to the registry's SubscriptionRef so the entity exists when
+ * their watcher attaches.
  */
 const EnsureStartedFields = {
   sessionId: SessionId,

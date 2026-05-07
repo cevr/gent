@@ -18,7 +18,6 @@ import type { MessageStorage } from "../storage/message-storage.js"
 import type { EventStorage } from "../storage/event-storage.js"
 import type { RelationshipStorage } from "../storage/relationship-storage.js"
 import type { StorageTransaction } from "../storage/storage-transaction.js"
-import type { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
 import type { SearchStorage } from "../storage/search-storage.js"
@@ -67,7 +66,6 @@ type EphemeralStorageProvides =
   | EventStorage
   | RelationshipStorage
   | StorageTransaction
-  | CheckpointStorage
   | InteractionStorage
   | InteractionPendingReader
   | SearchStorage

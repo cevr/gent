@@ -248,12 +248,6 @@
       ],
       "@gent/core/storage/branch-storage": ["./packages/core/src/storage/branch-storage.ts"],
       "@gent/core/storage/branch-storage.js": ["./packages/core/src/storage/branch-storage.ts"],
-      "@gent/core/storage/checkpoint-storage": [
-        "./packages/core/src/storage/checkpoint-storage.ts"
-      ],
-      "@gent/core/storage/checkpoint-storage.js": [
-        "./packages/core/src/storage/checkpoint-storage.ts"
-      ],
       "@gent/core/storage/event-storage": ["./packages/core/src/storage/event-storage.ts"],
       "@gent/core/storage/event-storage.js": ["./packages/core/src/storage/event-storage.ts"],
       "@gent/core/storage/interaction-storage": [

@@ -27,7 +27,6 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { StorageTransaction } from "../../src/storage/storage-transaction"
-import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { SearchStorage } from "@gent/core/storage/search-storage"
@@ -69,7 +68,6 @@ describe("scope brand type fences", () => {
       Layer.succeed(EventStorage, { sentinel: "child-event" } as never),
       Layer.succeed(RelationshipStorage, { sentinel: "child-relationship" } as never),
       Layer.succeed(StorageTransaction, { sentinel: "child-transaction" } as never),
-      Layer.succeed(CheckpointStorage, { sentinel: "child-checkpoint" } as never),
       Layer.succeed(InteractionStorage, { sentinel: "child-interaction" } as never),
       Layer.succeed(InteractionPendingReader, { sentinel: "child-pending" } as never),
       Layer.succeed(SearchStorage, { sentinel: "child-search" } as never),

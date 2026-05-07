@@ -232,12 +232,12 @@ export type ResolvedTurn = {
   driverSource?: DriverSource
 }
 
-// ── Phase-tagged loop state (flat, persisted) ──
+// ── Phase-tagged loop state (flat, actor-owned) ──
 //
 // Replaces the `effect-machine` `State()` / `Machine` driver from
 // pre-. The loop is a single fiber + Phase Ref now; this enum is
-// the source of truth for "where is the loop?". Persisted directly via
-// `agent-loop.checkpoint.ts`.
+// the source of truth for "where is the loop?" while the actor entity is
+// materialized.
 
 export const LoopState = TaggedEnumClass("LoopState", {
   /** No turn in progress. */

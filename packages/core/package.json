@@ -69,8 +69,6 @@
     "./debug/session.js": "./src/debug/session.ts",
     "./storage/branch-storage": "./src/storage/branch-storage.ts",
     "./storage/branch-storage.js": "./src/storage/branch-storage.ts",
-    "./storage/checkpoint-storage": "./src/storage/checkpoint-storage.ts",
-    "./storage/checkpoint-storage.js": "./src/storage/checkpoint-storage.ts",
     "./storage/event-storage": "./src/storage/event-storage.ts",
     "./storage/event-storage.js": "./src/storage/event-storage.ts",
     "./storage/interaction-pending-reader": "./src/storage/interaction-pending-reader.ts",

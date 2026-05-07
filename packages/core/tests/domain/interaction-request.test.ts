@@ -5,7 +5,6 @@ import {
   InteractionStorage,
   type InteractionStorageService,
 } from "@gent/core/storage/interaction-storage"
-import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { EventStoreError } from "@gent/core/domain/event"
 import {
@@ -319,89 +318,6 @@ describe("Interaction Request", () => {
       expect(result.notes).toBe("auto")
       const pending = yield* is.listPending()
       expect(pending.filter((r) => r.sessionId === "s4").length).toBe(0)
-    }).pipe(Effect.provide(storageLive)),
-  )
-
-  // C5.0 finding (2) regression: a pending interaction_requests row whose
-  // (session_id, branch_id) has no matching agent_loop_checkpoints row is
-  // unresumable. Startup recovery must drop it before rehydrate() runs so
-  // approval state isn't seeded for an orphan that no actor can resume.
-  it.live(
-    "reconcileOrphansAgainstCheckpoints deletes pending rows without a matching checkpoint",
-    () =>
-      Effect.gen(function* () {
-        const is = yield* InteractionStorage
-        const checkpoints = yield* CheckpointStorage
-
-        const sessionAlive = SessionId.make("s-alive")
-        const branchAlive = BranchId.make("b-alive")
-        const sessionOrphan = SessionId.make("s-orphan")
-        const branchOrphan = BranchId.make("b-orphan")
-        yield* ensureStorageParents({ sessionId: sessionAlive, branchId: branchAlive })
-        yield* ensureStorageParents({ sessionId: sessionOrphan, branchId: branchOrphan })
-
-        // Alive: pending row + matching checkpoint.
-        yield* checkpoints.upsert({
-          sessionId: sessionAlive,
-          branchId: branchAlive,
-          version: 1,
-          stateTag: "WaitingForInteraction",
-          stateJson: "{}",
-          updatedAt: yield* Clock.currentTimeMillis,
-        })
-        yield* is.persist({
-          requestId: InteractionRequestId.make("req-alive"),
-          type: "approval",
-          sessionId: sessionAlive,
-          branchId: branchAlive,
-          paramsJson: "{}",
-          status: "pending",
-          createdAt: yield* Clock.currentTimeMillis,
-        })
-
-        // Orphan: pending row, no checkpoint.
-        yield* is.persist({
-          requestId: InteractionRequestId.make("req-orphan"),
-          type: "approval",
-          sessionId: sessionOrphan,
-          branchId: branchOrphan,
-          paramsJson: "{}",
-          status: "pending",
-          createdAt: yield* Clock.currentTimeMillis,
-        })
-
-        const beforePending = yield* is.listPending()
-        expect(beforePending.length).toBe(2)
-
-        const deleted = yield* is.reconcileOrphansAgainstCheckpoints()
-        expect(deleted).toBe(1)
-
-        const afterPending = yield* is.listPending()
-        expect(afterPending.length).toBe(1)
-        expect(afterPending[0]!.requestId).toBe(InteractionRequestId.make("req-alive"))
-      }).pipe(Effect.provide(storageLive)),
-  )
-
-  it.live("reconcileOrphansAgainstCheckpoints leaves resolved rows alone", () =>
-    Effect.gen(function* () {
-      const is = yield* InteractionStorage
-      const sessionId = SessionId.make("s-resolved-orphan")
-      const branchId = BranchId.make("b-resolved-orphan")
-      yield* ensureStorageParents({ sessionId, branchId })
-      yield* is.persist({
-        requestId: InteractionRequestId.make("req-resolved"),
-        type: "approval",
-        sessionId,
-        branchId,
-        paramsJson: "{}",
-        status: "pending",
-        createdAt: yield* Clock.currentTimeMillis,
-      })
-      yield* is.resolve(InteractionRequestId.make("req-resolved"))
-
-      // Resolved row, no checkpoint — must NOT be touched by reconciliation.
-      const deleted = yield* is.reconcileOrphansAgainstCheckpoints()
-      expect(deleted).toBe(0)
     }).pipe(Effect.provide(storageLive)),
   )
 })

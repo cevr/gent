@@ -14,7 +14,6 @@
  */
 
 import { Context, Effect, Layer } from "effect"
-import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
@@ -37,7 +36,6 @@ import type { PricingLookup, TurnStorage } from "./phases/turn.js"
  */
 export type AgentLoopBehaviorDepsShape = {
   readonly turnStorage: TurnStorage
-  readonly checkpointStorage: typeof CheckpointStorage.Service
   readonly provider: typeof Provider.Service
   readonly extensionRegistry: ExtensionRegistryService
   readonly driverRegistry: typeof DriverRegistry.Service
@@ -69,7 +67,6 @@ export class AgentLoopBehaviorDeps extends Context.Service<
     | MessageStorage
     | EventStorage
     | StorageTransaction
-    | CheckpointStorage
     | Provider
     | ExtensionRegistry
     | DriverRegistry
@@ -92,7 +89,6 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           messages: messageStorage,
           sessions: sessionStorage,
         }
-        const checkpointStorage = yield* CheckpointStorage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
@@ -112,7 +108,6 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           )
         return {
           turnStorage,
-          checkpointStorage,
           provider,
           extensionRegistry,
           driverRegistry,

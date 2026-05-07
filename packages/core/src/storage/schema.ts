@@ -121,20 +121,6 @@ const initialMigration = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
-    CREATE TABLE agent_loop_checkpoints (
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      state_tag TEXT NOT NULL,
-      state_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
     CREATE TABLE interaction_requests (
       request_id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -156,9 +142,6 @@ const initialMigration = Effect.gen(function* () {
   yield* sql.unsafe(`CREATE INDEX idx_events_session ON events(session_id, id)`)
   yield* sql.unsafe(`CREATE INDEX idx_events_session_branch ON events(session_id, branch_id, id)`)
   yield* sql.unsafe(`CREATE INDEX idx_events_session_tag ON events(session_id, event_tag, id)`)
-  yield* sql.unsafe(
-    `CREATE INDEX idx_agent_loop_checkpoints_updated ON agent_loop_checkpoints(updated_at)`,
-  )
   yield* sql.unsafe(`CREATE INDEX idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(`CREATE INDEX idx_interaction_requests_status ON interaction_requests(status)`)

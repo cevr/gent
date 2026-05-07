@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Clock, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
@@ -19,7 +19,6 @@ import {
 import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
-import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import {
@@ -42,18 +41,13 @@ import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCommands } from "../../src/server/session-commands"
-import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
-import {
-  SessionRuntime,
-  SessionRuntimeError,
-  interruptPayloadToSteerCommand,
-} from "../../src/runtime/session-runtime"
+import { SessionRuntime, interruptPayloadToSteerCommand } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-import type { AgentLoopCheckpointRecord } from "../../src/runtime/agent/agent-loop.checkpoint"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 const makeTestExtensions = (tools: ReadonlyArray<ToolToken> = []) => {
@@ -165,70 +159,6 @@ const makeRuntimeLayerWithEventPublisher = (
     providedEventPublisherLayer,
     sessionRuntimeLayer,
     sessionMutationsLayer,
-  )
-}
-const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
-const checkpointStorageLayer = (options: { failUpsertOn?: number; failRemoveOn?: number }) => {
-  let upsertCount = 0
-  let removeCount = 0
-  const records = new Map<string, AgentLoopCheckpointRecord>()
-  return Layer.succeed(CheckpointStorage, {
-    upsert: (record) =>
-      Effect.gen(function* () {
-        upsertCount += 1
-        if (options.failUpsertOn === upsertCount) {
-          return yield* new StorageError({ message: "checkpoint upsert failed" })
-        }
-        records.set(checkpointKey(record.sessionId, record.branchId), record)
-        return record
-      }),
-    get: (input) => Effect.succeed(records.get(checkpointKey(input.sessionId, input.branchId))),
-    list: () => Effect.succeed(Array.from(records.values())),
-    remove: (input) =>
-      Effect.gen(function* () {
-        removeCount += 1
-        if (options.failRemoveOn === removeCount) {
-          return yield* new StorageError({ message: "checkpoint remove failed" })
-        }
-        records.delete(checkpointKey(input.sessionId, input.branchId))
-      }),
-  })
-}
-const makeRuntimeLayerWithCheckpointFailure = (options: {
-  failUpsertOn?: number
-  failRemoveOn?: number
-}) => {
-  const providerLayer = Provider.TestStream(() =>
-    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-  )
-  const resolvedExtensions = makeTestExtensions()
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql()
-  const baseDeps = Layer.mergeAll(
-    storageLayer,
-    makeClusterRunnerLayer(storageLayer),
-    checkpointStorageLayer(options),
-    providerLayer,
-    ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
-    eventStoreLayer,
-    recorderLayer,
-    ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    ConfigService.Test(),
-    BunServices.layer,
-    ResourceManagerLive,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-  )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
-  return Layer.provideMerge(
-    sessionRuntimeLayers({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
   )
 }
 const makeLiveToolRuntimeLayer = (
@@ -520,36 +450,6 @@ describe("SessionRuntime", () => {
             branchId,
             requestId: InteractionRequestId.make("req-not-waiting"),
           })
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("sendUserMessage fails when saving the running checkpoint fails", () =>
-    Effect.gen(function* () {
-      const layer = makeRuntimeLayerWithCheckpointFailure({ failUpsertOn: 1 })
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const recorder = yield* SequenceRecorder
-          const { sessionId, branchId } = yield* createSessionBranch
-          const exit = yield* Effect.exit(
-            sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "persist this turn",
-            }),
-          )
-          expect(exit._tag).toBe("Failure")
-          if (exit._tag === "Failure") {
-            const error = Cause.findErrorOption(exit.cause)
-            expect(Option.isSome(error)).toBe(true)
-            if (Option.isSome(error)) {
-              expect(error.value).toBeInstanceOf(SessionRuntimeError)
-              expect(error.value.message).toBe("sendUserMessage failed")
-            }
-            expect(Cause.pretty(exit.cause)).toContain("checkpoint upsert failed")
-          }
-          expect(eventTags(yield* recorder.getCalls())).toContain("ErrorOccurred")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

@@ -3,7 +3,7 @@
  *
  * Extracted from the legacy `AgentLoop.Live` factory closure as the first
  * step of C5.4.4.c.1 (the γ-shaped split). Pure code-move: same primitives,
- * same recovery flow, with the service-level recursive `queueFollowUp`
+ * same turn flow, with the service-level recursive `queueFollowUp`
  * reference replaced by an explicit `enqueueFollowUp` callback parameter.
  * C5.4.4.c.1.b relocates the call site from the legacy `getLoop` to
  * `Actor.toLayer(...)` build (per-entity scoping by encore).
@@ -17,7 +17,6 @@ import {
   DateTime,
   Deferred,
   Effect,
-  Option,
   Ref,
   Schema,
   Scope,
@@ -30,14 +29,7 @@ import {
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
-import {
-  AgentSwitched,
-  ErrorOccurred,
-  TurnRecoveryApplied,
-  AgentLoopRecoveryAbandoned,
-  type RecoveryAbandonReason,
-  type AgentEvent,
-} from "../../domain/event.js"
+import { AgentSwitched, ErrorOccurred, type AgentEvent } from "../../domain/event.js"
 import type { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
@@ -49,7 +41,6 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import type { MessageStorage } from "../../storage/message-storage.js"
-import type { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import type { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
 import type { ExtensionRegistryService } from "../extensions/registry.js"
@@ -58,13 +49,6 @@ import type { ToolRunner } from "./tool-runner.js"
 import type { ResourceManagerService } from "../resource-manager.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
-import {
-  AGENT_LOOP_CHECKPOINT_VERSION,
-  buildLoopCheckpointRecord,
-  decodeLoopCheckpointState,
-  RecoveryOutcome,
-  shouldRetainLoopCheckpoint,
-} from "./agent-loop.checkpoint.js"
 import {
   buildIdleState,
   buildRunningState,
@@ -150,7 +134,7 @@ export type AgentLoopBehavior = {
   interrupt: Effect.Effect<void, AgentLoopError>
   switchAgent: (agent: AgentNameType) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
-  /** Recover from persisted checkpoint, then start the initial turn fiber if Running. */
+  /** Mark the per-entity behavior ready to accept state mutations. */
   start: Effect.Effect<void, AgentLoopError>
   /** Resolves once the loop scope is closed. */
   awaitExit: Effect.Effect<void>
@@ -201,88 +185,6 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
       })
 }
 
-type LoopRecoveryDecision = {
-  state: LoopState
-  queue: LoopQueueState
-  recovery?: {
-    phase: "Idle" | "Running" | "WaitingForInteraction"
-    action: "resume-queued-turn" | "replay-running" | "restore-cold"
-    detail?: string
-  }
-}
-
-/** Recovery decision for persist.onRestore — takes decoded state, returns adjusted state or None. */
-const makeRecoveryDecision = (params: {
-  checkpoint: {
-    state: LoopState
-    queue: LoopQueueState
-  }
-  extensionRegistry: ExtensionRegistryService
-  currentAgent: AgentNameType
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, never>
-  sessionId: SessionId
-  branchId: BranchId
-}): Effect.Effect<Option.Option<LoopRecoveryDecision>, StorageError> =>
-  Effect.gen(function* () {
-    const { state } = params.checkpoint
-    const queue = params.checkpoint.queue
-
-    const publishRecovery = (recovery: LoopRecoveryDecision["recovery"]) =>
-      recovery === undefined
-        ? Effect.void
-        : params
-            .publishEvent(
-              TurnRecoveryApplied.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                phase: recovery.phase,
-                action: recovery.action,
-                ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
-              }),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
-
-    if (state._tag === "Idle") {
-      const queuedCreatedAt = yield* DateTime.nowAsDate
-      const { queue: remainingQueue, nextItem } = takeNextQueuedTurn(queue, queuedCreatedAt)
-      if (nextItem !== undefined) {
-        yield* publishRecovery({ phase: "Idle", action: "resume-queued-turn" })
-        const startedAtMs = yield* Clock.currentTimeMillis
-        return Option.some({
-          state: buildRunningState(
-            { currentAgent: state.currentAgent ?? params.currentAgent },
-            nextItem,
-            { startedAtMs },
-          ),
-          queue: remainingQueue,
-        })
-      }
-      return Option.some(
-        state.currentAgent === undefined
-          ? {
-              state: updateCurrentAgentOnState(state, params.currentAgent),
-              queue,
-            }
-          : {
-              state,
-              queue,
-            },
-      )
-    }
-
-    if (state._tag === "Running") {
-      yield* publishRecovery({ phase: "Running", action: "replay-running" })
-      return Option.some({ state, queue })
-    }
-
-    if (state._tag === "WaitingForInteraction") {
-      yield* publishRecovery({ phase: "WaitingForInteraction", action: "restore-cold" })
-      return Option.some({ state, queue })
-    }
-
-    return Option.none()
-  })
-
 /**
  * Dependencies for `makeAgentLoopBehavior`. Captures the layer-level services
  * the legacy `AgentLoop.Live` factory closed over, lifted to an explicit
@@ -291,7 +193,6 @@ const makeRecoveryDecision = (params: {
  */
 export type AgentLoopBehaviorDeps = {
   readonly turnStorage: TurnStorage
-  readonly checkpointStorage: typeof CheckpointStorage.Service
   readonly provider: typeof Provider.Service
   readonly extensionRegistry: ExtensionRegistryService
   readonly driverRegistry: typeof DriverRegistry.Service
@@ -332,7 +233,6 @@ export const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     const {
       turnStorage,
-      checkpointStorage,
       provider,
       extensionRegistry,
       driverRegistry,
@@ -416,49 +316,13 @@ export const makeAgentLoopBehavior = (
     let started = false
 
     const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
-      Effect.gen(function* () {
-        yield* Effect.logDebug("checkpoint.save.start").pipe(
-          Effect.annotateLogs({ nextState: state._tag }),
-        )
-        if (!shouldRetainLoopCheckpoint({ state, queue })) {
-          yield* checkpointStorage.remove({ sessionId, branchId })
-          yield* Effect.logDebug("checkpoint.save.removed")
-          yield* SubscriptionRef.update(loopRef, (s) => ({
-            ...s,
-            state,
-            queue,
-            stateEpoch: s.stateEpoch + 1,
-            startingState: undefined,
-          }))
-          return
-        }
-        yield* checkpointStorage.upsert(
-          yield* buildLoopCheckpointRecord({
-            sessionId,
-            branchId,
-            state,
-            queue,
-          }),
-        )
-        yield* Effect.logDebug("checkpoint.save.done").pipe(
-          Effect.annotateLogs({ nextState: state._tag }),
-        )
-        yield* SubscriptionRef.update(loopRef, (s) => ({
-          ...s,
-          state,
-          queue,
-          stateEpoch: s.stateEpoch + 1,
-          startingState: undefined,
-        }))
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new AgentLoopError({
-              message: "Failed to persist agent loop checkpoint",
-              cause: error,
-            }),
-        ),
-      )
+      SubscriptionRef.update(loopRef, (s) => ({
+        ...s,
+        state,
+        queue,
+        stateEpoch: s.stateEpoch + 1,
+        startingState: undefined,
+      }))
 
     const persistRuntimeState = (state: LoopState) =>
       SubscriptionRef.get(loopRef).pipe(
@@ -926,128 +790,10 @@ export const makeAgentLoopBehavior = (
         }),
       )
 
-    const publishRecoveryAbandoned = (params: { reason: RecoveryAbandonReason; detail?: string }) =>
-      publishEvent(
-        AgentLoopRecoveryAbandoned.make({
-          sessionId,
-          branchId,
-          reason: params.reason,
-          ...(params.detail !== undefined ? { detail: params.detail } : {}),
-        }),
-      )
-
-    const failRecovery = (params: {
-      reason: RecoveryAbandonReason
-      message: string
-      cause: unknown
-    }) =>
-      publishRecoveryAbandoned({
-        reason: params.reason,
-        detail: String(params.cause),
-      }).pipe(
-        Effect.andThen(
-          Effect.fail(
-            new AgentLoopError({
-              message: params.message,
-              cause: params.cause,
-            }),
-          ),
-        ),
-      )
-
-    const removeAbandonedCheckpoint = (params: {
-      reason: RecoveryAbandonReason
-      detail?: string
-    }) =>
-      publishRecoveryAbandoned(params).pipe(
-        Effect.andThen(
-          checkpointStorage.remove({ sessionId, branchId }).pipe(
-            Effect.catchEager((error) =>
-              failRecovery({
-                reason: "checkpoint-remove-failed",
-                message: "Failed to remove abandoned agent loop checkpoint",
-                cause: error,
-              }),
-            ),
-          ),
-        ),
-      )
-
-    const resolveRecovery = Effect.gen(function* () {
+    const start = Effect.sync(() => {
       if (started) return
       started = true
-
-      const record = yield* checkpointStorage.get({ sessionId, branchId }).pipe(
-        Effect.catchCause((cause) =>
-          failRecovery({
-            reason: "checkpoint-read-failed",
-            message: "Failed to read agent loop checkpoint",
-            cause: Cause.squash(cause),
-          }),
-        ),
-      )
-      if (record === undefined) {
-        return RecoveryOutcome.NoCheckpoint.make({})
-      }
-      if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-        yield* removeAbandonedCheckpoint({
-          reason: "checkpoint-version-mismatch",
-          detail: `expected=${AGENT_LOOP_CHECKPOINT_VERSION} actual=${record.version}`,
-        })
-        return RecoveryOutcome.Abandoned.make({
-          reason: "checkpoint-version-mismatch",
-          detail: `expected=${AGENT_LOOP_CHECKPOINT_VERSION} actual=${record.version}`,
-        })
-      }
-      const decoded = yield* decodeLoopCheckpointState(record.stateJson).pipe(
-        Effect.map(Option.some),
-        Effect.catchCause((cause) =>
-          removeAbandonedCheckpoint({
-            reason: "checkpoint-decode-failed",
-            detail: Cause.pretty(cause),
-          }).pipe(Effect.as(Option.none())),
-        ),
-      )
-      if (Option.isNone(decoded)) {
-        return RecoveryOutcome.Abandoned.make({
-          reason: "checkpoint-decode-failed",
-        })
-      }
-      const recovered = yield* makeRecoveryDecision({
-        checkpoint: decoded.value,
-        extensionRegistry,
-        currentAgent,
-        publishEvent: publishEventOrDie,
-        sessionId,
-        branchId,
-      }).pipe(
-        Effect.catchEager((error) =>
-          failRecovery({
-            reason: "recovery-decision-failed",
-            message: "Failed to recover agent loop checkpoint",
-            cause: error,
-          }),
-        ),
-      )
-
-      if (Option.isNone(recovered)) return RecoveryOutcome.NoCheckpoint.make({})
-
-      yield* SubscriptionRef.update(loopRef, (s) => ({
-        ...s,
-        state: recovered.value.state,
-        queue: recovered.value.queue,
-        stateEpoch: s.stateEpoch + 1,
-        startingState: undefined,
-      }))
-      if (recovered.value.state._tag === "Running") {
-        yield* forkTurn(recovered.value.state as RunningState)
-      }
-      return RecoveryOutcome.Recovered.make({
-        stateTag: recovered.value.state._tag,
-      })
-    }).pipe(Effect.withSpan("AgentLoop.recovery.resolve"))
-
-    const start = resolveRecovery.pipe(Effect.asVoid)
+    })
 
     return {
       activeStreamRef,
