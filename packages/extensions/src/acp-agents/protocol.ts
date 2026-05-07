@@ -21,6 +21,7 @@ import {
   Stream,
 } from "effect"
 import type { PlatformError } from "effect/PlatformError"
+import { TaggedEnumClass } from "@gent/core/extensions/api"
 import type {
   InitializeRequest,
   InitializeResponse,
@@ -75,6 +76,11 @@ type PendingRequest = {
   readonly resolve: Deferred.Deferred<unknown, AcpError | AcpClosedError>
 }
 
+const PendingRequests = Schema.declare<HashMap.HashMap<RequestId, PendingRequest>>(
+  (u): u is HashMap.HashMap<RequestId, PendingRequest> => HashMap.isHashMap(u),
+  { identifier: "AcpPendingRequests" },
+)
+
 /**
  * The closed-flag and the pending-RPC map MUST be one atomic cell. A
  * naive layout (separate `closedRef` + `pendingRef`) leaks Deferreds
@@ -86,9 +92,11 @@ type PendingRequest = {
  * Folding both into `ConnState` lets `Ref.modify` make
  * "check-open-and-register" a single transaction.
  */
-type ConnState =
-  | { readonly _tag: "open"; readonly pending: HashMap.HashMap<RequestId, PendingRequest> }
-  | { readonly _tag: "closed" }
+const ConnState = TaggedEnumClass("AcpConnState", {
+  Open: TaggedEnumClass.variant("open", { pending: PendingRequests }),
+  Closed: TaggedEnumClass.variant("closed", {}),
+})
+type ConnState = typeof ConnState.Type
 
 type IncomingRequestHandler = (method: string, params: unknown) => Effect.Effect<unknown, AcpError>
 
@@ -127,10 +135,9 @@ export const makeAcpConnection = (
 ) =>
   Effect.gen(function* () {
     const nextIdRef = yield* Ref.make(1 as RequestId)
-    const stateRef = yield* Ref.make<ConnState>({
-      _tag: "open",
-      pending: HashMap.empty<RequestId, PendingRequest>(),
-    })
+    const stateRef = yield* Ref.make<ConnState>(
+      ConnState.Open.make({ pending: HashMap.empty<RequestId, PendingRequest>() }),
+    )
     const updatesPubSub = yield* PubSub.unbounded<SessionNotification>()
     const writeQueue = yield* Queue.unbounded<string>()
     const encoder = new TextEncoder()
@@ -150,7 +157,7 @@ export const makeAcpConnection = (
       stateRef,
       (s): [HashMap.HashMap<RequestId, PendingRequest> | undefined, ConnState] => {
         if (s._tag === "closed") return [undefined, s]
-        return [s.pending, { _tag: "closed" }]
+        return [s.pending, ConnState.Closed.make({})]
       },
     )
 
@@ -201,7 +208,7 @@ export const makeAcpConnection = (
             if (s._tag === "closed") return [undefined, s]
             const found = HashMap.get(s.pending, id)
             if (found._tag === "None") return [undefined, s]
-            return [found.value, { _tag: "open", pending: HashMap.remove(s.pending, id) }]
+            return [found.value, ConnState.Open.make({ pending: HashMap.remove(s.pending, id) })]
           },
         )
         if (claimed === undefined) return
@@ -352,10 +359,9 @@ export const makeAcpConnection = (
           if (s._tag === "closed") return [false, s]
           return [
             true,
-            {
-              _tag: "open",
+            ConnState.Open.make({
               pending: HashMap.set(s.pending, id, { resolve: deferred } as PendingRequest),
-            },
+            }),
           ]
         })
         if (!registered) {
