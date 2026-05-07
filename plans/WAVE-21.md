@@ -97,6 +97,7 @@ Commits landed in this wave so far:
 - `bae05284 refactor(extensions): remove platform from author api`
 - `3c0843c2 fix(extensions): isolate resource startup failures`
 - `30cb8972 fix(extensions): serialize oauth credential refresh`
+- `079813b6 fix(tui): serialize child session tracking`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -126,8 +127,9 @@ classes of privilege and races, but the deeper P1s remain:
   OpenAI and Anthropic, with concurrent stale-refresh tests proving duplicate
   refreshes collapse to one serialized update while preserving OpenAI rotated
   refresh tokens across persist failures.
-- The child session tracker still mutates a `Ref<Map<...>>` from independent
-  parent/child subscription fibers and can lose interleaved state updates.
+- The child session tracker now applies entry/fiber map transitions through
+  atomic `Ref.modify` helpers and has a parent/child interleaving regression
+  proving child tool state survives parent completion.
 - The scheduler still probes `globalThis.Bun.cron` from core runtime and fails
   open when cron is unavailable.
 
@@ -692,8 +694,7 @@ Validation:
 Goal: apply Effect-owned serialized state primitives to remaining extension/TUI
 race surfaces found by the fresh Effect usage lane.
 
-Status: credential refresh closed by `30cb8972`; child-session tracker remains
-open.
+Status: closed by `30cb8972` and `079813b6`.
 
 Work:
 
@@ -703,21 +704,24 @@ Work:
   in `30cb8972`.
 - Convert `ChildSessionTracker` mutations to `Ref.modify` at minimum, or to a
   `TxSubscriptionRef<Map<...>>` if subscribers need transactional change
-  streams.
+  streams. Done in `079813b6`.
 - Add concurrent stale-refresh tests for OpenAI and Anthropic credential
   services. Done in `30cb8972`.
 - Add parent/child interleaving regression for the TUI tracker.
+  Done in `079813b6`.
 
 Validation:
 
 - Focused provider credential tests:
   `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/openai/openai-credential-service.test.ts tests/anthropic/anthropic-credential-service.test.ts tests/openai/openai-extension-driver.test.ts tests/anthropic/anthropic-extension-driver.test.ts`
 - Focused child session tracker tests.
+- Focused child session tracker tests:
+  `cd apps/tui && bun test --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts --reporter=dots tests/child-session-tracker.test.ts`
 - `bun run lint`
 - `bun run typecheck`
-- `bun run gate` passed before commit and in the successful `30cb8972`
-  pre-commit hook. One earlier pre-commit retry hit a Bun 1.3.13 segfault in an
-  unrelated core test shard; rerun passed without code changes.
+- `bun run gate` passed before commit and in the successful `30cb8972` and
+  `079813b6` pre-commit hooks. One earlier pre-commit retry hit a Bun 1.3.13
+  segfault in an unrelated core test shard; rerun passed without code changes.
 
 ### C21.10 — Upstream Encore Actor DX
 
