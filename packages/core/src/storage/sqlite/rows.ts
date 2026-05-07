@@ -10,7 +10,7 @@ import {
 } from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent } from "../../domain/event.js"
-import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
+import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 
@@ -30,27 +30,29 @@ export const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
 export const decodeEvent = (json: string) =>
   decodeEventJson(json).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)))
 // Row types
-export interface SessionRow {
-  id: SessionId
-  name: string | null
-  cwd: string | null
-  reasoning_level: string | null
-  active_branch_id: BranchId | null
-  parent_session_id: SessionId | null
-  parent_branch_id: BranchId | null
-  created_at: number
-  updated_at: number
-}
+export const SessionRow = Schema.Struct({
+  id: SessionId,
+  name: Schema.NullOr(Schema.String),
+  cwd: Schema.NullOr(Schema.String),
+  reasoning_level: Schema.NullOr(Schema.String),
+  active_branch_id: Schema.NullOr(BranchId),
+  parent_session_id: Schema.NullOr(SessionId),
+  parent_branch_id: Schema.NullOr(BranchId),
+  created_at: Schema.Number,
+  updated_at: Schema.Number,
+})
+export type SessionRow = typeof SessionRow.Type
 
-export interface BranchRow {
-  id: BranchId
-  session_id: SessionId
-  parent_branch_id: BranchId | null
-  parent_message_id: MessageId | null
-  name: string | null
-  summary: string | null
-  created_at: number
-}
+export const BranchRow = Schema.Struct({
+  id: BranchId,
+  session_id: SessionId,
+  parent_branch_id: Schema.NullOr(BranchId),
+  parent_message_id: Schema.NullOr(MessageId),
+  name: Schema.NullOr(Schema.String),
+  summary: Schema.NullOr(Schema.String),
+  created_at: Schema.Number,
+})
+export type BranchRow = typeof BranchRow.Type
 
 export interface MessageRow {
   id: MessageId
@@ -80,7 +82,7 @@ export const SESSION_PARENT_BRANCH_CHECK =
 
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
-export const sessionFromRow = (row: SessionRow) =>
+const rowToSession = (row: SessionRow) =>
   new Session({
     id: row.id,
     name: row.name ?? undefined,
@@ -96,7 +98,11 @@ export const sessionFromRow = (row: SessionRow) =>
     updatedAt: dateFromMillis(row.updated_at),
   })
 
-export const branchFromRow = (row: BranchRow) =>
+const decodeSessionRow = Schema.decodeUnknownSync(SessionRow)
+
+export const sessionFromRow = (row: SessionRow): Session => rowToSession(decodeSessionRow(row))
+
+const rowToBranch = (row: BranchRow) =>
   new Branch({
     id: row.id,
     sessionId: row.session_id,
@@ -106,6 +112,10 @@ export const branchFromRow = (row: BranchRow) =>
     summary: row.summary ?? undefined,
     createdAt: dateFromMillis(row.created_at),
   })
+
+const decodeBranchRow = Schema.decodeUnknownSync(BranchRow)
+
+export const branchFromRow = (row: BranchRow): Branch => rowToBranch(decodeBranchRow(row))
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.map(

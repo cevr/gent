@@ -98,6 +98,15 @@ describe("Storage", () => {
         expect(retrieved?.name).toBe("Updated")
       }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
     )
+    it.live("decodes invalid stored reasoning levels as absent", () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`INSERT INTO sessions (id, reasoning_level, created_at, updated_at) VALUES (${"invalid-reasoning"}, ${"too-spicy"}, ${FIXED_NOW_MILLIS}, ${FIXED_NOW_MILLIS})`
+        const retrieved = yield* sessions.getSession(SessionId.make("invalid-reasoning"))
+        expect(retrieved?.reasoningLevel).toBeUndefined()
+      }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    )
     it.live("deletes a session", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
