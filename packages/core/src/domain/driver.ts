@@ -210,6 +210,7 @@ export interface TurnContext {
   readonly cwd: string
   readonly abortSignal: AbortSignal
   readonly hostCtx: ExtensionHostContext
+  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
 }
 
 /** Executor interface implemented by external drivers (ACP agents, etc.).

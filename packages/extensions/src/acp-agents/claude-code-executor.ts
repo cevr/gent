@@ -492,7 +492,7 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       const services = yield* Effect.context<never>()
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         services,
-        hostCtx: ctx.hostCtx,
+        runTool: ctx.runTool,
       })
 
       const codemodeConfig: CodemodeConfig | undefined =

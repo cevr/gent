@@ -1,19 +1,17 @@
 /**
  * Boundary helper for {@link createAcpTurnExecutor}.
  *
- * The MCP Codemode `runTool` callback hands tool invocations to a
- * JS sandbox; that sandbox is a Promise-returning host (sandbox API
- * deliberately stays on the platform side, not the Effect side). To
- * cross from `ToolRunner.run` (typed Effect) into the sandbox's
- * Promise contract, we exit Effect-land via `Effect.runPromiseWith`.
+ * The MCP Codemode `runTool` callback hands tool invocations to a JS sandbox;
+ * that sandbox is a Promise-returning host. Core owns actual tool execution and
+ * passes this external driver a narrow typed Effect callback, so this file only
+ * adapts Effect to the sandbox Promise contract.
  *
  * Per `gent/no-runpromise-outside-boundary`, that call lives here.
  * Each export NAMES a specific external seam — there is no generic
  * `runAnyEffect(services, effect)` trampoline.
  */
 
-import { Context, Effect, Random } from "effect"
-import { ToolCallId, ToolRunner, type ToolCapabilityContext } from "@gent/core/extensions/api"
+import { Effect, type Context } from "effect"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
@@ -25,23 +23,9 @@ import type { CodemodeConfig } from "./mcp-codemode.js"
  */
 export const makeAcpRunTool = (params: {
   readonly services: Context.Context<never>
-  readonly hostCtx: Omit<ToolCapabilityContext, "toolCallId">
+  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
 }): CodemodeConfig["runTool"] => {
-  // The TurnExecutor interface erases the executor's context channel, but
-  // the agent runtime ambiently provides ToolRunner at invocation time. Re-
-  // type the captured ServiceMap to expose the typed ToolRunner key.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-  const ambient = params.services as unknown as Context.Context<ToolRunner>
-  const toolRunner = Context.get(ambient, ToolRunner)
   const runOnRuntime = Effect.runPromiseWith(params.services)
 
-  return (toolName, args) =>
-    runOnRuntime(
-      Effect.gen(function* () {
-        const uuid = yield* Random.nextUUIDv4
-        const toolCallId = ToolCallId.make(uuid)
-        const toolCtx: ToolCapabilityContext = { ...params.hostCtx, toolCallId }
-        return yield* toolRunner.run({ toolCallId, toolName, input: args }, toolCtx)
-      }),
-    )
+  return (toolName, args) => runOnRuntime(params.runTool(toolName, args))
 }

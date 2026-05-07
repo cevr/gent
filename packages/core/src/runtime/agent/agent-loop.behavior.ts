@@ -686,6 +686,7 @@ export const makeAgentLoopBehavior = (
         branchId,
         activeStream: params.activeStream,
         hostCtx: params.hostCtx,
+        toolRunner,
       })
 
       if (source === undefined) {

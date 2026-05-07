@@ -1,4 +1,4 @@
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Random, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentDefinition,
@@ -629,6 +629,7 @@ export const resolveTurnSource = (params: {
   branchId: BranchId
   activeStream: ActiveStreamHandle
   hostCtx: ExtensionHostContext
+  toolRunner: ToolRunnerService
 }) =>
   Effect.gen(function* () {
     const { resolved } = params
@@ -660,6 +661,13 @@ export const resolveTurnSource = (params: {
           cwd: params.hostCtx.cwd,
           abortSignal: params.activeStream.abortController.signal,
           hostCtx: params.hostCtx,
+          runTool: (toolName, args) =>
+            Effect.gen(function* () {
+              const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
+              return yield* params.toolRunner
+                .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
+                .pipe(Effect.orDie)
+            }),
         }),
         formatStreamError: (streamError: unknown) =>
           `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
