@@ -158,7 +158,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" -print0 | xargs -0 -n 4 -P 10 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots'"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" -print0 | xargs -0 -n 4 -P 6 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots'"
   },
   "dependencies": {
     "effect-encore": "catalog:",
