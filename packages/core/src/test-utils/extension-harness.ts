@@ -19,7 +19,6 @@ import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { AgentLoopTestActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopBehaviorDeps } from "../runtime/agent/agent-loop.behavior-deps.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
-import { AgentLoopStateRegistry } from "../runtime/agent/agent-loop.state-registry.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import {
@@ -135,7 +134,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       const baseWithRuntimeLayer = Layer.mergeAll(
         baseDepsLayer,
         eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
         AgentLoopSessionGovernance.Live,
       )
       const agentLoopLayer = AgentLoop.Live({ baseSections: [] }).pipe(

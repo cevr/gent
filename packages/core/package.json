@@ -164,7 +164,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'preload=../../packages/tooling/src/test-log-preload.ts; bun test --preload $preload --reporter=dots tests/runtime/session-runtime.test.ts & p1=$!; bun test --preload $preload --reporter=dots tests/extensions/auto-integration.test.ts & p2=$!; find tests -name \"*.test.ts\" ! -path \"tests/runtime/session-runtime.test.ts\" ! -path \"tests/extensions/auto-integration.test.ts\" -print0 | xargs -0 -n 10 -P 6 bun test --preload $preload --reporter=dots; c=$?; wait $p1; c1=$?; wait $p2; c2=$?; exit $((c || c1 || c2))'"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'preload=../../packages/tooling/src/test-log-preload.ts; bun test --preload $preload --reporter=dots tests/runtime/session-runtime.test.ts & p1=$!; bun test --preload $preload --reporter=dots tests/extensions/auto-integration.test.ts & p2=$!; find tests -name \"*.test.ts\" ! -path \"tests/runtime/session-runtime.test.ts\" ! -path \"tests/extensions/auto-integration.test.ts\" -print0 | xargs -0 -n 6 -P 4 bun test --preload $preload --reporter=dots; c=$?; wait $p1; c1=$?; wait $p2; c2=$?; exit $((c || c1 || c2))'"
   },
   "dependencies": {
     "@effect/opentelemetry": "4.0.0-beta.59",

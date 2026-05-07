@@ -411,7 +411,7 @@ Prefer the explicit handler context if the type surface is cleaner. Use
 `exhaust-the-design-space`: sketch both approaches in code/tests, keep the one
 with smaller author burden.
 
-Status: complete in upstream commit `762bf25 feat: hide current address context`.
+Status: complete in upstream commit `77231b1 feat: hide current address context`.
 
 Chosen API: `Actor.CurrentAddress` / named `CurrentAddress` export. This keeps
 the existing request-first handler shape and mirrors Effect Cluster's own
@@ -444,6 +444,14 @@ Definition of done:
 - Encore tests prove state watch is entity-owned, not side-registry-owned.
 - Gent can delete `AgentLoopStateRegistry` after adoption.
 - `bun run gate` in `effect-encore`.
+
+Status: complete in upstream commit `8729916 feat: add live actor state protocol`
+and released through version PR `#19` as `effect-encore@0.10.0`.
+
+The shipped API is `Actor.registerState`, plus typed `getState`, `watchState`,
+and `listStateEntityIds` helpers on each entity actor. `Actor.toLayer` /
+`Actor.toTestLayer` provide the shared `ActorStateRegistry` support layer so
+consumers do not wire a side registry.
 
 #### C4: feat(effect-encore): own SQL message storage for rerun
 
@@ -482,6 +490,30 @@ Definition of done:
 - No `EnsureStarted` no-op solely for registry materialization.
 - Focused runtime state/watch tests plus `bun run test:e2e`.
 - `bun run gate`.
+
+Status: complete in Gent commit pending after upstream release adoption.
+
+Implementation notes:
+
+- Deleted Gent's `AgentLoopStateRegistry` service and direct registry unit test.
+- The `AgentLoop` actor registers projected runtime state with
+  `Actor.registerState`.
+- `AgentLoop.getState` / `watchState` use Encore actor-state helpers with an
+  actor materialization operation.
+- `terminateSession` lists Encore-registered entity ids and routes branch
+  shutdown through actor operations.
+- `EnsureStarted` remains, but no longer exists solely to populate a Gent side
+  registry; it is the actor materialization/wake operation used by state reads
+  and restart interaction recovery.
+- Test runner sharding changed from `xargs -n 10 -P 6` to `xargs -n 6 -P 4`
+  after the root budget probe showed CPU contention; `bun run test` now reports
+  4.677s against the 5s budget.
+
+Verification on 2026-05-07:
+
+- `bun run typecheck`
+- `bun run lint`
+- `bun run test`
 
 #### C7: refactor(runtime): collapse AgentLoop.Live into SessionRuntime internals
 

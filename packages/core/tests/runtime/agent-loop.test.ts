@@ -15,7 +15,6 @@ import {
   AgentLoopTestActor,
 } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
-import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -232,14 +231,7 @@ const makeLayer = (
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
@@ -265,14 +257,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
@@ -321,14 +306,7 @@ const makeLiveToolLayer = (
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
@@ -371,14 +349,7 @@ const makeLayerWithEvents = (
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 const makeLayerWithEventPublisher = (
@@ -405,12 +376,7 @@ const makeLayerWithEventPublisher = (
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
     Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        providedEventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
+      Layer.mergeAll(deps, providedEventPublisherLayer, AgentLoopSessionGovernance.Live),
     ),
   )
 }
@@ -478,14 +444,7 @@ const makeExternalLayerWithEvents = (
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 /** Poll `getState` until the phase matches, with a short sleep between attempts. */
@@ -618,12 +577,7 @@ describe("streaming", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -1685,12 +1639,7 @@ describe("interaction", () => {
         AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
       ),
       Layer.provideMerge(
-        Layer.mergeAll(
-          deps,
-          eventPublisherLayer,
-          AgentLoopStateRegistry.Live,
-          AgentLoopSessionGovernance.Live,
-        ),
+        Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
       ),
     )
   }
@@ -1841,12 +1790,7 @@ describe("interaction", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -1990,12 +1934,7 @@ describe("queue drain regression", () => {
             ),
           ),
           Layer.provideMerge(
-            Layer.mergeAll(
-              deps,
-              eventPublisherLayer,
-              AgentLoopStateRegistry.Live,
-              AgentLoopSessionGovernance.Live,
-            ),
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),
         )
         yield* Effect.scoped(

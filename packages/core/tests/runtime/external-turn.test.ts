@@ -15,7 +15,6 @@ import {
   AgentLoopTestActor,
 } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
-import { AgentLoopStateRegistry } from "../../src/runtime/agent/agent-loop.state-registry"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
@@ -253,14 +252,7 @@ const makeLayerWithEvents = (
     Layer.provideMerge(
       AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
     ),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        deps,
-        eventPublisherLayer,
-        AgentLoopStateRegistry.Live,
-        AgentLoopSessionGovernance.Live,
-      ),
-    ),
+    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 // ── Tests ──
@@ -466,12 +458,7 @@ describe("external turn execution", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -630,12 +617,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -721,12 +703,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -827,12 +804,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(
@@ -932,12 +904,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
         ),
         Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            eventPublisherLayer,
-            AgentLoopStateRegistry.Live,
-            AgentLoopSessionGovernance.Live,
-          ),
+          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
       )
       yield* Effect.scoped(

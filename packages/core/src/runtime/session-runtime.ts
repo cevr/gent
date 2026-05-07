@@ -3,7 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
-import { ActorAddressResolver } from "effect-encore"
+import { ActorAddressResolver, type ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
@@ -27,7 +27,6 @@ import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf } from "./agent/agent-loop.entity-id.js"
-import { AgentLoopStateRegistry } from "./agent/agent-loop.state-registry.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -256,7 +255,8 @@ type SessionRuntimeEntityLayerRequirements =
   | GentPlatform
   | Exclude<
       LayerRequirements<ReturnType<typeof AgentLoop.Live>>,
-      | AgentLoopStateRegistry
+      | ActorAddressResolver
+      | ActorStateRegistry
       | AgentLoopSessionGovernance
       | Context.Service.Identifier<typeof AgentLoopActor.Context>
     >
@@ -396,7 +396,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
-  const agentLoopStateRegistry = yield* AgentLoopStateRegistry
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
@@ -489,7 +488,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       })
       const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
       yield* ref
-        .execute(
+        .send(
           AgentLoopActor.QueueFollowUp.make({
             workspaceId: yield* CurrentWorkspaceId,
             message,
@@ -507,6 +506,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               }),
           ),
         )
+      yield* waitForSubmittedMessageAccepted({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        messageId: message.id,
+        content: input.content,
+      })
     },
   )
 
@@ -710,11 +715,22 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            const payload = AgentLoopActor.RespondInteraction.make({
+              ...input,
+              workspaceId: yield* CurrentWorkspaceId,
+            })
+            yield* ref.send(payload)
             yield* ref.execute(
-              AgentLoopActor.RespondInteraction.make({
-                ...input,
+              AgentLoopActor.EnsureStarted.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
                 workspaceId: yield* CurrentWorkspaceId,
               }),
+            )
+            yield* redeliverPendingActorMessages(input)
+            yield* AgentLoopActor.RespondInteraction.waitFor(payload).pipe(
+              Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+              Effect.provideService(ActorAddressResolver, actorAddressResolver),
             )
           }),
         ),
@@ -774,10 +790,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
         yield* redeliverPendingActorMessages(input)
-        const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-        const loopState = yield* ref.execute(
-          AgentLoopActor.GetState.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
-        )
+        const loopState = yield* agentLoop.getState(input)
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
@@ -836,36 +849,15 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     watchState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
-        const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-        yield* ref.execute(
-          AgentLoopActor.EnsureStarted.make({
-            ...input,
-            workspaceId: yield* CurrentWorkspaceId,
-          }),
+        return (yield* agentLoop.watchState(input)).pipe(
+          Stream.mapError((error) => wrapEntitySessionRuntimeError("watchState", error)),
         )
-        return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
     terminateSession: (sessionId) =>
       Effect.gen(function* () {
         const workspaceId = yield* CurrentWorkspaceId
         yield* agentLoopSessionGovernance.markTerminated(workspaceId, sessionId)
-        const branches = yield* agentLoopStateRegistry.listForSession(workspaceId, sessionId)
-        yield* Effect.forEach(
-          branches,
-          (branchId) =>
-            Effect.gen(function* () {
-              const ref = yield* agentLoopActorRefFor(sessionId, branchId)
-              yield* ref.execute(
-                AgentLoopActor.TerminateBranch.make({
-                  workspaceId,
-                  sessionId,
-                  branchId,
-                }),
-              )
-            }),
-          { concurrency: "unbounded", discard: true },
-        )
         yield* agentLoop.terminateSession(sessionId)
       }).pipe(
         Effect.catchCause((cause) => Effect.fail(wrapError("terminateSession failed", cause))),
@@ -975,14 +967,9 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       // Provide it after merging those two consumers so the actor client is
       // shared and not re-exported from `LiveWithEntity`.
       Layer.provide(AgentLoopLiveActor),
-      // `AgentLoopStateRegistry` and `AgentLoopSessionGovernance` are
-      // runtime-internal shared services. They are provided at the entity
-      // boundary (NOT inside `AgentLoop.Live`) so the legacy `AgentLoop`
-      // service and the actor handler (C5.4.4.c) consume the SAME instances —
-      // otherwise actor-owned state and read-side state would split into two
-      // separate registries. `Layer.provide` keeps them out of public layer
-      // requirements.
-      Layer.provide(AgentLoopStateRegistry.Live),
+      // `AgentLoopSessionGovernance` is a runtime-internal shared service.
+      // Encore owns actor state registration; session governance remains a
+      // Gent policy boundary shared by the facade and actor handler.
       Layer.provide(AgentLoopSessionGovernance.Live),
       // `AgentLoopBehaviorDeps` (C5.4.4.c.1.b.1) is the layer-level service
       // snapshot the per-entity actor build will consume in c.1.b.2. Provided

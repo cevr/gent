@@ -3,7 +3,7 @@ import { Effect, Layer, FileSystem, Path } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
-import type { EncoreMessageStorageShape } from "effect-encore"
+import type { EncoreMessageStorage } from "effect-encore"
 import { EncoreMessageStorageLive } from "../runtime/agent/encore-storage.js"
 import { InteractionStorage } from "./interaction-storage.js"
 import { InteractionPendingReader } from "./interaction-pending-reader.js"
@@ -36,7 +36,7 @@ type FocusedStorage =
   | StorageTransaction
   | InteractionPendingReader
   | ClusterMessageStorage.MessageStorage
-  | EncoreMessageStorageShape
+  | EncoreMessageStorage
 
 const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,

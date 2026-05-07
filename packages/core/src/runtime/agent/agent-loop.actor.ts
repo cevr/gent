@@ -97,7 +97,6 @@ import {
 import { AgentLoopBehaviorDeps } from "./agent-loop.behavior-deps.js"
 import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
 import { invokeTool, recordToolResult } from "./turn-helpers.js"
 
 const WorkspaceFields = {
@@ -270,6 +269,7 @@ type HandlerRequest<Operation> = {
 export const AgentLoop = Actor.fromEntity("AgentLoop", {
   Submit: {
     payload: TurnSubmissionFields,
+    success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
     id: (p: TurnSubmissionInput) => ({
@@ -279,6 +279,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
   Run: {
     payload: TurnSubmissionFields,
+    success: Schema.Void,
     error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
@@ -287,6 +288,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
   QueueFollowUp: {
     payload: TurnSubmissionFields,
+    success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
     id: (p: TurnSubmissionInput) => ({
@@ -296,6 +298,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
   Steer: {
     payload: SteerFields,
+    success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
     id: (p: SteerInput) => ({
@@ -305,6 +308,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
   Interrupt: {
     payload: InterruptFields,
+    success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
     id: (p: InterruptInput) => ({
@@ -314,6 +318,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
   RespondInteraction: {
     payload: RespondInteractionFields,
+    success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
     id: (p: RespondInteractionInput) => ({
@@ -354,6 +359,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   // call must collapse to one effect.
   RecordToolResult: {
     payload: RecordToolResultFields,
+    success: Schema.Void,
     error: AgentLoopError,
     id: (p: RecordToolResultInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
@@ -366,6 +372,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   // commandId now generate one before sending.
   InvokeTool: {
     payload: InvokeToolFields,
+    success: Schema.Void,
     error: AgentLoopError,
     id: (p: InvokeToolInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
@@ -378,6 +385,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   // watcher attaches. Constant primaryKey collapses redundant calls.
   EnsureStarted: {
     payload: EnsureStartedFields,
+    success: Schema.Void,
     error: AgentLoopError,
     id: (p: EnsureStartedInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
@@ -388,6 +396,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   // single branch's loop resources from inside the entity's own scope.
   TerminateBranch: {
     payload: TerminateBranchFields,
+    success: Schema.Void,
     error: AgentLoopError,
     id: (p: TerminateBranchInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
@@ -476,7 +485,6 @@ const failIfTurnFailedAfterEpoch = (
  */
 const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const rawDeps = yield* AgentLoopBehaviorDeps
-  const stateRegistry = yield* AgentLoopStateRegistry
   const sessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
   const addr = yield* Actor.CurrentAddress
@@ -556,10 +564,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       yield* Scope.close(loop.scope, Exit.void)
     }).pipe(Effect.ignore)
 
-  const cleanupLoop = (loop: AgentLoopBehavior) =>
-    stateRegistry
-      .deregister(workspaceId, sessionId, branchId, loop.loopRef)
-      .pipe(Effect.andThen(closeBehavior(loop)), Effect.ignore)
+  const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
   const currentRuntimeState = (loop: AgentLoopBehavior) =>
     SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
@@ -772,12 +777,6 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       return
     }
 
-    yield* stateRegistry.register(workspaceId, sessionId, branchId, {
-      loopRef: handle.loopRef,
-      queueMutationSemaphore: handle.queueMutationSemaphore,
-      persistQueueState: handle.persistQueueState,
-      closed: handle.closed,
-    })
     startupExit = yield* Effect.exit(
       handle.start.pipe(
         Effect.andThen(handle.refreshRuntimeState),
@@ -804,6 +803,28 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     }
     if (Exit.isSuccess(startupExit)) return
     return yield* causeToAgentLoopError(startupExit.cause)
+  })
+
+  const currentRegisteredState = Effect.gen(function* () {
+    yield* rejectIfTerminated
+    yield* ensureStarted
+    return yield* handle.queueMutationSemaphore.withPermits(1)(currentRuntimeState(handle))
+  })
+
+  const registeredStateChanges = Stream.unwrap(
+    Effect.gen(function* () {
+      yield* rejectIfTerminated
+      yield* ensureStarted
+      return SubscriptionRef.changes(handle.loopRef).pipe(
+        Stream.map(projectRuntimeState),
+        Stream.interruptWhen(Deferred.await(handle.closed)),
+      )
+    }),
+  )
+
+  yield* Actor.registerState({
+    get: withWorkspace(currentRegisteredState),
+    watch: registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
   })
 
   const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
@@ -1021,6 +1042,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
                   if (state._tag !== "Idle") return
                   const message = yield* latestIncompleteUserTurn
                   if (message === undefined) return
+                  const baseline = (yield* SubscriptionRef.get(handle.loopRef)).stateEpoch
                   yield* handle
                     .startTurn({ message })
                     .pipe(
@@ -1028,6 +1050,10 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
                         cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
                       ),
                     )
+                  yield* Effect.raceFirst(
+                    waitForIdleAfterEpoch(handle, baseline),
+                    waitForTurnFailureAfterEpoch(handle, baseline),
+                  )
                   return
                 }
               }
