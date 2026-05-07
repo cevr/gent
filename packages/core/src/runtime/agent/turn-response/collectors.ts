@@ -25,7 +25,7 @@ import type { AssistantDraft } from "../agent-loop.state.js"
 import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
-} from "../../../providers/ai-transcript.js"
+} from "../../../domain/message-part-projection.js"
 import { ProviderError } from "../../../domain/provider-error.js"
 import { summarizeOutput, stringifyOutput } from "../../../domain/tool-output.js"
 

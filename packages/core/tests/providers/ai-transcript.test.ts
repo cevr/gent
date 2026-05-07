@@ -5,9 +5,8 @@ import {
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
   responsePartsFromMessages,
-  toPrompt,
-  toPromptMessages,
-} from "@gent/core/providers/ai-transcript"
+} from "@gent/core/domain/message-part-projection"
+import { toPrompt, toPromptMessages } from "@gent/core/providers/ai-transcript"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import * as Response from "effect/unstable/ai/Response"
