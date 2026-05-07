@@ -1208,6 +1208,22 @@ Definition of done:
 - Root `bun run test` includes extensions.
 - Empty or seed test proves runner ownership before migration.
 
+Status: complete.
+
+Implementation notes:
+
+- Added `packages/extensions/tests/starting-extensions.test.ts` as the package
+  seed lane.
+- Added the package `test` script and included `tests` in the package
+  `tsconfig.json`.
+- Added `@gent/extensions` to `workspace-test-runner.ts` so root `bun run test`
+  executes the package lane.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/extensions test`
+- `bun run test`
+
 #### C54-C75: test(extensions): move extension-owned tests out of core
 
 Move extension tests by family:

@@ -1,5 +1,6 @@
 const packages = [
   { name: "@gent/core", cwd: "packages/core" },
+  { name: "@gent/extensions", cwd: "packages/extensions" },
   { name: "@gent/tooling", cwd: "packages/tooling" },
   { name: "@gent/sdk", cwd: "packages/sdk" },
   { name: "@gent/tui", cwd: "apps/tui" },
