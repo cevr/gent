@@ -19,13 +19,14 @@ const toEventStoreError =
 const getOrCreateSessionPubSub = (
   sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
   sessionId: SessionId,
-): PubSub.PubSub<EventEnvelope> => {
-  const existing = sessions.get(sessionId)
-  if (existing !== undefined) return existing
-  const ps = Effect.runSync(PubSub.unbounded<EventEnvelope>())
-  sessions.set(sessionId, ps)
-  return ps
-}
+): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
+  Effect.gen(function* () {
+    const existing = sessions.get(sessionId)
+    if (existing !== undefined) return existing
+    const ps = yield* PubSub.unbounded<EventEnvelope>()
+    sessions.set(sessionId, ps)
+    return ps
+  })
 
 const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
   if (branchId === undefined) return true
@@ -55,10 +56,10 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
         broadcast: (envelope) => {
           const eventSessionId = getEventSessionId(envelope.event)
           if (eventSessionId !== undefined) {
-            return PubSub.publish(
-              getOrCreateSessionPubSub(sessions, eventSessionId),
-              envelope,
-            ).pipe(Effect.asVoid)
+            return Effect.gen(function* () {
+              const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
+              yield* PubSub.publish(ps, envelope)
+            })
           }
           return Effect.void
         },
@@ -81,7 +82,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                     message: `Session not found: ${sessionId}`,
                   })
                 }
-                const ps = getOrCreateSessionPubSub(sessions, sessionId)
+                const ps = yield* getOrCreateSessionPubSub(sessions, sessionId)
                 const subscription = yield* PubSub.subscribe(ps)
                 const initial = yield* eventStorage
                   .listEvents({ sessionId, branchId, afterId })
