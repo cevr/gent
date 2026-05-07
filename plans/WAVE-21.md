@@ -81,6 +81,77 @@ not targets to copy. Effect v4 already gives Gent better primitives:
 `SynchronizedRef`, `TxRef`, `TxQueue`, `TxHashMap`, Effect AI `Tool`, and
 `Toolkit`.
 
+## Progress And Re-Audit Addendum
+
+Commits landed in this wave so far:
+
+- `89737196 fix(runtime): serialize agent loop queue persistence`
+- `835ac34f fix(runtime): serialize user config persistence`
+- `fd01be17 fix(extensions): fail resource layer on startup failure`
+- `8b5fb090 refactor(extensions): keep host loading out of author api`
+- `5bb02ea9 refactor(extensions): require explicit wide tool context`
+- `b9334674 refactor(extensions): keep tool runner in core runtime`
+- `6b19a08a refactor(extensions): publish task state changes generically`
+
+Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
+found no P0, but Wave 21 is not closeable. The initial commits removed broad
+classes of privilege and races, but the deeper P1s remain:
+
+- AgentLoop queue mutation is serialized around persistence, but
+  `TxSubscriptionRef.modify` still exposes the in-memory transition before the
+  durable write can fail, and queue persistence failures still do not flow
+  through actor persistence-failure handling.
+- Resource start failure now fails the resource layer, but that is still the
+  wrong ownership boundary. Startup failures must be extension activation
+  failures, allowing unaffected extensions to remain active.
+- Public resource scopes are not truthful yet. The production path builds only
+  process resources, while ephemeral child runtimes can rebuild process-scoped
+  extension resources.
+- The extension author API is narrower, but it still exposes `runProcess` and
+  `GentPlatform`. Builtins are still able to use host-level APIs that third
+  party extensions should not receive by default.
+- Task-tools now publishes a generic `ExtensionStateChanged` pulse instead of
+  raw task lifecycle events through `@gent/core/extensions/api`, but the
+  `Task` schema and legacy `TaskCreated` / `TaskUpdated` / `TaskCompleted` /
+  `TaskFailed` / `TaskStopped` / `TaskDeleted` event variants still live in
+  core. That is a P1 ownership mismatch: task is an extension concern.
+- OAuth credential refresh cells are still plain `Ref` read-refresh-write
+  paths in OpenAI and Anthropic; concurrent stale calls can duplicate refresh
+  work and race rotated refresh tokens.
+- The child session tracker still mutates a `Ref<Map<...>>` from independent
+  parent/child subscription fibers and can lose interleaved state updates.
+- The scheduler still probes `globalThis.Bun.cron` from core runtime and fails
+  open when cron is unavailable.
+
+Fresh re-audit receipts to carry into the remaining batches:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:349`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:375`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:1035`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:1038`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/resource-layer.ts:52`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/activation.ts:373`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts:297`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-runner.ts:596`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/index.ts:43`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/session-manager.ts:85`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:256`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:258`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts:219`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/task.ts:1`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/index.ts:264`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/credential-service.ts:227`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/index.ts:248`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/credential-service.ts:210`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/services/child-session-tracker.ts:74`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/services/child-session-tracker.ts:201`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:152`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:250`
+- `/Users/cvr/Developer/personal/gent/node_modules/effect/src/SynchronizedRef.ts:137`
+- `/Users/cvr/Developer/personal/gent/node_modules/effect/src/SynchronizedRef.ts:205`
+- `/Users/cvr/Developer/personal/gent/node_modules/effect/src/TxSubscriptionRef.ts:204`
+- `/Users/cvr/Developer/personal/gent/node_modules/effect/src/TxSubscriptionRef.ts:570`
+
 ## P1 Findings
 
 ### P1.1 — AgentLoop Queue Durability Is Not Structurally Serialized
@@ -427,12 +498,20 @@ Validation:
 Goal: make queue mutation and durable persistence one actor-owned serialized
 transition.
 
+Status: partial. `89737196` added a queue persistence lane and concurrent
+follow-up regression, but fresh audit found the acceptance boundary is still
+not durable enough.
+
 Work:
 
-- Change AgentLoop actor handling so mutation commands are sequential.
+- Add a queue-persistence-failure regression proving failed durable writes do
+  not appear accepted to observers.
+- Change AgentLoop actor handling so mutation commands are sequential or make
+  the mutation result visible only after the durable commit succeeds.
 - Move long-running turn execution behind an owned worker queue/fiber map so
   slow runs do not require unbounded mailbox mutation.
-- Persist queue snapshots only from the serialized mutation owner.
+- Persist queue snapshots only from the serialized mutation owner and route
+  persistence failures through the actor failure state.
 - Remove stale comments claiming FIFO serialization where the code does not
   enforce it.
 
@@ -447,6 +526,9 @@ Validation:
 
 Goal: replace ad hoc read-modify-write config mutation with one Effect-owned
 serialized primitive.
+
+Status: done in `835ac34f`; keep this batch closed unless recursive audit finds
+new config-write races.
 
 Work:
 
@@ -466,10 +548,20 @@ Validation:
 Goal: remove the impossible state where a failed resource has active
 contributions.
 
+Status: partial. `fd01be17` made resource start failure fail the resource layer,
+but fresh audit found startup failure still belongs in extension activation
+state, not profile/runtime layer construction.
+
 Work:
 
+- Build/start resources per owning extension during activation or otherwise
+  preserve extension identity across startup.
 - Make lifecycle start failures part of activation/reconciliation output.
 - Mark dependent contributions inactive when required resource startup fails.
+- Prove one failed extension resource does not prevent unrelated extensions
+  from activating.
+- Make process/cwd/session/branch resource scopes truthful, or delete
+  unimplemented scope literals until their owners exist.
 - Expose resource health to doctor/diagnostic paths.
 - Update docs for resource scope semantics.
 
@@ -484,10 +576,18 @@ Validation:
 
 Goal: make builtins and external extensions use one minimal, non-privileged API.
 
+Status: partial. Commits `8b5fb090`, `5bb02ea9`, `b9334674`, and `6b19a08a`
+removed several host-loader, tool-runner, wide-context, raw-event, and task
+event privileges. `runProcess`, `GentPlatform`, and core-owned task domain
+types/events still remain.
+
 Work:
 
 - Redefine `packages/core/src/extensions/api.ts` as the small author API.
-- Remove exports of runtime/platform/private host services.
+- Remove exports of runtime/platform/private host services, including
+  `runProcess` and `GentPlatform`.
+- Move task-tools schemas/storage/events out of core or replace the legacy core
+  task event variants with extension-owned state/request semantics.
 - Migrate builtins to the narrowed API.
 - Add lint/static guards for forbidden extension imports.
 - Delete compatibility aliases and old docs examples.
@@ -559,9 +659,13 @@ Validation:
 Goal: host APIs live behind explicit services; product/runtime code stays
 portable and testable.
 
+Status: not started. Fresh platform audit promoted scheduler cron failure-open,
+SDK host identity, and shipped-extension ambient process reads to P1.
+
 Work:
 
-- Move cron runtime into a platform service.
+- Move cron runtime into a platform service and make missing cron a scheduled
+  job failure, not silent success.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -571,6 +675,30 @@ Validation:
 
 - Guard tests.
 - `bun run lint`
+- `bun run gate`
+
+### C21.9b — Serialize Extension Credential Refresh And Child Tracking
+
+Goal: apply Effect-owned serialized state primitives to remaining extension/TUI
+race surfaces found by the fresh Effect usage lane.
+
+Work:
+
+- Replace OpenAI and Anthropic credential refresh `Ref` cells with
+  `SynchronizedRef.modifyEffect` or a single-flight credential service so stale
+  concurrent calls cannot duplicate refresh or overwrite rotated tokens.
+- Convert `ChildSessionTracker` mutations to `Ref.modify` at minimum, or to a
+  `TxSubscriptionRef<Map<...>>` if subscribers need transactional change
+  streams.
+- Add concurrent stale-refresh tests for OpenAI and Anthropic credential
+  services.
+- Add parent/child interleaving regression for the TUI tracker.
+
+Validation:
+
+- Focused provider credential tests.
+- Focused child session tracker tests.
+- `bun run typecheck`
 - `bun run gate`
 
 ### C21.10 — Upstream Encore Actor DX
