@@ -93,6 +93,7 @@ Commits landed in this wave so far:
 - `b9334674 refactor(extensions): keep tool runner in core runtime`
 - `6b19a08a refactor(extensions): publish task state changes generically`
 - `05579bfa refactor(task-tools): own task domain in extension`
+- `4d8f91f2 refactor(extensions): keep process runner out of author api`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -108,9 +109,11 @@ classes of privilege and races, but the deeper P1s remain:
 - Public resource scopes are not truthful yet. The production path builds only
   process resources, while ephemeral child runtimes can rebuild process-scoped
   extension resources.
-- The extension author API is narrower, but it still exposes `runProcess` and
-  `GentPlatform`. Builtins are still able to use host-level APIs that third
-  party extensions should not receive by default.
+- The extension author API is narrower, but it still exposes `GentPlatform`.
+  Builtins are still able to use host-level platform APIs that third party
+  extensions should not receive by default. `runProcess` is now extension-local
+  to the shipped builtin package, with public API locks covering both
+  `runProcess` and `ProcessError`.
 - Task-tools now publishes a generic `ExtensionStateChanged` pulse and owns
   `Task`, `TaskId`, status/transition schemas, and task-storage integration
   tests. The previous task ownership mismatch is closed.
@@ -574,16 +577,16 @@ Validation:
 
 Goal: make builtins and external extensions use one minimal, non-privileged API.
 
-Status: partial. Commits `8b5fb090`, `5bb02ea9`, `b9334674`, `6b19a08a`, and
-`05579bfa` removed several host-loader, tool-runner, wide-context, raw-event,
-task event, and core-owned task-domain privileges. `runProcess` and
-`GentPlatform` still remain.
+Status: partial. Commits `8b5fb090`, `5bb02ea9`, `b9334674`, `6b19a08a`,
+`05579bfa`, and `4d8f91f2` removed several host-loader, tool-runner,
+wide-context, raw-event, task event, core-owned task-domain, and process-runner
+privileges. `GentPlatform` still remains.
 
 Work:
 
 - Redefine `packages/core/src/extensions/api.ts` as the small author API.
 - Remove exports of runtime/platform/private host services, including
-  `runProcess` and `GentPlatform`.
+  `GentPlatform`.
 - Keep task-tools schemas/storage/events extension-owned; do not re-export them
   from core author APIs.
 - Migrate builtins to the narrowed API.
