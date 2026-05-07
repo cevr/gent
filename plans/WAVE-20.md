@@ -813,6 +813,36 @@ Definition of done:
 - The STM prototype includes a `TxSubscriptionRef` committed-change proof.
 - `bun run --cwd packages/core typecheck`.
 
+Status: complete in `f5ed06c0 refactor(runtime): use transactional state ref`.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
+- `bun run gate`; test wall `4847ms / budget 5000ms`
+- Pre-commit `bun run test`; test wall `4684ms / budget 5000ms`
+
+#### C25: refactor(runtime): hide the transactional loop state cell
+
+Encapsulate the raw `TxSubscriptionRef` inside `AgentLoopBehavior` so actor
+handlers consume named state operations instead of importing or mutating the
+primitive directly.
+
+Definition of done:
+
+- `agent-loop.actor.ts` has no direct `TxSubscriptionRef` import.
+- Actor reads use `readState`, `runtimeState`, `queueState`, and
+  `queueSnapshot`.
+- Actor subscriptions use `stateChanges`.
+- Reservation writes use `setStartingState`.
+- `bun run --cwd packages/core typecheck`.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent/agent-loop.actor.test.ts packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/runtime/session-runtime.test.ts`
+- `bun run gate`; test wall `4855ms / budget 5000ms`
+
 ### Part D — Extension API Narrowing
 
 #### C31: docs/extensions): define public vs builtin-internal API inventory

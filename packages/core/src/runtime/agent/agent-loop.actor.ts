@@ -10,8 +10,8 @@
  * `Subscribe` and `Snapshot` are NOT actor ops:
  * - `Actor.fromEntity` is request/reply; `OperationHandle.watch` is
  *   polling status, not a live state stream.
- * - State subscription stays as the existing `TxSubscriptionRef` exposed
- *   via `SessionRuntime` (or `Actor.withProtocol` later if encore grows
+ * - State subscription stays behavior-owned and is exposed through
+ *   `Actor.registerState` (or `Actor.withProtocol` later if encore grows
  *   streaming-RPC support).
  *
  * **Entity ID** keys per `(sessionId, branchId)` so all ops for one
@@ -45,7 +45,6 @@ import {
   Scope,
   Semaphore,
   Stream,
-  TxSubscriptionRef,
   Layer,
   Option,
 } from "effect"
@@ -173,7 +172,7 @@ const InvokeToolFields = {
 /**
  * `EnsureStarted` materializes the entity and registers state without
  * performing any other work. Cold `watchState` callers send this before
- * subscribing to the registry's TxSubscriptionRef so the entity exists when
+ * subscribing to the registered actor state so the entity exists when
  * their watcher attaches.
  */
 const EnsureStartedFields = {
@@ -380,7 +379,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     }),
   },
   // No-op materialization. Cold `watchState` callers send this before
-  // subscribing to the registry's TxSubscriptionRef so the entity exists
+  // subscribing to the registered actor state so the entity exists
   // (build runs, recovery completes, state is registered) when their
   // watcher attaches. Constant primaryKey collapses redundant calls.
   EnsureStarted: {
@@ -422,9 +421,9 @@ const waitForIdleAfterEpoch = (
   baseline: number,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const current = yield* TxSubscriptionRef.get(behavior.loopRef)
+    const current = yield* behavior.readState
     if (current.stateEpoch > baseline && current.state._tag === "Idle") return
-    yield* TxSubscriptionRef.changesStream(behavior.loopRef).pipe(
+    yield* behavior.stateChanges.pipe(
       Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
       Stream.runHead,
     )
@@ -445,7 +444,7 @@ const waitForTurnFailureAfterEpoch = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* TxSubscriptionRef.get(behavior.loopRef)
+    const current = yield* behavior.readState
     if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
@@ -454,10 +453,7 @@ const waitForTurnFailureAfterEpoch = (
     ): state is AgentLoopState & {
       readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
     } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
-    const next = yield* TxSubscriptionRef.changesStream(behavior.loopRef).pipe(
-      Stream.filter(hasNewTurnFailure),
-      Stream.runHead,
-    )
+    const next = yield* behavior.stateChanges.pipe(Stream.filter(hasNewTurnFailure), Stream.runHead)
     if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
     return yield* new AgentLoopError({
       message: "Agent loop turn failure stream ended",
@@ -469,7 +465,7 @@ const failIfTurnFailedAfterEpoch = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* TxSubscriptionRef.get(behavior.loopRef)
+    const current = yield* behavior.readState
     if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
@@ -565,8 +561,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
   const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
-  const currentRuntimeState = (loop: AgentLoopBehavior) =>
-    TxSubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
+  const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
   const hasPriorMessageHistory = Effect.gen(function* () {
     const messages = yield* deps.messageStorage
@@ -603,7 +598,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const startNextQueuedTurnIfIdle = Effect.gen(function* () {
     const start = yield* handle.queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const current = yield* TxSubscriptionRef.get(handle.loopRef)
+        const current = yield* handle.readState
         if (current.state._tag !== "Idle") return
         const queuedCreatedAt = yield* DateTime.nowAsDate
         const { queue, nextItem } = takeNextQueuedTurn(current.queue, queuedCreatedAt)
@@ -670,9 +665,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     const item = { message }
     const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const currentQueue = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-          Effect.map((s) => s.queue),
-        )
+        const currentQueue = yield* handle.queueState
         if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
           return yield* new AgentLoopError({
             message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
@@ -683,9 +676,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           return
         }
         const projectedState = yield* currentRuntimeState(handle)
-        const startingState = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-          Effect.map((s) => s.startingState),
-        )
+        const startingState = (yield* handle.readState).startingState
         if (startingState !== undefined) {
           yield* handle.persistQueueSnapshot(
             startingState,
@@ -697,19 +688,14 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
           return
         }
-        const loopState = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-          Effect.map((s) => s.state),
-        )
+        const loopState = yield* handle.snapshot
         if (loopState._tag !== "Idle") {
           yield* handle.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
           return
         }
         const startedAtMs = yield* Clock.currentTimeMillis
         const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-        yield* TxSubscriptionRef.update(handle.loopRef, (s) => ({
-          ...s,
-          startingState: reservedRunningState,
-        }))
+        yield* handle.setStartingState(reservedRunningState)
         return reservedRunningState
       }),
     )
@@ -814,7 +800,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* rejectIfTerminated
       yield* ensureStarted
-      return TxSubscriptionRef.changesStream(handle.loopRef).pipe(
+      return handle.stateChanges.pipe(
         Stream.map(projectRuntimeState),
         Stream.interruptWhen(Deferred.await(handle.closed)),
       )
@@ -835,46 +821,30 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     const item = buildQueuedTurnItem(operation)
     const reservedStart = yield* handle.queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const startingState = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-          Effect.map((s) => s.startingState),
-        )
+        const startingState = (yield* handle.readState).startingState
         if (startingState !== undefined) {
           yield* handle.persistQueueSnapshot(
             startingState,
-            appendFollowUpQueueState(
-              yield* TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-              item,
-            ),
+            appendFollowUpQueueState(yield* handle.queueState, item),
           )
           return
         }
         const projectedState = yield* currentRuntimeState(handle)
         if (projectedState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(
-            yield* TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-            item,
-          )
+          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
           yield* handle.persistQueueCurrentState(nextQueue)
           return
         }
-        const loopState = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-          Effect.map((s) => s.state),
-        )
+        const loopState = yield* handle.snapshot
         if (loopState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(
-            yield* TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-            item,
-          )
+          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
           yield* handle.persistQueueCurrentState(nextQueue)
           return
         }
 
         const startedAtMs = yield* Clock.currentTimeMillis
         const reservedRunningState = buildRunningState(loopState, item, { startedAtMs })
-        yield* TxSubscriptionRef.update(handle.loopRef, (s) => ({
-          ...s,
-          startingState: reservedRunningState,
-        }))
+        yield* handle.setStartingState(reservedRunningState)
         return reservedRunningState
       }),
     )
@@ -900,14 +870,11 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       Effect.gen(function* () {
         const initialState = yield* handle.snapshot
         if (initialState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(
-            yield* TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-            item,
-          )
+          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
           yield* handle.persistQueueState(nextQueue)
           return undefined
         }
-        const current = yield* TxSubscriptionRef.get(handle.loopRef)
+        const current = yield* handle.readState
         return {
           stateEpochBaseline: current.stateEpoch,
           turnFailureBaseline: current.turnFailure?.epoch ?? 0,
@@ -989,10 +956,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         }
         const shouldInterrupt = yield* handle.queueMutationSemaphore.withPermits(1)(
           Effect.gen(function* () {
-            const nextQueue = appendSteeringItem(
-              yield* TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map((s) => s.queue)),
-              item,
-            )
+            const nextQueue = appendSteeringItem(yield* handle.queueState, item)
             yield* handle.persistQueueState(nextQueue)
             const loopState = yield* handle.snapshot
             return projectedState._tag === "Running" || loopState._tag === "Running"
@@ -1041,7 +1005,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
                   if (state._tag !== "Idle") return
                   const message = yield* latestIncompleteUserTurn
                   if (message === undefined) return
-                  const baseline = (yield* TxSubscriptionRef.get(handle.loopRef)).stateEpoch
+                  const baseline = (yield* handle.readState).stateEpoch
                   yield* handle
                     .startTurn({ message })
                     .pipe(
@@ -1075,9 +1039,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           Effect.andThen(
             handle.queueMutationSemaphore.withPermits(1)(
               Effect.gen(function* () {
-                const queue = yield* TxSubscriptionRef.get(handle.loopRef).pipe(
-                  Effect.map((s) => s.queue),
-                )
+                const queue = yield* handle.queueState
                 const snapshot = queueSnapshotFromQueueState(queue)
                 yield* handle.persistQueueState(emptyLoopQueueState())
                 return snapshot
@@ -1091,13 +1053,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(rejectIfTerminated),
           Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              TxSubscriptionRef.get(handle.loopRef).pipe(
-                Effect.map((s) => queueSnapshotFromQueueState(s.queue)),
-              ),
-            ),
-          ),
+          Effect.andThen(handle.queueMutationSemaphore.withPermits(1)(handle.queueSnapshot)),
         ),
       ),
     GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
@@ -1105,11 +1061,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(rejectIfTerminated),
           Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              TxSubscriptionRef.get(handle.loopRef).pipe(Effect.map(projectRuntimeState)),
-            ),
-          ),
+          Effect.andThen(handle.queueMutationSemaphore.withPermits(1)(handle.runtimeState)),
         ),
       ),
     RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>

@@ -19,6 +19,7 @@ import {
   Scope,
   Semaphore,
   TxSubscriptionRef,
+  type Stream,
 } from "effect"
 import {
   AgentName,
@@ -63,12 +64,16 @@ import {
   toWaitingForInteractionState,
   updateCurrentAgentOnState,
   buildInitialAgentLoopState,
+  projectRuntimeState,
+  queueSnapshotFromQueueState,
   type AgentLoopState,
   type LoopQueueState,
   type LoopState,
   type QueuedTurnItem,
   type RunningState,
+  type SessionRuntimeState,
 } from "./agent-loop.state.js"
+import type { QueueSnapshot } from "../../domain/queue.js"
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
@@ -124,10 +129,15 @@ export const resolveStoredAgent = (params: {
 
 export type AgentLoopBehavior = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
-  loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
   sideMutationSemaphore: Semaphore.Semaphore
   queueMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
+  readState: Effect.Effect<AgentLoopState>
+  stateChanges: Stream.Stream<AgentLoopState>
+  runtimeState: Effect.Effect<SessionRuntimeState>
+  queueState: Effect.Effect<LoopQueueState>
+  queueSnapshot: Effect.Effect<QueueSnapshot>
+  setStartingState: (state: RunningState) => Effect.Effect<void>
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
@@ -368,6 +378,16 @@ export const makeAgentLoopBehavior = (
       }))
 
     const currentLoopState = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.state))
+    const readState = TxSubscriptionRef.get(loopRef)
+    const stateChanges = TxSubscriptionRef.changesStream(loopRef)
+    const runtimeState = readState.pipe(Effect.map(projectRuntimeState))
+    const queueState = readState.pipe(Effect.map((s) => s.queue))
+    const queueSnapshot = queueState.pipe(Effect.map(queueSnapshotFromQueueState))
+    const setStartingState = (state: RunningState) =>
+      TxSubscriptionRef.update(loopRef, (s) => ({
+        ...s,
+        startingState: state,
+      }))
 
     const refreshRuntimeState = Effect.gen(function* () {
       if (!started) return
@@ -1086,10 +1106,15 @@ export const makeAgentLoopBehavior = (
 
     return {
       activeStreamRef,
-      loopRef,
       sideMutationSemaphore,
       queueMutationSemaphore,
       persistenceFailure: Deferred.await(persistenceFailure),
+      readState,
+      stateChanges,
+      runtimeState,
+      queueState,
+      queueSnapshot,
+      setStartingState,
       resolveTurnProfile,
       persistState: persistRuntimeState,
       refreshRuntimeState,
