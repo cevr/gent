@@ -4,7 +4,8 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Clock, Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Model } from "effect/unstable/schema"
 import {
   EventEnvelope,
   EventId,
@@ -13,11 +14,21 @@ import {
   type AgentEvent,
   type AgentEventTag,
 } from "../domain/event.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlModel } from "effect/unstable/sql"
 import { decodeEvent, encodeEvent, type EventRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+
+class EventTable extends Model.Class<EventTable>("EventTable")({
+  id: Model.Generated(Schema.Number),
+  session_id: SessionId,
+  branch_id: Schema.NullOr(BranchId),
+  event_tag: Schema.String,
+  event_json: Schema.String,
+  created_at: Schema.Number,
+  trace_id: Schema.NullOr(Schema.String),
+}) {}
 
 export interface EventStorageService {
   readonly appendEvent: (
@@ -47,6 +58,11 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
     EventStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+      const eventRepository = yield* SqlModel.makeRepository(EventTable, {
+        tableName: "events",
+        spanPrefix: "EventStorage",
+        idColumn: "id",
+      })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
@@ -70,15 +86,16 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             const createdAt = yield* Clock.currentTimeMillis
             const traceId = options?.traceId
             const eventJson = yield* encodeEvent(event)
-            const id = yield* sql.withTransaction(
-              Effect.gen(function* () {
-                yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at, trace_id) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt}, ${traceId ?? null})`
-                const rows = yield* sql<{ id: number }>`SELECT last_insert_rowid() as id`
-                return rows[0]?.id ?? 0
-              }),
-            )
+            const row = yield* eventRepository.insert({
+              session_id: sessionId,
+              branch_id: branchId ?? null,
+              event_tag: event._tag,
+              event_json: eventJson,
+              created_at: createdAt,
+              trace_id: traceId ?? null,
+            })
             return EventEnvelope.make({
-              id: EventId.make(id),
+              id: EventId.make(row.id),
               event,
               createdAt,
               ...(traceId !== undefined ? { traceId } : {}),
