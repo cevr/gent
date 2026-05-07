@@ -23,7 +23,9 @@ describe("runProcess", () => {
         Effect.gen(function* () {
           // sh -c "exit 7" gives a deterministic nonzero without relying on
           // a specific binary's error semantics.
-          const result = yield* provideBun(runProcess("/bin/sh", ["-c", "exit 7"]))
+          const result = yield* provideBun(
+            runProcess("/bin/sh", ["-c", "exit 7"], { stdout: "ignore", stderr: "ignore" }),
+          )
           expect(result.exitCode).toBe(7)
         }),
       ),
