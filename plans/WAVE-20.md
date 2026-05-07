@@ -1397,6 +1397,23 @@ Definition of done:
 - Direct service tests remain for local behavior.
 - At least one public-boundary test exists for each extension family.
 
+Status: complete.
+
+Completed sub-commits:
+
+- C93 added `AutoExtension` RPC acceptance coverage for start/read/cancel
+  requests.
+- C94 added `ExecutorExtension` RPC acceptance coverage with a fake public
+  process-resource layer, avoiding sidecar startup while still exercising the
+  request boundary.
+- C95-C96 added a real model-turn acceptance test for `FsToolsExtension`,
+  proving model-emitted tool calls execute through the extension layer.
+
+Verification on 2026-05-07:
+
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/auto/auto-rpc.test.ts packages/extensions/tests/executor/executor-rpc.test.ts packages/extensions/tests/fs-tools/fs-tools-model-turn.test.ts`
+- `bun run --cwd packages/extensions test`
+
 ### Part G — Recursive Audit and Closure
 
 #### C97: audit: rerun five-lane residue search
