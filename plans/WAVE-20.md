@@ -111,6 +111,10 @@ Receipts:
 Gent owns cluster table knowledge (`cluster_replies`, `cluster_messages`) to
 support Encore `rerun`.
 
+Status: resolved by upstream `effect-encore` commit
+`63b4bea feat: add sql message storage layer`, released as
+`effect-encore@0.11.0` through version PR `#20`, and adopted in Gent by C8.
+
 Receipts:
 
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/encore-storage.ts:1`
@@ -465,6 +469,15 @@ Definition of done:
   to a one-line import/wire.
 - `bun run gate` in both repos.
 
+Status: complete in upstream commit
+`63b4bea feat: add sql message storage layer`, released through version PR `#20`
+as `effect-encore@0.11.0`.
+
+The shipped API is `fromSqlClient()` / `fromSqlClientWithShardingConfig()`.
+It provides both upstream `MessageStorage.MessageStorage` and Encore's
+`EncoreMessageStorage`, including surgical `deleteEnvelope` support for the
+default `cluster_messages` / `cluster_replies` tables.
+
 ### Part B — Gent Actor and Session Control Collapse
 
 #### C5: refactor(runtime): remove `CurrentAddress` erasure from AgentLoop actor
@@ -508,6 +521,9 @@ Implementation notes:
 - Test runner sharding changed from `xargs -n 10 -P 6` to `xargs -n 6 -P 4`
   after the root budget probe showed CPU contention; `bun run test` now reports
   4.677s against the 5s budget.
+- TUI test sharding changed from `xargs -n 10 -P 5` to `xargs -n 10 -P 2`
+  after the pre-commit hook reproduced budget flake under package-level CPU
+  contention; root `bun run test` reports 4.841s after the change.
 
 Verification on 2026-05-07:
 
@@ -538,6 +554,23 @@ Definition of done:
 - SQLite storage wiring uses upstream Encore layer.
 - Focused storage + rerun tests.
 - `bun run gate`.
+
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- Deleted `packages/core/src/runtime/agent/encore-storage.ts`.
+- Removed the public package export for the deleted local adapter.
+- Deleted the duplicate local SQL storage test because the behavior now lives in
+  `effect-encore/test/sql-storage.test.ts`.
+- `SqliteStorage` now wires `effect-encore`'s `fromSqlClient()` directly.
+
+Verification on 2026-05-07:
+
+- `bun run typecheck`
+- `bun run lint`
+- `bun run test`
+- `bun run gate`
 
 ### Part C — Effect AI Owns Tool Contracts
 

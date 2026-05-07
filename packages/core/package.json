@@ -102,8 +102,6 @@
     "./runtime/agent/agent-loop": null,
     "./runtime/agent/agent-loop.js": null,
     "./runtime/agent/agent-loop.ts": null,
-    "./runtime/agent/encore-storage": "./src/runtime/agent/encore-storage.ts",
-    "./runtime/agent/encore-storage.js": "./src/runtime/agent/encore-storage.ts",
     "./runtime/agent/agent-loop.actor": "./src/runtime/agent/agent-loop.actor.ts",
     "./runtime/agent/agent-loop.actor.js": "./src/runtime/agent/agent-loop.actor.ts",
     "./runtime/prompt-presenter-live": "./src/runtime/prompt-presenter-live.ts",
