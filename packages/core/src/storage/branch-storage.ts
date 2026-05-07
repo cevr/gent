@@ -4,13 +4,24 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
+import { Model } from "effect/unstable/schema"
 import type { Branch } from "../domain/message.js"
-import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlModel } from "effect/unstable/sql"
 import { branchFromRow, type BranchRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+
+class BranchTable extends Model.Class<BranchTable>("BranchTable")({
+  id: Model.GeneratedByApp(BranchId),
+  session_id: SessionId,
+  parent_branch_id: Schema.NullOr(BranchId),
+  parent_message_id: Schema.NullOr(MessageId),
+  name: Schema.NullOr(Schema.String),
+  summary: Schema.NullOr(Schema.String),
+  created_at: Schema.Number,
+}) {}
 
 export interface BranchStorageService {
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
@@ -36,6 +47,11 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
     BranchStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+      const branchRepository = yield* SqlModel.makeRepository(BranchTable, {
+        tableName: "branches",
+        spanPrefix: "BranchStorage",
+        idColumn: "id",
+      })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
@@ -66,7 +82,15 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
                 })
               }
             }
-            yield* sql`INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, summary, created_at) VALUES (${branch.id}, ${branch.sessionId}, ${branch.parentBranchId ?? null}, ${branch.parentMessageId ?? null}, ${branch.name ?? null}, ${branch.summary ?? null}, ${branch.createdAt.getTime()})`
+            yield* branchRepository.insertVoid({
+              id: branch.id,
+              session_id: branch.sessionId,
+              parent_branch_id: branch.parentBranchId ?? null,
+              parent_message_id: branch.parentMessageId ?? null,
+              name: branch.name ?? null,
+              summary: branch.summary ?? null,
+              created_at: branch.createdAt.getTime(),
+            })
             return branch
           },
           Effect.mapError(mapError("Failed to create branch")),
