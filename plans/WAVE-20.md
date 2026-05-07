@@ -1370,6 +1370,22 @@ Definition of done:
   correct.
 - `bun run --cwd apps/tui test`.
 
+Status: complete.
+
+Completed sub-commits:
+
+- C86-C90 moved the command palette render spec into
+  `apps/tui/tests/components/command-palette.test.tsx`.
+- C91 split `interaction-renderers.test.tsx` into source-owned renderer specs:
+  `ask-user`, `prompt`, and `handoff`.
+- C92 updated the TUI test script to discover both `.test.ts` and `.test.tsx`
+  so component render specs remain in the package test lane.
+
+Verification on 2026-05-07:
+
+- `bun test apps/tui/tests/components/command-palette.test.tsx apps/tui/tests/components/interaction-renderers/ask-user.test.tsx apps/tui/tests/components/interaction-renderers/prompt.test.tsx apps/tui/tests/components/interaction-renderers/handoff.test.tsx`
+- `bun run --cwd apps/tui test`
+
 #### C93-C96: test(extensions): add missing RPC/model-turn acceptance coverage
 
 For request-capability extensions, add one RPC acceptance test. For tool-only

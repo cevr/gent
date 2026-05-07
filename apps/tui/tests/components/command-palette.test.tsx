@@ -4,13 +4,14 @@ import { createEffect, onMount } from "solid-js"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { dateFromMillis } from "@gent/core/domain/message"
-import { CommandPalette } from "../src/components/command-palette"
-import { useCommand } from "../src/command"
-import { Route, useRouter, type RouterContextValue } from "../src/router"
-import { useClient } from "../src/client"
-import type { ClientContextValue } from "../src/client/context"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
-import { waitForRenderedFrame } from "./helpers"
+import { CommandPalette } from "../../src/components/command-palette"
+import { useCommand } from "../../src/command"
+import { Route, useRouter, type RouterContextValue } from "../../src/router"
+import { useClient } from "../../src/client"
+import type { ClientContextValue } from "../../src/client/context"
+import { createMockClient, renderFrame, renderWithProviders } from "../render-harness"
+import { waitForRenderedFrame } from "../helpers"
+
 function OpenPaletteOnMount() {
   const command = useCommand()
   createEffect(() => {
@@ -18,6 +19,7 @@ function OpenPaletteOnMount() {
   })
   return <CommandPalette />
 }
+
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
@@ -25,6 +27,7 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   })
   return <box />
 }
+
 function RouterProbe(props: { readonly onReady: (router: RouterContextValue) => void }) {
   const router = useRouter()
   onMount(() => {
@@ -32,6 +35,7 @@ function RouterProbe(props: { readonly onReady: (router: RouterContextValue) => 
   })
   return <box />
 }
+
 describe("CommandPalette renderer", () => {
   it.live("opens the theme submenu through keyboard navigation and activation", () =>
     Effect.gen(function* () {
@@ -52,6 +56,7 @@ describe("CommandPalette renderer", () => {
       expect(frame).toContain("Light")
     }),
   )
+
   it.live("switches sessions through the sessions palette", () =>
     Effect.gen(function* () {
       let ctx: ClientContextValue | undefined
@@ -142,6 +147,7 @@ describe("CommandPalette renderer", () => {
       })
     }),
   )
+
   it.live("creates palette sessions with workspace cwd", () =>
     Effect.gen(function* () {
       let router: RouterContextValue | undefined
