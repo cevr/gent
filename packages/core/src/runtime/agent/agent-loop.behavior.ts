@@ -16,9 +16,9 @@ import {
   Effect,
   Ref,
   Schema,
+  Semaphore,
   Scope,
   TxSubscriptionRef,
-  type Semaphore,
   type Stream,
 } from "effect"
 import {
@@ -346,6 +346,7 @@ export const makeAgentLoopBehavior = (
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
+    const queuePersistenceSemaphore = yield* Semaphore.make(1)
     const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
     const closed = yield* Deferred.make<void>()
     let started = false
@@ -371,47 +372,50 @@ export const makeAgentLoopBehavior = (
         readonly persist: boolean
       },
     ): Effect.Effect<A, AgentLoopError> =>
-      Effect.gen(function* () {
-        const decision = yield* TxSubscriptionRef.modify(loopRef, (state) => {
-          const next = decide(state)
-          const committed = next.persist
-            ? {
-                ...next.next,
-                stateEpoch: next.next.stateEpoch + 1,
-                startingState: undefined,
-              }
-            : next.next
-          return [{ ...next, next: committed }, committed]
-        })
-        if (decision.persist) {
-          yield* persistCommittedQueue(decision.next.queue, operation)
-        }
-        return decision.value
-      })
-
-    const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
-      queueStorage.putQueueState(sessionId, branchId, queue).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentLoopError({
-              message: `Failed to persist loop queue for ${sessionId}/${branchId}`,
-              cause,
-            }),
-        ),
-        Effect.andThen(
-          TxSubscriptionRef.update(loopRef, (s) => ({
-            ...s,
-            state,
-            queue,
-            stateEpoch: s.stateEpoch + 1,
-            startingState: undefined,
-          })),
-        ),
+      queuePersistenceSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const decision = yield* TxSubscriptionRef.modify(loopRef, (state) => {
+            const next = decide(state)
+            const committed = next.persist
+              ? {
+                  ...next.next,
+                  stateEpoch: next.next.stateEpoch + 1,
+                  startingState: undefined,
+                }
+              : next.next
+            return [{ ...next, next: committed }, committed]
+          })
+          if (decision.persist) {
+            yield* persistCommittedQueue(decision.next.queue, operation)
+          }
+          return decision.value
+        }),
       )
 
     const persistRuntimeState = (state: LoopState) =>
-      TxSubscriptionRef.get(loopRef).pipe(
-        Effect.flatMap((s) => persistRuntimeSnapshot(state, s.queue)),
+      queuePersistenceSemaphore.withPermits(1)(
+        TxSubscriptionRef.get(loopRef).pipe(
+          Effect.flatMap((s) =>
+            queueStorage.putQueueState(sessionId, branchId, s.queue).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AgentLoopError({
+                    message: `Failed to persist loop queue for ${sessionId}/${branchId}`,
+                    cause,
+                  }),
+              ),
+              Effect.andThen(
+                TxSubscriptionRef.update(loopRef, (current) => ({
+                  ...current,
+                  state,
+                  queue: current.queue,
+                  stateEpoch: current.stateEpoch + 1,
+                  startingState: undefined,
+                })),
+              ),
+            ),
+          ),
+        ),
       )
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>) =>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Layer, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -29,6 +29,14 @@ import {
   submitAgentLoop,
   waitForPhase,
 } from "./agent-loop/helpers"
+import {
+  LoopQueueState,
+  type LoopQueueState as LoopQueueStateType,
+} from "../../src/domain/agent-loop-queue-state"
+import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
+
+const emptyPersistedQueue = (): LoopQueueStateType =>
+  LoopQueueState.make({ steering: [], followUp: [] })
 
 describe("queue drain regression", () => {
   it.live(
@@ -140,6 +148,114 @@ describe("queue drain regression", () => {
             const order = yield* Ref.get(streamOrder)
             expect(order).toEqual([0, 1, 2, 3])
           }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "concurrent follow-up persistence keeps the full queue after actor restart",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-persist-race")
+        const branchId = BranchId.make("branch-loop-persist-race")
+        const storedQueueRef = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+        const secondFollowUpStored = yield* Deferred.make<void>()
+        const activeTurnReleased = yield* Deferred.make<void>()
+        const queuedProvider = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            yield* Deferred.await(activeTurnReleased)
+            return Stream.fromIterable([
+              textDeltaPart("held"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const queueStorageLayer = Layer.succeed(
+          AgentLoopQueueStorage,
+          AgentLoopQueueStorage.of({
+            getQueueState: () => Ref.get(storedQueueRef),
+            putQueueState: (_sessionId, _branchId, queue) =>
+              Effect.gen(function* () {
+                const queuedFollowUps = queue.followUp.length
+                if (queuedFollowUps === 1) {
+                  yield* Deferred.await(secondFollowUpStored).pipe(
+                    Effect.timeoutOption("10 millis"),
+                  )
+                }
+                yield* Ref.set(storedQueueRef, queue)
+                if (queuedFollowUps === 2) {
+                  yield* Deferred.succeed(secondFollowUpStored, undefined).pipe(
+                    Effect.catchEager(() => Effect.void),
+                  )
+                }
+              }),
+            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
+          }),
+        )
+        const makeLayer = () => {
+          const deps = Layer.mergeAll(
+            SqliteStorage.TestWithSql(),
+            queueStorageLayer,
+            queuedProvider,
+            ModelResolver.fromLanguageModel(queuedProvider),
+            makeExtRegistry(),
+            RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+            ConfigService.Test(),
+            EventStore.Memory,
+            ToolRunner.Test(),
+            BunServices.layer,
+            ResourceManagerLive,
+            ModelRegistry.Test(),
+            GentPlatform.Test(),
+          )
+          const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+          return AgentLoopTestActor.pipe(
+            Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+            Layer.provideMerge(
+              Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+            ),
+          )
+        }
+        const makeMessage = (id: string, text: string) =>
+          Message.Regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-race-0", "first"), {
+              interactive: true,
+            })
+            const firstQueued = yield* Effect.forkChild(
+              submitAgentLoop(agentLoop, makeMessage("msg-persist-race-1", "second"), {
+                interactive: true,
+              }),
+            )
+            const secondQueued = yield* Effect.forkChild(
+              submitAgentLoop(agentLoop, makeMessage("msg-persist-race-2", "third"), {
+                interactive: true,
+              }),
+            )
+            yield* Fiber.join(firstQueued)
+            yield* Fiber.join(secondQueued)
+            expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toHaveLength(2)
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const recovered = yield* agentLoop.getQueue({ sessionId, branchId })
+            expect(recovered.followUp.map((item) => item.content)).toEqual(["second", "third"])
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
+        )
+        yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
+          Effect.catchEager(() => Effect.void),
         )
       }),
     15000,
