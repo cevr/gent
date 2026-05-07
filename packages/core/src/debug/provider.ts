@@ -1,12 +1,10 @@
 /**
- * Test step builders for `Provider.Sequence`.
+ * Test step builders for scripted language-model sequences.
  *
- * The provider implementations (`Provider.Sequence`, `Provider.Signal`,
- * `Provider.Debug`, `Provider.Failing`) and the low-level stream-part
- * helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`,
- * `finishPart`) live on / next to the `Provider` class itself in
- * `providers/provider.ts`. This module only defines the higher-level
- * scripting helpers that compose those parts into a single `SequenceStep`.
+ * `test-utils/language-model` owns the low-level Effect AI stream-part
+ * helpers and language-model layers. This module only defines the
+ * higher-level scripting helpers that compose those parts into a single
+ * `SequenceStep`.
  *
  * @module
  */
@@ -17,7 +15,7 @@ import {
   type SequenceStep,
   textDeltaPart,
   toolCallPart,
-} from "../providers/provider.js"
+} from "../test-utils/language-model.js"
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)

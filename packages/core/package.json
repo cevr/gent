@@ -151,6 +151,8 @@
     "./test-utils/fixtures.js": "./src/test-utils/fixtures.ts",
     "./test-utils/in-process-layer": "./src/test-utils/in-process-layer.ts",
     "./test-utils/in-process-layer.js": "./src/test-utils/in-process-layer.ts",
+    "./test-utils/language-model": "./src/test-utils/language-model.ts",
+    "./test-utils/language-model.js": "./src/test-utils/language-model.ts",
     "./test-utils/reconciled-extensions": "./src/test-utils/reconciled-extensions.ts",
     "./test-utils/reconciled-extensions.js": "./src/test-utils/reconciled-extensions.ts",
     "./test-utils/rpc-harness": "./src/test-utils/rpc-harness.ts",

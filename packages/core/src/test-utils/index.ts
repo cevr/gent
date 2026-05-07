@@ -12,8 +12,8 @@ import {
   finishPart,
   textDeltaPart,
   toolCallPart,
-  type ProviderStreamPart,
-} from "../providers/provider.js"
+  type LanguageModelStreamPart,
+} from "./language-model.js"
 import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
 
@@ -176,7 +176,7 @@ export const testSetupCtx = (
 
 // Mock Helpers
 
-export const mockTextResponse = (text: string): ProviderStreamPart[] => [
+export const mockTextResponse = (text: string): LanguageModelStreamPart[] => [
   textDeltaPart(text),
   finishPart({ finishReason: "stop" }),
 ]
@@ -185,7 +185,7 @@ export const mockToolCallResponse = (
   toolCallId: ToolCallId,
   toolName: string,
   input: unknown,
-): ProviderStreamPart[] => [
+): LanguageModelStreamPart[] => [
   toolCallPart(toolName, input, { toolCallId }),
   finishPart({ finishReason: "tool-calls" }),
 ]

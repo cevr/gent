@@ -1,25 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import { Provider, type ModelRequest } from "@gent/core/providers/provider"
+import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
 import { LanguageModel } from "effect/unstable/ai"
 
-const dummyRequest: ModelRequest = {
-  model: "test/model",
-}
+const callProvider = LanguageModel.streamText({ prompt: [] }).pipe(Stream.runCollect)
 
-const callProvider = Effect.gen(function* () {
-  const provider = yield* Provider
-  const model = yield* provider.resolve(dummyRequest)
-  return yield* LanguageModel.streamText({ prompt: [] }).pipe(
-    Stream.provide(model),
-    Stream.runCollect,
-  )
-})
-
-describe("Provider.Signal", () => {
+describe("LanguageModelLayers.signal", () => {
   it.scoped("waitForStreamStart resolves once LanguageModel stream is invoked", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* Provider.Signal("hi.")
+      const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
       // Drain in the background — gate stays closed but the model stream is called.
       yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* controls.waitForStreamStart
@@ -28,7 +17,7 @@ describe("Provider.Signal", () => {
 
   it.scoped("emitAll releases every gated chunk in order", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* Provider.Signal("hi.")
+      const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* controls.waitForStreamStart
       yield* controls.emitAll()
