@@ -206,7 +206,7 @@ describe("server lifecycle", () => {
           expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
           expect(states).toContain("connected")
 
-          serverRef.current.proc.kill("SIGTERM")
+          serverRef.current.proc.kill("SIGKILL")
           yield* fromPromise(() => serverRef.current.proc.exited)
 
           const sawReconnecting = yield* waitUntil(() => states.includes("reconnecting"), 5_000)
