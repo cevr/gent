@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./src/test-log-preload.ts --reporter=dots tests/blanket-eslint-disable.test.ts tests/platform-duplication-guards.test.ts tests/fixtures.test.ts"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./src/test-log-preload.ts --reporter=dots tests/blanket-eslint-disable.test.ts tests/platform-duplication-guards.test.ts tests/suppression-inventory.test.ts tests/fixtures.test.ts"
   }
 }

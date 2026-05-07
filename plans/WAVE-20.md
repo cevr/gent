@@ -1177,6 +1177,25 @@ Definition of done:
 - Guard has fixture tests.
 - `bun run lint` runs it.
 
+Status: complete.
+
+Implementation notes:
+
+- Added `packages/tooling/src/suppression-inventory.ts` and
+  `check-suppression-inventory.ts`.
+- Guard fails `@ts-ignore`, direct `as any`, `as unknown as
+ExtensionHostContext`, block `eslint-disable`, and `@effect-diagnostics`
+  outside the reviewed file inventory.
+- Wired the guard into root `bun run lint` and added fixture coverage in
+  `packages/tooling/tests/suppression-inventory.test.ts`.
+
+Verification on 2026-05-07:
+
+- `bun packages/tooling/src/check-suppression-inventory.ts`
+- `bun run --cwd packages/tooling test`
+- `bun run lint`
+- `bun run gate`
+
 ### Part F — Test Ownership, Taxonomy, and Harness Collapse
 
 #### C53: test(extensions): give `@gent/extensions` its own test lane
