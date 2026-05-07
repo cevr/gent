@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { GitReader, GitReaderError } from "@gent/extensions/librarian/git-reader"
+import { GitReader, GitReaderError } from "@gent/extensions/librarian"
 import { $ } from "bun"
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files

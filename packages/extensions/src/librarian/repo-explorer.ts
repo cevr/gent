@@ -1,8 +1,219 @@
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { $ } from "bun"
-import { GitReader } from "./git-reader.js"
+import * as esGit from "es-git"
+
+export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("GitReaderError", {
+  message: Schema.String,
+  operation: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
+
+type Credential =
+  | { type: "SSHKeyFromPath"; username: string; privateKeyPath: string; publicKeyPath?: string }
+  | { type: "Plain"; username: string; password: string }
+
+const resolveCredential = (
+  fs: FileSystem.FileSystem,
+  home: string,
+  url: string,
+): Effect.Effect<Credential | undefined> =>
+  Effect.gen(function* () {
+    if (url.startsWith("git@") || url.includes("ssh://")) {
+      const ed25519 = `${home}/.ssh/id_ed25519`
+      if (yield* fs.exists(ed25519).pipe(Effect.orElseSucceed(() => false))) {
+        const ed25519Pub = `${home}/.ssh/id_ed25519.pub`
+        const hasPub = yield* fs.exists(ed25519Pub).pipe(Effect.orElseSucceed(() => false))
+        return {
+          type: "SSHKeyFromPath" as const,
+          username: "git",
+          privateKeyPath: ed25519,
+          publicKeyPath: hasPub ? ed25519Pub : undefined,
+        } satisfies Credential
+      }
+      const rsa = `${home}/.ssh/id_rsa`
+      if (yield* fs.exists(rsa).pipe(Effect.orElseSucceed(() => false))) {
+        const rsaPub = `${home}/.ssh/id_rsa.pub`
+        const hasPub = yield* fs.exists(rsaPub).pipe(Effect.orElseSucceed(() => false))
+        return {
+          type: "SSHKeyFromPath" as const,
+          username: "git",
+          privateKeyPath: rsa,
+          publicKeyPath: hasPub ? rsaPub : undefined,
+        } satisfies Credential
+      }
+      return undefined
+    }
+
+    if (url.includes("github.com")) {
+      const token = yield* Effect.tryPromise({
+        try: () => $`gh auth token`.quiet().text(),
+        catch: () => undefined as string | undefined,
+      })
+      if (token !== undefined) {
+        const trimmed = token.trim()
+        if (trimmed.length > 0) {
+          return {
+            type: "Plain" as const,
+            username: "x-access-token",
+            password: trimmed,
+          } satisfies Credential
+        }
+      }
+    }
+    return undefined
+  }).pipe(Effect.orElseSucceed(() => undefined))
+
+export interface GitReaderService {
+  readonly clone: (
+    url: string,
+    dest: string,
+    options?: { depth?: number; ref?: string },
+  ) => Effect.Effect<void, GitReaderError>
+  readonly fetch: (repoPath: string) => Effect.Effect<void, GitReaderError>
+  readonly listFiles: (
+    repoPath: string,
+    ref?: string,
+  ) => Effect.Effect<ReadonlyArray<string>, GitReaderError>
+  readonly readFile: (
+    repoPath: string,
+    filePath: string,
+    ref?: string,
+  ) => Effect.Effect<{ content: Uint8Array; size: number; isBinary: boolean }, GitReaderError>
+}
+
+export class GitReader extends Context.Service<GitReader, GitReaderService>()(
+  "@gent/extensions/src/librarian/repo-explorer/GitReader",
+) {
+  static Live = (home: string): Layer.Layer<GitReader, never, FileSystem.FileSystem> =>
+    Layer.effect(
+      GitReader,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const cred = (url: string) => resolveCredential(fs, home, url)
+
+        return {
+          clone: (url, dest, options) =>
+            Effect.gen(function* () {
+              const credential = yield* cred(url)
+              yield* Effect.tryPromise({
+                try: () =>
+                  esGit.cloneRepository(url, dest, {
+                    fetch: { depth: options?.depth, credential },
+                    branch: options?.ref,
+                  }),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "clone", cause: e }),
+              })
+            }),
+
+          fetch: (repoPath) =>
+            Effect.gen(function* () {
+              const repo = yield* Effect.tryPromise({
+                try: () => esGit.openRepository(repoPath),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "fetch.open", cause: e }),
+              })
+              const remote = repo.getRemote("origin")
+              const credential = yield* cred(remote.url())
+              yield* Effect.tryPromise({
+                try: () =>
+                  remote
+                    .fetch(["refs/heads/*:refs/remotes/origin/*"], {
+                      fetch: { credential },
+                    })
+                    .then(() => {
+                      const headOid = repo.revparseSingle("origin/HEAD")
+                      const headCommit = repo.getCommit(headOid)
+                      repo.setHeadDetached(headCommit)
+                      repo.checkoutHead({ force: true })
+                    }),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
+              })
+            }),
+
+          listFiles: (repoPath, ref) =>
+            Effect.tryPromise({
+              try: () =>
+                esGit.openRepository(repoPath).then((repo) => {
+                  const oid = repo.revparseSingle(ref ?? "HEAD")
+                  const commit = repo.getCommit(oid)
+                  const files: string[] = []
+                  const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
+                    for (const entry of tree.iter()) {
+                      const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
+                      if (entry.type() === "Blob") {
+                        files.push(fullPath)
+                      } else if (entry.type() === "Tree") {
+                        const subtree = repo.findTree(entry.id())
+                        if (subtree !== null) walk(subtree, fullPath)
+                      }
+                    }
+                  }
+                  walk(commit.tree(), "")
+                  return files
+                }),
+              catch: (e) =>
+                new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
+            }),
+
+          readFile: (repoPath, filePath, ref) =>
+            Effect.gen(function* () {
+              const repo = yield* Effect.tryPromise({
+                try: () => esGit.openRepository(repoPath),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
+              })
+              const entry = yield* Effect.try({
+                try: () => {
+                  const oid = repo.revparseSingle(ref ?? "HEAD")
+                  const commit = repo.getCommit(oid)
+                  const tree = commit.tree()
+                  return tree.getPath(filePath)
+                },
+                catch: (e) =>
+                  new GitReaderError({
+                    message: String(e),
+                    operation: "readFile.lookup",
+                    cause: e,
+                  }),
+              })
+              if (entry === null || entry === undefined) {
+                return yield* new GitReaderError({
+                  message: `File not found: ${filePath}`,
+                  operation: "readFile",
+                })
+              }
+              const blob = yield* Effect.try({
+                try: () => entry.toObject(repo).peelToBlob(),
+                catch: (e) =>
+                  new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
+              })
+              if (blob === null || blob === undefined) {
+                return yield* new GitReaderError({
+                  message: `Not a blob: ${filePath}`,
+                  operation: "readFile",
+                })
+              }
+              return {
+                content: new Uint8Array(blob.content()),
+                size: Number(blob.size()),
+                isBinary: blob.isBinary(),
+              }
+            }),
+        }
+      }),
+    )
+
+  static Test: Layer.Layer<GitReader> = Layer.succeed(GitReader, {
+    clone: () => Effect.void,
+    fetch: () => Effect.void,
+    listFiles: () => Effect.succeed([]),
+    readFile: () => Effect.succeed({ content: new Uint8Array(), size: 0, isBinary: false }),
+  })
+}
 
 // RepoExplorer Tool Error
 

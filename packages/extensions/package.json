@@ -106,8 +106,6 @@
     "./interaction-tools/ask-user.js": "./src/interaction-tools/ask-user.ts",
     "./interaction-tools/prompt": "./src/interaction-tools/prompt.ts",
     "./interaction-tools/prompt.js": "./src/interaction-tools/prompt.ts",
-    "./librarian/git-reader": "./src/librarian/git-reader.ts",
-    "./librarian/git-reader.js": "./src/librarian/git-reader.ts",
     "./memory": "./src/memory/index.ts",
     "./memory.js": "./src/memory/index.ts",
     "./memory/projection": "./src/memory/projection.ts",

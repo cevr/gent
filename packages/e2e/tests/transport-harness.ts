@@ -10,7 +10,7 @@ import {
 } from "@gent/core/test-utils/language-model.js"
 import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
-import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+import { GitReader } from "@gent/extensions/librarian.js"
 import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
 export { waitFor } from "./seam-fixture"
 

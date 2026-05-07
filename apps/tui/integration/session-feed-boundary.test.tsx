@@ -11,7 +11,7 @@ import {
 } from "../tests/render-harness"
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
-import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+import { GitReader } from "@gent/extensions/librarian.js"
 import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Gent } from "@gent/sdk"

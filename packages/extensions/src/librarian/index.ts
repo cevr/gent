@@ -5,8 +5,9 @@ import {
   defineResource,
   ModelId,
 } from "@gent/core/extensions/api"
-import { RepoTool } from "./repo-explorer.js"
-import { GitReader } from "./git-reader.js"
+import { GitReader, RepoTool } from "./repo-explorer.js"
+
+export { GitReader, GitReaderError } from "./repo-explorer.js"
 
 const LIBRARIAN_PROMPT = `
 Librarian agent. Answer questions about an external repository by reading its source code.
