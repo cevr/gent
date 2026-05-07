@@ -18,6 +18,7 @@ import { DriverRpcs } from "./rpcs/driver.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ServerRpcs } from "./rpcs/server.js"
 import type { GentConnectionError } from "./transport-contract.js"
+import { WorkspaceRpcMiddleware, WorkspaceHeaderError } from "./workspace-rpc.js"
 
 // Re-export sub-groups for handler wiring
 export {
@@ -33,6 +34,8 @@ export {
   DriverRpcs,
   ExtensionRpcs,
   ServerRpcs,
+  WorkspaceHeaderError,
+  WorkspaceRpcMiddleware,
 }
 
 // Re-export transport contract schemas (consumed by SDK + tests)
@@ -78,20 +81,22 @@ export {
 // Merged RPC Group
 // ============================================================================
 
-export class GentRpcs extends RpcGroup.make().merge(
-  SessionRpcs,
-  BranchRpcs,
-  MessageRpcs,
-  SteerRpcs,
-  QueueRpcs,
-  InteractionRpcs,
-  PermissionRpcs,
-  ModelRpcs,
-  AuthRpcs,
-  DriverRpcs,
-  ExtensionRpcs,
-  ServerRpcs,
-) {}
+export class GentRpcs extends RpcGroup.make()
+  .merge(
+    SessionRpcs,
+    BranchRpcs,
+    MessageRpcs,
+    SteerRpcs,
+    QueueRpcs,
+    InteractionRpcs,
+    PermissionRpcs,
+    ModelRpcs,
+    AuthRpcs,
+    DriverRpcs,
+    ExtensionRpcs,
+    ServerRpcs,
+  )
+  .middleware(WorkspaceRpcMiddleware) {}
 
 // ============================================================================
 // RPC Client Types

@@ -133,6 +133,8 @@
     "./server/rpc-handlers.js": "./src/server/rpc-handlers.ts",
     "./server/rpcs": "./src/server/rpcs.ts",
     "./server/rpcs.js": "./src/server/rpcs.ts",
+    "./server/workspace-rpc": "./src/server/workspace-rpc.ts",
+    "./server/workspace-rpc.js": "./src/server/workspace-rpc.ts",
     "./server/server-identity": "./src/server/server-identity.ts",
     "./server/server-identity.js": "./src/server/server-identity.ts",
     "./server/server-routes": "./src/server/server-routes.ts",

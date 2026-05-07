@@ -1,4 +1,6 @@
-import type { Effect, Fiber } from "effect"
+import { Stream, type Effect, type Fiber } from "effect"
+import { RpcClient } from "effect/unstable/rpc"
+import { Headers } from "effect/unstable/http"
 import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
 import { ConnectionState } from "@gent/core/server/transport-contract.js"
 import type { GentConnectionError, GentLifecycle } from "@gent/core/server/transport-contract.js"
@@ -31,6 +33,9 @@ export type NamespacedClient<T> = {
 }
 
 export type GentNamespacedClient = NamespacedClient<GentRpcClient>
+type RpcMethod = (
+  ...args: ReadonlyArray<never>
+) => Effect.Effect<never, never, never> | Stream.Stream<never, never, never>
 
 // ---------------------------------------------------------------------------
 // GentRuntime — execution surface for the caller
@@ -69,12 +74,26 @@ const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
     return parsed.namespace === namespace && parsed.method !== undefined ? [parsed.method] : []
   })
 
-const makeNamespace = (flat: GentRpcClient, namespace: string) => {
+const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
   const methods = namespaceMethods(namespace)
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
       if (typeof property !== "string") return undefined
-      return Reflect.get(flat, `${namespace}.${property}`)
+      const method = Reflect.get(flat, `${namespace}.${property}`)
+      if (headers === undefined || typeof method !== "function") return method
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- Runtime key comes from GentRpcs.requests; wrapping preserves the underlying RPC method shape.
+      const call = method as RpcMethod
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- The proxy returns the same callable contract with CurrentHeaders attached around the returned Effect or Stream.
+      return ((...args: ReadonlyArray<never>) => {
+        const result = call(...args)
+        return Stream.isStream(result)
+          ? Stream.updateService(
+              result,
+              RpcClient.CurrentHeaders,
+              Headers.merge(Headers.fromInput(headers)),
+            )
+          : RpcClient.withHeaders(result, headers)
+      }) as typeof method
     },
     has: (_target, property) => typeof property === "string" && methods.includes(property),
     ownKeys: () => methods,
@@ -85,7 +104,10 @@ const makeNamespace = (flat: GentRpcClient, namespace: string) => {
   })
 }
 
-export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient => {
+export const makeNamespacedClient = (
+  flat: GentRpcClient,
+  headers?: Headers.Input,
+): GentNamespacedClient => {
   const namespaceCache = new Map<string, object>()
   const namespaces = [
     ...new Set(
@@ -100,7 +122,7 @@ export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient 
       if (typeof property !== "string" || !namespaces.includes(property)) return undefined
       const existing = namespaceCache.get(property)
       if (existing !== undefined) return existing
-      const created = makeNamespace(flat, property)
+      const created = makeNamespace(flat, property, headers)
       namespaceCache.set(property, created)
       return created
     },

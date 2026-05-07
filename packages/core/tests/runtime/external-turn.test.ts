@@ -52,6 +52,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
 import { getToolId, tool, type ToolToken } from "@gent/core/extensions/api"
+import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
@@ -86,9 +87,12 @@ const runAgentLoop = (
     Effect.flatMap(() =>
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
-        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        const ref = yield* actorClientFactory(
+          entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
+        )
         yield* ref.execute(
           AgentLoopActor.Run.make({
+            workspaceId: DefaultWorkspaceId,
             message,
             agentOverride: options?.agentOverride,
             runSpec: options?.runSpec,

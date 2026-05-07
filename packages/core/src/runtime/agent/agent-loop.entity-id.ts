@@ -3,7 +3,7 @@
  *
  * Encore's `Entity.toLayer` keys entities by a `string` `entityId`. Per-actor
  * state lives behind that string, so the encoding must:
- *   - Round-trip uniquely for any `(sessionId, branchId)` pair
+ *   - Round-trip uniquely for any `(workspaceId, sessionId, branchId)` tuple
  *   - Be parseable from `CurrentAddress.entityId` inside the actor handler
  *
  * `SessionId` and `BranchId` are unconstrained branded strings, so a plain
@@ -23,23 +23,34 @@ import { Effect } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { AgentLoopError } from "./agent-loop.commands.js"
 
-/** Encode `(sessionId, branchId)` into a unique reversible string. */
-export const entityIdOf = (sessionId: SessionId, branchId: BranchId): string =>
-  `${encodeURIComponent(sessionId)}:${encodeURIComponent(branchId)}`
+/** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
+export const entityIdOf = (workspaceId: string, sessionId: SessionId, branchId: BranchId): string =>
+  `${encodeURIComponent(workspaceId)}:${encodeURIComponent(sessionId)}:${encodeURIComponent(branchId)}`
 
-/** Parse an encoded entity id back into its `(sessionId, branchId)` pair. */
+/** Parse an encoded entity id back into its `(workspaceId, sessionId, branchId)` tuple. */
 export const parseEntityId = (
   entityId: string,
-): Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, AgentLoopError> =>
+): Effect.Effect<
+  { workspaceId: string; sessionId: SessionId; branchId: BranchId },
+  AgentLoopError
+> =>
   Effect.gen(function* () {
-    const sep = entityId.indexOf(":")
-    if (sep < 0) {
+    const firstSep = entityId.indexOf(":")
+    const secondSep = firstSep < 0 ? -1 : entityId.indexOf(":", firstSep + 1)
+    if (firstSep < 0 || secondSep < 0) {
       return yield* new AgentLoopError({
-        message: `Invalid entity id (no separator): ${entityId}`,
+        message: `Invalid entity id (expected workspace/session/branch): ${entityId}`,
       })
     }
-    const rawSession = entityId.slice(0, sep)
-    const rawBranch = entityId.slice(sep + 1)
+    const rawWorkspace = entityId.slice(0, firstSep)
+    const rawSession = entityId.slice(firstSep + 1, secondSep)
+    const rawBranch = entityId.slice(secondSep + 1)
+    const workspaceId = decodeOrFail(rawWorkspace)
+    if (workspaceId === undefined) {
+      return yield* new AgentLoopError({
+        message: `Invalid entity id (workspaceId decode): ${entityId}`,
+      })
+    }
     const sessionRaw = decodeOrFail(rawSession)
     if (sessionRaw === undefined) {
       return yield* new AgentLoopError({
@@ -53,6 +64,7 @@ export const parseEntityId = (
       })
     }
     return {
+      workspaceId,
       sessionId: SessionId.make(sessionRaw),
       branchId: BranchId.make(branchRaw),
     }

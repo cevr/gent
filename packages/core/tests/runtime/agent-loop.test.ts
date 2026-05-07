@@ -86,6 +86,7 @@ import {
   toolResultMessageIdForTurn,
 } from "../../src/runtime/agent/agent-loop.utils"
 import type { TurnStreamPart } from "@gent/core/domain/driver"
+import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
 // ============================================================================
 // Shared helpers
 // ============================================================================
@@ -136,9 +137,12 @@ const runAgentLoop = (
     Effect.flatMap(() =>
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
-        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        const ref = yield* actorClientFactory(
+          entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
+        )
         yield* ref.execute(
           AgentLoopActor.Run.make({
+            workspaceId: DefaultWorkspaceId,
             message,
             agentOverride: options?.agentOverride,
             runSpec: options?.runSpec,
@@ -161,9 +165,12 @@ const submitAgentLoop = (
     Effect.flatMap(() =>
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
-        const ref = yield* actorClientFactory(entityIdOf(message.sessionId, message.branchId))
+        const ref = yield* actorClientFactory(
+          entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
+        )
         yield* ref.execute(
           AgentLoopActor.Submit.make({
+            workspaceId: DefaultWorkspaceId,
             message,
             agentOverride: options?.agentOverride,
             runSpec: options?.runSpec,
@@ -177,9 +184,12 @@ const steerAgentLoop = (command: SteerCommand) =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
     const actorClientFactory = yield* AgentLoopActor.Context
-    const ref = yield* actorClientFactory(entityIdOf(command.sessionId, command.branchId))
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, command.sessionId, command.branchId),
+    )
     yield* ref.execute(
       AgentLoopActor.Steer.make({
+        workspaceId: DefaultWorkspaceId,
         commandId: ActorCommandId.make(yield* platform.randomId),
         command,
       }),
@@ -192,8 +202,12 @@ const respondAgentLoopInteraction = (input: {
 }) =>
   Effect.gen(function* () {
     const actorClientFactory = yield* AgentLoopActor.Context
-    const ref = yield* actorClientFactory(entityIdOf(input.sessionId, input.branchId))
-    yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
+    )
+    yield* ref.execute(
+      AgentLoopActor.RespondInteraction.make({ ...input, workspaceId: DefaultWorkspaceId }),
+    )
   })
 const makeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,

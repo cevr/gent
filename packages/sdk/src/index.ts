@@ -36,6 +36,7 @@ export {
   type GentRpcsClient,
   type GentRpcError,
   type GentClientBundle,
+  type GentClientOptions,
 } from "./client.js"
 
 // Namespaced client + runtime types

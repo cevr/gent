@@ -30,6 +30,7 @@ import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
+import { workspaceHeadersForCwd, type WorkspaceHeaders } from "./transport-headers.js"
 import {
   readRegistryEntry,
   validateRegistryEntry,
@@ -82,9 +83,11 @@ export interface GentServerOptions {
 export const GentServer = TaggedEnumClass("GentServer", {
   Owned: TaggedEnumClass.variant("owned", {
     url: Schema.String,
+    workspaceId: Schema.String,
   }),
   Attached: TaggedEnumClass.variant("attached", {
     url: Schema.String,
+    workspaceId: Schema.String,
   }),
 })
 export type GentServer = Schema.Schema.Type<typeof GentServer>
@@ -95,6 +98,7 @@ interface OwnedServerInternal {
   readonly handlerContext: Context.Context<BuiltRpcHandlers>
   readonly port: number
   readonly serverId: string
+  readonly headers: WorkspaceHeaders
 }
 
 /** WeakMap keyed by GentServer object identity — keeps handler context private */
@@ -191,6 +195,7 @@ const buildOwnedServer = (
         })
       }
       const url = `http://127.0.0.1:${port}/rpc`
+      const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
       const home = resolveHome(options, stateSpec)
       const serverId = yield* platform.randomId
       const buildFingerprint = yield* resolveBuildFingerprint.pipe(
@@ -288,11 +293,15 @@ const buildOwnedServer = (
         scope,
       ).pipe(Effect.orDie)
 
-      const server: GentServer = GentServer.Owned.make({ url })
+      const server: GentServer = GentServer.Owned.make({
+        url,
+        workspaceId: workspaceHeaders["x-gent-workspace-id"],
+      })
       ownedInternals.set(server, {
         handlerContext: handlersContext,
         port,
         serverId,
+        headers: workspaceHeaders,
       })
 
       return server
@@ -379,7 +388,10 @@ const resolveServerInternal = (
           buildFingerprint: fingerprint,
         })
         if (alive) {
-          return GentServer.Attached.make({ url: existing.rpcUrl })
+          return GentServer.Attached.make({
+            url: existing.rpcUrl,
+            workspaceId: workspaceHeadersForCwd(options.cwd)["x-gent-workspace-id"],
+          })
         }
       }
       // Stale — only signal when the live process proves it owns this registry identity.
@@ -430,7 +442,10 @@ const resolveServerInternal = (
               buildFingerprint: fingerprint,
             })
             if (alive) {
-              return GentServer.Attached.make({ url: retryEntry.rpcUrl })
+              return GentServer.Attached.make({
+                url: retryEntry.rpcUrl,
+                workspaceId: workspaceHeadersForCwd(options.cwd)["x-gent-workspace-id"],
+              })
             }
             return yield* new GentConnectionError({
               message: "Lock contention: new server did not pass identity probe",

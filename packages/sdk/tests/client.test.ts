@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
+import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   Gent,
@@ -13,6 +14,8 @@ import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis } from "@gent/core/domain/message"
 import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
+import { WORKSPACE_ID_HEADER } from "@gent/core/server/workspace-rpc"
+import { workspaceHeadersForCwd, workspaceIdForCwd } from "../src/transport-headers"
 
 describe("sdk client helpers", () => {
   test("sdk entrypoint exports the public constructors", () => {
@@ -125,4 +128,61 @@ describe("sdk client helpers", () => {
       expect(methodClient).toBe(handlers.get(key))
     }
   })
+
+  test("workspace id is a stable hash of canonical cwd", () => {
+    expect(workspaceIdForCwd("/tmp/gent/../gent")).toBe(workspaceIdForCwd("/tmp/gent"))
+    expect(workspaceIdForCwd("/tmp/gent")).toMatch(/^[a-f0-9]{64}$/)
+    expect(workspaceHeadersForCwd("/tmp/gent")[WORKSPACE_ID_HEADER]).toBe(
+      workspaceIdForCwd("/tmp/gent"),
+    )
+  })
+
+  test("namespaced client attaches workspace header to RPC effects", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        let observed: string | undefined
+        const flat = new Proxy(Object.create(null) as GentRpcClient, {
+          get: (_target, property) =>
+            property === "session.list"
+              ? () =>
+                  Effect.gen(function* () {
+                    const headers = yield* RpcClient.CurrentHeaders
+                    observed = headers[WORKSPACE_ID_HEADER]
+                    return []
+                  })
+              : undefined,
+        })
+        const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
+        yield* client.session.list()
+        expect(observed).toBe(workspaceIdForCwd("/tmp/gent"))
+      }),
+    ))
+
+  test("namespaced client attaches workspace header to RPC streams", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        let observed: string | undefined
+        const flat = new Proxy(Object.create(null) as GentRpcClient, {
+          get: (_target, property) =>
+            property === "session.watchRuntime"
+              ? () =>
+                  Stream.fromEffect(
+                    Effect.gen(function* () {
+                      const headers = yield* RpcClient.CurrentHeaders
+                      observed = headers[WORKSPACE_ID_HEADER]
+                      return undefined
+                    }),
+                  )
+              : undefined,
+        })
+        const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
+        yield* Stream.runDrain(
+          client.session.watchRuntime({
+            sessionId: SessionId.make("session-stream-header"),
+            branchId: BranchId.make("branch-stream-header"),
+          }),
+        )
+        expect(observed).toBe(workspaceIdForCwd("/tmp/gent"))
+      }),
+    ))
 })

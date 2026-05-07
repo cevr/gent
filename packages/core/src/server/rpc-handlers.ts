@@ -1,4 +1,4 @@
-import { Clock, Effect, Stream, type Context } from "effect"
+import { Clock, Effect, Layer, Stream, type Context } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import {
@@ -42,6 +42,7 @@ import { InteractionCommands, type InteractionCommandsService } from "./interact
 import { ServerIdentity, type ServerIdentityShape } from "./server-identity.js"
 import { SessionCommands, type SessionCommandsService } from "./session-commands.js"
 import { SessionQueries, type SessionQueriesService } from "./session-queries.js"
+import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   DriverInfo,
   DriverListResult,
@@ -594,7 +595,7 @@ const buildServerRpcHandlers = (deps: RpcHandlerDeps) => ({
 // RPC Handlers Layer
 // ============================================================================
 
-export const RpcHandlersLive = GentRpcs.toLayer(
+const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
@@ -674,3 +675,5 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     }
   }),
 )
+
+export const RpcHandlersLive = Layer.merge(RpcHandlers, WorkspaceRpcMiddleware.Live)

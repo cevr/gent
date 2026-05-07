@@ -42,6 +42,7 @@ import type { ModelRegistry } from "./model-registry.js"
 import { GentPlatform } from "./gent-platform.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { SessionProfileCache } from "./session-profile.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import {
   AllowAllPermission,
@@ -390,7 +391,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const actorClientFactory = yield* AgentLoopActor.Context
   const actorAddressResolver = yield* ActorAddressResolver
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
-    actorClientFactory(entityIdOf(sessionId, branchId))
+    Effect.gen(function* () {
+      const workspaceId = yield* CurrentWorkspaceId
+      return yield* actorClientFactory(entityIdOf(workspaceId, sessionId, branchId))
+    })
   const sharding = yield* Sharding.Sharding
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const sessionStorage = yield* SessionStorage
@@ -446,15 +450,19 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         }
 
         const ref = yield* agentLoopActorRefFor(params.sessionId, params.branchId)
-        const queue = yield* ref.execute(AgentLoopActor.GetQueue.make(params)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new SessionRuntimeError({
-                message: `Failed to read submitted message queue ${params.messageId}`,
-                cause,
-              }),
-          ),
-        )
+        const queue = yield* ref
+          .execute(
+            AgentLoopActor.GetQueue.make({ ...params, workspaceId: yield* CurrentWorkspaceId }),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new SessionRuntimeError({
+                  message: `Failed to read submitted message queue ${params.messageId}`,
+                  cause,
+                }),
+            ),
+          )
         const queued = [...queue.steering, ...queue.followUp].some(
           (entry) =>
             entry.id === params.messageId ||
@@ -489,6 +497,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       yield* ref
         .execute(
           AgentLoopActor.QueueFollowUp.make({
+            workspaceId: yield* CurrentWorkspaceId,
             message,
             agentOverride: undefined,
             runSpec: undefined,
@@ -517,7 +526,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   })
 
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
-    AgentLoopActor.redeliver(entityIdOf(target.sessionId, target.branchId)).pipe(
+    Effect.gen(function* () {
+      const workspaceId = yield* CurrentWorkspaceId
+      yield* AgentLoopActor.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
+    }).pipe(
       Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
       Effect.provideService(ActorAddressResolver, actorAddressResolver),
       Effect.provideService(Sharding.Sharding, sharding),
@@ -574,6 +586,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     yield* ref
       .send(
         AgentLoopActor.Submit.make({
+          workspaceId: yield* CurrentWorkspaceId,
           message,
           agentOverride: input.agentOverride,
           interactive: input.interactive,
@@ -644,6 +657,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             yield* ref.execute(
               AgentLoopActor.RecordToolResult.make({
+                workspaceId: yield* CurrentWorkspaceId,
                 sessionId: input.sessionId,
                 branchId: input.branchId,
                 toolCallId: input.toolCallId,
@@ -666,6 +680,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             yield* ref.execute(
               AgentLoopActor.InvokeTool.make({
+                workspaceId: yield* CurrentWorkspaceId,
                 sessionId: input.sessionId,
                 branchId: input.branchId,
                 commandId,
@@ -684,7 +699,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           Effect.gen(function* () {
             const commandId = ActorCommandId.make(yield* platform.randomId)
             const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.send(AgentLoopActor.Steer.make({ commandId, command }))
+            yield* ref.send(
+              AgentLoopActor.Steer.make({
+                workspaceId: yield* CurrentWorkspaceId,
+                commandId,
+                command,
+              }),
+            )
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
@@ -695,7 +716,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(AgentLoopActor.RespondInteraction.make(input))
+            yield* ref.execute(
+              AgentLoopActor.RespondInteraction.make({
+                ...input,
+                workspaceId: yield* CurrentWorkspaceId,
+              }),
+            )
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
@@ -727,6 +753,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             return yield* ref.execute(
               AgentLoopActor.DrainQueue.make({
                 ...input,
+                workspaceId: yield* CurrentWorkspaceId,
                 commandId,
               }),
             )
@@ -741,7 +768,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(AgentLoopActor.GetQueue.make(input))
+            return yield* ref.execute(
+              AgentLoopActor.GetQueue.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
+            )
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
@@ -752,7 +781,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         yield* requireSessionBranch(input)
         yield* redeliverPendingActorMessages(input)
         const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-        const loopState = yield* ref.execute(AgentLoopActor.GetState.make(input))
+        const loopState = yield* ref.execute(
+          AgentLoopActor.GetState.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
+        )
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
@@ -812,7 +843,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
         const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-        yield* ref.execute(AgentLoopActor.EnsureStarted.make(input))
+        yield* ref.execute(
+          AgentLoopActor.EnsureStarted.make({
+            ...input,
+            workspaceId: yield* CurrentWorkspaceId,
+          }),
+        )
         return yield* agentLoop.watchState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
@@ -823,11 +859,16 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         yield* Effect.forEach(
           branches,
           (branchId) =>
-            agentLoopActorRefFor(sessionId, branchId).pipe(
-              Effect.flatMap((ref) =>
-                ref.execute(AgentLoopActor.TerminateBranch.make({ sessionId, branchId })),
-              ),
-            ),
+            Effect.gen(function* () {
+              const ref = yield* agentLoopActorRefFor(sessionId, branchId)
+              yield* ref.execute(
+                AgentLoopActor.TerminateBranch.make({
+                  workspaceId: yield* CurrentWorkspaceId,
+                  sessionId,
+                  branchId,
+                }),
+              )
+            }),
           { concurrency: "unbounded", discard: true },
         )
         yield* agentLoop.terminateSession(sessionId)

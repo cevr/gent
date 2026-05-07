@@ -58,6 +58,7 @@ import {
   type StateSpec,
   type ProviderSpec,
 } from "./server.js"
+import { workspaceHeadersForCwd } from "./transport-headers.js"
 
 export type {
   MessagePart,
@@ -189,6 +190,10 @@ export interface GentClientBundle<Services = Scope.Scope> {
   readonly runtime: GentRuntime<Services>
 }
 
+export interface GentClientOptions {
+  readonly cwd?: string
+}
+
 // ---------------------------------------------------------------------------
 // Internal: WS connect with reconnection via ConnectionHooks
 // ---------------------------------------------------------------------------
@@ -198,6 +203,7 @@ export interface GentClientBundle<Services = Scope.Scope> {
  *  connect/disconnect via hooks and project onto GentLifecycle. */
 const connectWs = (
   url: string,
+  headers = workspaceHeadersForCwd(process.cwd()),
 ): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
@@ -263,7 +269,7 @@ const connectWs = (
     }
 
     return {
-      client: makeNamespacedClient(rpcClient),
+      client: makeNamespacedClient(rpcClient, headers),
       runtime: makeRuntime(services, lifecycle),
     }
   })
@@ -282,7 +288,7 @@ export const Gent = {
       const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
       const services = yield* Effect.context<R | Scope.Scope>()
       return {
-        client: makeNamespacedClient(rpcClient),
+        client: makeNamespacedClient(rpcClient, workspaceHeadersForCwd(process.cwd())),
         runtime: makeRuntime(
           services,
           staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
@@ -304,10 +310,11 @@ export const Gent = {
   /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (
     serverOrUrl: GentServer | string,
+    options?: GentClientOptions,
   ): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
       if (typeof serverOrUrl === "string") {
-        return yield* connectWs(serverOrUrl)
+        return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(options?.cwd ?? process.cwd()))
       }
 
       switch (serverOrUrl._tag) {
@@ -324,7 +331,7 @@ export const Gent = {
           )
           const services = yield* Effect.context<Scope.Scope>()
           return {
-            client: makeNamespacedClient(rpcClient),
+            client: makeNamespacedClient(rpcClient, internal.headers),
             runtime: makeRuntime(
               services,
               staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
@@ -332,7 +339,9 @@ export const Gent = {
           }
         }
         case "attached":
-          return yield* connectWs(serverOrUrl.url)
+          return yield* connectWs(serverOrUrl.url, {
+            "x-gent-workspace-id": serverOrUrl.workspaceId,
+          })
       }
     }),
 } as const

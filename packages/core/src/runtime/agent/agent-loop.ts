@@ -19,6 +19,7 @@ export { AgentLoopError, SteerCommand }
 import { persistMessageReceived, type TurnStorage } from "./turn-helpers.js"
 import { AgentLoop as AgentLoopActor } from "./agent-loop.actor.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
+import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 
 // Agent Loop Context
 
@@ -72,7 +73,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
         const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
-          actorClientFactory(entityIdOf(sessionId, branchId))
+          Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            return yield* actorClientFactory(entityIdOf(workspaceId, sessionId, branchId))
+          })
         const sessionStorage = yield* SessionStorage
         const messageStorage = yield* MessageStorage
         const eventStorage = yield* EventStorage
@@ -117,6 +121,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             return yield* ref
               .execute(
                 AgentLoopActor.Run.make({
+                  workspaceId: yield* CurrentWorkspaceId,
                   message: userMessage,
                   agentOverride: input.agentName,
                   runSpec: input.runSpec,
@@ -136,16 +141,25 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           getQueue: Effect.fn("AgentLoop.getQueue")(function* (input) {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(AgentLoopActor.GetQueue.make(input))
+            return yield* ref.execute(
+              AgentLoopActor.GetQueue.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
+            )
           }),
 
           getState: Effect.fn("AgentLoop.getState")(function* (input) {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(AgentLoopActor.GetState.make(input))
+            return yield* ref.execute(
+              AgentLoopActor.GetState.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
+            )
           }),
           watchState: Effect.fn("AgentLoop.watchState")(function* (input) {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(AgentLoopActor.EnsureStarted.make(input))
+            yield* ref.execute(
+              AgentLoopActor.EnsureStarted.make({
+                ...input,
+                workspaceId: yield* CurrentWorkspaceId,
+              }),
+            )
             const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
             if (registered === undefined) {
               return yield* new AgentLoopError({
@@ -166,17 +180,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             yield* Effect.forEach(
               branchIds,
               (branchId) =>
-                agentLoopActorRefFor(sessionId, branchId).pipe(
-                  Effect.flatMap((ref) =>
-                    ref.execute(
-                      AgentLoopActor.TerminateBranch.make({
-                        sessionId,
-                        branchId,
-                      }),
-                    ),
-                  ),
-                  Effect.ignore,
-                ),
+                Effect.gen(function* () {
+                  const workspaceId = yield* CurrentWorkspaceId
+                  const ref = yield* agentLoopActorRefFor(sessionId, branchId)
+                  yield* ref.execute(
+                    AgentLoopActor.TerminateBranch.make({
+                      workspaceId,
+                      sessionId,
+                      branchId,
+                    }),
+                  )
+                }).pipe(Effect.ignore),
               { concurrency: "unbounded", discard: true },
             )
             yield* stateRegistry.deregisterSession(sessionId)

@@ -100,7 +100,12 @@ import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
 import { invokeTool, recordToolResult } from "./turn-helpers.js"
 
+const WorkspaceFields = {
+  workspaceId: Schema.String,
+}
+
 const TurnSubmissionFields = {
+  ...WorkspaceFields,
   message: Message,
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
@@ -108,39 +113,46 @@ const TurnSubmissionFields = {
 }
 
 const SteerFields = {
+  ...WorkspaceFields,
   commandId: ActorCommandId,
   command: SteerCommand,
 }
 
 const InterruptFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
 }
 
 const RespondInteractionFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
   requestId: InteractionRequestId,
 }
 
 const DrainQueueFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
 }
 
 const GetQueueFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
 }
 
 const GetStateFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
 }
 
 const RecordToolResultFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
   commandId: Schema.optional(ActorCommandId),
@@ -151,6 +163,7 @@ const RecordToolResultFields = {
 }
 
 const InvokeToolFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
@@ -165,6 +178,7 @@ const InvokeToolFields = {
  * their watcher attaches.
  */
 const EnsureStartedFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
 }
@@ -177,6 +191,7 @@ const EnsureStartedFields = {
  * `terminateSession` sweeps.
  */
 const TerminateBranchFields = {
+  ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
 }
@@ -184,32 +199,44 @@ const TerminateBranchFields = {
 type MessageType = Schema.Schema.Type<typeof Message>
 type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 
-type TurnSubmissionInput = { readonly message: MessageType }
-type SteerInput = { readonly commandId: ActorCommandId; readonly command: SteerCommandType }
+type WorkspaceInput = {
+  readonly workspaceId: string
+}
+type TurnSubmissionInput = WorkspaceInput & { readonly message: MessageType }
+type SteerInput = WorkspaceInput & {
+  readonly commandId: ActorCommandId
+  readonly command: SteerCommandType
+}
 type InterruptInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type RespondInteractionInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly requestId: InteractionRequestId
 }
 type DrainQueueInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type GetQueueInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
 type GetStateInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
 type RecordToolResultInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId?: ActorCommandId
@@ -219,6 +246,7 @@ type RecordToolResultInput = {
   readonly isError?: boolean
 }
 type InvokeToolInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
@@ -226,10 +254,12 @@ type InvokeToolInput = {
   readonly input: unknown
 }
 type EnsureStartedInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
 type TerminateBranchInput = {
+  readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
@@ -243,7 +273,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     error: AgentLoopError,
     persisted: true,
     id: (p: TurnSubmissionInput) => ({
-      entityId: entityIdOf(p.message.sessionId, p.message.branchId),
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
     }),
   },
@@ -251,7 +281,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: TurnSubmissionFields,
     error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
-      entityId: entityIdOf(p.message.sessionId, p.message.branchId),
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
     }),
   },
@@ -260,7 +290,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     error: AgentLoopError,
     persisted: true,
     id: (p: TurnSubmissionInput) => ({
-      entityId: entityIdOf(p.message.sessionId, p.message.branchId),
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
     }),
   },
@@ -269,7 +299,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     error: AgentLoopError,
     persisted: true,
     id: (p: SteerInput) => ({
-      entityId: entityIdOf(p.command.sessionId, p.command.branchId),
+      entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
       primaryKey: p.commandId,
     }),
   },
@@ -278,7 +308,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     error: AgentLoopError,
     persisted: true,
     id: (p: InterruptInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
     }),
   },
@@ -287,7 +317,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     error: AgentLoopError,
     persisted: true,
     id: (p: RespondInteractionInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.requestId,
     }),
   },
@@ -298,7 +328,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     success: QueueSnapshot,
     error: AgentLoopError,
     id: (p: DrainQueueInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
     }),
   },
@@ -307,7 +337,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     success: QueueSnapshot,
     error: AgentLoopError,
     id: (p: GetQueueInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: "get-queue",
     }),
   },
@@ -316,7 +346,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     success: SessionRuntimeStateSchema,
     error: AgentLoopError,
     id: (p: GetStateInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: "get-state",
     }),
   },
@@ -326,7 +356,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: RecordToolResultFields,
     error: AgentLoopError,
     id: (p: RecordToolResultInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.toolCallId,
     }),
   },
@@ -338,7 +368,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: InvokeToolFields,
     error: AgentLoopError,
     id: (p: InvokeToolInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
     }),
   },
@@ -350,7 +380,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: EnsureStartedFields,
     error: AgentLoopError,
     id: (p: EnsureStartedInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: "ensure-started",
     }),
   },
@@ -360,7 +390,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: TerminateBranchFields,
     error: AgentLoopError,
     id: (p: TerminateBranchInput) => ({
-      entityId: entityIdOf(p.sessionId, p.branchId),
+      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: "terminate-branch",
     }),
   },

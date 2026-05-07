@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
+import { GentRpcs, WorkspaceRpcMiddleware } from "../../src/server/rpcs"
 import { BranchRpcs } from "../../src/server/rpcs/branch"
 import { SessionRpcs } from "../../src/server/rpcs/session"
 
@@ -41,5 +42,11 @@ describe("RPC contract schemas", () => {
     expect(decodeSuccess(BranchRpcs, "branch.fork", { branchId: "branch-2" })).toEqual({
       branchId: "branch-2",
     })
+  })
+
+  test("all RPCs require workspace header middleware", () => {
+    for (const rpc of GentRpcs.requests.values()) {
+      expect(rpc.middlewares.has(WorkspaceRpcMiddleware)).toBe(true)
+    }
   })
 })

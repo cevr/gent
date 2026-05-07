@@ -2,6 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { entityIdOf, parseEntityId } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
 
 const cases: ReadonlyArray<{ readonly session: string; readonly branch: string }> = [
   { session: "session-a", branch: "branch-main" },
@@ -20,8 +21,9 @@ describe("agent-loop.entity-id", () => {
       for (const { session, branch } of cases) {
         const sid = SessionId.make(session)
         const bid = BranchId.make(branch)
-        const encoded = entityIdOf(sid, bid)
+        const encoded = entityIdOf(DefaultWorkspaceId, sid, bid)
         const decoded = yield* parseEntityId(encoded)
+        expect(decoded.workspaceId).toBe(DefaultWorkspaceId)
         expect(decoded.sessionId).toBe(sid)
         expect(decoded.branchId).toBe(bid)
       }
@@ -29,8 +31,14 @@ describe("agent-loop.entity-id", () => {
   )
 
   test("does not collide on tricky pairs", () => {
-    const a = entityIdOf(SessionId.make("a:"), BranchId.make("x"))
-    const b = entityIdOf(SessionId.make("a"), BranchId.make(":x"))
+    const a = entityIdOf(DefaultWorkspaceId, SessionId.make("a:"), BranchId.make("x"))
+    const b = entityIdOf(DefaultWorkspaceId, SessionId.make("a"), BranchId.make(":x"))
+    expect(a).not.toBe(b)
+  })
+
+  test("does not collide across workspaces", () => {
+    const a = entityIdOf("a".repeat(64), SessionId.make("same"), BranchId.make("same"))
+    const b = entityIdOf("b".repeat(64), SessionId.make("same"), BranchId.make("same"))
     expect(a).not.toBe(b)
   })
 
