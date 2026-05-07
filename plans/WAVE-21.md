@@ -95,6 +95,7 @@ Commits landed in this wave so far:
 - `05579bfa refactor(task-tools): own task domain in extension`
 - `4d8f91f2 refactor(extensions): keep process runner out of author api`
 - `bae05284 refactor(extensions): remove platform from author api`
+- `3c0843c2 fix(extensions): isolate resource startup failures`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -104,9 +105,11 @@ classes of privilege and races, but the deeper P1s remain:
   `TxSubscriptionRef.modify` still exposes the in-memory transition before the
   durable write can fail, and queue persistence failures still do not flow
   through actor persistence-failure handling.
-- Resource start failure now fails the resource layer, but that is still the
-  wrong ownership boundary. Startup failures must be extension activation
-  failures, allowing unaffected extensions to remain active.
+- Resource lifecycle startup failures now belong to extension reconciliation:
+  a failed process resource marks only its owning extension failed with
+  `phase: "startup"`, while unaffected extensions remain active. Runtime
+  profile layer construction skips duplicate lifecycle hooks and still builds
+  process resource services normally.
 - Public resource scopes are not truthful yet. The production path builds only
   process resources, while ephemeral child runtimes can rebuild process-scoped
   extension resources.
@@ -550,29 +553,32 @@ Validation:
 Goal: remove the impossible state where a failed resource has active
 contributions.
 
-Status: partial. `fd01be17` made resource start failure fail the resource layer,
-but fresh audit found startup failure still belongs in extension activation
-state, not profile/runtime layer construction.
+Status: startup-failure ownership closed by `3c0843c2`. Broader resource scope
+truth remains open under C21.7.
 
 Work:
 
-- Build/start resources per owning extension during activation or otherwise
-  preserve extension identity across startup.
-- Make lifecycle start failures part of activation/reconciliation output.
+- Build/start lifecycle resources per owning extension during activation or
+  otherwise preserve extension identity across startup. Done in `3c0843c2`.
+- Make lifecycle start failures part of activation/reconciliation output. Done
+  in `3c0843c2`.
 - Mark dependent contributions inactive when required resource startup fails.
+  Done in `3c0843c2`.
 - Prove one failed extension resource does not prevent unrelated extensions
-  from activating.
+  from activating. Done in `3c0843c2`.
 - Make process/cwd/session/branch resource scopes truthful, or delete
-  unimplemented scope literals until their owners exist.
+  unimplemented scope literals until their owners exist. Moved to C21.7.
 - Expose resource health to doctor/diagnostic paths.
 - Update docs for resource scope semantics.
 
 Validation:
 
-- Focused resource-start-failure regression.
-- `bun run test -- tests/extensions`
+- Focused resource-start-failure regression:
+  `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/activation.test.ts tests/runtime/runtime-profile.test.ts`
+- Focused resource/service regression:
+  `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-tool-execution.test.ts tests/task-tools/task-storage.test.ts tests/task-tools/task-rpc.test.ts tests/delegate/delegate-background.test.ts`
 - `bun run test:e2e` where extension startup is exercised.
-- `bun run gate`
+- `bun run gate` passed in the `3c0843c2` pre-commit hook.
 
 ### C21.5 — Narrow The Public Extension Author API
 
