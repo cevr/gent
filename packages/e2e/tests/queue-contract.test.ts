@@ -173,6 +173,20 @@ describe("queue seam contract", () => {
               })
               .pipe(Effect.mapError(toTestFailure))
 
+            const followUpQueued = yield* waitFor(
+              client.queue
+                .get({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                })
+                .pipe(Effect.mapError(toTestFailure)),
+              (snapshot) =>
+                snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+              10_000,
+            )
+
+            expect(followUpQueued.followUp[0]?.content).toContain("queued follow-up")
+
             yield* client.steer
               .command({
                 command: {
@@ -183,22 +197,6 @@ describe("queue seam contract", () => {
                 },
               })
               .pipe(Effect.mapError(toTestFailure))
-
-            const queued = yield* waitFor(
-              client.queue
-                .get({
-                  sessionId: created.sessionId,
-                  branchId: created.branchId,
-                })
-                .pipe(Effect.mapError(toTestFailure)),
-              (snapshot) =>
-                snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
-                snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
-              10_000,
-            )
-
-            expect(queued.steering[0]?.content).toContain("urgent steer")
-            expect(queued.followUp[0]?.content).toContain("queued follow-up")
 
             // Release chunks so the first turn finishes and the steer + follow-up
             // can drain through the run loop. Each subsequent turn re-uses the

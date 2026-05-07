@@ -16,6 +16,7 @@
 import { Context, Effect, Layer } from "effect"
 import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
+import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { StorageTransaction } from "../../storage/storage-transaction.js"
 import { Provider } from "../../providers/provider.js"
@@ -43,6 +44,7 @@ export type AgentLoopBehaviorDepsShape = {
   readonly toolRunner: typeof ToolRunner.Service
   readonly resourceManager: ResourceManagerService
   readonly messageStorage: typeof MessageStorage.Service
+  readonly queueStorage: typeof AgentLoopQueueStorage.Service
   readonly sessionStorage: typeof SessionStorage.Service
   readonly configServiceForRun: typeof ConfigService.Service
   readonly getPricing: PricingLookup
@@ -65,6 +67,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
     never,
     | SessionStorage
     | MessageStorage
+    | AgentLoopQueueStorage
     | EventStorage
     | StorageTransaction
     | Provider
@@ -81,6 +84,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
       Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const messageStorage = yield* MessageStorage
+        const queueStorage = yield* AgentLoopQueueStorage
         const eventStorage = yield* EventStorage
         const storageTransaction = yield* StorageTransaction
         const turnStorage: TurnStorage = {
@@ -115,6 +119,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           toolRunner,
           resourceManager,
           messageStorage,
+          queueStorage,
           sessionStorage,
           configServiceForRun,
           getPricing,

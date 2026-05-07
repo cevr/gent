@@ -154,6 +154,20 @@ const initialMigration = Effect.gen(function* () {
   )
 })
 
+const agentLoopQueueMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE agent_loop_queues (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      queue_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id)
+    )
+  `)
+})
+
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
 
@@ -167,6 +181,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
   SqliteMigrator.layer({
     loader: Migrator.fromRecord({
       "001_init": initialMigration,
+      "002_agent_loop_queue": agentLoopQueueMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

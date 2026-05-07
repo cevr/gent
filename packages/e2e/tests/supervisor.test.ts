@@ -102,6 +102,11 @@ describe("worker supervisor", () => {
             { concurrency: "unbounded" },
           )
 
+          if (exitCode !== 0) {
+            throw new Error(
+              `headless --connect exited ${exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+            )
+          }
           expect(exitCode).toBe(0)
           expect(stderr).toBe("")
           expect(stdout.length).toBeGreaterThan(0)

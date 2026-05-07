@@ -41,6 +41,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import type { MessageStorage } from "../../storage/message-storage.js"
+import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import type { Provider } from "../../providers/provider.js"
 import { SessionProfileCache } from "../session-profile.js"
 import type { ExtensionRegistryService } from "../extensions/registry.js"
@@ -200,6 +201,7 @@ export type AgentLoopBehaviorDeps = {
   readonly toolRunner: typeof ToolRunner.Service
   readonly resourceManager: ResourceManagerService
   readonly messageStorage: typeof MessageStorage.Service
+  readonly queueStorage: typeof AgentLoopQueueStorage.Service
   readonly sessionStorage: typeof SessionStorage.Service
   readonly configServiceForRun: typeof ConfigService.Service
   readonly getPricing: PricingLookup
@@ -240,6 +242,7 @@ export const makeAgentLoopBehavior = (
       toolRunner,
       resourceManager,
       messageStorage,
+      queueStorage,
       sessionStorage,
       configServiceForRun,
       getPricing,
@@ -316,13 +319,24 @@ export const makeAgentLoopBehavior = (
     let started = false
 
     const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
-      SubscriptionRef.update(loopRef, (s) => ({
-        ...s,
-        state,
-        queue,
-        stateEpoch: s.stateEpoch + 1,
-        startingState: undefined,
-      }))
+      queueStorage.putQueueState(sessionId, branchId, queue).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentLoopError({
+              message: `Failed to persist loop queue for ${sessionId}/${branchId}`,
+              cause,
+            }),
+        ),
+        Effect.andThen(
+          SubscriptionRef.update(loopRef, (s) => ({
+            ...s,
+            state,
+            queue,
+            stateEpoch: s.stateEpoch + 1,
+            startingState: undefined,
+          })),
+        ),
+      )
 
     const persistRuntimeState = (state: LoopState) =>
       SubscriptionRef.get(loopRef).pipe(
@@ -372,10 +386,21 @@ export const makeAgentLoopBehavior = (
     const takeNextQueuedTurnSerialized = queueMutationSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const queuedCreatedAt = yield* DateTime.nowAsDate
-        return yield* SubscriptionRef.modify(loopRef, (s) => {
+        const taken = yield* SubscriptionRef.modify(loopRef, (s) => {
           const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
           return [{ nextItem }, { ...s, queue }]
         })
+        const current = yield* SubscriptionRef.get(loopRef)
+        yield* queueStorage.putQueueState(sessionId, branchId, current.queue).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: `Failed to persist dequeued turn for ${sessionId}/${branchId}`,
+                cause,
+              }),
+          ),
+        )
+        return taken
       }),
     )
 

@@ -1,5 +1,5 @@
-import { Cause, Context, DateTime, Effect, Layer, Schema, Semaphore, Stream } from "effect"
-import { Entity, type Sharding } from "effect/unstable/cluster"
+import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, Semaphore, Stream } from "effect"
+import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
 import {
@@ -25,6 +25,7 @@ import { Message, MessageMetadata, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
@@ -386,8 +387,11 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const actorClientFactory = yield* AgentLoopActor.Context
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
     actorClientFactory(entityIdOf(sessionId, branchId))
+  const sharding = yield* Sharding.Sharding
+  const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
+  const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
   const agentLoopStateRegistry = yield* AgentLoopStateRegistry
@@ -418,7 +422,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
             })
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
+            yield* ref.send(
               AgentLoopActor.QueueFollowUp.make({
                 message,
                 agentOverride: undefined,
@@ -426,6 +430,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
                 interactive: undefined,
               }),
             )
+            yield* waitForSubmittedMessageAccepted({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              messageId: message.id,
+              content: input.content,
+            })
           }),
       },
     },
@@ -444,6 +454,65 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             cause,
           }),
       ),
+    )
+
+  const waitForSubmittedMessageAccepted = (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly messageId: MessageId
+    readonly content?: string
+    readonly acceptPersisted?: boolean
+  }): Effect.Effect<void, SessionRuntimeError> =>
+    Effect.gen(function* () {
+      const deadline = (yield* Clock.currentTimeMillis) + 15_000
+      const loop: Effect.Effect<void, SessionRuntimeError> = Effect.gen(function* () {
+        if (params.acceptPersisted !== false) {
+          const persisted = yield* messageStorage.getMessage(params.messageId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new SessionRuntimeError({
+                  message: `Failed to read submitted message ${params.messageId}`,
+                  cause,
+                }),
+            ),
+          )
+          if (persisted !== undefined) return
+        }
+
+        const ref = yield* agentLoopActorRefFor(params.sessionId, params.branchId)
+        const queue = yield* ref.execute(AgentLoopActor.GetQueue.make(params)).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SessionRuntimeError({
+                message: `Failed to read submitted message queue ${params.messageId}`,
+                cause,
+              }),
+          ),
+        )
+        const queued = [...queue.steering, ...queue.followUp].some(
+          (entry) =>
+            entry.id === params.messageId ||
+            (params.content !== undefined && entry.content.includes(params.content)),
+        )
+        if (queued) return
+
+        if ((yield* Clock.currentTimeMillis) >= deadline) {
+          return yield* new SessionRuntimeError({
+            message: `Timed out waiting for submitted message ${params.messageId}`,
+          })
+        }
+
+        yield* Effect.sleep("50 millis")
+        return yield* loop
+      })
+      yield* loop
+    })
+
+  const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
+    AgentLoopActor.redeliver(entityIdOf(target.sessionId, target.branchId)).pipe(
+      Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+      Effect.provideService(Sharding.Sharding, sharding),
+      Effect.ignore,
     )
 
   const sendUserMessage = Effect.fn("SessionRuntime.sendUserMessage")(function* (
@@ -494,7 +563,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     yield* ref
-      .execute(
+      .send(
         AgentLoopActor.Submit.make({
           message,
           agentOverride: input.agentOverride,
@@ -539,6 +608,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           )
         }),
       )
+    yield* waitForSubmittedMessageAccepted({
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      messageId: message.id,
+      content,
+    })
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({
         sessionId: input.sessionId,
@@ -607,7 +682,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             Effect.gen(function* () {
               const commandId = ActorCommandId.make(yield* platform.randomId)
               const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-              yield* ref.execute(AgentLoopActor.Steer.make({ commandId, command }))
+              yield* ref.send(AgentLoopActor.Steer.make({ commandId, command }))
             }),
           ),
           Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
@@ -655,7 +730,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
                 ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
               })
               const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-              yield* ref.execute(
+              yield* ref.send(
                 AgentLoopActor.QueueFollowUp.make({
                   message,
                   agentOverride: undefined,
@@ -663,6 +738,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
                   interactive: undefined,
                 }),
               )
+              yield* waitForSubmittedMessageAccepted({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                messageId: message.id,
+                content: input.content,
+              })
             }),
           ),
           Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
@@ -688,6 +769,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     getQueuedMessages: (input) =>
       requireSessionBranch(input).pipe(
+        Effect.andThen(redeliverPendingActorMessages(input)),
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
@@ -700,6 +782,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     getState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
+        yield* redeliverPendingActorMessages(input)
         const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
         const loopState = yield* ref.execute(AgentLoopActor.GetState.make(input))
         return loopState satisfies SessionRuntimeState

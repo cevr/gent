@@ -69,6 +69,7 @@ import { GentPlatform } from "../gent-platform.js"
 import {
   AgentLoopError,
   assistantMessageIdForCommand,
+  interjectionMessageIdForCommand,
   toolCallIdForCommand,
   toolResultMessageIdForCommand,
   toolResultMessageIdForToolCall,
@@ -82,6 +83,7 @@ import {
   projectRuntimeState,
   queueSnapshotFromQueueState,
   SessionRuntimeStateSchema,
+  takeNextQueuedTurn,
   type AgentLoopState,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
@@ -238,6 +240,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   Submit: {
     payload: TurnSubmissionFields,
     error: AgentLoopError,
+    persisted: true,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
@@ -254,6 +257,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   QueueFollowUp: {
     payload: TurnSubmissionFields,
     error: AgentLoopError,
+    persisted: true,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
@@ -262,6 +266,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   Steer: {
     payload: SteerFields,
     error: AgentLoopError,
+    persisted: true,
     id: (p: SteerInput) => ({
       entityId: entityIdOf(p.command.sessionId, p.command.branchId),
       primaryKey: p.commandId,
@@ -270,6 +275,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   Interrupt: {
     payload: InterruptFields,
     error: AgentLoopError,
+    persisted: true,
     id: (p: InterruptInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.commandId,
@@ -278,6 +284,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   RespondInteraction: {
     payload: RespondInteractionFields,
     error: AgentLoopError,
+    persisted: true,
     id: (p: RespondInteractionInput) => ({
       entityId: entityIdOf(p.sessionId, p.branchId),
       primaryKey: p.requestId,
@@ -472,6 +479,54 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const currentRuntimeState = (loop: AgentLoopBehavior) =>
     SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState))
 
+  const hasPriorMessageHistory = Effect.gen(function* () {
+    const messages = yield* deps.messageStorage
+      .listMessages(branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed([])))
+    return messages.some((message) => message.sessionId === sessionId)
+  })
+
+  const hasIncompleteUserTurn = Effect.gen(function* () {
+    const envelopes = yield* deps.turnStorage.events
+      .listEvents({ sessionId, branchId })
+      .pipe(Effect.catchEager(() => Effect.succeed([])))
+    const completed = new Set(
+      envelopes.flatMap((envelope) =>
+        envelope.event._tag === "TurnCompleted" && envelope.event.messageId !== undefined
+          ? [envelope.event.messageId]
+          : [],
+      ),
+    )
+    return envelopes.some(
+      (envelope) =>
+        envelope.event._tag === "MessageReceived" &&
+        envelope.event.message.role === "user" &&
+        !completed.has(envelope.event.message.id),
+    )
+  })
+
+  const startNextQueuedTurnIfIdle = Effect.gen(function* () {
+    const start = yield* handle.queueMutationSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(handle.loopRef)
+        if (current.state._tag !== "Idle") return
+        const queuedCreatedAt = yield* DateTime.nowAsDate
+        const { queue, nextItem } = takeNextQueuedTurn(current.queue, queuedCreatedAt)
+        yield* handle.persistQueueCurrentState(queue)
+        return nextItem
+      }),
+    )
+    if (start !== undefined) {
+      yield* handle
+        .startTurn(start)
+        .pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
+    }
+  })
+
   const markWrite = Effect.gen(function* () {
     if (yield* sessionGovernance.isTerminated(sessionId)) {
       return yield* new AgentLoopError({
@@ -572,10 +627,45 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           ),
         )
     }
+    if (!wasAlreadyWarm) {
+      if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
+        yield* startNextQueuedTurnIfIdle
+      }
+      return
+    }
   })
 
   const openLoop = Effect.gen(function* () {
     yield* Ref.set(closed, false)
+    const initialQueueExit = yield* Effect.exit(
+      deps.queueStorage.getQueueState(sessionId, branchId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentLoopError({
+              message: `Failed to load loop queue for ${sessionId}/${branchId}`,
+              cause,
+            }),
+        ),
+      ),
+    )
+    const initialQueue = Exit.isSuccess(initialQueueExit)
+      ? initialQueueExit.value
+      : emptyLoopQueueState()
+    const initialQueueFailure = Exit.isFailure(initialQueueExit)
+      ? new AgentLoopError({
+          message: `Failed to load loop queue for ${sessionId}/${branchId}`,
+          cause: initialQueueExit.cause,
+        })
+      : undefined
+    if (initialQueueFailure !== undefined) {
+      yield* Effect.logWarning("failed to load loop queue").pipe(
+        Effect.annotateLogs({
+          sessionId,
+          branchId,
+          error: initialQueueFailure.message,
+        }),
+      )
+    }
     handle = yield* makeAgentLoopBehavior(
       {
         ...deps,
@@ -584,8 +674,12 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       sessionId,
       branchId,
       sideMutationSemaphore,
-      emptyLoopQueueState(),
+      initialQueue,
     )
+    if (initialQueueFailure !== undefined) {
+      startupExit = Exit.fail(initialQueueFailure)
+      return
+    }
 
     yield* stateRegistry.register(sessionId, branchId, {
       loopRef: handle.loopRef,
@@ -593,7 +687,21 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       persistQueueState: handle.persistQueueState,
       closed: handle.closed,
     })
-    startupExit = yield* Effect.exit(handle.start.pipe(Effect.andThen(handle.refreshRuntimeState)))
+    startupExit = yield* Effect.exit(
+      handle.start.pipe(
+        Effect.andThen(handle.refreshRuntimeState),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const hasRecoveredQueue =
+              initialQueue.steering.length > 0 || initialQueue.followUp.length > 0
+            if (!hasRecoveredQueue) return
+            if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
+              yield* startNextQueuedTurnIfIdle
+            }
+          }),
+        ),
+      ),
+    )
   })
 
   yield* openLoop
@@ -715,7 +823,10 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     yield* failIfTurnFailedAfterEpoch(handle, start.turnFailureBaseline)
   })
 
-  const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (command: SteerCommandType) {
+  const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
+    commandId: ActorCommandId,
+    command: SteerCommandType,
+  ) {
     yield* ensureStarted
     yield* ensureTarget(command)
     yield* markWrite
@@ -754,7 +865,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
       case "Interject": {
         const interjectMessage = Message.Interjection.make({
-          id: MessageId.make(yield* platform.randomId),
+          id: interjectionMessageIdForCommand(commandId),
           sessionId: command.sessionId,
           branchId: command.branchId,
           role: "user",
@@ -790,9 +901,11 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) => runTurn(operation),
     QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
       ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
-    Steer: ({ operation }: HandlerRequest<SteerInput>) => applySteer(operation.command),
+    Steer: ({ operation }: HandlerRequest<SteerInput>) =>
+      applySteer(operation.commandId, operation.command),
     Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
       applySteer(
+        operation.commandId,
         Schema.decodeSync(SteerCommand)({
           _tag: "Cancel",
           sessionId: operation.sessionId,

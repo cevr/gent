@@ -85,6 +85,8 @@ export const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:assistant`)
 export const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:tool-result`)
+export const interjectionMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:interjection`)
 
 export const toolResultMessageIdForToolCall = (toolCallId: ToolCallId) =>
   MessageId.make(`tool-call:${toolCallId}:tool-result`)

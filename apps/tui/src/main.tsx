@@ -273,7 +273,7 @@ const main = Command.make(
         })
         const missingProviders = startupAuth.missingProviders
 
-        if (missingProviders.length > 0 && !debug) {
+        if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
           const hint = formatMissingProviders(missingProviders)
           yield* Console.error(`Error: missing required API keys: ${hint}`)
           return yield* Effect.die(hint)

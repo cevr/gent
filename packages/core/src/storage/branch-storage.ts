@@ -112,6 +112,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
                 if (messageIds.length > 0) {
                   yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
                 }
+                yield* sql`DELETE FROM agent_loop_queues WHERE branch_id = ${id}`
                 yield* sql`DELETE FROM branches WHERE id = ${id}`
                 yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
               }),

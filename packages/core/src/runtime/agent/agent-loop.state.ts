@@ -10,6 +10,8 @@ import {
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
+import type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
+export type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
 import { Message, TextPart, ToolCallPart } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import {
@@ -23,24 +25,10 @@ import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
 } from "../../domain/ids.js"
-import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
+import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 
 // ── Queue ──
-
-export const QueuedTurnItemSchema = Schema.Struct({
-  message: Message,
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  interactive: Schema.optional(Schema.Boolean),
-})
-export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
-
-export const LoopQueueState = Schema.Struct({
-  steering: Schema.Array(QueuedTurnItemSchema),
-  followUp: Schema.Array(QueuedTurnItemSchema),
-})
-export type LoopQueueState = typeof LoopQueueState.Type
 
 const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
   if (existing.agentOverride !== undefined || incoming.agentOverride !== undefined) return false

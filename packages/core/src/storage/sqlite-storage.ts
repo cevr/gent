@@ -11,6 +11,7 @@ import { SearchStorage } from "./search-storage.js"
 import { SessionStorage } from "./session-storage.js"
 import { BranchStorage } from "./branch-storage.js"
 import { MessageStorage } from "./message-storage.js"
+import { AgentLoopQueueStorage } from "./agent-loop-queue-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { StorageTransaction } from "./storage-transaction.js"
@@ -29,6 +30,7 @@ type FocusedStorage =
   | SessionStorage
   | BranchStorage
   | MessageStorage
+  | AgentLoopQueueStorage
   | EventStorage
   | RelationshipStorage
   | StorageTransaction
@@ -45,6 +47,7 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(SessionStorage.Live, base),
     Layer.provide(BranchStorage.Live, base),
     Layer.provide(MessageStorage.Live, base),
+    Layer.provide(AgentLoopQueueStorage.Live, base),
     Layer.provide(EventStorage.Live, base),
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(StorageTransaction.Live, base),
