@@ -1515,6 +1515,41 @@ Record:
 - any upstream commits and Gent dependency refreshes;
 - final recursive audit result.
 
+#### C101-C106: refactor(runtime): finish STM-owned loop queue mutations
+
+The recursive audit still finds the runtime queue path half-migrated:
+`AgentLoopBehavior` owns state in `TxSubscriptionRef`, but queue mutation
+serialization still depends on `Semaphore` plus read/modify/write helpers.
+
+Definition of done:
+
+- Queue reservation, follow-up append, steering append, take-next, drain, and
+  snapshot reads are represented as transaction functions over the loop STM
+  state.
+- Non-transactional work stays outside the transaction; durable queue writes
+  persist committed state after the STM decision.
+- Existing queue/concurrency behavior tests remain green, including
+  `packages/core/tests/runtime/agent-loop-stm-queue.test.ts`.
+- No new public API and no parallel legacy queue path.
+
+#### C107-C110: refactor(runtime): remove remaining local ToolRunner erasure
+
+The recursive audit also leaves scoped casts in
+`packages/core/src/runtime/agent/tool-runner.ts`. Some may be upstream Effect AI
+typing limitations, but the wave cannot close until each remaining cast is
+either deleted or isolated behind a named, tested helper with a suppression
+comment proving why the local API cannot express it.
+
+Definition of done:
+
+- `metadata.effect` context casting is removed or wrapped by a typed helper
+  whose input/output boundary is tested.
+- `toolkit.handle(...)` stream service erasure is removed or wrapped by a
+  single named helper with an exact upstream reason.
+- `ToolRunner.run` no longer requires a function-level unsafe assertion.
+- `bun run --cwd packages/core typecheck` and the ToolRunner/agent-loop test
+  lane pass.
+
 ## Completion Definition
 
 Wave 20 is not done when a subset is green. It is done when:
