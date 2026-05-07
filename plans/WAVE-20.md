@@ -1264,6 +1264,8 @@ Progress:
 - C58 moved audit/review/counsel/delegate/research/plan tests into
   `packages/extensions`. Audit/review tests now use the public
   `@gent/core/runtime/runtime-platform` export.
+- C59 moved Anthropic/OpenAI extension and provider-helper tests into
+  `packages/extensions`.
 
 Verification on 2026-05-07:
 
