@@ -13,3 +13,5 @@ export {
   type InteractionPendingReaderService,
   type PendingInteraction,
 } from "../storage/interaction-pending-reader.js"
+export { ProcessError, runProcess } from "../utils/run-process.js"
+export type { ProcessResult, RunProcessOptions } from "../utils/run-process.js"

@@ -919,6 +919,28 @@ Definition of done:
 - No product feature removed.
 - Focused extension tests per family, then `bun run gate`.
 
+Status: in progress.
+
+Sub-commit C32 complete: moved builtin process/platform plumbing through the
+privileged internal seam.
+
+Implementation notes:
+
+- `packages/core/src/extensions/internal.ts` now exports `runProcess`,
+  `ProcessError`, `ProcessResult`, and `RunProcessOptions`.
+- `packages/extensions/internal/builtin.ts` re-exports those process helpers
+  beside `GentPlatform`.
+- Executor sidecar, Anthropic OAuth, ACP session manager, and workflow helpers
+  no longer import `runProcess` / `GentPlatform` from the public extension API.
+- No public compatibility alias was added; public exports are left only until
+  the final C46 narrowing commit deletes the stale surface.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/extensions typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/executor-integration.test.ts packages/core/tests/extensions/acp-agents.test.ts packages/core/tests/extensions/anthropic-credential-service.test.ts`
+- `bun run gate`; test wall `4271ms`
+
 #### C46: refactor(core): narrow `packages/core/src/extensions/api.ts`
 
 Delete public re-exports that are now internal-only.
