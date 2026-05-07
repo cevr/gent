@@ -599,19 +599,6 @@ const buildEphemeralLayer = (params: {
   return composed.layer
 }
 
-const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
-  switch (event._tag) {
-    case "StreamStarted":
-    case "StreamEnded":
-    case "ToolCallStarted":
-    case "ToolCallSucceeded":
-    case "ToolCallFailed":
-      return true
-    default:
-      return false
-  }
-}
-
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
   parentSessionId: SessionId,
@@ -679,6 +666,13 @@ const runEphemeralAgent = (params: {
 }) => {
   const { sessionId, branchId } = params
   const normalizedRunSpec = params.runSpec
+  const mirroredChildEventTags = new Set<AgentEvent["_tag"]>([
+    "StreamStarted",
+    "StreamEnded",
+    "ToolCallStarted",
+    "ToolCallSucceeded",
+    "ToolCallFailed",
+  ])
   // The ephemeral runtime builder centralizes the override-family map;
   // adding a new child-owned service requires editing one composition root.
   const ephemeralLayer = buildEphemeralLayer({
@@ -743,23 +737,22 @@ const runEphemeralAgent = (params: {
 
     const mirrorFiber = yield* Effect.forkChild(
       localEventStore.subscribe({ sessionId }).pipe(
+        Stream.filter((envelope) => mirroredChildEventTags.has(envelope.event._tag)),
         Stream.runForEach((envelope) =>
-          shouldMirrorEphemeralChildEvent(envelope.event)
-            ? Effect.sync(() =>
-                reparentEphemeralChildEvent(
-                  envelope.event,
-                  params.parentSessionId,
-                  params.parentBranchId,
-                ),
-              ).pipe(
-                Effect.flatMap((event) =>
-                  params.parentBaseEventStore
-                    .publish(event)
-                    .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
-                ),
-                Effect.catchEager(() => Effect.void),
-              )
-            : Effect.void,
+          Effect.sync(() =>
+            reparentEphemeralChildEvent(
+              envelope.event,
+              params.parentSessionId,
+              params.parentBranchId,
+            ),
+          ).pipe(
+            Effect.flatMap((event) =>
+              params.parentBaseEventStore
+                .publish(event)
+                .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
+            ),
+            Effect.catchEager(() => Effect.void),
+          ),
         ),
         Effect.catchEager(() => Effect.void),
       ),
