@@ -162,11 +162,7 @@ const makeExecutionToolkit = (params: {
               params.ctx,
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
               metadata
-                .effect(
-                  decodedInput,
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-                  params.ctx as Parameters<typeof metadata.effect>[1],
-                )
+                .effect(decodedInput, params.ctx)
                 .pipe(Effect.mapError(normalizeToolExecutionError)),
             ),
           params.ctx,
@@ -202,15 +198,17 @@ const makeExecutionToolkit = (params: {
   })
 }
 
+const closedHandlerResultStream = (
+  stream: Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError, unknown>,
+): Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError> =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect AI handler streams retain the handler environment in the stream R channel after `toolkit.asEffect()` has closed it; the runtime receives a closed toolkit from `makeExecutionToolkit`.
+  stream as unknown as Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>
+
 const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
   Effect.gen(function* () {
-    const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input).pipe(
-      Effect.map(
-        (stream) =>
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect AI handler stream carries services in the registered handler context; ToolRunner closes it when building the toolkit.
-          stream as unknown as Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>,
-      ),
-    )
+    const resultStream = yield* toolkit
+      .handle(toolCall.toolName, toolCall.input)
+      .pipe(Effect.map(closedHandlerResultStream))
     const terminal = yield* resultStream.pipe(
       Stream.filter((result) => result.preliminary === false),
       Stream.run(Sink.last()),
@@ -258,9 +256,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const extensionRegistry = yield* ExtensionRegistry
       const basePermissionOpt = yield* Effect.serviceOption(Permission)
 
-      const run =
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-        Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
+      const run: ToolRunnerService["run"] = Effect.fn("ToolRunner.run")(
+        function* (toolCall, ctx, profileOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
             yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
@@ -353,7 +350,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const executeResult = yield* scopedExecute.pipe(Effect.result)
 
             if (executeResult._tag === "Failure") {
-              const failure = executeResult.failure as unknown
+              const failure: unknown = executeResult.failure
               if (Schema.is(InteractionPendingError)(failure)) {
                 return yield* failure
               }
@@ -382,7 +379,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
             return yield* finish(executeResult.success)
           }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
-        }) as ToolRunnerService["run"]
+        },
+      )
 
       return ToolRunner.of({ run })
     }),

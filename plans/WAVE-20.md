@@ -1567,6 +1567,22 @@ Definition of done:
 - `bun run --cwd packages/core typecheck` and the ToolRunner/agent-loop test
   lane pass.
 
+Status: in progress.
+
+Completed sub-commits:
+
+- C107-C110 removed the avoidable `metadata.effect` context assertion and the
+  `ToolRunner.run` function-level assertion. The remaining Effect AI handler
+  stream erasure is isolated in `closedHandlerResultStream`, with the upstream
+  reason attached to the only suppression in the file.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/tool-runner.test.ts`
+- `rg "no-unsafe-type-assertion|as unknown|unknown as" packages/core/src/runtime/agent/tool-runner.ts -n`
+
 ## Completion Definition
 
 Wave 20 is not done when a subset is green. It is done when:
