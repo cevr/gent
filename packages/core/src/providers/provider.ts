@@ -14,7 +14,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import { ProviderError } from "../domain/provider-error.js"
-import { resolveProviderModel } from "./model-resolver.js"
+import { ModelResolver, resolveProviderModel, type ResolveModelRequest } from "./model-resolver.js"
 
 // ── Provider Resolution ──
 
@@ -64,6 +64,44 @@ export interface ProviderService {
     request: ModelRequest,
   ) => Effect.Effect<ProviderResolution, ProviderError | ProviderAuthError>
 }
+
+const isModelReasoning = (value: string): value is NonNullable<ModelRequest["reasoning"]> =>
+  value === "none" ||
+  value === "minimal" ||
+  value === "low" ||
+  value === "medium" ||
+  value === "high" ||
+  value === "xhigh"
+
+export const modelResolverFromProvider = <E, R>(
+  providerLayer: Layer.Layer<Provider, E, R>,
+): Layer.Layer<ModelResolver, E, R> =>
+  Layer.effect(
+    ModelResolver,
+    Effect.gen(function* () {
+      const provider = yield* Provider
+      return {
+        resolve: (request: ResolveModelRequest) =>
+          Effect.gen(function* () {
+            const hints = request.hints
+            const reasoning = hints?.reasoning
+            const modelRequest: ModelRequest = {
+              model: request.modelId,
+              ...(reasoning !== undefined && isModelReasoning(reasoning) ? { reasoning } : {}),
+              ...(hints?.maxTokens !== undefined ? { maxTokens: hints.maxTokens } : {}),
+              ...(hints?.temperature !== undefined ? { temperature: hints.temperature } : {}),
+              ...(request.driverRegistry !== undefined
+                ? { driverRegistry: request.driverRegistry }
+                : {}),
+              ...(request.driverId !== undefined ? { driverId: request.driverId } : {}),
+            }
+            const resolved = yield* provider.resolve(modelRequest)
+            const context = yield* Effect.scoped(Layer.build(resolved))
+            return Context.get(context, LanguageModel.LanguageModel)
+          }),
+      }
+    }),
+  ).pipe(Layer.provide(providerLayer))
 
 // ── Response Encoding Toolkit ──
 

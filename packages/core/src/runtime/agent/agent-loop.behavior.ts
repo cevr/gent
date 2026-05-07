@@ -49,7 +49,7 @@ import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import type { Provider } from "../../providers/provider.js"
+import type { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
 import type { ExtensionRegistryService } from "../extensions/registry.js"
 import type { DriverRegistry, DriverRegistryService } from "../extensions/driver-registry.js"
@@ -213,7 +213,7 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
  */
 export type AgentLoopBehaviorDeps = {
   readonly turnStorage: TurnStorage
-  readonly provider: typeof Provider.Service
+  readonly modelResolver: typeof ModelResolver.Service
   readonly extensionRegistry: ExtensionRegistryService
   readonly driverRegistry: typeof DriverRegistry.Service
   readonly eventPublisher: typeof EventPublisher.Service
@@ -254,7 +254,7 @@ export const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     const {
       turnStorage,
-      provider,
+      modelResolver,
       extensionRegistry,
       driverRegistry,
       eventPublisher,
@@ -535,7 +535,7 @@ export const makeAgentLoopBehavior = (
 
       const source = yield* resolveTurnSource({
         resolved: params.resolved,
-        provider,
+        modelResolver,
         driverRegistry: params.driverRegistry,
         publishEvent: publishEventOrDie,
         sessionId,

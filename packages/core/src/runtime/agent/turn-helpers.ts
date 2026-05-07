@@ -43,13 +43,9 @@ import type { EventStorageService } from "../../storage/event-storage.js"
 import type { MessageStorageService } from "../../storage/message-storage.js"
 import type { SessionStorageService } from "../../storage/session-storage.js"
 import type { StorageTransactionService } from "../../storage/storage-transaction.js"
-import {
-  ProviderError,
-  type ProviderService,
-  type ProviderStreamPart,
-} from "../../providers/provider.js"
+import { ProviderError } from "../../providers/provider.js"
+import type { ModelResolverService } from "../../providers/model-resolver.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
-import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../retry"
@@ -617,7 +613,7 @@ export const runTurnBeforeHook = (
 type ModelTurnSource = {
   readonly driverKind: "model"
   readonly driverId?: string
-  readonly stream: Stream.Stream<ProviderStreamPart, ProviderError>
+  readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
@@ -634,7 +630,7 @@ type ExternalTurnSource = {
 
 export const resolveTurnSource = (params: {
   resolved: ResolvedTurnContext
-  provider: ProviderService
+  modelResolver: ModelResolverService
   driverRegistry: DriverRegistryService
   publishEvent: PublishEvent
   sessionId: SessionId
@@ -679,10 +675,12 @@ export const resolveTurnSource = (params: {
       } satisfies ExternalTurnSource
     }
 
-    const model = yield* params.provider.resolve({
-      model: resolved.modelId,
-      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-      ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+    const model = yield* params.modelResolver.resolve({
+      modelId: resolved.modelId,
+      hints: {
+        ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+        ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+      },
       driverRegistry: params.driverRegistry,
       ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
         ? { driverId: resolved.driver.id }
@@ -692,17 +690,16 @@ export const resolveTurnSource = (params: {
     const toolkit = convertTools([...resolved.tools])
     const rawStream =
       resolved.tools.length > 0
-        ? LanguageModel.streamText({
+        ? model.streamText({
             prompt,
             toolkit,
             disableToolCallResolution: true as const,
           })
-        : LanguageModel.streamText({ prompt })
+        : model.streamText({ prompt })
 
     return {
       driverKind: "model" as const,
       stream: rawStream.pipe(
-        Stream.provide(model),
         Stream.mapError(
           (error: unknown) =>
             new ProviderError({

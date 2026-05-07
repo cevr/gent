@@ -6,7 +6,7 @@ import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import { ExtensionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import type { CallRecord } from "@gent/core/test-utils"
-import { Provider } from "@gent/core/providers/provider"
+import { modelResolverFromProvider, Provider } from "@gent/core/providers/provider"
 import { textStep } from "@gent/core/debug/provider"
 import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { SessionCommands } from "../../../src/server/session-commands"
@@ -57,6 +57,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     storageLayer,
     clusterRunnerLayer,
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),

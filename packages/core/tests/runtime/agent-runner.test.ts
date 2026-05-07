@@ -3,6 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
+  modelResolverFromProvider,
   Provider,
   finishPart,
   textDeltaPart,
@@ -136,6 +137,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
       externalDrivers: resolved.externalDrivers,
     }),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
@@ -315,6 +317,7 @@ describe("AgentRunner", () => {
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
         recorderLayer,
@@ -407,6 +410,7 @@ describe("AgentRunner", () => {
         failingPublisherLayer,
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -457,6 +461,7 @@ describe("AgentRunner", () => {
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
         recorderLayer,
@@ -506,6 +511,7 @@ describe("AgentRunner", () => {
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(() => Effect.sleep("50 millis")),
         eventStoreLayer,
@@ -552,14 +558,16 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+      const providerLayer = scriptedProvider([
+        [textDeltaPart("ephemeral response"), finishPart({ finishReason: "stop" })],
+      ])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         eventStoreLayer,
         eventPublisherLayer,
         testRegistryLayer,
-        scriptedProvider([
-          [textDeltaPart("ephemeral response"), finishPart({ finishReason: "stop" })],
-        ]),
+        providerLayer,
+        modelResolverFromProvider(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -611,22 +619,20 @@ describe("AgentRunner", () => {
       const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+      const providerLayer = scriptedProvider([
+        [
+          toolCallPart("bash", { command: "pwd" }, { toolCallId: ToolCallId.make("tc-ephemeral") }),
+          finishPart({ finishReason: "tool-calls" }),
+        ],
+        [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
+      ])
       const deps = Layer.mergeAll(
         storageLayer,
         eventStoreLayer,
         eventPublisherLayer,
         testRegistryLayer,
-        scriptedProvider([
-          [
-            toolCallPart(
-              "bash",
-              { command: "pwd" },
-              { toolCallId: ToolCallId.make("tc-ephemeral") },
-            ),
-            finishPart({ finishReason: "tool-calls" }),
-          ],
-          [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
-        ]),
+        providerLayer,
+        modelResolverFromProvider(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
       )
@@ -683,6 +689,7 @@ describe("AgentRunner", () => {
         SqliteStorage.TestWithSql(),
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         sessionRuntimeStub(),
         eventStoreLayer,
@@ -754,6 +761,7 @@ describe("AgentRunner", () => {
         storageLayer,
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -827,6 +835,7 @@ describe("AgentRunner", () => {
         storageLayer,
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -900,6 +909,7 @@ describe("AgentRunner", () => {
         storageLayer,
         ExtensionRegistry.Test(),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         mockRuntime,
         eventStoreLayer,
@@ -1087,6 +1097,7 @@ describe("ephemeral service propagation", () => {
       eventPublisherLayer,
       testRegistryLayer,
       providerLayer,
+      modelResolverFromProvider(providerLayer),
       sessionRuntimeStub(),
       ephemeralParentDeps,
     )
@@ -1170,6 +1181,7 @@ describe("ephemeral service propagation", () => {
         eventPublisherLayer,
         toolRegistry,
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )

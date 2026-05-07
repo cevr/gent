@@ -32,6 +32,7 @@ import {
   type RunSpec,
 } from "@gent/core/domain/agent"
 import {
+  modelResolverFromProvider,
   Provider,
   finishPart,
   reasoningDeltaPart,
@@ -201,6 +202,7 @@ const makeLayer = (
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     makeExtRegistry(tools, resources),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -232,6 +234,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -286,6 +289,7 @@ const makeLiveToolLayer = (
   const baseDeps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     extRegistry,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -337,6 +341,7 @@ const makeLayerWithEvents = (
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     makeExtRegistry(tools),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -369,6 +374,7 @@ const makeLayerWithEventPublisher = (
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     makeExtRegistry(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -442,6 +448,7 @@ const makeExternalLayerWithEvents = (
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
@@ -580,6 +587,7 @@ describe("streaming", () => {
       const deps = Layer.mergeAll(
         slowStorage,
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         makeExtRegistry(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
@@ -1641,11 +1649,13 @@ describe("interaction", () => {
     tools: ReadonlyArray<ToolToken>,
     providerLayer?: Layer.Layer<Provider>,
   ) => {
+    const resolvedProviderLayer = providerLayer ?? makeInteractionProviderLayer()
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
       SqliteStorage.TestWithSql(),
-      providerLayer ?? makeInteractionProviderLayer(),
+      resolvedProviderLayer,
+      modelResolverFromProvider(resolvedProviderLayer),
       makeExtRegistry(tools),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
@@ -1796,13 +1806,15 @@ describe("interaction", () => {
   )
   it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
     Effect.gen(function* () {
+      const providerLayer = Provider.TestStream(() =>
+        Effect.succeed(
+          Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
+        ),
+      )
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
-        Provider.TestStream(() =>
-          Effect.succeed(
-            Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
-          ),
-        ),
+        providerLayer,
+        modelResolverFromProvider(providerLayer),
         makeExtRegistry(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
@@ -1949,6 +1961,7 @@ describe("queue drain regression", () => {
         const deps = Layer.mergeAll(
           SqliteStorage.TestWithSql(),
           gatedProvider,
+          modelResolverFromProvider(gatedProvider),
           makeExtRegistry(),
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
           ConfigService.Test(),

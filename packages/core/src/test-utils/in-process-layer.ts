@@ -14,7 +14,11 @@ import { Auth, AuthGuard } from "../domain/auth.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
+import {
+  DebugSlowProviderDelayMs,
+  Provider,
+  modelResolverFromProvider,
+} from "../providers/provider.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
@@ -70,6 +74,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     memoryStorage,
     clusterRunnerLive,
     providerLive,
+    modelResolverFromProvider(providerLive),
     extensionRegistryLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunGentPlatformLive,

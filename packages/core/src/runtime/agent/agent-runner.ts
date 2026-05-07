@@ -74,6 +74,7 @@ import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
+import { ModelResolver } from "../../providers/model-resolver.js"
 import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -519,6 +520,7 @@ const buildEphemeralLayer = (params: {
   )
   const parentPathLayer = Layer.succeed(Path.Path, parentService(Path.Path))
   const parentProviderLayer = Layer.succeed(Provider, parentService(Provider))
+  const parentModelResolverLayer = Layer.succeed(ModelResolver, parentService(ModelResolver))
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
   const parentGentPlatformLayer = Layer.succeed(GentPlatform, parentService(GentPlatform))
@@ -568,6 +570,7 @@ const buildEphemeralLayer = (params: {
           ResourceManagerLive,
           extensionLayers,
           parentProviderLayer,
+          parentModelResolverLayer,
           parentConfigLayer,
           parentModelRegistryLayer,
           parentGentPlatformLayer,
@@ -891,6 +894,7 @@ export const InProcessRunner = (
   | SessionRuntime
   | ExtensionRegistry
   | Provider
+  | ModelResolver
   | RuntimePlatform
   | FileSystem.FileSystem
   | Path.Path
@@ -1104,6 +1108,7 @@ export const SubprocessRunner = (
   | EventPublisher
   | ExtensionRegistry
   | Provider
+  | ModelResolver
   | RuntimePlatform
   | FileSystem.FileSystem
   | Path.Path

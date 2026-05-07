@@ -30,7 +30,7 @@ import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
-import type { Provider } from "../providers/provider.js"
+import { modelResolverFromProvider, type Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -228,6 +228,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         storageLayer,
         clusterRunnerLive,
         config.providerLayer,
+        modelResolverFromProvider(config.providerLayer),
         extensionRegistryLive,
         driverRegistryLive,
         Permission.Test(),

@@ -7,7 +7,11 @@ import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
-import { DebugSlowProviderDelayMs, Provider } from "../providers/provider.js"
+import {
+  DebugSlowProviderDelayMs,
+  Provider,
+  modelResolverFromProvider,
+} from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
@@ -183,6 +187,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   } else if (providerMode === "debug-slow") {
     providerLive = Provider.Debug({ delayMs: DebugSlowProviderDelayMs })
   }
+  const modelResolverLive = modelResolverFromProvider(providerLive)
 
   const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)
 
@@ -201,6 +206,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     extensionRegistryLive,
     fileLockServiceLive,
     providerLive,
+    modelResolverLive,
     Layer.provide(FileIndexLive, runtimePlatformLive),
     FetchHttpClient.layer,
   )

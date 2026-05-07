@@ -23,7 +23,7 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { Provider, finishPart } from "@gent/core/providers/provider"
+import { modelResolverFromProvider, Provider, finishPart } from "@gent/core/providers/provider"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import {
   messagePartsText,
@@ -231,6 +231,7 @@ const makeLayerWithEvents = (
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
@@ -439,6 +440,7 @@ describe("external turn execution", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         ExtensionRegistry.fromResolved(agentsResolved),
         DriverRegistry.fromResolved({
           modelDrivers: agentsResolved.modelDrivers,
@@ -601,6 +603,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -692,6 +695,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -797,6 +801,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,
@@ -901,6 +906,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
         providerLayer,
+        modelResolverFromProvider(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
         DriverRegistry.fromResolved({
           modelDrivers: e2eResolved.modelDrivers,

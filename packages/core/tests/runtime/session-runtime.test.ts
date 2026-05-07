@@ -10,6 +10,7 @@ import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { tool, ToolNeeds, type ToolToken } from "@gent/core/extensions/api"
 import {
+  modelResolverFromProvider,
   Provider,
   finishPart,
   textDeltaPart,
@@ -88,6 +89,7 @@ const makeRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,
@@ -130,6 +132,7 @@ const makeRuntimeLayerWithEventPublisher = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,
@@ -173,6 +176,7 @@ const makeLiveToolRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
+    modelResolverFromProvider(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     DriverRegistry.fromResolved({
       modelDrivers: resolvedExtensions.modelDrivers,

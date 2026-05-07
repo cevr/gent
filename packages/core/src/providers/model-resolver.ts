@@ -119,6 +119,19 @@ export const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderMode
 export class ModelResolver extends Context.Service<ModelResolver, ModelResolverService>()(
   "@gent/core/src/providers/model-resolver/ModelResolver",
 ) {
+  static fromLanguageModel = (
+    layer: Layer.Layer<LanguageModel.LanguageModel>,
+  ): Layer.Layer<ModelResolver> =>
+    Layer.effect(
+      ModelResolver,
+      Effect.gen(function* () {
+        const model = yield* LanguageModel.LanguageModel
+        return {
+          resolve: () => Effect.succeed(model),
+        }
+      }),
+    ).pipe(Layer.provide(layer))
+
   static Live: Layer.Layer<ModelResolver, never, Auth | DriverRegistry> = Layer.effect(
     ModelResolver,
     Effect.gen(function* () {

@@ -33,7 +33,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
-import { Provider } from "../providers/provider.js"
+import { Provider, modelResolverFromProvider } from "../providers/provider.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 
 export interface ToolTestLayerConfig {
@@ -116,6 +116,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         Permission.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         Provider.Debug(),
+        modelResolverFromProvider(Provider.Debug()),
         ToolRunner.Test(),
         ResourceManagerLive,
         ConfigService.Test(),

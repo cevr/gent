@@ -19,7 +19,7 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { StorageTransaction } from "../../storage/storage-transaction.js"
-import { Provider } from "../../providers/provider.js"
+import { ModelResolver } from "../../providers/model-resolver.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -37,7 +37,7 @@ import type { PricingLookup, TurnStorage } from "./turn-helpers.js"
  */
 export type AgentLoopBehaviorDepsShape = {
   readonly turnStorage: TurnStorage
-  readonly provider: typeof Provider.Service
+  readonly modelResolver: typeof ModelResolver.Service
   readonly extensionRegistry: ExtensionRegistryService
   readonly driverRegistry: typeof DriverRegistry.Service
   readonly eventPublisher: typeof EventPublisher.Service
@@ -70,7 +70,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
     | AgentLoopQueueStorage
     | EventStorage
     | StorageTransaction
-    | Provider
+    | ModelResolver
     | ExtensionRegistry
     | DriverRegistry
     | EventPublisher
@@ -93,7 +93,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           messages: messageStorage,
           sessions: sessionStorage,
         }
-        const provider = yield* Provider
+        const modelResolver = yield* ModelResolver
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
         const eventPublisher = yield* EventPublisher
@@ -112,7 +112,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           )
         return {
           turnStorage,
-          provider,
+          modelResolver,
           extensionRegistry,
           driverRegistry,
           eventPublisher,
