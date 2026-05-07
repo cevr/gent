@@ -167,6 +167,13 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 zsh -c 'find tests -name \"*.test.ts\" -print0 | xargs -0 -n 8 -P 5 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots'"
   },
   "dependencies": {
+    "@effect/opentelemetry": "4.0.0-beta.59",
+    "@opentelemetry/api": "^1.9",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
+    "@opentelemetry/resources": "^2.0.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.0",
+    "@opentelemetry/sdk-trace-node": "^2.0.0",
+    "@opentelemetry/semantic-conventions": "^1.33.0",
     "effect-encore": "catalog:",
     "effect-wide-event": "catalog:",
     "picomatch": "catalog:"
