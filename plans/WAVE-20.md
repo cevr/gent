@@ -1334,6 +1334,18 @@ Definition of done:
 - File names mirror feature area and source ownership.
 - No assertion weakened during moves.
 
+Status: in progress.
+
+Completed sub-commits:
+
+- C77-C81 split `storage/sqlite-storage.test.ts` into behavior-owned files:
+  `sqlite-session-storage`, `sqlite-event-storage`, `sqlite-branch-storage`,
+  `sqlite-message-storage`, and `sqlite-concurrency`.
+
+Verification on 2026-05-07:
+
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/storage/sqlite-session-storage.test.ts packages/core/tests/storage/sqlite-event-storage.test.ts packages/core/tests/storage/sqlite-branch-storage.test.ts packages/core/tests/storage/sqlite-message-storage.test.ts packages/core/tests/storage/sqlite-concurrency.test.ts`
+
 #### C86-C92: test(tui): mirror TUI source structure
 
 Move/split flat TUI tests into area directories where it improves ownership:
