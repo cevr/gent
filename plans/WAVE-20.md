@@ -1518,6 +1518,33 @@ Run:
 - suppression inventory;
 - residue searches for deleted APIs.
 
+Status: complete.
+
+Verification on 2026-05-07:
+
+- `/Users/cvr/Developer/personal/effect-encore`: `bun run gate`
+- `/Users/cvr/Developer/personal/effect-machine`: `bun run gate`
+- `/Users/cvr/Developer/personal/gent`: `bun run gate`
+- `/Users/cvr/Developer/personal/gent`: `bun run test:e2e`
+- `/Users/cvr/Developer/personal/gent`: `bun packages/tooling/src/check-suppression-inventory.ts`
+- `/Users/cvr/Developer/personal/gent`: `rg "queueMutationSemaphore|persistQueueState|persistQueueCurrentState|persistQueueSnapshot|updateQueue|handle\\.queueState" packages/core/src/runtime/agent -n`
+- `/Users/cvr/Developer/personal/gent`: `rg "ExtensionHostContext|@gent/core/domain/extension-host-context|@gent/core/runtime/extensions|effect-machine|agent-loop-stm-prototype|task-tools\\.test" packages/extensions/src packages/extensions/tests packages/core/src/extensions packages/core/tests apps/tui/src/extensions package.json bun.lock -n`
+- `/Users/cvr/Developer/personal/gent`: `rg "AgentLoopStateRegistry|WithoutCurrentAddress|CurrentAddress|AgentLoop\\.Live|packages/core/src/runtime/agent/agent-loop\\.ts|from \"@gent/core/runtime/agent/agent-loop\"|from \"\\.\\./.*agent-loop\\.js\"" packages/core/src packages/core/tests apps packages/extensions package.json bun.lock -n`
+- `/Users/cvr/Developer/personal/gent`: `rg "@gent/core/(domain|runtime|server|storage|providers)/|\\.\\./\\.\\./.*packages/core/src|domain/extension-host-context|runtime/extensions" apps/tui/src/extensions packages/extensions/src -n`
+- `/Users/cvr/Developer/personal/gent`: `rg "effect-machine" package.json bun.lock packages -n`
+- `/Users/cvr/Developer/personal/gent`: `rg "success:\\s*Schema\\.Unknown|metadata\\.output|Schema\\.Unknown" packages/core/src/domain/capability/tool.ts packages/core/src/runtime/agent/tool-runner.ts -n`
+
+Final residue notes:
+
+- `CurrentAddress` remains only as the upstream Encore actor-provided service,
+  not as Gent layer erasure.
+- `ExtensionHostContext` remains in internal core tests and typed test helpers;
+  it is not exported from `@gent/core/extensions/api`.
+- `effect-machine` remains only in migration comments; package metadata and
+  lockfile no longer depend on it.
+- The only `ToolRunner` stream erasure is the named
+  `closedHandlerResultStream` upstream Effect AI handler-stream boundary.
+
 #### C100: docs(plan): close Wave 20 ledger
 
 Record:
@@ -1527,6 +1554,24 @@ Record:
 - verification receipts;
 - any upstream commits and Gent dependency refreshes;
 - final recursive audit result.
+
+Status: complete.
+
+Closure:
+
+- Upstream `effect-machine` modernization and v3 mirror landed and released in
+  merge `3f26aaf Merge pull request #27 from cevr/changeset-release/main`.
+- Upstream `effect-encore` handler-context/state/storage fixes landed and the
+  SQL storage release merged in `c7f4f94 Merge pull request #20 from
+cevr/changeset-release/main`.
+- Gent adopted the upstream primitives, removed the local actor/state
+  workarounds, narrowed the public extension API, moved extension tests to
+  `@gent/extensions`, split god tests, added RPC/model-turn acceptance
+  coverage, moved budget enforcement out of the core test path, and finished
+  the STM queue/ToolRunner residue found by recursive audit.
+- Final recursive audit: no open P0/P1/P2 findings remain in the Wave 20
+  lanes. Remaining explicit boundaries are documented and covered by guard
+  searches.
 
 #### C101-C106: refactor(runtime): finish STM-owned loop queue mutations
 
