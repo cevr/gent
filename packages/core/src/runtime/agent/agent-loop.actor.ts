@@ -69,9 +69,9 @@ import { GentPlatform } from "../gent-platform.js"
 import {
   AgentLoopError,
   assistantMessageIdForCommand,
-  commandIdForToolCall,
   toolCallIdForCommand,
   toolResultMessageIdForCommand,
+  toolResultMessageIdForToolCall,
 } from "./agent-loop.commands.js"
 import {
   appendFollowUpQueueState,
@@ -866,7 +866,10 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
             recordToolResultPhase({
               storage: deps.turnStorage,
               eventPublisher: deps.eventPublisher,
-              commandId: operation.commandId ?? commandIdForToolCall(operation.toolCallId),
+              toolResultMessageId:
+                operation.commandId !== undefined
+                  ? toolResultMessageIdForCommand(operation.commandId)
+                  : toolResultMessageIdForToolCall(operation.toolCallId),
               sessionId: operation.sessionId,
               branchId: operation.branchId,
               toolCallId: operation.toolCallId,

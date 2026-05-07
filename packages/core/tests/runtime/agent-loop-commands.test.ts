@@ -6,6 +6,7 @@ import {
   toolCallIdForCommand,
   assistantMessageIdForCommand,
   toolResultMessageIdForCommand,
+  toolResultMessageIdForToolCall,
 } from "../../src/runtime/agent/agent-loop.commands"
 import {
   ActorCommandId,
@@ -35,6 +36,9 @@ describe("agent loop commands", () => {
     expect(String(toolCallIdForCommand(commandId))).toBe(String(commandId))
     expect(String(assistantMessageIdForCommand(commandId))).toBe(`${commandId}:assistant`)
     expect(String(toolResultMessageIdForCommand(commandId))).toBe(`${commandId}:tool-result`)
+    expect(String(toolResultMessageIdForToolCall(toolCallIdForCommand(commandId)))).toBe(
+      `tool-call:${commandId}:tool-result`,
+    )
   })
 
   test("loop command schema accepts submit turn commands", () => {

@@ -23,13 +23,7 @@ import {
   type ReasoningPart,
   type TextPart,
 } from "../../../domain/message.js"
-import {
-  ToolCallId,
-  type ActorCommandId,
-  type BranchId,
-  type MessageId,
-  type SessionId,
-} from "../../../domain/ids.js"
+import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../../domain/ids.js"
 import {
   ErrorOccurred,
   MessageReceived,
@@ -73,7 +67,6 @@ import {
   toolResultMessageIdForTurn,
 } from "../agent-loop.utils.js"
 import type { ResolvedTurn } from "../agent-loop.state.js"
-import { toolResultMessageIdForCommand } from "../agent-loop.commands.js"
 import {
   collectExternalTurnResponse,
   collectFailedModelTurnResponse,
@@ -158,7 +151,7 @@ export const persistMessageReceived = (params: {
 export const recordToolResultPhase = (params: {
   storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  commandId: ActorCommandId
+  toolResultMessageId: MessageId
   sessionId: SessionId
   branchId: BranchId
   toolCallId: ToolCallId
@@ -176,7 +169,7 @@ export const recordToolResultPhase = (params: {
     })
 
     const message = Message.Regular.make({
-      id: toolResultMessageIdForCommand(params.commandId),
+      id: params.toolResultMessageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "tool",
