@@ -73,13 +73,9 @@ import {
   toolResultMessageIdForToolCall,
 } from "./agent-loop.commands.js"
 import {
-  appendFollowUpQueueState,
-  appendSteeringItem,
   emptyLoopQueueState,
   projectRuntimeState,
-  queueSnapshotFromQueueState,
   SessionRuntimeStateSchema,
-  takeNextQueuedTurn,
   type AgentLoopState,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
@@ -592,16 +588,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   )
 
   const startNextQueuedTurnIfIdle = Effect.gen(function* () {
-    const start = yield* handle.queueMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const current = yield* handle.readState
-        if (current.state._tag !== "Idle") return
-        const queuedCreatedAt = yield* DateTime.nowAsDate
-        const { queue, nextItem } = takeNextQueuedTurn(current.queue, queuedCreatedAt)
-        yield* handle.persistQueueCurrentState(queue)
-        return nextItem
-      }),
-    )
+    const start = yield* handle.takeNextQueuedTurnIfIdle
     if (start !== undefined) {
       yield* handle
         .startTurn(start)
@@ -756,7 +743,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const currentRegisteredState = Effect.gen(function* () {
     yield* rejectIfTerminated
     yield* ensureStarted
-    return yield* handle.queueMutationSemaphore.withPermits(1)(currentRuntimeState(handle))
+    return yield* currentRuntimeState(handle)
   })
 
   const registeredStateChanges = Stream.unwrap(
@@ -803,21 +790,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     yield* ensureTarget(operation.message)
     yield* markWrite
     const item = buildQueuedTurnItem(operation)
-    const start = yield* handle.queueMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const initialState = yield* handle.snapshot
-        if (initialState._tag !== "Idle") {
-          const nextQueue = appendFollowUpQueueState(yield* handle.queueState, item)
-          yield* handle.persistQueueState(nextQueue)
-          return undefined
-        }
-        const current = yield* handle.readState
-        return {
-          stateEpochBaseline: current.stateEpoch,
-          turnFailureBaseline: current.turnFailure?.epoch ?? 0,
-        }
-      }),
-    )
+    const start = yield* handle.reserveRunStartOrQueueFollowUp(item)
     if (start === undefined) return
 
     yield* handle
@@ -891,14 +864,8 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
           message: interjectMessage,
           ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
         }
-        const shouldInterrupt = yield* handle.queueMutationSemaphore.withPermits(1)(
-          Effect.gen(function* () {
-            const nextQueue = appendSteeringItem(yield* handle.queueState, item)
-            yield* handle.persistQueueState(nextQueue)
-            const loopState = yield* handle.snapshot
-            return projectedState._tag === "Running" || loopState._tag === "Running"
-          }),
-        )
+        const loopState = yield* handle.appendSteering(item)
+        const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
         if (shouldInterrupt) {
           yield* interruptActiveStream(handle.activeStreamRef)
         }
@@ -973,16 +940,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(markWrite),
           Effect.andThen(ensureStarted),
-          Effect.andThen(
-            handle.queueMutationSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                const queue = yield* handle.queueState
-                const snapshot = queueSnapshotFromQueueState(queue)
-                yield* handle.persistQueueState(emptyLoopQueueState())
-                return snapshot
-              }),
-            ),
-          ),
+          Effect.andThen(handle.drainQueue),
         ),
       ),
     GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
@@ -990,7 +948,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(rejectIfTerminated),
           Effect.andThen(ensureStarted),
-          Effect.andThen(handle.queueMutationSemaphore.withPermits(1)(handle.queueSnapshot)),
+          Effect.andThen(handle.queueSnapshot),
         ),
       ),
     GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
@@ -998,7 +956,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(rejectIfTerminated),
           Effect.andThen(ensureStarted),
-          Effect.andThen(handle.queueMutationSemaphore.withPermits(1)(handle.runtimeState)),
+          Effect.andThen(handle.runtimeState),
         ),
       ),
     RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>

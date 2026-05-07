@@ -1532,6 +1532,23 @@ Definition of done:
   `packages/core/tests/runtime/agent-loop-stm-queue.test.ts`.
 - No new public API and no parallel legacy queue path.
 
+Status: in progress.
+
+Completed sub-commits:
+
+- C101 moved queue reservation, run reservation, steering append, take-next,
+  drain, and queue snapshot reads behind `AgentLoopBehavior` STM operations.
+  `AgentLoopActor` no longer reaches into queue refs or wraps queue reads and
+  writes in a separate semaphore.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-queue.test.ts packages/core/tests/runtime/agent-loop-queue.test.ts packages/core/tests/runtime/agent-loop-concurrency.test.ts packages/core/tests/runtime/agent-loop-streaming.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-*.test.ts packages/core/tests/runtime/agent/*.test.ts`
+- `rg "queueMutationSemaphore|persistQueueState|persistQueueCurrentState|persistQueueSnapshot|updateQueue|handle\\.queueState" packages/core/src/runtime/agent -n`
+
 #### C107-C110: refactor(runtime): remove remaining local ToolRunner erasure
 
 The recursive audit also leaves scoped casts in

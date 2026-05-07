@@ -17,8 +17,8 @@ import {
   Ref,
   Schema,
   Scope,
-  Semaphore,
   TxSubscriptionRef,
+  type Semaphore,
   type Stream,
 } from "effect"
 import {
@@ -65,6 +65,7 @@ import {
   updateCurrentAgentOnState,
   buildInitialAgentLoopState,
   appendFollowUpQueueState,
+  appendSteeringItem,
   countQueuedFollowUps,
   projectRuntimeState,
   queueSnapshotFromQueueState,
@@ -132,18 +133,28 @@ export const resolveStoredAgent = (params: {
 export type AgentLoopBehavior = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   sideMutationSemaphore: Semaphore.Semaphore
-  queueMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   readState: Effect.Effect<AgentLoopState>
   stateChanges: Stream.Stream<AgentLoopState>
   runtimeState: Effect.Effect<SessionRuntimeState>
-  queueState: Effect.Effect<LoopQueueState>
   queueSnapshot: Effect.Effect<QueueSnapshot>
   setStartingState: (state: RunningState) => Effect.Effect<void>
   reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly coldQueueOnly: boolean },
   ) => Effect.Effect<RunningState | undefined, AgentLoopError>
+  reserveRunStartOrQueueFollowUp: (item: QueuedTurnItem) => Effect.Effect<
+    | {
+        readonly stateEpochBaseline: number
+        readonly turnFailureBaseline: number
+      }
+    | undefined,
+    AgentLoopError
+  >
+  takeNextQueuedTurnIfIdle: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
+  takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
+  appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
+  drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   resolveTurnProfile: Effect.Effect<{
     turnExtensionRegistry: ExtensionRegistryService
     turnDriverRegistry: DriverRegistryService
@@ -153,15 +164,6 @@ export type AgentLoopBehavior = {
   }>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
-  updateQueue: (
-    update: (queue: LoopQueueState) => LoopQueueState,
-  ) => Effect.Effect<void, AgentLoopError>
-  persistQueueSnapshot: (
-    state: LoopState,
-    queue: LoopQueueState,
-  ) => Effect.Effect<void, AgentLoopError>
-  persistQueueCurrentState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
-  persistQueueState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
@@ -344,10 +346,48 @@ export const makeAgentLoopBehavior = (
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
-    const queueMutationSemaphore = yield* Semaphore.make(1)
     const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
     const closed = yield* Deferred.make<void>()
     let started = false
+
+    const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
+      started
+        ? queueStorage.putQueueState(sessionId, branchId, queue).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AgentLoopError({
+                  message: `Failed to persist ${operation} for ${sessionId}/${branchId}`,
+                  cause,
+                }),
+            ),
+          )
+        : Effect.void
+
+    const commitQueueTransaction = <A>(
+      operation: string,
+      decide: (state: AgentLoopState) => {
+        readonly value: A
+        readonly next: AgentLoopState
+        readonly persist: boolean
+      },
+    ): Effect.Effect<A, AgentLoopError> =>
+      Effect.gen(function* () {
+        const decision = yield* TxSubscriptionRef.modify(loopRef, (state) => {
+          const next = decide(state)
+          const committed = next.persist
+            ? {
+                ...next.next,
+                stateEpoch: next.next.stateEpoch + 1,
+                startingState: undefined,
+              }
+            : next.next
+          return [{ ...next, next: committed }, committed]
+        })
+        if (decision.persist) {
+          yield* persistCommittedQueue(decision.next.queue, operation)
+        }
+        return decision.value
+      })
 
     const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
       queueStorage.putQueueState(sessionId, branchId, queue).pipe(
@@ -398,88 +438,130 @@ export const makeAgentLoopBehavior = (
       item: QueuedTurnItem,
       options: { readonly coldQueueOnly: boolean },
     ) =>
-      queueMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const current = yield* readState
-          if (countQueuedFollowUps(current.queue) >= DEFAULTS.followUpQueueMax) {
-            return yield* new AgentLoopError({
-              message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
-            })
+      Effect.gen(function* () {
+        const startedAtMs = yield* Clock.currentTimeMillis
+        return yield* commitQueueTransaction<RunningState | undefined | AgentLoopError>(
+          "reserved or queued follow-up",
+          (current) => {
+            if (countQueuedFollowUps(current.queue) >= DEFAULTS.followUpQueueMax) {
+              return {
+                value: new AgentLoopError({
+                  message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                }),
+                next: current,
+                persist: false,
+              }
+            }
+
+            const nextQueue = appendFollowUpQueueState(current.queue, item)
+            if (options.coldQueueOnly) {
+              return {
+                value: undefined,
+                next: { ...current, queue: nextQueue },
+                persist: true,
+              }
+            }
+
+            if (current.startingState !== undefined) {
+              return {
+                value: undefined,
+                next: {
+                  ...current,
+                  state: current.startingState,
+                  queue: nextQueue,
+                  startingState: undefined,
+                },
+                persist: true,
+              }
+            }
+
+            const projectedState = projectRuntimeState(current)
+            if (projectedState._tag !== "Idle" || current.state._tag !== "Idle") {
+              return {
+                value: undefined,
+                next: { ...current, queue: nextQueue },
+                persist: true,
+              }
+            }
+
+            const reservedRunningState = buildRunningState(current.state, item, { startedAtMs })
+            return {
+              value: reservedRunningState,
+              next: { ...current, startingState: reservedRunningState },
+              persist: false,
+            }
+          },
+        ).pipe(
+          Effect.flatMap(
+            (value): Effect.Effect<RunningState | undefined, AgentLoopError> =>
+              Schema.is(AgentLoopError)(value) ? Effect.fail(value) : Effect.succeed(value),
+          ),
+        )
+      })
+
+    const reserveRunStartOrQueueFollowUp = (item: QueuedTurnItem) =>
+      Effect.gen(function* () {
+        const startedAtMs = yield* Clock.currentTimeMillis
+        return yield* commitQueueTransaction("run start reservation", (current) => {
+          if (current.state._tag !== "Idle" || current.startingState !== undefined) {
+            const state = current.startingState ?? current.state
+            return {
+              value: undefined,
+              next: { ...current, state, queue: appendFollowUpQueueState(current.queue, item) },
+              persist: true,
+            }
           }
 
-          const nextQueue = appendFollowUpQueueState(current.queue, item)
-          if (options.coldQueueOnly) {
-            yield* persistRuntimeSnapshot(current.state, nextQueue)
-            return
+          return {
+            value: {
+              stateEpochBaseline: current.stateEpoch,
+              turnFailureBaseline: current.turnFailure?.epoch ?? 0,
+            },
+            next: {
+              ...current,
+              startingState: buildRunningState(current.state, item, { startedAtMs }),
+            },
+            persist: false,
           }
-
-          if (current.startingState !== undefined) {
-            yield* persistRuntimeSnapshot(current.startingState, nextQueue)
-            return
-          }
-
-          const projectedState = projectRuntimeState(current)
-          if (projectedState._tag !== "Idle" || current.state._tag !== "Idle") {
-            yield* persistRuntimeSnapshot(current.state, nextQueue)
-            return
-          }
-
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const reservedRunningState = buildRunningState(current.state, item, { startedAtMs })
-          yield* setStartingState(reservedRunningState)
-          return reservedRunningState
-        }),
-      )
+        })
+      })
 
     const refreshRuntimeState = Effect.gen(function* () {
       if (!started) return
       yield* persistRuntimeState(yield* currentLoopState)
     })
 
-    const updateQueue = (update: (queue: LoopQueueState) => LoopQueueState) =>
-      queueMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          if (!started) return
-          const current = yield* TxSubscriptionRef.get(loopRef)
-          const nextQueue = update(current.queue)
-          yield* persistRuntimeSnapshot(current.state, nextQueue)
-        }),
-      )
-
-    const persistQueueState = (nextQueue: LoopQueueState) =>
-      Effect.gen(function* () {
-        if (!started) return
-        yield* persistRuntimeSnapshot(yield* currentLoopState, nextQueue)
-      })
-
-    const persistQueueSnapshot = (state: LoopState, nextQueue: LoopQueueState) =>
-      persistRuntimeSnapshot(state, nextQueue)
-
-    const persistQueueCurrentState = (nextQueue: LoopQueueState) =>
-      TxSubscriptionRef.get(loopRef).pipe(
-        Effect.flatMap((s) => persistRuntimeSnapshot(s.state, nextQueue)),
-      )
-
-    const takeNextQueuedTurnSerialized = queueMutationSemaphore.withPermits(1)(
+    const takeNextQueuedTurnFromState = (options: { readonly onlyIfIdle: boolean }) =>
       Effect.gen(function* () {
         const queuedCreatedAt = yield* DateTime.nowAsDate
-        const taken = yield* TxSubscriptionRef.modify(loopRef, (s) => {
+        return yield* commitQueueTransaction("dequeued turn", (s) => {
+          if (options.onlyIfIdle && s.state._tag !== "Idle") {
+            return { value: undefined, next: s, persist: false }
+          }
           const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
-          return [{ nextItem }, { ...s, queue }]
+          return {
+            value: nextItem,
+            next: { ...s, queue },
+            persist: queue !== s.queue,
+          }
         })
-        const current = yield* TxSubscriptionRef.get(loopRef)
-        yield* queueStorage.putQueueState(sessionId, branchId, current.queue).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: `Failed to persist dequeued turn for ${sessionId}/${branchId}`,
-                cause,
-              }),
-          ),
-        )
-        return taken
-      }),
-    )
+      })
+
+    const takeNextQueuedTurnIfIdle = takeNextQueuedTurnFromState({ onlyIfIdle: true })
+    const takeNextQueuedTurnCommitted = takeNextQueuedTurnFromState({ onlyIfIdle: false })
+
+    const appendSteering = (item: QueuedTurnItem) =>
+      commitQueueTransaction("queued steering", (s) => ({
+        value: s.state,
+        next: { ...s, queue: appendSteeringItem(s.queue, item) },
+        persist: true,
+      }))
+
+    const drainQueue = commitQueueTransaction("drained queue", (s) => ({
+      value: queueSnapshotFromQueueState(s.queue),
+      next: { ...s, queue: emptyLoopQueueState() },
+      persist: true,
+    }))
 
     const switchAgentOnState = (state: LoopState, next: AgentNameType): Effect.Effect<LoopState> =>
       Effect.gen(function* () {
@@ -1007,7 +1089,7 @@ export const makeAgentLoopBehavior = (
               return
             }
 
-            const { nextItem } = yield* takeNextQueuedTurnSerialized
+            const nextItem = yield* takeNextQueuedTurnCommitted
             yield* Ref.set(interruptedRef, false)
             if (nextItem !== undefined) {
               const startedAtMs = yield* Clock.currentTimeMillis
@@ -1027,7 +1109,7 @@ export const makeAgentLoopBehavior = (
           Effect.catchCause(() =>
             sideMutationSemaphore.withPermits(1)(
               Effect.gen(function* () {
-                const { nextItem } = yield* takeNextQueuedTurnSerialized
+                const nextItem = yield* takeNextQueuedTurnCommitted
                 const current = yield* currentLoopState
                 yield* Ref.set(interruptedRef, false)
                 if (nextItem !== undefined) {
@@ -1149,22 +1231,21 @@ export const makeAgentLoopBehavior = (
     return {
       activeStreamRef,
       sideMutationSemaphore,
-      queueMutationSemaphore,
       persistenceFailure: Deferred.await(persistenceFailure),
       readState,
       stateChanges,
       runtimeState,
-      queueState,
       queueSnapshot,
       setStartingState,
       reserveStartOrQueueFollowUp,
+      reserveRunStartOrQueueFollowUp,
+      takeNextQueuedTurnIfIdle,
+      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
+      appendSteering,
+      drainQueue,
       resolveTurnProfile,
       persistState: persistRuntimeState,
       refreshRuntimeState,
-      updateQueue,
-      persistQueueSnapshot,
-      persistQueueCurrentState,
-      persistQueueState,
       snapshot: currentLoopState,
       startTurn,
       interrupt,
