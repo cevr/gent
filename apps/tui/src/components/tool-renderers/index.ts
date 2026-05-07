@@ -14,10 +14,15 @@ export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
 export { SkillsToolRenderer } from "./skills"
 import type { ToolRenderer } from "./types"
+import {
+  BUILTIN_HEADLESS_TOOL_RENDERERS,
+  type HeadlessToolRenderer,
+} from "../../headless-tool-renderers"
 
 interface BuiltinToolRendererEntry {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
+  readonly headless?: HeadlessToolRenderer
 }
 import { ReadToolRenderer } from "./read"
 import { EditToolRenderer } from "./edit"
@@ -36,18 +41,33 @@ import { SkillsToolRenderer } from "./skills"
 
 /** Builtin tool renderers consumed by the `@gent/tools` client extension. */
 export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
-  { toolNames: ["read"], component: ReadToolRenderer },
-  { toolNames: ["edit"], component: EditToolRenderer },
-  { toolNames: ["bash"], component: BashToolRenderer },
-  { toolNames: ["write"], component: WriteToolRenderer },
-  { toolNames: ["grep"], component: GrepToolRenderer },
-  { toolNames: ["glob"], component: GlobToolRenderer },
-  { toolNames: ["webfetch"], component: WebfetchToolRenderer },
-  { toolNames: ["delegate"], component: SubagentToolRenderer },
-  { toolNames: ["review"], component: ReviewToolRenderer },
-  { toolNames: ["counsel"], component: CounselToolRenderer },
-  { toolNames: ["research"], component: ResearchToolRenderer },
-  { toolNames: ["search_sessions"], component: SearchSessionsToolRenderer },
-  { toolNames: ["read_session"], component: ReadSessionToolRenderer },
-  { toolNames: ["skills"], component: SkillsToolRenderer },
+  { toolNames: ["read"], component: ReadToolRenderer, headless: headlessFor("read") },
+  { toolNames: ["edit"], component: EditToolRenderer, headless: headlessFor("edit") },
+  { toolNames: ["bash"], component: BashToolRenderer, headless: headlessFor("bash") },
+  { toolNames: ["write"], component: WriteToolRenderer, headless: headlessFor("write") },
+  { toolNames: ["grep"], component: GrepToolRenderer, headless: headlessFor("grep") },
+  { toolNames: ["glob"], component: GlobToolRenderer, headless: headlessFor("glob") },
+  { toolNames: ["webfetch"], component: WebfetchToolRenderer, headless: headlessFor("webfetch") },
+  { toolNames: ["delegate"], component: SubagentToolRenderer, headless: headlessFor("delegate") },
+  { toolNames: ["review"], component: ReviewToolRenderer, headless: headlessFor("review") },
+  { toolNames: ["counsel"], component: CounselToolRenderer, headless: headlessFor("counsel") },
+  { toolNames: ["research"], component: ResearchToolRenderer, headless: headlessFor("research") },
+  {
+    toolNames: ["search_sessions"],
+    component: SearchSessionsToolRenderer,
+    headless: headlessFor("search_sessions"),
+  },
+  {
+    toolNames: ["read_session"],
+    component: ReadSessionToolRenderer,
+    headless: headlessFor("read_session"),
+  },
+  { toolNames: ["skills"], component: SkillsToolRenderer, headless: headlessFor("skills") },
 ]
+
+function headlessFor(toolName: string): HeadlessToolRenderer | undefined {
+  for (const entry of BUILTIN_HEADLESS_TOOL_RENDERERS) {
+    if (entry.toolNames.includes(toolName)) return entry.render
+  }
+  return undefined
+}

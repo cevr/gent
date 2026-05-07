@@ -14,6 +14,7 @@ import {
 } from "../src/extensions/client-facets.js"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ToolRenderer } from "../src/components/tool-renderers/types"
+import type { HeadlessToolRenderer } from "../src/headless-tool-renderers"
 
 const make = (
   id: string,
@@ -22,6 +23,10 @@ const make = (
 ): LoadedTuiExtension => ({ id, scope, filePath: `/test/${id}`, contributions })
 
 const renderer = (label: string): ToolRenderer => (() => label) as unknown as ToolRenderer
+const headless =
+  (label: string): HeadlessToolRenderer =>
+  () =>
+    label
 
 const widget =
   (label: string): WidgetComponent =>
@@ -57,6 +62,27 @@ describe("resolveTuiExtensions", () => {
     ])
 
     expect((resolved.renderers.get("bash") as () => string)()).toBe("project")
+  })
+
+  test("headless renderer surfaces use the same renderer scope precedence", () => {
+    const resolved = resolveTuiExtensions([
+      make("builtin-tools", "builtin", [
+        rendererContribution(["bash"], renderer("builtin"), { headless: headless("builtin") }),
+      ]),
+      make("project-tools", "project", [
+        rendererContribution(["bash"], renderer("project"), { headless: headless("project") }),
+      ]),
+    ])
+
+    expect(
+      resolved.headlessRenderers.get("bash")?.({
+        toolName: "bash",
+        status: "running",
+        input: undefined,
+        output: undefined,
+        summary: undefined,
+      }),
+    ).toBe("project")
   })
 
   test("widgets stay user-ordered by priority after scope resolution", () => {

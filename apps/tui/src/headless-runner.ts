@@ -2,6 +2,12 @@ import { Cause, Deferred, Effect, Exit, Fiber, Random, Schedule, Stream } from "
 import type { AgentName, RunSpec } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
+import {
+  DEFAULT_HEADLESS_TOOL_RENDERERS,
+  renderHeadlessToolCall,
+  type HeadlessToolRendererRegistry,
+  type HeadlessToolCall,
+} from "./headless-tool-renderers"
 
 const isTransientTransportOpenError = (error: unknown): boolean => {
   const text = String(error)
@@ -15,10 +21,15 @@ export const runHeadless = (
   promptText: string,
   agentOverride?: AgentName,
   runSpec?: RunSpec,
+  toolRenderers: HeadlessToolRendererRegistry = DEFAULT_HEADLESS_TOOL_RENDERERS,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const done = yield* Deferred.make<void>()
+      const activeTools = new Map<string, HeadlessToolCall>()
+      const renderTool = (toolCall: HeadlessToolCall): void => {
+        process.stdout.write(`${renderHeadlessToolCall(toolCall, toolRenderers)}\n`)
+      }
       const streamFiber = yield* client.session.events({ sessionId, branchId }).pipe(
         Stream.tap((envelope) =>
           Effect.gen(function* () {
@@ -27,15 +38,43 @@ export const runHeadless = (
               case "StreamChunk":
                 process.stdout.write(event.chunk)
                 break
-              case "ToolCallStarted":
-                process.stdout.write(`\n[tool: ${event.toolName}]\n`)
+              case "ToolCallStarted": {
+                const toolCall: HeadlessToolCall = {
+                  toolName: event.toolName,
+                  input: event.input,
+                  status: "running",
+                  summary: undefined,
+                  output: undefined,
+                }
+                activeTools.set(String(event.toolCallId), toolCall)
+                process.stdout.write("\n")
+                renderTool(toolCall)
                 break
-              case "ToolCallSucceeded":
-                process.stdout.write(`[tool done: ${event.toolName}]\n`)
+              }
+              case "ToolCallSucceeded": {
+                const toolCall: HeadlessToolCall = {
+                  toolName: event.toolName,
+                  input: activeTools.get(String(event.toolCallId))?.input,
+                  status: "completed",
+                  summary: event.summary,
+                  output: event.output,
+                }
+                activeTools.delete(String(event.toolCallId))
+                renderTool(toolCall)
                 break
-              case "ToolCallFailed":
-                process.stdout.write(`[tool done: ${event.toolName} (error)]\n`)
+              }
+              case "ToolCallFailed": {
+                const toolCall: HeadlessToolCall = {
+                  toolName: event.toolName,
+                  input: activeTools.get(String(event.toolCallId))?.input,
+                  status: "error",
+                  summary: event.summary,
+                  output: event.output,
+                }
+                activeTools.delete(String(event.toolCallId))
+                renderTool(toolCall)
                 break
+              }
               case "StreamEnded":
                 process.stdout.write("\n")
                 break

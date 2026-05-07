@@ -29,6 +29,7 @@ import type { GentExtension } from "@gent/core/extensions/api"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { HeadlessToolRenderer } from "../headless-tool-renderers"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 import type { ClientTransport } from "./client-transport"
@@ -97,6 +98,7 @@ export interface RendererContribution {
   readonly _tag: "renderer"
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
+  readonly headless?: HeadlessToolRenderer
 }
 
 export interface WidgetContribution {
@@ -223,7 +225,8 @@ export type ClientContributionTag = ClientContribution["_tag"]
 export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
   component: ToolRenderer,
-): RendererContribution => ({ _tag: "renderer", toolNames, component })
+  options?: { readonly headless?: HeadlessToolRenderer },
+): RendererContribution => ({ _tag: "renderer", toolNames, component, ...options })
 
 export const widgetContribution = (opts: {
   readonly id: string

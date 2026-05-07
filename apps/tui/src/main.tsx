@@ -11,6 +11,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  ManagedRuntime,
   Option,
   Runtime,
   Schema,
@@ -31,6 +32,7 @@ import {
 } from "@gent/core/domain/agent.js"
 
 import { render } from "@opentui/solid"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { App } from "./app"
 import { detectColorScheme } from "./theme/index"
 import { ClientProvider } from "./client/index"
@@ -47,6 +49,7 @@ import {
   type InitialState,
 } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
+import { DEFAULT_HEADLESS_TOOL_RENDERERS } from "./headless-tool-renderers"
 import {
   Gent,
   GentConnectionError,
@@ -61,6 +64,16 @@ import {
   getLocalHostname,
   signalIfIdentityOwned,
 } from "@gent/sdk/server-lock"
+import { builtinClientModules } from "./extensions/builtins/index"
+import { loadExtensionUi } from "./extensions/context-boundary"
+import { makeClientTransportLayer } from "./extensions/client-transport"
+import {
+  makeClientComposerLayer,
+  makeClientLifecycleLayer,
+  makeClientShellLayer,
+  makeClientWorkspaceLayer,
+} from "./extensions/client-services"
+import type { ClientRuntime } from "./extensions/client-facets.js"
 
 // Clear client log on startup
 clearClientLog()
@@ -105,6 +118,8 @@ const resolveParentSpan = () =>
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
+  cwd: string,
+  home: string,
   agent: AgentName | undefined,
   runSpec?: RunSpec,
 ) =>
@@ -119,6 +134,44 @@ const runHeadlessTurn = (
     }
 
     const parentSpan = yield* resolveParentSpan()
+    const clientRuntime: ClientRuntime = ManagedRuntime.make(
+      Layer.mergeAll(
+        BunFileSystem.layer,
+        BunServices.layer,
+        makeClientTransportLayer({
+          client: bundle.client,
+          runtime: bundle.runtime,
+          currentSession: () => ({ sessionId: state.session.id, branchId }),
+          onExtensionStateChanged: () => () => {},
+          onSessionEvent: () => () => {},
+        }),
+        makeClientWorkspaceLayer({ cwd, home }),
+        makeClientShellLayer({
+          sendMessage: () => {},
+          openOverlay: () => {},
+          closeOverlay: () => {},
+        }),
+        makeClientComposerLayer({
+          state: () => ({
+            draft: "",
+            mode: "editing",
+            inputFocused: false,
+            autocompleteOpen: false,
+          }),
+        }),
+        makeClientLifecycleLayer({ addCleanup: () => {} }),
+      ),
+    )
+    const toolRenderers = yield* Effect.promise(() =>
+      loadExtensionUi(clientRuntime, {
+        builtins: builtinClientModules,
+        home,
+        cwd,
+      }).finally(() => clientRuntime.dispose()),
+    ).pipe(
+      Effect.map((resolved) => resolved.headlessRenderers),
+      Effect.catchEager(() => Effect.succeed(DEFAULT_HEADLESS_TOOL_RENDERERS)),
+    )
     yield* bundle.runtime.lifecycle.waitForReady.pipe(
       Effect.timeoutOption("15 seconds"),
       Effect.flatMap((ready) =>
@@ -141,6 +194,7 @@ const runHeadlessTurn = (
       state.prompt,
       agent,
       runSpec,
+      toolRenderers,
     ).pipe(
       Effect.withSpan("Headless.run"),
       parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
@@ -305,7 +359,7 @@ const main = Command.make(
             )
           : undefined
 
-        yield* runHeadlessTurn(bundle, state, requestedAgent, decodedRunSpec)
+        yield* runHeadlessTurn(bundle, state, cwd, home, requestedAgent, decodedRunSpec)
         return
       }
 

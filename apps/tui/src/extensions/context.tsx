@@ -26,6 +26,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { HeadlessToolRenderer } from "../headless-tool-renderers"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import type {
@@ -53,6 +54,7 @@ import {
 
 export interface ExtensionUIContextValue {
   readonly renderers: Accessor<Map<string, ToolRenderer>>
+  readonly headlessRenderers: Accessor<Map<string, HeadlessToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
   readonly overlays: Accessor<Map<string, OverlayComponent>>
@@ -85,6 +87,7 @@ export interface ExtensionUIContextValue {
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
+  headlessRenderers: new Map(),
   widgets: [],
   commands: [],
   overlays: new Map(),
@@ -296,6 +299,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     <ExtensionUIContext.Provider
       value={{
         renderers: () => resolved().renderers,
+        headlessRenderers: () => resolved().headlessRenderers,
         widgets: () => resolved().widgets,
         commands: () => [...resolved().commands, ...serverCommands()],
         overlays: () => resolved().overlays,

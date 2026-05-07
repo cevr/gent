@@ -43,7 +43,7 @@ export const builtinTools = defineClientExtension("@gent/tools", {
     const shell = yield* ClientShell
     return [
       ...BUILTIN_TOOL_RENDERERS.map((entry) =>
-        rendererContribution(entry.toolNames, entry.component),
+        rendererContribution(entry.toolNames, entry.component, { headless: entry.headless }),
       ),
       clientCommandContribution({
         id: "tools.review",

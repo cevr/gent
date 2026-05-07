@@ -42,6 +42,7 @@ export class TuiExtensionResolveError extends Schema.TaggedErrorClass<TuiExtensi
   }
 }
 import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { HeadlessToolRenderer } from "../headless-tool-renderers"
 import type { Command } from "../command/types"
 
 export type ExtensionScope = CoreExtensionScope
@@ -68,6 +69,7 @@ export interface ResolvedBorderLabel {
 
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
+  readonly headlessRenderers: Map<string, HeadlessToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
   readonly overlays: Map<string, OverlayComponent>
@@ -124,6 +126,25 @@ const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, Too
       const key = name.toLowerCase()
       checkCollision(scopes.get(key), ext, "renderer", name)
       renderers.set(key, contribution.component)
+      scopes.set(key, { scope: ext.scope, source: ext.filePath })
+    }
+  }
+
+  return renderers
+}
+
+const resolveHeadlessRenderers = (
+  flat: ReadonlyArray<SortedExtension>,
+): Map<string, HeadlessToolRenderer> => {
+  const renderers = new Map<string, HeadlessToolRenderer>()
+  const scopes = new Map<string, ScopeEntry>()
+
+  for (const { ext, contribution } of flat) {
+    if (contribution._tag !== "renderer" || contribution.headless === undefined) continue
+    for (const name of contribution.toolNames) {
+      const key = name.toLowerCase()
+      checkCollision(scopes.get(key), ext, "headless renderer", name)
+      renderers.set(key, contribution.headless)
       scopes.set(key, { scope: ext.scope, source: ext.filePath })
     }
   }
@@ -340,6 +361,7 @@ export const resolveTuiExtensions = (
 
   return {
     renderers: resolveRenderers(flat),
+    headlessRenderers: resolveHeadlessRenderers(flat),
     widgets: resolveWidgets(flat),
     commands: resolveCommands(flat),
     overlays: resolveOverlays(flat),
