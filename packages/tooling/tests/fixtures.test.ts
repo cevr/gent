@@ -204,4 +204,12 @@ effectDescribe("custom lint rules", () => {
       expect(validRun.report.diagnostics.length).toBe(0)
     }),
   )
+
+  it.live("gent/no-bun-outside-adapter allows adapter files", () =>
+    Effect.gen(function* () {
+      const run = yield* Effect.promise(() => runOxlint(["runtime/fallback-adapter.ts"]))
+      expect(run.exitCode).toBe(0)
+      expect(countViolations(run.report.diagnostics, "gent/no-bun-outside-adapter")).toBe(0)
+    }),
+  )
 })

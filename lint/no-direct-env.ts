@@ -1094,16 +1094,16 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans `Bun.*` references everywhere except the single canonical
-     * platform implementation file `runtime/gent-platform-bun.ts`. The
-     * `Bun` global is a platform-specific runtime API; product code must
-     * route through Effect platform services (`GentPlatform`, `FileSystem`,
-     * `ChildProcess`, `KeyValueStore`, `Config`) so the runtime is portable
-     * and the I/O boundary is explicit.
+     * Bans `Bun.*` references everywhere except platform adapter,
+     * entrypoint, tooling, and test harness boundaries. The `Bun` global is
+     * a platform-specific runtime API; product code must route through
+     * Effect platform services (`GentPlatform`, `FileSystem`,
+     * `ChildProcess`, `KeyValueStore`, `Config`) so the runtime is
+     * portable and the I/O boundary is explicit.
      *
      * Exempt by filename:
-     *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl — this
-     *     is the ONE file allowed to call `Bun.*`)
+     *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
+     *   - `*-adapter.ts` / `*-adapter.tsx` files (platform-specific adapters)
      *   - `**\/scripts/**` (build/dev entrypoints)
      *   - `**\/packages/tooling/**` (CI helpers)
      *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
@@ -1120,6 +1120,7 @@ const plugin: Plugin = {
         const inFixtures = /\/packages\/tooling\/fixtures\//.test(filename)
         if (!inFixtures) {
           if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return {}
+          if (/-adapter\.tsx?$/.test(filename)) return {}
           if (/\/scripts\//.test(filename)) return {}
           if (/\/packages\/tooling\//.test(filename)) return {}
           if (/\/packages\/e2e\//.test(filename)) return {}
@@ -1129,8 +1130,9 @@ const plugin: Plugin = {
           if (/\.test\.tsx?$/.test(filename)) return {}
         } else {
           // Inside fixtures: only the canonical platform file is exempted,
-          // so the valid-adapter fixture must use that exact filename.
+          // so valid-adapter fixtures must use exact adapter filenames.
           if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return {}
+          if (/-adapter\.tsx?$/.test(filename)) return {}
         }
         return {
           MemberExpression(node) {
@@ -1144,7 +1146,7 @@ const plugin: Plugin = {
             else if (prop?.type === "StringLiteral") propName = getStringField(prop, "value")
             const suffix = propName !== undefined ? `.${propName}` : ""
             context.report({
-              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). The only file allowed to call \`Bun.*\` is \`packages/core/src/runtime/gent-platform-bun.ts\`.`,
+              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, entrypoint, tooling, and test harness boundaries.`,
               node,
             })
           },
