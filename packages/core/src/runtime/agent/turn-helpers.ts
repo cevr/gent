@@ -64,9 +64,10 @@ import {
   type PublishEvent,
 } from "./turn-response/collectors.js"
 
-type CommittedEvent<A> =
-  | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
-  | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
+interface CommittedMutation<A> {
+  readonly result: A
+  readonly envelope?: EventEnvelope
+}
 
 export interface TurnStorage {
   readonly transaction: StorageTransactionService
@@ -88,7 +89,7 @@ export const findPersistedEvent = (params: {
 export const commitWithEvent = <A, E, R>(params: {
   storage: Pick<TurnStorage, "transaction">
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  mutation: Effect.Effect<CommittedEvent<A>, E, R>
+  mutation: Effect.Effect<CommittedMutation<A>, E, R>
 }) =>
   Effect.gen(function* () {
     const committed = yield* params.storage.transaction.withTransaction(params.mutation)
@@ -118,7 +119,6 @@ export const persistMessageReceived = (params: {
             candidate.event.message.id === params.message.id,
         })
         return {
-          _tag: "unchanged" as const,
           result: existing,
           ...(envelope !== undefined ? { envelope } : {}),
         }
@@ -130,7 +130,7 @@ export const persistMessageReceived = (params: {
           message: params.message,
         }),
       )
-      return { _tag: "changed" as const, result: params.message, envelope }
+      return { result: params.message, envelope }
     }),
   })
 
@@ -188,7 +188,6 @@ export const recordToolResult = (params: {
               candidate.event.toolCallId === params.toolCallId,
           })
           return {
-            _tag: "unchanged" as const,
             result: existing,
             ...(envelope !== undefined ? { envelope } : {}),
           }
@@ -198,7 +197,7 @@ export const recordToolResult = (params: {
         const envelope = yield* params.eventPublisher.append(
           isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
         )
-        return { _tag: "changed" as const, result, envelope }
+        return { result, envelope }
       }),
     })
   })
