@@ -160,7 +160,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 workspaceId: yield* CurrentWorkspaceId,
               }),
             )
-            const registered = yield* stateRegistry.find(input.sessionId, input.branchId)
+            const workspaceId = yield* CurrentWorkspaceId
+            const registered = yield* stateRegistry.find(
+              workspaceId,
+              input.sessionId,
+              input.branchId,
+            )
             if (registered === undefined) {
               return yield* new AgentLoopError({
                 message: `AgentLoop state unavailable: ${input.sessionId}/${input.branchId}`,
@@ -175,13 +180,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }),
 
           terminateSession: Effect.fn("AgentLoop.terminateSession")(function* (sessionId) {
-            yield* sessionGovernance.markTerminated(sessionId)
-            const branchIds = yield* stateRegistry.listForSession(sessionId)
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sessionGovernance.markTerminated(workspaceId, sessionId)
+            const branchIds = yield* stateRegistry.listForSession(workspaceId, sessionId)
             yield* Effect.forEach(
               branchIds,
               (branchId) =>
                 Effect.gen(function* () {
-                  const workspaceId = yield* CurrentWorkspaceId
                   const ref = yield* agentLoopActorRefFor(sessionId, branchId)
                   yield* ref.execute(
                     AgentLoopActor.TerminateBranch.make({
@@ -193,9 +198,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }).pipe(Effect.ignore),
               { concurrency: "unbounded", discard: true },
             )
-            yield* stateRegistry.deregisterSession(sessionId)
+            yield* stateRegistry.deregisterSession(workspaceId, sessionId)
           }),
-          restoreSession: (sessionId) => sessionGovernance.clearTerminated(sessionId),
+          restoreSession: (sessionId) =>
+            Effect.gen(function* () {
+              const workspaceId = yield* CurrentWorkspaceId
+              yield* sessionGovernance.clearTerminated(workspaceId, sessionId)
+            }),
         }
       }),
     )

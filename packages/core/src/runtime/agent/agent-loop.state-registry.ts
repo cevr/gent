@@ -1,5 +1,5 @@
 /**
- * Per-(sessionId, branchId) handle to AgentLoop runtime state.
+ * Per-(workspaceId, sessionId, branchId) handle to AgentLoop runtime state.
  *
  * The actor handler in `agent-loop.actor.ts` owns the SubscriptionRef
  * that holds `AgentLoopState`. Pure read-side callers (`getState`,
@@ -11,7 +11,7 @@
  * from the registry — in C5.4.4.c it becomes an actor op so the
  * actor remains the single mutator of its own state.
  *
- * This registry is the shared per-(sessionId, branchId) lookup surface.
+ * This registry is the shared per-(workspaceId, sessionId, branchId) lookup surface.
  * The actor handler registers a handle on entity-instance construction
  * and deregisters on instance scope finalization. Read-side callers
  * look up the registry by `(sessionId, branchId)`; if no entry exists,
@@ -46,15 +46,18 @@ export type AgentLoopStateHandle = {
 }
 
 /**
- * Nested map: SessionId → BranchId → handle. Counsel finding from C5.4.4.a:
+ * Nested map: workspaceId → SessionId → BranchId → handle. Counsel finding from C5.4.4.a:
  * delimiter-encoded `${sessionId}:${branchId}` is structurally unsound since
  * SessionId/BranchId are unconstrained branded strings — a `:` in either
  * collides. Nested maps make collision impossible.
  */
-type Registry = ReadonlyMap<SessionId, ReadonlyMap<BranchId, AgentLoopStateHandle>>
+type BranchRegistry = ReadonlyMap<BranchId, AgentLoopStateHandle>
+type SessionRegistry = ReadonlyMap<SessionId, BranchRegistry>
+type Registry = ReadonlyMap<string, SessionRegistry>
 
 export interface AgentLoopStateRegistryService {
   readonly register: (
+    workspaceId: string,
     sessionId: SessionId,
     branchId: BranchId,
     handle: AgentLoopStateHandle,
@@ -68,18 +71,20 @@ export interface AgentLoopStateRegistryService {
    * protects against deleting a newer registration after a re-create.
    */
   readonly deregister: (
+    workspaceId: string,
     sessionId: SessionId,
     branchId: BranchId,
     loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>,
   ) => Effect.Effect<void>
   /**
-   * Removes ALL registry entries matching `sessionId` (any branch).
+   * Removes ALL registry entries matching `(workspaceId, sessionId)` (any branch).
    * Used by `terminateSession` to keep registry cleanup in the same
    * critical section as the legacy loopsRef cleanup, so no stale handle
    * is observable to read-side callers between deletion and finalization.
    */
-  readonly deregisterSession: (sessionId: SessionId) => Effect.Effect<void>
+  readonly deregisterSession: (workspaceId: string, sessionId: SessionId) => Effect.Effect<void>
   readonly find: (
+    workspaceId: string,
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<AgentLoopStateHandle | undefined>
@@ -88,7 +93,10 @@ export interface AgentLoopStateRegistryService {
    * `terminateSession` to drive a cross-entity actor sweep without resurrecting
    * the legacy `loopsRef` map.
    */
-  readonly listForSession: (sessionId: SessionId) => Effect.Effect<ReadonlyArray<BranchId>>
+  readonly listForSession: (
+    workspaceId: string,
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<BranchId>>
 }
 
 export class AgentLoopStateRegistry extends Context.Service<
@@ -101,44 +109,61 @@ export class AgentLoopStateRegistry extends Context.Service<
       const ref = yield* Ref.make<Registry>(new Map())
 
       return {
-        register: (sessionId, branchId, handle) =>
+        register: (workspaceId, sessionId, branchId, handle) =>
           Ref.update(ref, (m) => {
             const next = new Map(m)
-            const branches = new Map(next.get(sessionId) ?? new Map())
+            const sessions = new Map(next.get(workspaceId) ?? new Map())
+            const branches = new Map(sessions.get(sessionId) ?? new Map())
             branches.set(branchId, handle)
-            next.set(sessionId, branches)
+            sessions.set(sessionId, branches)
+            next.set(workspaceId, sessions)
             return next
           }),
-        deregister: (sessionId, branchId, loopRef) =>
+        deregister: (workspaceId, sessionId, branchId, loopRef) =>
           Ref.update(ref, (m) => {
-            const branches = m.get(sessionId)
+            const sessions = m.get(workspaceId)
+            if (sessions === undefined) return m
+            const branches = sessions.get(sessionId)
             if (branches === undefined) return m
             const current = branches.get(branchId)
             if (current === undefined) return m
             if (current.loopRef !== loopRef) return m
             const nextBranches = new Map(branches)
             nextBranches.delete(branchId)
+            const nextSessions = new Map(sessions)
             const next = new Map(m)
             if (nextBranches.size === 0) {
-              next.delete(sessionId)
+              nextSessions.delete(sessionId)
             } else {
-              next.set(sessionId, nextBranches)
+              nextSessions.set(sessionId, nextBranches)
+            }
+            if (nextSessions.size === 0) {
+              next.delete(workspaceId)
+            } else {
+              next.set(workspaceId, nextSessions)
             }
             return next
           }),
-        deregisterSession: (sessionId) =>
+        deregisterSession: (workspaceId, sessionId) =>
           Ref.update(ref, (m) => {
-            if (!m.has(sessionId)) return m
+            const sessions = m.get(workspaceId)
+            if (sessions === undefined || !sessions.has(sessionId)) return m
+            const nextSessions = new Map(sessions)
+            nextSessions.delete(sessionId)
             const next = new Map(m)
-            next.delete(sessionId)
+            if (nextSessions.size === 0) {
+              next.delete(workspaceId)
+            } else {
+              next.set(workspaceId, nextSessions)
+            }
             return next
           }),
-        find: (sessionId, branchId) =>
-          Ref.get(ref).pipe(Effect.map((m) => m.get(sessionId)?.get(branchId))),
-        listForSession: (sessionId) =>
+        find: (workspaceId, sessionId, branchId) =>
+          Ref.get(ref).pipe(Effect.map((m) => m.get(workspaceId)?.get(sessionId)?.get(branchId))),
+        listForSession: (workspaceId, sessionId) =>
           Ref.get(ref).pipe(
             Effect.map((m) => {
-              const branches = m.get(sessionId)
+              const branches = m.get(workspaceId)?.get(sessionId)
               return branches === undefined ? [] : Array.from(branches.keys())
             }),
           ),

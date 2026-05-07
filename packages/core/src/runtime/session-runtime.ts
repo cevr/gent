@@ -854,8 +854,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     terminateSession: (sessionId) =>
       Effect.gen(function* () {
-        yield* agentLoopSessionGovernance.markTerminated(sessionId)
-        const branches = yield* agentLoopStateRegistry.listForSession(sessionId)
+        const workspaceId = yield* CurrentWorkspaceId
+        yield* agentLoopSessionGovernance.markTerminated(workspaceId, sessionId)
+        const branches = yield* agentLoopStateRegistry.listForSession(workspaceId, sessionId)
         yield* Effect.forEach(
           branches,
           (branchId) =>
@@ -863,7 +864,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               const ref = yield* agentLoopActorRefFor(sessionId, branchId)
               yield* ref.execute(
                 AgentLoopActor.TerminateBranch.make({
-                  workspaceId: yield* CurrentWorkspaceId,
+                  workspaceId,
                   sessionId,
                   branchId,
                 }),

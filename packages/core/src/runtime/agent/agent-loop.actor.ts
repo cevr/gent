@@ -485,7 +485,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const sessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
   const addr = yield* CurrentAddress
-  const { sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(Effect.orDie)
+  const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
+    Effect.orDie,
+  )
   const sideMutationSemaphore = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const operationSeen = yield* Ref.make(false)
@@ -504,7 +506,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
   const cleanupLoop = (loop: AgentLoopBehavior) =>
     stateRegistry
-      .deregister(sessionId, branchId, loop.loopRef)
+      .deregister(workspaceId, sessionId, branchId, loop.loopRef)
       .pipe(Effect.andThen(closeBehavior(loop)), Effect.ignore)
 
   const currentRuntimeState = (loop: AgentLoopBehavior) =>
@@ -565,7 +567,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   })
 
   const markWrite = Effect.gen(function* () {
-    if (yield* sessionGovernance.isTerminated(sessionId)) {
+    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
       return yield* new AgentLoopError({
         message: `Session runtime terminated: ${sessionId}`,
       })
@@ -574,7 +576,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   })
 
   const rejectIfTerminated = Effect.gen(function* () {
-    if (yield* sessionGovernance.isTerminated(sessionId)) {
+    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
       return yield* new AgentLoopError({
         message: `Session terminated: ${sessionId}`,
       })
@@ -718,7 +720,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       return
     }
 
-    yield* stateRegistry.register(sessionId, branchId, {
+    yield* stateRegistry.register(workspaceId, sessionId, branchId, {
       loopRef: handle.loopRef,
       queueMutationSemaphore: handle.queueMutationSemaphore,
       persistQueueState: handle.persistQueueState,
@@ -1079,7 +1081,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       ensureTarget(operation).pipe(Effect.andThen(ensureStarted)),
     TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
       ensureTarget(operation).pipe(
-        Effect.andThen(sessionGovernance.markTerminated(sessionId)),
+        Effect.andThen(sessionGovernance.markTerminated(workspaceId, sessionId)),
         Effect.andThen(cleanupLoop(handle)),
       ),
   }
