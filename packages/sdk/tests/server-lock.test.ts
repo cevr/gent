@@ -13,7 +13,6 @@ import {
   writeServerLock,
   removeServerLock,
   validateServerLockEntry,
-  isPidAlive,
   serverLockIdentityOf,
   canSignalServerLockEntry,
   signalIfIdentityOwned,
@@ -254,6 +253,38 @@ describe("Server Lock Ownership", () => {
 })
 
 describe("signalIfIdentityOwned", () => {
+  const withSignalTrap = <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<
+    { readonly result: A; readonly signals: ReadonlyArray<string | number | undefined> },
+    E,
+    R | Scope.Scope
+  > =>
+    Effect.gen(function* () {
+      const signals: Array<string | number | undefined> = []
+      const originalKill = Reflect.get(process, "kill") as typeof process.kill
+      const replacement = ((pid: number, signal?: string | number) => {
+        if (pid === process.pid && signal === "SIGTERM") {
+          signals.push(signal)
+          return true
+        }
+        return originalKill(pid, signal)
+      }) as typeof process.kill
+
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          process.kill = replacement
+        }),
+        () =>
+          Effect.sync(() => {
+            process.kill = originalKill
+          }),
+      )
+
+      const result = yield* effect
+      return { result, signals }
+    })
+
   it.live("skips when PID is not alive", () =>
     Effect.gen(function* () {
       let probeCalled = false
@@ -268,47 +299,31 @@ describe("signalIfIdentityOwned", () => {
 
   it.scopedLive("skips when probe says identity does not match", () =>
     Effect.gen(function* () {
-      const proc = yield* Effect.acquireRelease(
-        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
-        (subprocess) => Effect.sync(() => subprocess.kill()),
-      )
-      const result = yield* signalIfIdentityOwned(makeEntry({ pid: proc.pid }), () =>
-        Effect.succeed(false),
+      const { result, signals } = yield* withSignalTrap(
+        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.succeed(false)),
       )
       expect(result).toBe("skipped")
-      expect(isPidAlive(proc.pid)).toBe(true)
+      expect(signals).toEqual([])
     }),
   )
 
   it.scopedLive("signals when probe confirms identity", () =>
     Effect.gen(function* () {
-      const proc = yield* Effect.acquireRelease(
-        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
-        (subprocess) =>
-          Effect.sync(() => {
-            if (isPidAlive(subprocess.pid)) subprocess.kill()
-          }),
-      )
-      const result = yield* signalIfIdentityOwned(makeEntry({ pid: proc.pid }), () =>
-        Effect.succeed(true),
+      const { result, signals } = yield* withSignalTrap(
+        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.succeed(true)),
       )
       expect(result).toBe("signaled")
-      yield* Effect.promise(() => proc.exited).pipe(Effect.timeout("2 seconds"))
-      expect(isPidAlive(proc.pid)).toBe(false)
+      expect(signals).toEqual(["SIGTERM"])
     }),
   )
 
   it.scopedLive("skips when probe fails", () =>
     Effect.gen(function* () {
-      const proc = yield* Effect.acquireRelease(
-        Effect.sync(() => Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })),
-        (subprocess) => Effect.sync(() => subprocess.kill()),
-      )
-      const result = yield* signalIfIdentityOwned(makeEntry({ pid: proc.pid }), () =>
-        Effect.fail("probe boom"),
+      const { result, signals } = yield* withSignalTrap(
+        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.fail("probe boom")),
       )
       expect(result).toBe("skipped")
-      expect(isPidAlive(proc.pid)).toBe(true)
+      expect(signals).toEqual([])
     }),
   )
 })
