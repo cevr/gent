@@ -16,27 +16,27 @@ export const GrepParams = Schema.Struct({
   pattern: Schema.String.annotate({
     description: "Regex pattern to search for",
   }),
-  path: Schema.optional(
+  path: Schema.optionalKey(
     Schema.String.annotate({
       description: "File or directory to search (default: cwd)",
     }),
   ),
-  glob: Schema.optional(
+  glob: Schema.optionalKey(
     Schema.String.annotate({
       description: "Glob pattern to filter files (e.g., *.ts)",
     }),
   ),
-  caseSensitive: Schema.optional(
+  caseSensitive: Schema.optionalKey(
     Schema.Boolean.annotate({
       description: "Case sensitive search (default: true)",
     }),
   ),
-  context: Schema.optional(
+  context: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Lines of context around matches",
     }),
   ),
-  limit: Schema.optional(
+  limit: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Maximum number of matches (default: 100)",
     }),

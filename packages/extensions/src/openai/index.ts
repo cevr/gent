@@ -15,9 +15,16 @@ import {
   OPENAI_OAUTH_ALLOWED_MODELS,
   type OpenAIAuthorizationFlow,
 } from "./oauth.js"
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import {
+  OpenAiClient as OpenAiResponsesClient,
+  OpenAiLanguageModel as OpenAiResponsesLanguageModel,
+} from "@effect/ai-openai"
+import {
+  OpenAiClient as OpenAiCompatClient,
+  OpenAiLanguageModel as OpenAiCompatLanguageModel,
+} from "@effect/ai-openai-compat"
 import { Model as AiModel } from "effect/unstable/ai"
-import { FetchHttpClient } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import {
   OpenAICredentialService,
   EMPTY_CREDENTIAL_CELL,
@@ -37,12 +44,25 @@ type PendingCallbackEntry = {
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
-const buildOpenAiConfig = (hints?: ProviderHints) => {
+const buildOpenAiCompatConfig = (hints?: ProviderHints) => {
   const config: Record<string, unknown> = {}
   if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
   if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
   if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
     config["reasoning_effort"] = hints.reasoning
+  }
+  return config
+}
+
+const buildOpenAiResponsesConfig = (hints?: ProviderHints) => {
+  const config: Record<string, unknown> = { store: false }
+  if (hints?.maxTokens !== undefined) config["max_output_tokens"] = hints.maxTokens
+  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
+  if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
+    config["reasoning"] = {
+      effort: hints.reasoning,
+      summary: "auto",
+    }
   }
   return config
 }
@@ -59,10 +79,12 @@ const makeApiKeyOpenAILayer = (
   config: Record<string, unknown>,
   apiKey: string,
 ) => {
-  const clientLayer = OpenAiClient.layer({
+  const clientLayer = OpenAiCompatClient.layer({
     apiKey: Redacted.make(apiKey),
   }).pipe(Layer.provide(FetchHttpClient.layer))
-  return OpenAiLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
+  return OpenAiCompatLanguageModel.layer({ model: modelName, config }).pipe(
+    Layer.provide(clientLayer),
+  )
 }
 
 /**
@@ -90,13 +112,22 @@ const makeOauthOpenAILayer = (
   const clientLayer = Layer.unwrap(
     Effect.gen(function* () {
       const creds = yield* OpenAICredentialService
-      return OpenAiClient.layer({
-        transformClient: buildCodexTransformClient(creds),
-      }).pipe(Layer.provide(FetchHttpClient.layer))
+      const codexHttpClientLayer = Layer.effect(
+        HttpClient.HttpClient,
+        Effect.gen(function* () {
+          const client = yield* HttpClient.HttpClient
+          return buildCodexTransformClient(creds)(client)
+        }),
+      ).pipe(Layer.provide(FetchHttpClient.layer))
+      return OpenAiResponsesClient.layer({
+        apiUrl: "https://chatgpt.com/backend-api/codex",
+      }).pipe(Layer.provide(codexHttpClientLayer))
     }),
   ).pipe(Layer.provide(credentialLayer))
 
-  return OpenAiLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
+  return OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
+    Layer.provide(clientLayer),
+  )
 }
 
 /**
@@ -113,12 +144,11 @@ export const buildOpenAIModelDriver = (
   id: "openai",
   name: "OpenAI",
   resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-    const config = buildOpenAiConfig(hints)
-
-    // Stored OAuth — handle inline with token refresh
-    // Uses openai-compat (Chat Completions) since the Codex endpoint
-    // expects that format
+    // Stored OAuth — handle inline with token refresh. The ChatGPT Codex
+    // backend speaks the Responses shape, so the OAuth path uses
+    // @effect/ai-openai instead of the chat-completions compat adapter.
     if (authInfo?.type === "oauth") {
+      const config = buildOpenAiResponsesConfig(hints)
       if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
         throw new ProviderAuthError({
           message: `Model "${modelName}" not available with ChatGPT OAuth`,
@@ -137,6 +167,7 @@ export const buildOpenAIModelDriver = (
     const apiKey = storedApiKey ?? envApiKey
 
     if (apiKey !== undefined) {
+      const config = buildOpenAiCompatConfig(hints)
       return AiModel.make("openai", modelName, makeApiKeyOpenAILayer(modelName, config, apiKey))
     }
 

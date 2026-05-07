@@ -12,7 +12,7 @@ export class SearchSkillsError extends Schema.TaggedErrorClass<SearchSkillsError
 
 export const SearchSkillsParams = Schema.Struct({
   query: Schema.String.annotate({ description: "Search term" }),
-  includeContent: Schema.optional(
+  includeContent: Schema.optionalKey(
     Schema.Boolean.annotate({
       description: "Include full skill content in results (default false)",
     }),

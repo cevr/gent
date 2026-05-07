@@ -314,6 +314,7 @@ export function useSessionFeed(
   const [streamReadyKey, setStreamReadyKey] = createSignal<string | null>(null)
   let eventSeq = 0
   const lastSeenEventIdByKey = new Map<string, number>()
+  let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
 
   // Track the active key to guard against stale async writes and reset prompt state
   let currentKey: string | null = null
@@ -324,6 +325,7 @@ export function useSessionFeed(
     setActiveTool(undefined)
     setStreamReadyKey(null)
     eventSeq = 0
+    processedEnvelopeIds = new Set()
   }
 
   const items = createMemo((): SessionItem[] => {
@@ -503,6 +505,11 @@ export function useSessionFeed(
     Effect.gen(function* () {
       // Drop events if identity changed
       if (currentKey !== key) return
+      if (processedEnvelopeIds.has(envelope.id)) {
+        client.log.debug("feed.event.duplicate", { key, eventId: envelope.id })
+        return
+      }
+      processedEnvelopeIds.add(envelope.id)
       lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
       if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
         client.applyBufferedSessionEvent(envelope)

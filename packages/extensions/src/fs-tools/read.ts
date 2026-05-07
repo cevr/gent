@@ -15,12 +15,12 @@ export const ReadParams = Schema.Struct({
   path: Schema.String.annotate({
     description: "Absolute path to file to read",
   }),
-  offset: Schema.optional(
+  offset: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Line number to start reading from (1-indexed)",
     }),
   ),
-  limit: Schema.optional(
+  limit: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Maximum number of lines to read",
     }),

@@ -16,14 +16,7 @@ import {
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
 import { AutoCheckpointTool } from "./checkpoint.js"
-import {
-  AutoControllerLive,
-  AutoRead,
-  AutoState,
-  AutoWrite,
-  projectSnapshot,
-  viewForState,
-} from "./controller.js"
+import { AutoControllerLive, AutoRead, AutoState, AutoWrite, viewForState } from "./controller.js"
 import { AutoJournal } from "./journal.js"
 import { AUTO_EXTENSION_ID, AutoRpc } from "./protocol.js"
 

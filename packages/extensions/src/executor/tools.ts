@@ -95,7 +95,7 @@ export const ResumeTool = tool({
     action: Schema.Literals(["accept", "decline", "cancel"]).annotate({
       description: "How to respond to the pending interaction.",
     }),
-    content: Schema.optional(
+    content: Schema.optionalKey(
       Schema.String.annotate({
         description: "Optional JSON string with additional content for the interaction.",
       }),

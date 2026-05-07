@@ -7,7 +7,7 @@ export const SkillsParams = Schema.Struct({
     description:
       'Skill names to load, or "all". Supports $skill, $skill:local, $skill:global syntax.',
   }),
-  level: Schema.optional(
+  level: Schema.optionalKey(
     Schema.Literals(["local", "global"]).annotate({
       description: "Filter by level. If omitted, resolves local-first.",
     }),

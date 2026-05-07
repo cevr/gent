@@ -16,12 +16,12 @@ export const GlobParams = Schema.Struct({
   pattern: Schema.String.annotate({
     description: "Glob pattern (e.g., **/*.ts, src/**/*.tsx)",
   }),
-  path: Schema.optional(
+  path: Schema.optionalKey(
     Schema.String.annotate({
       description: "Directory to search in (default: cwd)",
     }),
   ),
-  limit: Schema.optional(
+  limit: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Maximum number of results (default: 100)",
     }),

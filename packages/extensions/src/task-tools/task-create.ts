@@ -4,15 +4,17 @@ import { TaskService } from "../task-tools-service.js"
 
 export const TaskCreateParams = Schema.Struct({
   subject: Schema.String.annotate({ description: "Brief task title in imperative form" }),
-  description: Schema.optional(
+  description: Schema.optionalKey(
     Schema.String.annotate({ description: "Detailed description of what needs to be done" }),
   ),
-  agent: Schema.optional(AgentName.annotate({ description: "Agent type to execute this task" })),
-  prompt: Schema.optional(
+  agent: Schema.optionalKey(AgentName.annotate({ description: "Agent type to execute this task" })),
+  prompt: Schema.optionalKey(
     Schema.String.annotate({ description: "Execution prompt for the agent" }),
   ),
-  cwd: Schema.optional(Schema.String.annotate({ description: "Working directory for execution" })),
-  blockedBy: Schema.optional(
+  cwd: Schema.optionalKey(
+    Schema.String.annotate({ description: "Working directory for execution" }),
+  ),
+  blockedBy: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({
       description: "Task IDs that must complete before this one can start",
     }),

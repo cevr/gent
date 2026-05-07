@@ -59,7 +59,6 @@ import {
 } from "../domain/extension-package-shape.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
-import type { AgentEvent } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 

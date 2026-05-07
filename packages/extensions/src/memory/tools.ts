@@ -23,12 +23,12 @@ const RememberParams = Schema.Struct({
     description:
       "Where to store: session (ephemeral, lost on restart), project (per-cwd repo), global (cross-session)",
   }),
-  tags: Schema.optional(
+  tags: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({
       description: "Optional tags for categorization and search",
     }),
   ),
-  project_key: Schema.optional(
+  project_key: Schema.optionalKey(
     Schema.String.annotate({
       description:
         "Project key for project-scoped memories (auto-detected if omitted). Format: basename-hash.",
@@ -94,18 +94,18 @@ export const MemoryRememberTool = tool({
 // ── memory_recall ──
 
 const RecallParams = Schema.Struct({
-  query: Schema.optional(
+  query: Schema.optionalKey(
     Schema.String.annotate({
       description:
         "Search query to filter memories. Omit to list all memories (titles + summaries only).",
     }),
   ),
-  scope: Schema.optional(
+  scope: Schema.optionalKey(
     Schema.Literals(["project", "global"]).annotate({
       description: "Filter by scope. Omit to search all scopes.",
     }),
   ),
-  limit: Schema.optional(
+  limit: Schema.optionalKey(
     Schema.Number.annotate({ description: "Maximum entries to return (default 20)" }),
   ),
 })
@@ -181,7 +181,7 @@ const ForgetParams = Schema.Struct({
   scope: Schema.Literals(["session", "project", "global"]).annotate({
     description: "Scope of the memory to remove",
   }),
-  project_key: Schema.optional(
+  project_key: Schema.optionalKey(
     Schema.String.annotate({ description: "Project key for project-scoped memories" }),
   ),
 })

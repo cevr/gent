@@ -35,7 +35,7 @@ export const ResearchParams = Schema.Struct({
     description:
       "Repository specs to research: owner/repo, owner/repo@tag, npm:package. Single = focused explanation, multiple = comparative analysis.",
   }),
-  focus: Schema.optional(
+  focus: Schema.optionalKey(
     Schema.String.annotate({
       description: "Narrow the search: specific file paths, modules, or patterns to examine",
     }),

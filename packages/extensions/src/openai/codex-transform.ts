@@ -60,7 +60,10 @@ const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
  * responses-API shape. Both forward to the same Codex endpoint.
  */
 const isCodexBoundPath = (pathname: string): boolean =>
-  pathname === "/v1/chat/completions" || pathname === "/v1/responses"
+  pathname === "/v1/chat/completions" ||
+  pathname === "/v1/responses" ||
+  pathname === "/chat/completions" ||
+  pathname === "/responses"
 
 const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
 
@@ -72,6 +75,7 @@ const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
  * backend would reject it. Merge instead.
  */
 const CODEX_BETA_TOKEN = "responses=experimental"
+const CODEX_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
 /**
  * Merge `requiredToken` into a comma-separated `OpenAI-Beta` header
@@ -99,9 +103,10 @@ const ensureBetaToken = (existing: string | undefined, requiredToken: string): s
  *     `instructions` string (joined by `\n\n`)
  *   - `store: false` to prevent server-side conversation persistence
  *
- * Inputs without an `input` array (e.g. chat-completions `messages` payloads)
- * pass through untouched so the SDK can gradually move provider traffic toward
- * `/responses`.
+ * The OAuth path uses the Responses SDK, but the transformer also normalizes
+ * legacy chat-completions `messages` bodies so old tests and future adapter
+ * drift fail closed at this boundary instead of hitting Codex with the wrong
+ * shape.
  */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -114,6 +119,20 @@ const isInstructionItem = (
   return role === "system" || role === "developer"
 }
 
+const textFromContent = (content: unknown): string | undefined => {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return undefined
+  const text = content
+    .flatMap((part) => {
+      if (!isRecord(part)) return []
+      const type = part["type"]
+      const value = part["text"]
+      return (type === "input_text" || type === "text") && typeof value === "string" ? [value] : []
+    })
+    .join("\n")
+  return text.length > 0 ? text : undefined
+}
+
 const splitInstructions = (
   input: unknown,
 ): { instructions: string[]; filteredInput: unknown[] } | undefined => {
@@ -122,18 +141,71 @@ const splitInstructions = (
   const filteredInput: unknown[] = []
   for (const item of input) {
     if (isInstructionItem(item)) {
-      // Only string content lifts to top-level `instructions`. Items
-      // with structured (non-string) content stay in `filteredInput`
-      // so the Codex backend still sees them — silently dropping them
-      // would corrupt the prompt at the boundary.
-      if (typeof item.content === "string") {
-        instructions.push(item.content)
+      const text = textFromContent(item.content)
+      if (text !== undefined) {
+        instructions.push(text)
         continue
       }
     }
     filteredInput.push(item)
   }
   return { instructions, filteredInput }
+}
+
+const convertChatContent = (content: unknown): unknown => {
+  if (typeof content === "string") return [{ type: "input_text", text: content }]
+  if (!Array.isArray(content)) return content
+  return content.map((part) => {
+    if (!isRecord(part)) return part
+    if (part["type"] === "text" && typeof part["text"] === "string") {
+      return { ...part, type: "input_text" }
+    }
+    if (part["type"] === "image_url") {
+      const image = part["image_url"]
+      if (typeof image === "string") return { type: "input_image", image_url: image }
+      if (isRecord(image) && typeof image["url"] === "string") {
+        return { type: "input_image", image_url: image["url"] }
+      }
+    }
+    return part
+  })
+}
+
+const chatMessagesToResponsesInput = (
+  messages: unknown,
+): { instructions: string[]; input: unknown[] } | undefined => {
+  if (!Array.isArray(messages)) return undefined
+  const instructions: string[] = []
+  const input: unknown[] = []
+
+  for (const message of messages) {
+    if (!isRecord(message)) continue
+    const role = message["role"]
+    if (role === "system" || role === "developer") {
+      const text = textFromContent(message["content"])
+      if (text !== undefined) instructions.push(text)
+      continue
+    }
+    if (role === "user") {
+      input.push({ role: "user", content: convertChatContent(message["content"]) })
+      continue
+    }
+    if (role === "assistant") {
+      const text = textFromContent(message["content"])
+      if (text !== undefined) {
+        input.push({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text, annotations: [] }],
+          status: "completed",
+        })
+        continue
+      }
+    }
+    input.push(message)
+  }
+
+  return { instructions, input }
 }
 
 /**
@@ -160,12 +232,15 @@ const rewriteCodexBody = (
   const parsed = tryReadJsonBody(req.body)
   if (parsed === undefined) return req
   const split = splitInstructions(parsed["input"])
-  if (split === undefined) return req
+  const chat = split === undefined ? chatMessagesToResponsesInput(parsed["messages"]) : undefined
+  const instructions = split?.instructions ?? chat?.instructions
+  const input = split?.filteredInput ?? chat?.input
+  if (instructions === undefined || input === undefined) return req
   const next: Record<string, unknown> = { ...parsed }
-  if (split.instructions.length > 0) {
-    next["instructions"] = split.instructions.join("\n\n")
-  }
-  next["input"] = split.filteredInput
+  delete next["messages"]
+  next["instructions"] =
+    instructions.length > 0 ? instructions.join("\n\n") : CODEX_DEFAULT_INSTRUCTIONS
+  next["input"] = input
   next["store"] = false
   const encoded = new TextEncoder().encode(JSON.stringify(next))
   return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
@@ -310,7 +385,7 @@ export const buildCodexTransformClient =
             ),
           )
           let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
-          const url = new URL(req.url)
+          const url = new URL(req.url, "https://api.openai.com")
           if (codexUrlMatches(url)) {
             headers = Headers.set(
               headers,
@@ -318,6 +393,7 @@ export const buildCodexTransformClient =
               ensureBetaToken(headers["openai-beta"], CODEX_BETA_TOKEN),
             )
             const withBody = rewriteCodexBody(withHeaders(req, headers))
+            if (req.url.startsWith("/")) return withBody
             return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
           }
           return withHeaders(req, headers)

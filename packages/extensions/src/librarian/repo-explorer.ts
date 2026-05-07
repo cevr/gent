@@ -237,22 +237,22 @@ export const RepoExplorerParams = Schema.Struct({
     description:
       "Action: fetch (clone/download), path (get local path), search (grep), info (metadata), tree (list files), read (read file content)",
   }),
-  query: Schema.optional(
+  query: Schema.optionalKey(
     Schema.String.annotate({
       description: "Search query (for search action)",
     }),
   ),
-  update: Schema.optional(
+  update: Schema.optionalKey(
     Schema.Boolean.annotate({
       description: "Update existing repo (for fetch action)",
     }),
   ),
-  ref: Schema.optional(
+  ref: Schema.optionalKey(
     Schema.String.annotate({
       description: "Git ref — branch, tag, or SHA (for tree/read actions). Defaults to HEAD",
     }),
   ),
-  filePath: Schema.optional(
+  filePath: Schema.optionalKey(
     Schema.String.annotate({
       description: "File path within the repo (for read action)",
     }),

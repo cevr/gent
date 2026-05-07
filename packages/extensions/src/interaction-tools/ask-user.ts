@@ -1,11 +1,5 @@
 import { Effect, Schema } from "effect"
-import {
-  tool,
-  ToolNeeds,
-  QuestionSchema,
-  QuestionOptionSchema,
-  type Question,
-} from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type Question } from "@gent/core/extensions/api"
 
 const parseAnswers = (notes: string): string[][] => {
   try {
@@ -21,20 +15,26 @@ const parseAnswers = (notes: string): string[][] => {
 }
 
 // AskUser Params — canonical questions[] input
-// Reuses QuestionSchema from event.ts with tool-specific length constraints.
+// Mirrors QuestionSchema with exact-optional fields for provider tool schemas.
 
+const AskUserQuestionOptionSchema = Schema.Struct({
+  label: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+})
 const AskUserQuestionSchema = Schema.Struct({
-  ...QuestionSchema.fields,
-  header: Schema.optional(
+  question: Schema.String,
+  header: Schema.optionalKey(
     Schema.String.check(Schema.isMaxLength(30)).annotate({
       description: "Short label for the question (max 30 chars)",
     }),
   ),
-  options: Schema.optional(
-    Schema.Array(QuestionOptionSchema)
+  markdown: Schema.optionalKey(Schema.String),
+  options: Schema.optionalKey(
+    Schema.Array(AskUserQuestionOptionSchema)
       .check(Schema.isMaxLength(4))
       .annotate({ description: "Options for user to choose from" }),
   ),
+  multiple: Schema.optionalKey(Schema.Boolean),
 })
 
 export const AskUserParams = Schema.Struct({

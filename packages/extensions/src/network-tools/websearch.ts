@@ -16,12 +16,12 @@ export const WebSearchParams = Schema.Struct({
   query: Schema.String.annotate({
     description: "Web search query",
   }),
-  numResults: Schema.optional(
+  numResults: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Number of search results to return (default: 8)",
     }),
   ),
-  type: Schema.optional(
+  type: Schema.optionalKey(
     Schema.Literals(["auto", "fast"]).annotate({
       description: "Search type — auto: balanced (default), fast: quick results",
     }),

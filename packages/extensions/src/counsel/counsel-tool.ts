@@ -28,13 +28,13 @@ export const CounselParams = Schema.Struct({
   prompt: Schema.String.annotate({
     description: "The question, task, or topic to get a second opinion on",
   }),
-  mode: Schema.optional(
+  mode: Schema.optionalKey(
     Schema.Literals(["deep", "standard"]).annotate({
       description:
         "deep: thorough analysis with read-only tools and high reasoning. standard: quick focused opinion (default: standard)",
     }),
   ),
-  context: Schema.optional(
+  context: Schema.optionalKey(
     Schema.String.annotate({
       description: "Additional context to include (e.g. relevant code, prior decisions)",
     }),

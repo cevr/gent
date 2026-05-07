@@ -32,6 +32,7 @@ import {
 } from "@gent/core/domain/agent.js"
 
 import { render } from "@opentui/solid"
+import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { App } from "./app"
 import { detectColorScheme } from "./theme/index"
@@ -74,6 +75,7 @@ import {
   makeClientWorkspaceLayer,
 } from "./extensions/client-services"
 import type { ClientRuntime } from "./extensions/client-facets.js"
+import { formatDoctorReport, makeDoctorReport, resetStorage } from "./ops/local-health"
 
 // Clear client log on startup
 clearClientLog()
@@ -82,6 +84,29 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
 
 const ATOM_CACHE_MAX = 256
+
+const waitForRendererDestroy = (renderer: CliRenderer) =>
+  Effect.callback<void>((resume) => {
+    let settled = false
+    // @effect-diagnostics-next-line globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive
+    const keepAlive = setInterval(() => {}, 60_000)
+    const onDestroy = () => {
+      if (settled) return
+      settled = true
+      clearInterval(keepAlive)
+      resume(Effect.void)
+    }
+
+    renderer.once("destroy", onDestroy)
+
+    return Effect.sync(() => {
+      if (settled) return
+      settled = true
+      clearInterval(keepAlive)
+      renderer.off("destroy", onDestroy)
+      renderer.destroy()
+    })
+  })
 
 class CliStartupError extends Schema.TaggedErrorClass<CliStartupError>()("CliStartupError", {
   message: Schema.String,
@@ -391,37 +416,48 @@ const main = Command.make(
         },
       }
 
-      yield* Effect.promise(() =>
-        render(() => (
-          <EnvProvider env={envWithShutdown}>
-            <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
-              <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider
-                  client={bundle.client}
-                  runtime={bundle.runtime}
-                  services={uiServices}
-                  log={log}
-                  initialSession={bootstrap.initialSession}
-                  initialAgent={initialAgent}
-                >
-                  <ExtensionUIProvider>
-                    <RouterProvider initialRoute={bootstrap.initialRoute}>
-                      <App
-                        debugMode={debug}
-                        missingAuthProviders={missingAuth}
-                        initialThemeMode={initialThemeMode}
-                      />
-                    </RouterProvider>
-                  </ExtensionUIProvider>
-                </ClientProvider>
-              </RegistryProvider>
-            </WorkspaceProvider>
-          </EnvProvider>
-        )),
+      const renderer = yield* Effect.promise(() =>
+        createCliRenderer({
+          onDestroy: () => {
+            shutdownLog("exit.renderer-destroy")
+          },
+        }),
       )
-      // Block until interrupted. Fiber interrupt from env.shutdown() breaks
-      // Layer.launch's Effect.never, triggering scope finalization.
-      return yield* Effect.never.pipe(
+      yield* Effect.promise(() =>
+        render(
+          () => (
+            <EnvProvider env={envWithShutdown}>
+              <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
+                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
+                  <ClientProvider
+                    client={bundle.client}
+                    runtime={bundle.runtime}
+                    services={uiServices}
+                    log={log}
+                    initialSession={bootstrap.initialSession}
+                    initialAgent={initialAgent}
+                  >
+                    <ExtensionUIProvider>
+                      <RouterProvider initialRoute={bootstrap.initialRoute}>
+                        <App
+                          debugMode={debug}
+                          missingAuthProviders={missingAuth}
+                          initialThemeMode={initialThemeMode}
+                        />
+                      </RouterProvider>
+                    </ExtensionUIProvider>
+                  </ClientProvider>
+                </RegistryProvider>
+              </WorkspaceProvider>
+            </EnvProvider>
+          ),
+          renderer,
+        ),
+      )
+      // Keep a real process handle open until the renderer is destroyed.
+      // OpenTUI mounts synchronously and `render(...)` resolves immediately;
+      // a bare suspended fiber does not keep Bun alive.
+      return yield* waitForRendererDestroy(renderer).pipe(
         Effect.onInterrupt(() =>
           Effect.sync(() => {
             shutdownLog("shutdown.interrupted")
@@ -550,9 +586,48 @@ const server = Command.make("server", {}, () =>
   Console.log("Usage: gent server <status|stop>"),
 ).pipe(Command.withSubcommands([serverStatus, serverStop]))
 
+const doctor = Command.make("doctor", {}, () =>
+  Effect.gen(function* () {
+    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
+    const entry = yield* readServerLock(home)
+    const report = yield* makeDoctorReport(home, entry)
+    yield* Console.log(formatDoctorReport(report))
+  }),
+)
+
+const storageReset = Command.make("reset", {}, () =>
+  Effect.gen(function* () {
+    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
+    const entry = yield* readServerLock(home)
+    if (entry !== undefined && validateServerLockEntry(entry).valid) {
+      yield* Console.error(
+        "Error: shared server is running. Stop it with `gent server stop` first.",
+      )
+      return yield* new CliStartupError({
+        message: "shared server is running; refusing to reset storage",
+      })
+    }
+
+    const result = yield* resetStorage(home)
+    if (result.archived.length === 0) {
+      yield* Console.log("No storage files found.")
+      return
+    }
+
+    yield* Console.log(`Archived storage files to ${result.archiveDir}`)
+    for (const file of result.archived) {
+      yield* Console.log(`  ${file}`)
+    }
+  }),
+)
+
+const storage = Command.make("storage", {}, () => Console.log("Usage: gent storage <reset>")).pipe(
+  Command.withSubcommands([storageReset]),
+)
+
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([sessions, server]),
+  Command.withSubcommands([sessions, server, doctor, storage]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 

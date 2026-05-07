@@ -21,16 +21,18 @@ export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
 
 // ── Agent-facing tools ──
 
+const ArtifactMetadataParam = Schema.fromJsonString(
+  Schema.Record(Schema.String, Schema.Unknown),
+).annotate({
+  description: "JSON object string with tool-specific metadata",
+})
+
 const ArtifactSaveParams = Schema.Struct({
   label: Schema.String.annotate({ description: "Short label for display" }),
   sourceTool: Schema.String.annotate({ description: "Tool that produced this artifact" }),
   content: Schema.String.annotate({ description: "Full artifact content" }),
-  path: Schema.optional(Schema.String.annotate({ description: "File path if saved to disk" })),
-  metadata: Schema.optional(
-    Schema.Record(Schema.String, Schema.Unknown).annotate({
-      description: "Tool-specific structured data",
-    }),
-  ),
+  path: Schema.optionalKey(Schema.String.annotate({ description: "File path if saved to disk" })),
+  metadata: Schema.optionalKey(ArtifactMetadataParam),
 })
 
 const ArtifactSaveResult = Schema.Struct({
@@ -53,8 +55,8 @@ const ArtifactSaveTool = tool({
 })
 
 const ArtifactReadParams = Schema.Struct({
-  id: Schema.optional(Schema.String.annotate({ description: "Artifact ID (if known)" })),
-  sourceTool: Schema.optional(
+  id: Schema.optionalKey(Schema.String.annotate({ description: "Artifact ID (if known)" })),
+  sourceTool: Schema.optionalKey(
     Schema.String.annotate({ description: "Source tool name to look up by" }),
   ),
 })
@@ -92,20 +94,16 @@ const ArtifactReadTool = tool({
 
 const ArtifactUpdateParams = Schema.Struct({
   id: Schema.String.annotate({ description: "Artifact ID to update" }),
-  find: Schema.optional(Schema.String.annotate({ description: "Text to find in content" })),
-  replace: Schema.optional(Schema.String.annotate({ description: "Replacement text" })),
-  replaceAll: Schema.optional(
+  find: Schema.optionalKey(Schema.String.annotate({ description: "Text to find in content" })),
+  replace: Schema.optionalKey(Schema.String.annotate({ description: "Replacement text" })),
+  replaceAll: Schema.optionalKey(
     Schema.Boolean.annotate({ description: "Replace all occurrences (default: first only)" }),
   ),
-  status: Schema.optional(
+  status: Schema.optionalKey(
     Schema.Literals(["active", "resolved"]).annotate({ description: "New status" }),
   ),
-  label: Schema.optional(Schema.String.annotate({ description: "New label" })),
-  metadata: Schema.optional(
-    Schema.Record(Schema.String, Schema.Unknown).annotate({
-      description: "New metadata (replaces existing)",
-    }),
-  ),
+  label: Schema.optionalKey(Schema.String.annotate({ description: "New label" })),
+  metadata: Schema.optionalKey(ArtifactMetadataParam),
 })
 
 const ArtifactUpdateResult = Schema.Struct({

@@ -26,20 +26,20 @@ const AuditFindingSchema = Schema.Struct({
 type AuditFinding = typeof AuditFindingSchema.Type
 
 export const AuditParams = Schema.Struct({
-  prompt: Schema.optional(
+  prompt: Schema.optionalKey(
     Schema.String.annotate({ description: "Focus area or specific concern" }),
   ),
-  paths: Schema.optional(
+  paths: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({
       description: "Paths to audit (default: changed files from git diff --name-only)",
     }),
   ),
-  maxConcerns: Schema.optional(
+  maxConcerns: Schema.optionalKey(
     Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 8 })).annotate({
       description: "Max concern categories to audit (default 5)",
     }),
   ),
-  mode: Schema.optional(
+  mode: Schema.optionalKey(
     Schema.Literals(["fix", "report"]).annotate({
       description: "report: findings only, fix: detect and apply changes (single cycle)",
     }),

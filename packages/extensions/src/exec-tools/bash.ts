@@ -25,17 +25,17 @@ export const BashParams = Schema.Struct({
   command: Schema.String.annotate({
     description: "Shell command to execute",
   }),
-  timeout: Schema.optional(
+  timeout: Schema.optionalKey(
     Schema.Number.annotate({
       description: "Timeout in milliseconds (default: 120000, max: 600000)",
     }),
   ),
-  cwd: Schema.optional(
+  cwd: Schema.optionalKey(
     Schema.String.annotate({
       description: "Working directory for command execution",
     }),
   ),
-  run_in_background: Schema.optional(
+  run_in_background: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
         "Run in background. Returns immediately, notifies when done. Use for long-running commands.",

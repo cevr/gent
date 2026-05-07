@@ -27,12 +27,12 @@ export const ReadSessionParams = Schema.Struct({
   sessionId: Schema.String.annotate({
     description: "Session ID to read",
   }),
-  branchId: Schema.optional(
+  branchId: Schema.optionalKey(
     Schema.String.annotate({
       description: "Target branch ID (defaults to first branch)",
     }),
   ),
-  goal: Schema.optional(
+  goal: Schema.optionalKey(
     Schema.String.annotate({
       description: "What to extract — AI sub-agent filters for relevance",
     }),

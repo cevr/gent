@@ -4,12 +4,12 @@ import { TaskService } from "../task-tools-service.js"
 
 export const TaskUpdateParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to update" }),
-  status: Schema.optional(
+  status: Schema.optionalKey(
     Schema.Literals(["pending", "in_progress", "completed", "failed", "stopped"]).annotate({
       description: "New status",
     }),
   ),
-  description: Schema.optional(Schema.String.annotate({ description: "Updated description" })),
+  description: Schema.optionalKey(Schema.String.annotate({ description: "Updated description" })),
 })
 
 export const TaskUpdateResult = Schema.Struct({

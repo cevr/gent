@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, Exit, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
@@ -207,6 +208,37 @@ describe("Sessions", () => {
           "agent_loop_queue_workspace",
         ])
       }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+  it.scoped("reports existing storage tables without migration records", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql.unsafe(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `)
+      }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
+
+      const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
+        Layer.provide(BunFileSystem.layer),
+        Layer.provide(BunServices.layer),
+      )
+      const exit = yield* Effect.exit(Layer.buildWithScope(layer, yield* Effect.scope))
+
+      expect(exit._tag).toBe("Failure")
+      if (Exit.isFailure(exit)) {
+        expect(String(exit.cause)).toContain("existing storage tables")
+        expect(String(exit.cause)).toContain("gent_storage_migrations")
+      }
     }).pipe(Effect.provide(BunServices.layer)),
   )
   it.live("rejects orphan branch, message, and event rows", () =>

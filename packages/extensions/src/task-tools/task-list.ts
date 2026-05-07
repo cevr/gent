@@ -9,7 +9,11 @@ import {
 } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
 
-export const TaskListParams = Schema.Struct({})
+export const TaskListParams = Schema.Struct({
+  status: Schema.optionalKey(
+    TaskStatus.annotate({ description: "Optional status filter for listed tasks" }),
+  ),
+})
 
 export const TaskListResult = Schema.Struct({
   tasks: Schema.Array(
@@ -39,9 +43,13 @@ export const TaskListTool = tool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   output: TaskListResult,
-  execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
+  execute: Effect.fn("TaskListTool.execute")(function* (params, ctx) {
     const taskService = yield* TaskService
-    const tasks = yield* taskService.list(ctx.sessionId, ctx.branchId)
+    const allTasks = yield* taskService.list(ctx.sessionId, ctx.branchId)
+    const tasks =
+      params.status === undefined
+        ? allTasks
+        : allTasks.filter((task) => task.status === params.status)
 
     if (tasks.length === 0) {
       return { tasks: [], summary: "No tasks" }

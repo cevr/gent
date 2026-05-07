@@ -501,37 +501,29 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value, responses=experimental")
     }),
   )
-  it.live(
-    "structured (non-string) system/developer content stays in input, NOT silently dropped",
-    () =>
-      Effect.gen(function* () {
-        // Only string content lifts to top-level `instructions`. Items
-        // with structured content (e.g. ReadonlyArray of InputContent for
-        // system/developer per the OpenAI-compat schema) must remain in
-        // `filteredInput` so the Codex backend still sees them — silently
-        // dropping would corrupt the prompt.
-        const state = okResponse()
-        const wrapped = yield* Effect.promise(() => buildWrapped(state))
-        const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
-        yield* Effect.promise(() =>
-          runOk(
-            wrapped.post("https://api.openai.com/v1/responses", {
-              body: jsonBody({
-                model: "gpt-5.4",
-                input: [
-                  { role: "system", content: "string-instructions" },
-                  structured,
-                  { role: "user", content: "hi" },
-                ],
-              }),
+  it.live("structured input_text system/developer content lifts into instructions", () =>
+    Effect.gen(function* () {
+      const state = okResponse()
+      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
+      yield* Effect.promise(() =>
+        runOk(
+          wrapped.post("https://api.openai.com/v1/responses", {
+            body: jsonBody({
+              model: "gpt-5.4",
+              input: [
+                { role: "system", content: "string-instructions" },
+                structured,
+                { role: "user", content: "hi" },
+              ],
             }),
-          ),
-        )
-        const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-        expect(parsed["instructions"]).toBe("string-instructions")
-        // Structured system item retained in input (alongside the user msg).
-        expect(parsed["input"]).toEqual([structured, { role: "user", content: "hi" }])
-      }),
+          }),
+        ),
+      )
+      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
+      expect(parsed["instructions"]).toBe("string-instructions\n\nstructured")
+      expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
+    }),
   )
   it.live(
     "rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false",
@@ -562,29 +554,34 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         expect(parsed["model"]).toBe("gpt-5.4")
       }),
   )
-  it.live("body without an `input` array passes through unchanged on Codex paths", () =>
+  it.live("chat-completions body is normalized to Codex Responses body", () =>
     Effect.gen(function* () {
-      // Chat-completions payloads (`messages` instead of `input`) are
-      // forwarded as-is to the Codex endpoint while the SDK emits this form on
-      // /chat/completions.
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      const original = { model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }
       yield* Effect.promise(() =>
         runOk(
           wrapped.post("https://api.openai.com/v1/chat/completions", {
-            body: jsonBody(original),
+            body: jsonBody({
+              model: "gpt-5.4",
+              messages: [
+                { role: "system", content: "Be brief." },
+                { role: "user", content: "hi" },
+              ],
+            }),
           }),
         ),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-      expect(parsed).toEqual(original)
+      expect(parsed["messages"]).toBeUndefined()
+      expect(parsed["instructions"]).toBe("Be brief.")
+      expect(parsed["input"]).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "hi" }] },
+      ])
+      expect(parsed["store"]).toBe(false)
     }),
   )
-  it.live("body without input array: store flag NOT injected", () =>
+  it.live("Codex-bound body with no instructions gets a non-empty default", () =>
     Effect.gen(function* () {
-      // Make sure we never set `store: false` on a body that didn't
-      // have an `input` array — the rewrite is gated on the input split.
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       yield* Effect.promise(() =>
@@ -595,11 +592,12 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         ),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-      expect(parsed["store"]).toBeUndefined()
+      expect(parsed["instructions"]).toBe("You are a helpful assistant.")
+      expect(parsed["store"]).toBe(false)
     }),
   )
   it.live(
-    "body with input but no system/developer items: instructions NOT injected, store=false set",
+    "body with input but no system/developer items: default instructions injected, store=false set",
     () =>
       Effect.gen(function* () {
         const state = okResponse()
@@ -615,7 +613,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
           ),
         )
         const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-        expect(parsed["instructions"]).toBeUndefined()
+        expect(parsed["instructions"]).toBe("You are a helpful assistant.")
         expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
         expect(parsed["store"]).toBe(false)
       }),

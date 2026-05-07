@@ -1,11 +1,11 @@
 import { Effect, FileSystem, Layer, Path } from "effect"
-import { FileIndex, FileIndexError, type FileIndexService } from "../../domain/file-index.js"
+import { FileIndex, type FileIndexService } from "../../domain/file-index.js"
 import {
   isNativeFileIndexAvailable,
   makeNativeServiceFromModule,
   ensureDbDir,
 } from "./native-adapter.js"
-import { FallbackFileIndexLive, makeFallbackService } from "./fallback-adapter.js"
+import { makeFallbackService } from "./fallback-adapter.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 
 export {

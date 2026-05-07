@@ -15,7 +15,7 @@ export const HandoffParams = Schema.Struct({
     description:
       "Distilled context for the new session. Include: current task, key decisions, relevant files, open questions, and any state that needs to carry over. This becomes the initial prompt.",
   }),
-  reason: Schema.optional(
+  reason: Schema.optionalKey(
     Schema.String.annotate({
       description: "Why handoff is needed (e.g. context window filling up)",
     }),

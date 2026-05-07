@@ -14,22 +14,22 @@ export class SearchSessionsError extends Schema.TaggedErrorClass<SearchSessionsE
 // Search Sessions Params
 
 export const SearchSessionsParams = Schema.Struct({
-  query: Schema.optional(
+  query: Schema.optionalKey(
     Schema.String.annotate({
       description: "Keyword to search for in session content",
     }),
   ),
-  file: Schema.optional(
+  file: Schema.optionalKey(
     Schema.String.annotate({
       description: "File path to search for in session history",
     }),
   ),
-  dateRange: Schema.optional(
+  dateRange: Schema.optionalKey(
     Schema.String.annotate({
       description: "Date filter: ISO date or relative (7d, 2w, 1m)",
     }),
   ),
-  limit: Schema.optional(Schema.Number),
+  limit: Schema.optionalKey(Schema.Number),
 })
 
 // Search Sessions Result

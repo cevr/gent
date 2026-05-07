@@ -21,7 +21,7 @@ export const EditParams = Schema.Struct({
   newString: Schema.String.annotate({
     description: "Replacement string",
   }),
-  replaceAll: Schema.optional(
+  replaceAll: Schema.optionalKey(
     Schema.Boolean.annotate({
       description: "Replace all occurrences (default: false)",
     }),

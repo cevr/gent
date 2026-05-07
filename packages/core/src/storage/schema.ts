@@ -35,6 +35,48 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
   })
 })
 
+const tableExists = (name: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{ name: string }>`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table' AND name = ${name}
+      LIMIT 1
+    `
+    return rows.length > 0
+  })
+
+const migrationCount = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const hasMigrationTable = yield* tableExists("gent_storage_migrations")
+  if (!hasMigrationTable) return 0
+  const rows = yield* sql<{ count: number }>`
+    SELECT COUNT(*) AS count
+    FROM gent_storage_migrations
+  `
+  return rows[0]?.count ?? 0
+})
+
+const assertMigrationStateCompatible = Effect.fn("Storage.assertMigrationStateCompatible")(
+  function* () {
+    const existingStorageTables = yield* Effect.forEach(
+      ["sessions", "branches", "messages", "events"],
+      tableExists,
+    )
+    const hasExistingStorageTables = existingStorageTables.some((exists) => exists)
+    if (!hasExistingStorageTables) return
+
+    const appliedMigrations = yield* migrationCount
+    if (appliedMigrations > 0) return
+
+    return yield* new StorageError({
+      message:
+        "Incompatible Gent SQLite database: found existing storage tables but no gent_storage_migrations records. Move or delete ~/.gent/data.db, or run a dedicated migration repair, before starting Gent.",
+    })
+  },
+)
+
 const initialMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
@@ -209,6 +251,17 @@ const wrapPragmaError = (error: unknown): StorageError =>
 const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(configureSqliteConnection().pipe(Effect.mapError(wrapPragmaError)))
 
+const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+  Layer.effectDiscard(
+    assertMigrationStateCompatible().pipe(
+      Effect.mapError((error) =>
+        isStorageError(error)
+          ? error
+          : new StorageError({ message: "Storage compatibility check failed", cause: error }),
+      ),
+    ),
+  )
+
 const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   SqliteMigrator.layer({
     loader: Migrator.fromRecord({
@@ -220,6 +273,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
     table: "gent_storage_migrations",
   }).pipe(
     Layer.catch((error) => Layer.effectDiscard(Effect.fail(wrapMigrationError(error)))),
+    Layer.provideMerge(StorageCompatibilityLive),
     Layer.provideMerge(StoragePragmaLive),
   )
 

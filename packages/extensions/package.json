@@ -199,7 +199,7 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.123",
+    "@anthropic-ai/claude-agent-sdk": "0.2.132",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",

@@ -14,13 +14,13 @@ import { saveArtifactBestEffort } from "./artifacts/store.js"
 
 export const PlanParams = Schema.Struct({
   prompt: Schema.String.annotate({ description: "What to plan" }),
-  context: Schema.optional(
+  context: Schema.optionalKey(
     Schema.String.annotate({ description: "Additional context, file paths, constraints" }),
   ),
-  files: Schema.optional(
+  files: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({ description: "Key files to read for context" }),
   ),
-  mode: Schema.optional(
+  mode: Schema.optionalKey(
     Schema.Literals(["plan-only", "fix"]).annotate({
       description: "plan-only: produce and present a plan, fix: single-cycle plan + execute",
     }),

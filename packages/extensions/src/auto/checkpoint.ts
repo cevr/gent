@@ -15,17 +15,17 @@ const AutoCheckpointParams = Schema.Struct({
   summary: Schema.String.annotate({
     description: "Brief summary of what happened this iteration",
   }),
-  learnings: Schema.optional(
+  learnings: Schema.optionalKey(
     Schema.String.annotate({
       description: "New insights from this iteration — appended to accumulated learnings",
     }),
   ),
-  metrics: Schema.optional(
+  metrics: Schema.optionalKey(
     Schema.Record(Schema.String, Schema.Number).annotate({
       description: "Optional quantitative tracking (e.g. findings count, coverage %)",
     }),
   ),
-  nextIdea: Schema.optional(
+  nextIdea: Schema.optionalKey(
     Schema.String.annotate({
       description: "What to try next iteration — injected into the follow-up prompt",
     }),

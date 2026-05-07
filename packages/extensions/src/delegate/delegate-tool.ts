@@ -25,12 +25,12 @@ const DelegateItem = Schema.Struct({
 type DelegateItemType = typeof DelegateItem.Type
 
 export const DelegateParams = Schema.Struct({
-  agent: Schema.optional(AgentName),
-  task: Schema.optional(Schema.String),
-  tasks: Schema.optional(Schema.Array(DelegateItem)),
-  chain: Schema.optional(Schema.Array(DelegateItem)),
-  description: Schema.optional(Schema.String),
-  background: Schema.optional(
+  agent: Schema.optionalKey(AgentName),
+  task: Schema.optionalKey(Schema.String),
+  tasks: Schema.optionalKey(Schema.Array(DelegateItem)),
+  chain: Schema.optionalKey(Schema.Array(DelegateItem)),
+  description: Schema.optionalKey(Schema.String),
+  background: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
         "Run in the background via task-tools. Returns immediately with taskId. Poll with task_get.",

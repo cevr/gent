@@ -52,12 +52,26 @@ const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell => ({
   invalidated: false,
 })
 const noopCallbacks = () => new Map()
-/**
- * OpenAI Chat Completions happy-path response. `LanguageModel.generateText`
- * parses this into a successful result so tests stay on the success branch
- * and assertions can focus on outbound request shape.
- */
-const openaiHappyResponse = () => ({
+const openaiResponsesHappyResponse = () => ({
+  status: 200,
+  body: JSON.stringify({
+    id: "resp-test-1",
+    object: "response",
+    created_at: 1700000000,
+    model: "gpt-5.4",
+    output: [
+      {
+        id: "msg-test-1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "ok", annotations: [], logprobs: [] }],
+      },
+    ],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  }),
+})
+const openaiChatHappyResponse = () => ({
   status: 200,
   body: JSON.stringify({
     id: "chatcmpl-test-1",
@@ -75,7 +89,13 @@ const openaiHappyResponse = () => ({
   }),
 })
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
-  Effect.runPromise(oneGenerate(layer, state, openaiHappyResponse).pipe(Effect.orDie))
+  Effect.runPromise(
+    oneGenerate(layer, state, (req) =>
+      req.url === "https://api.openai.com/v1/chat/completions"
+        ? openaiChatHappyResponse()
+        : openaiResponsesHappyResponse(),
+    ).pipe(Effect.orDie),
+  )
 describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {

@@ -107,15 +107,11 @@ export const createDependencies = (config: DependenciesConfig) => {
     persistenceMode === "memory"
       ? SqliteStorage.MemoryWithSql()
       : SqliteStorage.LiveWithSql(config.dbPath ?? ".gent/data.db")
-  const clusterRunnerLive = Layer.provide(
-    SingleRunner.layer({
-      runnerStorage: persistenceMode === "memory" ? "memory" : "sql",
-    }),
-    storageLive,
-  )
+  const clusterRunnerLive = SingleRunner.layer({
+    runnerStorage: persistenceMode === "memory" ? "memory" : "sql",
+  })
   // Base event store: raw storage-backed publish/subscribe storage
-  const baseEventStoreLive =
-    persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
+  const baseEventStoreLive = persistenceMode === "memory" ? EventStore.Memory : EventStoreLive
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // `Auth.Live` requires FileSystem + Path; `BunPlatformLive` bundles
@@ -151,11 +147,11 @@ export const createDependencies = (config: DependenciesConfig) => {
       return Layer.succeedContext(runtime.layerContext)
     }),
   )
-  // Extension registry needs storageLive for SqlClient (extension task layers use it)
-  // and ConfigService + RuntimePlatform + platform services for profile resolution.
+  // Profile resolution needs config/platform services; storage is provided once at the
+  // shared composition boundary so SQLite initialization cannot run in parallel copies.
   const extensionRegistryLive = Layer.provide(
     profileLayers,
-    Layer.mergeAll(storageLive, configServiceLive, runtimePlatformLive, BunGentPlatformLive),
+    Layer.mergeAll(configServiceLive, runtimePlatformLive, BunGentPlatformLive),
   )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
@@ -179,25 +175,27 @@ export const createDependencies = (config: DependenciesConfig) => {
     )
   }
 
-  const eventPublisherLive = Layer.provide(EventPublisherLive, baseEventStoreLive)
+  const eventPublisherLive = EventPublisherLive
+  const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
 
-  const baseServicesLive = Layer.mergeAll(
-    runtimePlatformLive,
-    BunGentPlatformLive,
+  const baseServicesLive = Layer.provideMerge(
+    Layer.mergeAll(
+      runtimePlatformLive,
+      BunGentPlatformLive,
+      clusterRunnerLive,
+      eventServicesLive,
+      authLive,
+      authGuardLive,
+      providerAuthLive,
+      configServiceLive,
+      Layer.provide(modelRegistryLive, FetchHttpClient.layer),
+      extensionRegistryLive,
+      fileLockServiceLive,
+      modelResolverLive,
+      Layer.provide(FileIndexLive, runtimePlatformLive),
+      FetchHttpClient.layer,
+    ),
     storageLive,
-    clusterRunnerLive,
-    baseEventStoreLive,
-    eventPublisherLive,
-    authLive,
-    authGuardLive,
-    providerAuthLive,
-    configServiceLive,
-    Layer.provide(modelRegistryLive, FetchHttpClient.layer),
-    extensionRegistryLive,
-    fileLockServiceLive,
-    modelResolverLive,
-    Layer.provide(FileIndexLive, runtimePlatformLive),
-    FetchHttpClient.layer,
   )
 
   // ApprovalService — single handler for all interaction types

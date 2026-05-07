@@ -1,39 +1,19 @@
 import { Effect, Schema } from "effect"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
 
-// Prompt Params — discriminated union on mode
+// Prompt Params — single object shape because Anthropic rejects top-level anyOf tool inputs.
 
-const PresentParams = Schema.Struct({
-  mode: Schema.Literal("present"),
-  content: Schema.String.annotate({
-    description: "Markdown content to display",
+export const PromptParams = Schema.Struct({
+  mode: Schema.Literals(["present", "confirm", "review"]).annotate({
+    description: "present: show information, confirm: ask yes/no, review: persist editable content",
   }),
-  title: Schema.optional(Schema.String).annotate({
+  content: Schema.String.annotate({
+    description: "Markdown content to display, confirm, or review",
+  }),
+  title: Schema.optionalKey(Schema.String).annotate({
     description: "Optional title",
   }),
 })
-
-const ConfirmParams = Schema.Struct({
-  mode: Schema.Literal("confirm"),
-  content: Schema.String.annotate({
-    description: "Markdown content requiring yes/no confirmation",
-  }),
-  title: Schema.optional(Schema.String).annotate({
-    description: "Optional title",
-  }),
-})
-
-const ReviewParams = Schema.Struct({
-  mode: Schema.Literal("review"),
-  content: Schema.String.annotate({
-    description: "Markdown content for review (persisted to disk, editable)",
-  }),
-  title: Schema.optional(Schema.String).annotate({
-    description: "Optional title",
-  }),
-})
-
-export const PromptParams = Schema.Union([PresentParams, ConfirmParams, ReviewParams])
 
 // Prompt Result — discriminated union on mode
 

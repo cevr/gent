@@ -32,27 +32,27 @@ export type ReviewComment = typeof ReviewComment.Type
 export const ReviewOutput = Schema.Array(ReviewComment)
 
 export const ReviewParams = Schema.Struct({
-  description: Schema.optional(
+  description: Schema.optionalKey(
     Schema.String.annotate({
       description: "What changed and why — guides the review focus",
     }),
   ),
-  content: Schema.optional(
+  content: Schema.optionalKey(
     Schema.String.annotate({
       description: "Explicit content to review directly instead of reading git diff",
     }),
   ),
-  files: Schema.optional(
+  files: Schema.optionalKey(
     Schema.Array(Schema.String).annotate({
       description: "Specific file paths to review",
     }),
   ),
-  diff_spec: Schema.optional(
+  diff_spec: Schema.optionalKey(
     Schema.String.annotate({
       description: "Git diff spec, e.g. 'HEAD~3' or 'main...feature' (default: unstaged diff)",
     }),
   ),
-  mode: Schema.optional(
+  mode: Schema.optionalKey(
     Schema.Literals(["report", "fix"]).annotate({
       description: "report: findings only, fix: single-cycle review + apply",
     }),

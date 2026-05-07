@@ -18,7 +18,7 @@ export const WebFetchParams = Schema.Struct({
   url: Schema.String.check(Schema.isPattern(/^https?:\/\//)).annotate({
     description: "URL to fetch (must start with http:// or https://)",
   }),
-  selector: Schema.optional(Schema.String).annotate({
+  selector: Schema.optionalKey(Schema.String).annotate({
     description: "CSS selector to extract specific content",
   }),
 })
