@@ -8,7 +8,7 @@ import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)

@@ -1261,6 +1261,9 @@ Progress:
 - C57 moved skills tests and extension-local memory tests into
   `packages/extensions`. The skills RPC test now uses public extension inputs
   plus `layerOverrides` instead of core's private setup/compiler helpers.
+- C58 moved audit/review/counsel/delegate/research/plan tests into
+  `packages/extensions`. Audit/review tests now use the public
+  `@gent/core/runtime/runtime-platform` export.
 
 Verification on 2026-05-07:
 
