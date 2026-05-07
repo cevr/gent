@@ -11,10 +11,8 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { textStep } from "@gent/core/debug/provider"
 import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import {
   TaskCreateRequest,
@@ -25,15 +23,6 @@ import {
 import { ref } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
-
-const setupTaskExt = Effect.provide(
-  setupExtension(
-    { extension: TaskExtension, scope: "builtin", sourcePath: "builtin" },
-    "/test/cwd",
-    "/test/home",
-  ),
-  BunPlatformLive,
-)
 
 // Hoisted refs — every test reuses the same capability tokens.
 const TaskCreateRef = ref(TaskCreateRequest)
@@ -47,12 +36,11 @@ describe("TaskExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [ext],
+            extensionInputs: [TaskExtension],
           })
 
           // request: create
@@ -128,12 +116,11 @@ describe("TaskExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [ext],
+            extensionInputs: [TaskExtension],
           })
 
           const result = yield* Effect.exit(
@@ -161,12 +148,11 @@ describe("TaskExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [ext],
+            extensionInputs: [TaskExtension],
           })
 
           const result = yield* Effect.exit(
@@ -192,12 +178,11 @@ describe("TaskExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [ext],
+            extensionInputs: [TaskExtension],
           })
 
           const result = yield* Effect.exit(

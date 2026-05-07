@@ -1250,6 +1250,10 @@ Progress:
   The moved fs tests no longer import core private file-index runtime modules;
   they use a package-local `FileIndex` test layer through the public extension
   API.
+- C55 moved session-tools formatter/date tests and task-tools unit/RPC tests
+  into `packages/extensions/tests`. The task RPC test now loads
+  `TaskExtension` through public extension inputs instead of core's private
+  extension loader.
 
 Verification on 2026-05-07:
 
