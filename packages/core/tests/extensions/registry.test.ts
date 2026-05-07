@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
@@ -17,8 +17,10 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
+  ExtensionRegistryError,
   ExtensionRegistry,
   listSlashCommands,
+  requireAgent,
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -414,6 +416,39 @@ describe("ExtensionRegistry", () => {
       const agent = yield* registry.getAgent(AgentName.make("explore"))
       expect(agent?.name).toBe(AgentName.make("explore"))
     }),
+  )
+  it.live("resolveDualModelPair fails with typed error when no modeled agents exist", () =>
+    Effect.gen(function* () {
+      const registry = yield* buildRegistry([])
+      const exit = yield* Effect.exit(registry.resolveDualModelPair())
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      const error = Cause.findErrorOption(exit.cause)
+      expect(Option.isSome(error)).toBe(true)
+      if (!Option.isSome(error)) return
+      expect(Schema.is(ExtensionRegistryError)(error.value)).toBe(true)
+      if (!Schema.is(ExtensionRegistryError)(error.value)) return
+      expect(error.value.operation).toBe("resolveDualModelPair")
+      expect(error.value.message).toBe(
+        "No modeled agents registered — dual-model workflows require at least one agent with a model",
+      )
+    }),
+  )
+  it.live("requireAgent fails with typed error when the agent is missing", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(requireAgent("missing"))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      const error = Cause.findErrorOption(exit.cause)
+      expect(Option.isSome(error)).toBe(true)
+      if (!Option.isSome(error)) return
+      expect(Schema.is(ExtensionRegistryError)(error.value)).toBe(true)
+      if (!Schema.is(ExtensionRegistryError)(error.value)) return
+      expect(error.value.operation).toBe("requireAgent")
+      expect(error.value.message).toBe(
+        'Required agent "missing" not found in ExtensionRegistry. Is @gent/agents disabled?',
+      )
+    }).pipe(Effect.provide(ExtensionRegistry.Test())),
   )
   it.live("lists all agents including override winners", () =>
     Effect.gen(function* () {

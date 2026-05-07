@@ -63,7 +63,10 @@ export declare namespace ExtensionHostContext {
       runSpec?: RunSpec
     }) => Effect.Effect<AgentRunResult, AgentRunError>
 
-    readonly resolveDualModelPair: () => Effect.Effect<readonly [ModelId, ModelId]>
+    readonly resolveDualModelPair: () => Effect.Effect<
+      readonly [ModelId, ModelId],
+      ExtensionHostError
+    >
   }
 
   interface SessionFacet {

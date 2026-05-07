@@ -111,6 +111,17 @@ export interface CompiledRpcRegistry {
 
 type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
 
+export class ExtensionRegistryError extends Schema.TaggedErrorClass<ExtensionRegistryError>()(
+  "ExtensionRegistryError",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+const registryFailure = (operation: string, message: string): ExtensionRegistryError =>
+  new ExtensionRegistryError({ operation, message })
+
 /** Compile a keyed bucket from sorted extensions. Later scope wins. */
 const compileBucket = <T>(
   sorted: ReadonlyArray<LoadedExtension>,
@@ -505,8 +516,8 @@ export interface ExtensionRegistryService {
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
   /** Resolve primary + reviewer model pair for dual-model workflows.
-   *  Tries cowork/deepwork by name, falls back to first two modeled agents, dies if none. */
-  readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId]>
+   *  Tries cowork/deepwork by name, falls back to first two modeled agents, fails if none. */
+  readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId], ExtensionRegistryError>
 
   // Permission rules
   readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
@@ -568,7 +579,8 @@ export class ExtensionRegistry extends Context.Service<
               return [resolveAgentModel(only), resolveAgentModel(only)] as [ModelId, ModelId]
             }
           }
-          return yield* Effect.die(
+          return yield* registryFailure(
+            "resolveDualModelPair",
             "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
@@ -627,10 +639,9 @@ export const requireAgent = (name: string) =>
     const registry = yield* ExtensionRegistry
     const agent = yield* registry.getAgent(name)
     if (agent === undefined) {
-      return yield* Effect.die(
-        new Error(
-          `Required agent "${name}" not found in ExtensionRegistry. Is @gent/agents disabled?`,
-        ),
+      return yield* registryFailure(
+        "requireAgent",
+        `Required agent "${name}" not found in ExtensionRegistry. Is @gent/agents disabled?`,
       )
     }
     return agent
