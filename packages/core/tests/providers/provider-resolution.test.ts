@@ -14,6 +14,7 @@ import {
   finishPart,
   toolCallPart,
 } from "@gent/core/providers/provider"
+import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
@@ -78,10 +79,40 @@ const buildProviderLayer = (
   const authLayer = Layer.succeed(Auth, authStore)
   return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
 }
+const buildModelResolverLayer = (
+  extensions: LoadedExtension[],
+  authStore: AuthService = testAuthStorage,
+) => {
+  const resolved = resolveExtensions(extensions)
+  const registryLayer = ExtensionRegistry.fromResolved(resolved)
+  const driverRegistryLayer = DriverRegistry.fromResolved({
+    modelDrivers: resolved.modelDrivers,
+    externalDrivers: resolved.externalDrivers,
+  })
+  const authLayer = Layer.succeed(Auth, authStore)
+  return Layer.provide(
+    ModelResolver.Live,
+    Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer),
+  )
+}
 const resolveModel = (request: ModelRequest) =>
   Effect.gen(function* () {
     const provider = yield* Provider
     return yield* provider.resolve(request)
+  })
+const resolveLanguageModel = (request: ModelRequest) =>
+  Effect.gen(function* () {
+    const resolver = yield* ModelResolver
+    return yield* resolver.resolve({
+      modelId: request.model,
+      hints: {
+        reasoning: request.reasoning,
+        maxTokens: request.maxTokens,
+        temperature: request.temperature,
+      },
+      driverRegistry: request.driverRegistry,
+      driverId: request.driverId,
+    })
   })
 const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<string, AiTool.Any>>(
   request: ModelRequest & {
@@ -122,6 +153,27 @@ describe("Provider model resolution", () => {
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Success")
+    }),
+  )
+  it.live("ModelResolver resolves the LanguageModel service directly", () =>
+    Effect.gen(function* () {
+      const languageModel = makeLanguageModel({
+        streamText: () => Stream.fromIterable([finishPart({ finishReason: "stop" })]),
+      })
+      const layer = buildModelResolverLayer([
+        makeExt("direct-ext", [
+          {
+            id: "direct",
+            name: "Direct",
+            resolveModel: () => modelFromService("direct", languageModel),
+          },
+        ]),
+      ])
+      const model = yield* resolveLanguageModel({ model: "direct/gpt-5" }).pipe(
+        Effect.provide(layer),
+      )
+      const result = yield* model.streamText({ prompt: [] }).pipe(Stream.runCollect)
+      expect(Array.from(result)).toEqual([expect.objectContaining({ type: "finish" })])
     }),
   )
   it.live("errors for unregistered provider", () =>

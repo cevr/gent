@@ -89,6 +89,8 @@
     "./storage/sqlite-storage.js": "./src/storage/sqlite-storage.ts",
     "./providers/ai-transcript": "./src/providers/ai-transcript.ts",
     "./providers/ai-transcript.js": "./src/providers/ai-transcript.ts",
+    "./providers/model-resolver": "./src/providers/model-resolver.ts",
+    "./providers/model-resolver.js": "./src/providers/model-resolver.ts",
     "./providers/provider": "./src/providers/provider.ts",
     "./providers/provider.js": "./src/providers/provider.ts",
     "./providers/provider-auth": "./src/providers/provider-auth.ts",

@@ -1,12 +1,7 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { ToolCallId } from "../domain/ids.js"
-import { Auth, AuthOauth, type AuthService } from "../domain/auth.js"
-import {
-  ProviderAuthError,
-  type ProviderAuthInfo,
-  type ProviderHints,
-  type ProviderResolution,
-} from "../domain/driver.js"
+import { Auth } from "../domain/auth.js"
+import type { ProviderAuthError, ProviderHints, ProviderResolution } from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
@@ -19,6 +14,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import { ProviderError } from "../domain/provider-error.js"
+import { resolveProviderModel } from "./model-resolver.js"
 
 // ── Provider Resolution ──
 
@@ -31,117 +27,6 @@ export class ProviderInfo extends Schema.Class<ProviderInfo>("ProviderInfo")({
   name: Schema.String,
   isCustom: Schema.Boolean,
 }) {}
-
-const parseModelId = (modelId: string): [string, string] | undefined => {
-  const slash = modelId.indexOf("/")
-  if (slash <= 0 || slash === modelId.length - 1) return undefined
-  return [modelId.slice(0, slash), modelId.slice(slash + 1)]
-}
-
-// ── Model Resolver ──
-
-const makeModelResolver = (authStore: AuthService, defaultRegistry: DriverRegistryService) =>
-  Effect.fn("Provider.resolveModel")(function* (
-    modelId: string,
-    hints?: ProviderHints,
-    /**
-     * Per-turn driver registry override. When the agent loop resolves a turn
-     * inside a per-cwd profile, it forwards that profile's `DriverRegistry`
-     * here so project/user-scope driver overrides take effect for model turns.
-     * Falls back to the registry captured at `Provider.Live` construction.
-     */
-    overrideRegistry?: DriverRegistryService,
-    /**
-     * Optional model-driver id from `agent.driver: ModelDriverRef`. When set,
-     * overrides the provider segment parsed from `modelId` so an agent can
-     * pick a non-default driver for a model that exists under multiple driver
-     * implementations.
-     */
-    driverIdOverride?: string,
-  ) {
-    const parsed = parseModelId(modelId)
-    if (parsed === undefined) {
-      return yield* new ProviderError({
-        message: "Invalid model id (expected provider/model)",
-        model: modelId,
-      })
-    }
-    const [parsedProviderName, modelName] = parsed
-    const providerName = driverIdOverride ?? parsedProviderName
-    const driverRegistry = overrideRegistry ?? defaultRegistry
-
-    const extensionProvider = yield* driverRegistry.getModel(providerName)
-    if (extensionProvider === undefined) {
-      return yield* new ProviderError({
-        message: `Unknown provider: ${providerName}`,
-        model: modelId,
-      })
-    }
-
-    const authInfo = yield* authStore.get(providerName).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProviderError({
-            message: `Failed to read auth for provider "${providerName}"`,
-            model: modelId,
-            cause: e,
-          }),
-      ),
-    )
-    let authParam: ProviderAuthInfo | undefined
-    if (authInfo?.type === "api") {
-      authParam = { type: "api", key: authInfo.key }
-    } else if (authInfo?.type === "oauth") {
-      authParam = {
-        type: "oauth",
-        access: authInfo.access,
-        refresh: authInfo.refresh,
-        expires: authInfo.expires,
-        accountId: authInfo.accountId,
-        persist: (updated) =>
-          authStore
-            .set(
-              providerName,
-              new AuthOauth({
-                type: "oauth",
-                access: updated.access,
-                refresh: updated.refresh,
-                expires: updated.expires,
-                ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
-              }),
-            )
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new ProviderAuthError({
-                    message: `Failed to persist refreshed auth for provider "${providerName}"`,
-                    cause: e,
-                  }),
-              ),
-            ),
-      }
-    }
-
-    const resolved = yield* Effect.try({
-      try: () => extensionProvider.resolveModel(modelName, authParam, hints),
-      catch: (e): ProviderError | ProviderAuthError => {
-        // Drivers that fail closed at credential resolution throw a
-        // typed `ProviderAuthError`. Re-raise it as-is so the tag
-        // survives across the RPC seam (`GentRpcError` has
-        // `ProviderAuthError` as a first-class union arm).
-        if (Schema.is(ProviderAuthError)(e)) {
-          return e
-        }
-        return new ProviderError({
-          message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
-          model: modelId,
-          cause: e,
-        })
-      },
-    })
-
-    return resolved
-  })
 
 const providerAiError = (method: string, message: string) =>
   AiError.make({
@@ -603,7 +488,6 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
     Effect.gen(function* () {
       const authStore = yield* Auth
       const registry = yield* DriverRegistry
-      const getModel = makeModelResolver(authStore, registry)
 
       const resolve = Effect.fn("Provider.resolve")(function* (request: ModelRequest) {
         const hints: ProviderHints = {
@@ -611,12 +495,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           maxTokens: request.maxTokens,
           temperature: request.temperature,
         }
-        const model = yield* getModel(
-          request.model,
+        const model = yield* resolveProviderModel(authStore, registry, {
+          modelId: request.model,
           hints,
-          request.driverRegistry,
-          request.driverId,
-        )
+          driverRegistry: request.driverRegistry,
+          driverId: request.driverId,
+        })
         return model
       })
 

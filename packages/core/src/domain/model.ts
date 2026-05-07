@@ -54,3 +54,9 @@ export const parseModelProvider = (modelId: string): ProviderId | undefined => {
   if (slash <= 0 || slash === modelId.length - 1) return undefined
   return ProviderId.make(modelId.slice(0, slash))
 }
+
+export const parseModelId = (modelId: string): readonly [ProviderId, string] | undefined => {
+  const slash = modelId.indexOf("/")
+  if (slash <= 0 || slash === modelId.length - 1) return undefined
+  return [ProviderId.make(modelId.slice(0, slash)), modelId.slice(slash + 1)] as const
+}
