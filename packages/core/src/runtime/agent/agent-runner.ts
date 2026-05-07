@@ -1,6 +1,7 @@
 import {
   Cause,
   Context,
+  type Config,
   DateTime,
   Duration,
   Effect,
@@ -13,6 +14,7 @@ import {
 } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { ChildProcessSpawner } from "effect/unstable/process"
+import type { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
@@ -61,6 +63,9 @@ import { SessionStorage, type SessionStorageService } from "../../storage/sessio
 import { BranchStorage, type BranchStorageService } from "../../storage/branch-storage.js"
 import { MessageStorage, type MessageStorageService } from "../../storage/message-storage.js"
 import { EventStorage, type EventStorageService } from "../../storage/event-storage.js"
+import type { InteractionStorage } from "../../storage/interaction-storage.js"
+import type { InteractionPendingReader } from "../../storage/interaction-pending-reader.js"
+import type { SearchStorage } from "../../storage/search-storage.js"
 import {
   RelationshipStorage,
   type RelationshipStorageService,
@@ -74,18 +79,18 @@ import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
+import type { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
-import { ResourceManagerLive } from "../resource-manager.js"
+import { ResourceManagerLive, type ResourceManager } from "../resource-manager.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { buildExtensionLayers } from "../profile.js"
-import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
-import { buildEphemeralRuntime } from "../composer.js"
 import { runWithBuiltLayer } from "../run-with-built-layer.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import type { StorageError } from "../../domain/storage-error.js"
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
@@ -106,6 +111,103 @@ interface AgentRunStorage {
   readonly messages: MessageStorageService
   readonly events: EventStorageService
   readonly relationships: RelationshipStorageService
+}
+
+type EphemeralOverrideError = StorageError | Config.ConfigError
+
+type EphemeralStorageProvides =
+  | SqlClient.SqlClient
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | StorageTransaction
+  | InteractionStorage
+  | InteractionPendingReader
+  | SearchStorage
+
+type EphemeralOverrideProvides =
+  | EphemeralStorageProvides
+  | EventStore
+  | EventPublisher
+  | BuiltinEventSink
+  | ApprovalService
+  | PromptPresenter
+  | ResourceManager
+  | ToolRunner
+  | SessionRuntime
+
+type EphemeralExtensionRequires =
+  | EphemeralStorageProvides
+  | RuntimePlatform
+  | FileSystem.FileSystem
+  | Path.Path
+  | ModelResolver
+  | ConfigService
+  | ModelRegistry
+
+interface EphemeralRuntimeOverrides {
+  readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
+  readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
+  readonly eventPublisher: Layer.Layer<
+    EventPublisher | BuiltinEventSink,
+    EphemeralOverrideError,
+    never
+  >
+  readonly approval: Layer.Layer<ApprovalService, never, never>
+  readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
+  readonly resourceManager: Layer.Layer<ResourceManager, never, never>
+  readonly toolRunner: Layer.Layer<ToolRunner, never, never>
+  readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
+}
+
+/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane */
+const recoverExtensionLayer = <Provides>(
+  layer: Layer.Layer<Provides, unknown, unknown>,
+): Layer.Layer<Provides, never, EphemeralExtensionRequires> =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane
+  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires>
+/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
+
+const composeEphemeralRuntimeLayer = <Provides>(params: {
+  readonly parentServices: Context.Context<never>
+  readonly overrides: EphemeralRuntimeOverrides
+  readonly extensionLayers?: Layer.Layer<Provides, unknown, unknown>
+}): Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never> => {
+  const parentLayer = Layer.succeedContext(params.parentServices)
+  const overridesLayer = Layer.mergeAll(
+    params.overrides.storage,
+    params.overrides.eventStore,
+    params.overrides.eventPublisher,
+    params.overrides.approval,
+    params.overrides.promptPresenter,
+    params.overrides.resourceManager,
+    params.overrides.toolRunner,
+    params.overrides.sessionRuntime,
+  )
+
+  const typedExtensionLayer =
+    params.extensionLayers === undefined
+      ? undefined
+      : // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane
+        recoverExtensionLayer<Provides>(params.extensionLayers)
+  const extensionLayer =
+    typedExtensionLayer === undefined
+      ? undefined
+      : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, params.overrides.storage))
+
+  const childLayer =
+    extensionLayer === undefined ? overridesLayer : Layer.merge(extensionLayer, overridesLayer)
+
+  // Fresh memoization keeps child-owned layer constants, such as in-memory
+  // SqliteClient, from aliasing the parent runtime's memoized services.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Provides plus override provides is the local composition output
+  return Layer.fresh(Layer.provideMerge(childLayer, parentLayer)) as Layer.Layer<
+    Provides | EphemeralOverrideProvides,
+    EphemeralOverrideError,
+    never
+  >
 }
 
 const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
@@ -496,7 +598,6 @@ const makeSharedRunnerHelpers = (
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
   parentServices: Context.Context<never>
-  parentProfile: ServerProfile
   extensionRegistry: ExtensionRegistryService
 }) => {
   const resolved = params.extensionRegistry.getResolved()
@@ -580,8 +681,7 @@ const buildEphemeralLayer = (params: {
   // parent keys by `Layer.provideMerge` last-writer-wins. Adding a new
   // storage sub-Tag means adding it to the focused storage family, not
   // updating an omit list at every call site.
-  const composed = buildEphemeralRuntime({
-    parent: params.parentProfile,
+  return composeEphemeralRuntimeLayer({
     parentServices: params.parentServices,
     overrides: {
       storage: storageLayer,
@@ -595,8 +695,6 @@ const buildEphemeralLayer = (params: {
     },
     extensionLayers,
   })
-
-  return composed.layer
 }
 
 const reparentEphemeralChildEvent = (
@@ -650,7 +748,6 @@ const runEphemeralAgent = (params: {
   shared: ReturnType<typeof makeSharedRunnerHelpers>
   extensionRegistry: ExtensionRegistryService
   parentServices: Context.Context<never>
-  parentProfile: ServerProfile
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId
@@ -678,7 +775,6 @@ const runEphemeralAgent = (params: {
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
     parentServices: params.parentServices,
-    parentProfile: params.parentProfile,
     extensionRegistry: params.extensionRegistry,
   })
 
@@ -818,7 +914,7 @@ const runEphemeralAgent = (params: {
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
-    // `buildEphemeralRuntime()` wraps the merged layer in `Layer.fresh` so the
+    // `composeEphemeralRuntimeLayer()` wraps the merged layer in `Layer.fresh` so the
     // child gets its own memo map. Child override layers like
     // `SqliteStorage.MemoryWithSql()` reference module-level layer constants
     // for the underlying SqlClient; without a fresh memo map the parent
@@ -896,7 +992,6 @@ export const InProcessRunner = (
   | Path.Path
   | ConfigService
   | ModelRegistry
-  | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
 > =>
@@ -921,9 +1016,6 @@ export const InProcessRunner = (
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
-      // Server-scoped parent profile — type-level proof of origin for the
-      // ephemeral runtime builder.
-      const parentProfile = yield* ServerProfileService
 
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
@@ -986,7 +1078,6 @@ export const InProcessRunner = (
                 shared,
                 extensionRegistry,
                 parentServices,
-                parentProfile,
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId,
@@ -1109,7 +1200,6 @@ export const SubprocessRunner = (
   | Path.Path
   | ConfigService
   | ModelRegistry
-  | ServerProfileService
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
 > =>
@@ -1133,9 +1223,6 @@ export const SubprocessRunner = (
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
-      // Server-scoped parent profile — type-level proof of origin for the
-      // ephemeral runtime builder.
-      const parentProfile = yield* ServerProfileService
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
       // Capture full parent context — no manual enumeration needed
@@ -1158,7 +1245,6 @@ export const SubprocessRunner = (
                 shared,
                 extensionRegistry,
                 parentServices,
-                parentProfile,
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId,

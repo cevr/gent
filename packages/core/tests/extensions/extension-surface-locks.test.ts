@@ -6,8 +6,8 @@
  * 2. Promise handlers stay out of Effect-returning seams
  * 3. read-only branding remains available for request/reaction service seams
  *
- * `scope-brands.test.ts` stays separate because it proves actor/runtime
- * ownership rather than extension surface typing.
+ * Runtime composition has separate behavior tests; this file only locks the
+ * public extension authoring surface.
  */
 
 import { describe, expect, test } from "bun:test"

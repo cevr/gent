@@ -18,7 +18,6 @@ import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { resolveProfileRuntime } from "../runtime/profile.js"
-import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
@@ -149,15 +148,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       const profile = sessionProfileFromRuntime(runtime)
       launchSessionProfileSeed = profile
       baseSectionsSeed = runtime.baseSections
-      // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
-      // can construct an EphemeralProfile through the runtime builder without
-      // forging the brand themselves. Only this composition root may call
-      // brandServerScope (lint-fenced).
-      const serverProfileLayer = Layer.succeed(
-        ServerProfileService,
-        brandServerScope({ cwd: profile.cwd, resolved: profile.resolved }),
-      )
-      return Layer.mergeAll(Layer.succeedContext(runtime.layerContext), serverProfileLayer)
+      return Layer.succeedContext(runtime.layerContext)
     }),
   )
   // Extension registry needs storageLive for SqlClient (extension task layers use it)

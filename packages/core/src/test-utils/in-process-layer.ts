@@ -22,7 +22,6 @@ import { ConfigService } from "../runtime/config-service.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { ServerProfileService } from "../runtime/scope-brands.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -89,10 +88,6 @@ const buildLayer = (
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
     ResourceManagerLive,
-    // Server-scoped profile brand for ephemeral runtime construction —
-    // tests don't construct a real server composition root, so the test
-    // layer fakes the brand with an empty extension set.
-    ServerProfileService.Test(),
     ...(config.extraLayers ?? []),
   )
 

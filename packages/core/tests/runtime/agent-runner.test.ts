@@ -46,7 +46,6 @@ import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/cor
 import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
-import { ServerProfileService } from "../../src/runtime/scope-brands"
 import {
   SessionRuntime,
   SessionRuntimeStateSchema,
@@ -166,7 +165,6 @@ const ephemeralParentDeps = Layer.mergeAll(
   BunPlatformLive,
   Permission.Live([], "allow"),
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-  ServerProfileService.Test(),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )

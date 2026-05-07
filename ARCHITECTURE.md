@@ -378,11 +378,12 @@ or ask/reply infrastructure inside extension authoring.
 
 **Ephemeral runtime builder**:
 
-`buildEphemeralRuntime({...})` (`runtime/composer.ts`) accepts explicit override
-families for sub-Tag-aware ephemeral layer construction. Each field maps one
-child-owned service family, such as `storage`, `eventStore`, or
-`eventPublisher`, to a required layer while the builder omits the corresponding
-parent Tags before merging child layers last.
+`agent-runner.ts` builds ephemeral child runs by snapshotting the parent context
+with `Layer.succeedContext(...)`, merging child-owned override families with
+`Layer.provideMerge`, and wrapping the final merged layer in `Layer.fresh`.
+Each override family, such as `storage`, `eventStore`, or `eventPublisher`,
+maps to a required child layer; matching child Tags occlude parent Tags through
+last-writer-wins context merge.
 
 ## Testing
 

@@ -1,8 +1,5 @@
 /**
- * Pure type-level scope brands used in domain types. Live profile carriers
- * (`Profile<S>`, `ServerProfileService`, `brandServerScope`, etc.) and any
- * runtime imports stay in `runtime/scope-brands.ts`, which re-exports the
- * brand types defined here.
+ * Pure type-level scope brands used by Resource declarations.
  *
  * Encodes the lifetime of a `Scope.Scope` at the type level so the runtime
  * cannot accidentally inject a process-scoped service into an ephemeral
@@ -15,7 +12,7 @@
  *   - {@link EphemeralScope} — survives for one ephemeral child run only
  *
  * These types carry no runtime payload — they are purely structural markers
- * used for nominal typing on `Profile<S>` carriers.
+ * used to distinguish process, cwd, and ephemeral Resource lifetimes.
  *
  * @module
  */
