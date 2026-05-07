@@ -75,7 +75,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })` — one server per DB, multiple clients. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for registry-aware shared, `Gent.client({ url })` for remote.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients use one host-local server lock at `~/.gent/server.lock`; workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -141,19 +141,21 @@ Core orchestration lives in:
 
 - `packages/core/src/runtime/session-runtime.ts`
 - `packages/core/src/runtime/agent/agent-loop.ts`
+- `packages/core/src/runtime/agent/agent-loop.actor.ts`
+- `packages/core/src/runtime/agent/agent-loop.behavior.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
-- `packages/core/src/runtime/agent/agent-loop.utils.ts`
-- `packages/core/src/runtime/agent/phases/turn.ts`
+- `packages/core/src/runtime/agent/turn-helpers.ts`
+- `packages/core/src/runtime/agent/turn-response/`
 
 Shape:
 
 - `SessionRuntime` is the single public session engine.
-- `AgentLoop` is an internal flat machine-owned control plane.
+- `AgentLoop` is an actor-backed internal control plane. The public `AgentLoop` service is a facade over `agent-loop.actor.ts`; the actor entity id includes `(workspaceId, sessionId, branchId)`.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
-- local CLI routing is in-process by default; remote routing is explicit server topology
+- local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
-- turn phases are explicit (resolve → stream → execute-tools → finalize)
+- turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
 - interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
 - `AgentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
@@ -215,9 +217,9 @@ Explicit platform/runtime seams:
 
 `FileIndex` — indexed file discovery backed by native Rust file finder (`@ff-labs/fff-bun`).
 
-Production stack: `NativeFileIndexLive` (FFF, per-cwd cached finders, `.gitignore`-aware) → fallback `FallbackFileIndexLive` (Bun.Glob walk + stat). Native failure (missing binary, unsupported platform) silently degrades to fallback. Layer always succeeds.
+Production stack: `NativeFileIndexLive` (FFF, per-cwd cached finders, `.gitignore`-aware) → fallback `FallbackFileIndexLive` (Effect `FileSystem` walk + `picomatch` filtering). Native failure (missing binary, unsupported platform) silently degrades to fallback. Layer always succeeds.
 
-GlobTool and GrepTool use `FileIndex.listFiles()` for file discovery, then filter with `Bun.Glob.match()` for pattern correctness. This replaces per-invocation directory walks with indexed lookups.
+GlobTool and GrepTool use `FileIndex.listFiles()` for file discovery, then filter with `picomatch` for pattern correctness. This replaces per-invocation directory walks with indexed lookups.
 
 Files:
 
@@ -225,7 +227,7 @@ Files:
 | ---------------------------------------------------------- | ------------------------------------------------- |
 | `packages/core/src/domain/file-index.ts`                   | Service tag, `IndexedFile`, `FileIndexError`      |
 | `packages/core/src/runtime/file-index/native-adapter.ts`   | FFF-backed adapter (dynamic import, polling scan) |
-| `packages/core/src/runtime/file-index/fallback-adapter.ts` | Bun.Glob walk fallback                            |
+| `packages/core/src/runtime/file-index/fallback-adapter.ts` | Effect FileSystem + picomatch fallback            |
 | `packages/core/src/runtime/file-index/index.ts`            | `FileIndexLive` (native-first, catch-to-fallback) |
 
 App entrypoints bind concrete Bun/OS behavior:
@@ -317,7 +319,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, commands?, rpc?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `commands`, or `rpc` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, tools?, actions?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `actions`, or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
@@ -391,7 +393,7 @@ Use the smallest honest boundary:
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
 
-**Banned test primitives**: `Provider.Test` and `EventStore.Test` are deleted. Use `Provider.Debug()` or `Provider.Sequence([...])` for provider mocking and `EventStore.Memory` for in-memory event stores.
+**Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core/test-utils/language-model` for model mocking and `EventStore.Memory` for in-memory event stores.
 
 **Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
 
@@ -433,7 +435,7 @@ One test file per source file. No god tests. Names match source owners.
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder`, recording layers
 - `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`
 - `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`
-- `packages/core/src/providers/provider.ts` — `Provider.Debug`, `Provider.Sequence`, `Provider.Signal`, `Provider.Failing` + step builders
+- `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
 - `packages/e2e/tests/transport-harness.ts` — direct transport contract harness
 
@@ -553,13 +555,13 @@ Key files:
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary        | Service       | File                                            |
-| --------------- | ------------- | ----------------------------------------------- |
-| Agent turn      | `agent-loop`  | `runtime/agent/agent-loop.ts` (TurnMetrics ref) |
-| Tool call       | `tool-runner` | `runtime/agent/tool-runner.ts`                  |
-| Provider stream | `provider`    | `runtime/agent/agent-loop.ts`                   |
-| RPC request     | `rpc`         | `server/rpc-handlers.ts`                        |
-| Agent run       | `agent-run`   | `runtime/agent/agent-runner.ts`                 |
+| Boundary     | Service       | File                                            |
+| ------------ | ------------- | ----------------------------------------------- |
+| Agent turn   | `agent-loop`  | `runtime/agent/agent-loop.ts` (TurnMetrics ref) |
+| Tool call    | `tool-runner` | `runtime/agent/tool-runner.ts`                  |
+| Model stream | `model`       | `runtime/agent/agent-loop.behavior.ts`          |
+| RPC request  | `rpc`         | `server/rpc-handlers.ts`                        |
+| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts`                 |
 
 Logging conventions:
 

@@ -7,11 +7,11 @@
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
-- **Types from core** - Import `MessagePart`, `TextPart` from `@gent/core`. Never redeclare.
+- **Message part types** - Import `MessagePart`, `TextPart` from `@gent/core/domain/message` when a UI projection needs them. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
-- **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (worker cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
@@ -152,18 +152,17 @@ Special prefixes at input start trigger different modes:
 
 Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 
-| File                              | Extension ID              | What                                           |
-| --------------------------------- | ------------------------- | ---------------------------------------------- |
-| `builtins/tools.client.ts`        | `@gent/tools`             | Tool renderers                                 |
-| `builtins/plan.client.ts`         | `@gent/plan`              | /plan and /audit slash commands                |
-| `builtins/artifacts.client.ts`    | `@gent/artifacts`         | Artifact count border label                    |
-| `builtins/auto.client.ts`         | `@gent/auto`              | Auto loop progress                             |
-| `builtins/tasks.client.tsx`       | `@gent/task-tools`        | Task widget, dialog overlay, border label      |
-| `builtins/connection.client.ts`   | `@gent/connection`        | Connection status widget                       |
-| `builtins/interactions.client.ts` | `@gent/interaction-tools` | Interaction renderers (questions, permissions) |
-| `builtins/handoff.client.ts`      | `@gent/handoff`           | Handoff interaction renderer                   |
-| `builtins/skills.client.ts`       | `@gent/skills-ui`         | `$` autocomplete: skills popup                 |
-| `builtins/files.client.ts`        | `@gent/files-ui`          | `@` autocomplete: file search popup            |
+| File                                 | Extension ID                                                   | What                                               |
+| ------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------- |
+| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/task-tools` / `@gent/interaction-tools` | Tool renderers, task widget, interaction renderers |
+| `builtins/plan.client.ts`            | `@gent/plan`                                                   | /plan and /audit slash commands                    |
+| `builtins/artifacts.client.ts`       | `@gent/artifacts`                                              | Artifact count border label                        |
+| `builtins/auto.client.ts`            | `@gent/auto`                                                   | Auto loop progress                                 |
+| `builtins/connection.client.ts`      | `@gent/connection`                                             | Connection status widget                           |
+| `builtins/handoff.client.ts`         | `@gent/handoff`                                                | Handoff interaction renderer                       |
+| `builtins/skills.client.ts`          | `@gent/skills-ui`                                              | `$` autocomplete: skills popup                     |
+| `builtins/files.client.ts`           | `@gent/files-ui`                                               | `@` autocomplete: file search popup                |
+| `builtins/driver.client.ts`          | `@gent/driver-ui`                                              | `/driver` slash command                            |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
 
@@ -171,7 +170,7 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 - User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`
-- **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `auto.client.ts` / `artifacts.client.ts` / `tasks.client.tsx` are the canonical examples.
+- **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `auto.client.ts`, `artifacts.client.ts`, and `tool-renderers.client.tsx` are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime`

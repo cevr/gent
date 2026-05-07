@@ -50,9 +50,9 @@ bun run --cwd apps/tui dev sessions
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
-- **Signal provider for lifecycle assertions** - Use `Provider.Signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
-- **`Provider.Debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
-- **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer through `buildEphemeralRuntime({ parent: ServerProfile, parentServices, overrides, extensionLayers })`. The explicit override families map fields like `storage` and `eventPublisher` to ALL Tags omitted from parent context, including sub-Tags such as `SessionStorage`, `BranchStorage`, and `BuiltinEventSink`. The builder also omits `Layer.CurrentMemoMap` from the forwarded parent context and wraps the final merged layer in `Layer.fresh`; both are load-bearing. The `parent: ServerProfile` brand makes cross-scope misuse a type error.
+- **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
+- **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
+- **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer through `buildEphemeralRuntime({ parent: ServerProfile, parentServices, overrides, extensionLayers })`. Parent services become a `Layer.succeedContext(...)` source; child-owned override families are merged with `Layer.provideMerge` so child Tags occlude parent Tags. The builder keeps `Layer.fresh` on the final merged layer so ephemeral SQLite and mutable services do not alias the parent memo map.
 - **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
 - **Process-shaped names** - Active source/test/module names should describe product behavior, not migration history. Avoid names like `batch12`, `wave14`, or `planify-migration` outside `plans/` and dated audit receipts.
 
@@ -72,7 +72,7 @@ Use `effect` skill. Key patterns:
 ## Code Style
 
 - Telegraph style, minimal tokens
-- Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag (e.g. `Provider.Sequence` / `Provider.Debug`)
+- Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
 - **Tagged/discriminated unions ALWAYS use `TaggedEnumClass`** (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Never hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions, even for internal driver/state events. Construct via `Variant.make({...})`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
 - **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
@@ -98,7 +98,7 @@ apps/server/             # BunHttpServer
 
 ```bash
 bun run test              # unit/integration (~2s)
-bun run test:e2e          # PTY + supervisor + worker-http (slow)
+bun run test:e2e          # PTY + focused server-process lifecycle coverage (slow)
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
@@ -106,10 +106,10 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Test philosophy
 
-- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `SqliteStorage.TestWithSql()` with in-memory SQLite + `Provider.Sequence` for LLM responses.
+- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `SqliteStorage.TestWithSql()` with in-memory SQLite + `LanguageModelLayers.sequence(...)` for LLM responses.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
-- **Mock at system boundaries**: only the LLM provider (via `Provider.Sequence` / `Provider.Debug`). Use real services inside the boundary.
-- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `Provider.Sequence([...])` or `Provider.Debug()` for provider mocking, `EventStore.Memory` for in-memory event stores. Provider statics (`Provider.Sequence`, `Provider.Signal`, `Provider.Debug`, `Provider.Failing`) and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/providers/provider`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
+- **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -129,7 +129,7 @@ New extension tests should include at least one RPC acceptance test via `createR
 ```typescript
 // Sequence provider for deterministic LLM responses
 const { layer: providerLayer, controls } =
-  yield * Provider.Sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
+  yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
 // Full in-process stack (AppServicesLive + real event store + real storage)
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
@@ -149,22 +149,22 @@ assertSequence(calls, [
 
 ## Key Files
 
-| File                                               | Purpose                                             |
-| -------------------------------------------------- | --------------------------------------------------- | ------ | ----- | -------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`      | SQLite layer composition for focused storage tags   |
-| `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
-| `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
-| `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
-| `packages/core/src/runtime/agent/agent-loop.ts`    | loop coordinator and command ingress                |
-| `packages/core/src/runtime/agent/phases/turn.ts`   | turn resolution, stream, tool, and finalize phases  |
-| `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
-| `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/debug/provider.ts`              | step builders for `Provider.Sequence`               |
-| `packages/core/src/providers/provider.ts`          | `Provider.Live` + `Provider.Sequence                | Signal | Debug | Failing` statics + stream-part helpers |
-| `packages/extensions/src/auto.ts`                  | auto loop modality extension (fromMachine)          |
-| `packages/extensions/src/auto-checkpoint.ts`       | signal tool for auto loop iteration                 |
-| `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
+| File                                                  | Purpose                                             |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`         | SQLite layer composition for focused storage tags   |
+| `packages/core/src/storage/schema.ts`                 | SQLite schema, migration, and initialization logic  |
+| `packages/core/src/test-utils/index.ts`               | `SequenceRecorder`, recording layers                |
+| `packages/core/src/server/dependencies.ts`            | startup wiring + dependency graph                   |
+| `packages/core/src/server/transport-contract.ts`      | shared client contract                              |
+| `packages/core/src/runtime/agent/agent-loop.ts`       | AgentLoop service facade over the actor             |
+| `packages/core/src/runtime/agent/agent-loop.actor.ts` | actor protocol, entity id, and mailbox handlers     |
+| `packages/core/src/runtime/wide-event-boundary.ts`    | `effect-wide-event` integration + context factories |
+| `packages/core/src/test-utils/in-process-layer.ts`    | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
+| `packages/core/src/debug/provider.ts`                 | step builders for `LanguageModelLayers.sequence`    |
+| `packages/core/src/test-utils/language-model.ts`      | `LanguageModelLayers` + stream-part helpers         |
+| `packages/extensions/src/auto/index.ts`               | auto loop modality extension                        |
+| `packages/extensions/src/auto/checkpoint.ts`          | signal tool for auto loop iteration                 |
+| `apps/tui/tsconfig.json`                              | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
 

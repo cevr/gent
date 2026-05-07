@@ -140,7 +140,7 @@ const SetStatus = request({
 
 export default defineExtension({
   id: String(StatusExtensionId),
-  rpc: [GetStatus, SetStatus],
+  requests: [GetStatus, SetStatus],
 })
 ```
 
@@ -166,7 +166,7 @@ const DeployAction = action({
 
 export default defineExtension({
   id: "deploy-ext",
-  commands: [DeployAction],
+  actions: [DeployAction],
 })
 ```
 
@@ -260,11 +260,13 @@ builtin).
 | `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
 | `packages/extensions/src/task-tools`    | `tool` + `request` + scoped storage resource |
 | `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
-| `packages/extensions/src/auto.ts`       | `reactions:` + scoped workflow services      |
+| `packages/extensions/src/auto/index.ts` | `reactions:` + scoped workflow services      |
 
 ## Surface Invariants
 
 - Extension callables are `tool(...)`, `request(...)`, and `action(...)`.
+- Extension buckets are `tools`, `requests`, and `actions`; older `rpc` and
+  `commands` bucket names are not part of the authoring surface.
 - Prompt shaping and policy derivation live in `reactions.turnProjection`.
 - Long-lived state lives in `defineResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
