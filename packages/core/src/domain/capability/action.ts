@@ -17,11 +17,13 @@
 
 import type { Effect, Schema } from "effect"
 import type {
+  ActionCapability,
   CapabilityEffect,
   CapabilityError,
   ErasedCapabilityEffect,
   ModelCapabilityContext,
 } from "../capability.js"
+import { Capability } from "../capability.js"
 import { CommandId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
@@ -33,9 +35,14 @@ export type ActionSurface = "slash" | "palette" | "both"
  * `ExtensionContributions.commands` bucket is the discrimination; non-action
  * leaves (`tool`, `request`) cannot be slotted into `commands:`.
  */
-declare const ActionTokenBrand: unique symbol
-export interface ActionToken<Input = unknown, Output = unknown> {
+const ActionTokenBrand: unique symbol = Symbol("@gent/core/ActionToken")
+declare const ActionTokenType: unique symbol
+export type ActionToken<Input = unknown, Output = unknown> = ActionCapability & {
   readonly [ActionTokenBrand]: true
+  readonly [ActionTokenType]?: {
+    readonly input: Input
+    readonly output: Output
+  }
   readonly id: CommandId
   readonly surface: ReadonlyArray<"slash" | "palette">
   readonly intent: "write"
@@ -88,6 +95,7 @@ const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "pal
     case "both":
       return ["slash", "palette"]
   }
+  return []
 }
 
 /**
@@ -98,8 +106,7 @@ export const action = <Input, Output, R>(
   input: ActionInput<Input, Output, R>,
 ): ActionToken<Input, Output> => {
   const surface = surfaceToSurfaces(input.surface)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
-  return {
+  const capability = Capability.Action.make({
     id: CommandId.make(input.id),
     description: input.description,
     surface,
@@ -112,5 +119,10 @@ export const action = <Input, Output, R>(
     ...(input.keybind !== undefined ? { keybind: input.keybind } : {}),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as CapabilityEffect<Input, Output, R, CapabilityError>,
-  } as unknown as ActionToken<Input, Output>
+  })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionToken brand applied at factory boundary
+  return Object.assign(capability, { [ActionTokenBrand]: true as const }) as unknown as ActionToken<
+    Input,
+    Output
+  >
 }

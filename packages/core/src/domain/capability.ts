@@ -7,7 +7,16 @@
 
 import { type Effect, Schema } from "effect"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import { ExtensionId, type BranchId, type RpcId, type SessionId, type ToolCallId } from "./ids.js"
+import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
+import {
+  ExtensionId,
+  CommandId,
+  RpcId,
+  ToolId,
+  type BranchId,
+  type SessionId,
+  type ToolCallId,
+} from "./ids.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
@@ -86,6 +95,67 @@ export type ErasedCapabilityEffect<E = any> = (
   ctx: CapabilityContext,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
 ) => Effect.Effect<any, E, any>
+
+const CapabilityNeed = Schema.Struct({
+  tag: Schema.String,
+  access: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
+})
+
+const CapabilityMetadataFields = {
+  intent: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
+  needs: Schema.optional(Schema.Array(CapabilityNeed)),
+  promptSnippet: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.Unknown),
+  permissionRules: Schema.optional(Schema.Array(Schema.Unknown)),
+} as const
+
+/**
+ * Canonical callable leaf shape. Buckets still preserve the product surfaces
+ * (`tools`, `commands`, `rpc`), but every callable contribution now carries the
+ * same discriminator and shared metadata fields.
+ */
+export const Capability = TaggedEnumClass("Capability", {
+  Tool: TaggedEnumClass.variant("tool", {
+    id: ToolId,
+    ...CapabilityMetadataFields,
+    input: Schema.Unknown,
+    output: Schema.Unknown,
+    native: Schema.Unknown,
+    effect: Schema.Unknown,
+    description: Schema.String,
+    promptGuidelines: Schema.optional(Schema.Array(Schema.String)),
+    interactive: Schema.optional(Schema.Boolean),
+    metadata: Schema.Unknown,
+  }),
+  Action: TaggedEnumClass.variant("action", {
+    id: CommandId,
+    ...CapabilityMetadataFields,
+    input: Schema.Unknown,
+    output: Schema.Unknown,
+    effect: Schema.Unknown,
+    surface: Schema.Array(Schema.Union([Schema.Literal("slash"), Schema.Literal("palette")])),
+    description: Schema.String,
+    displayName: Schema.String,
+    category: Schema.optional(Schema.String),
+    keybind: Schema.optional(Schema.String),
+  }),
+  Request: TaggedEnumClass.variant("request", {
+    id: RpcId,
+    ...CapabilityMetadataFields,
+    input: Schema.Unknown,
+    output: Schema.Unknown,
+    effect: Schema.Unknown,
+    public: Schema.Literal(true),
+    slash: Schema.optional(Schema.Unknown),
+    description: Schema.optional(Schema.String),
+    ref: Schema.Unknown,
+  }),
+})
+
+export type Capability = Schema.Schema.Type<typeof Capability>
+export type ToolCapability = Extract<Capability, { readonly _tag: "tool" }>
+export type ActionCapability = Extract<Capability, { readonly _tag: "action" }>
+export type RequestCapability = Extract<Capability, { readonly _tag: "request" }>
 
 /**
  * Reference object handed to transport callers so they can route + decode

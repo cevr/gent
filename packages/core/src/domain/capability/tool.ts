@@ -18,7 +18,12 @@
 
 import { Context, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import type { CapabilityEffect, ModelCapabilityContext } from "../capability.js"
+import {
+  Capability,
+  type CapabilityEffect,
+  type ModelCapabilityContext,
+  type ToolCapability,
+} from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
@@ -89,15 +94,18 @@ export type ToolToken<Input = unknown, Output = unknown, Error = unknown> = AiTo
     readonly output: Output
     readonly error: Error
   }
-}
+} & ToolCapability
 
 export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
 export const isToolToken = (value: unknown): value is ToolToken => {
+  const tag =
+    typeof value === "object" && value !== null && "_tag" in value ? value._tag : undefined
   if (
     !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
-    !(ToolTokenBrand in value)
+    !(ToolTokenBrand in value) ||
+    tag !== "tool"
   ) {
     return false
   }
@@ -245,7 +253,27 @@ export const tool = <
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.intent === "read")
     .annotate(AiTool.Destructive, input.destructive === true)
-  const branded = Object.assign(native, { [ToolTokenBrand]: true as const })
+  const capability = Capability.Tool.make({
+    id,
+    intent: metadata.intent,
+    ...(metadata.needs !== undefined ? { needs: metadata.needs } : {}),
+    input: metadata.input,
+    output: metadata.output,
+    native,
+    effect: metadata.effect,
+    description: input.description,
+    ...(metadata.promptSnippet !== undefined ? { promptSnippet: metadata.promptSnippet } : {}),
+    ...(metadata.promptGuidelines !== undefined
+      ? { promptGuidelines: metadata.promptGuidelines }
+      : {}),
+    ...(metadata.interactive !== undefined ? { interactive: metadata.interactive } : {}),
+    ...(metadata.permissionRules !== undefined
+      ? { permissionRules: metadata.permissionRules }
+      : {}),
+    ...(metadata.prompt !== undefined ? { prompt: metadata.prompt } : {}),
+    metadata,
+  })
+  const branded = Object.assign(native, capability, { [ToolTokenBrand]: true as const })
 
   return branded
 }

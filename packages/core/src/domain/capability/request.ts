@@ -22,12 +22,14 @@ import { type Effect, type Schema } from "effect"
 import { RpcId, type ExtensionId } from "../ids.js"
 import {
   type CapabilityContext,
+  type RequestCapability,
   type ErasedCapabilityEffect,
   type CapabilityRef,
   type CapabilityCoreContext,
   type CapabilityError,
   type ModelCapabilityContext,
 } from "../capability.js"
+import { Capability } from "../capability.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
@@ -38,9 +40,14 @@ import type { ReadOnlyTag } from "../read-only.js"
  * leaves (`tool`, `action`) cannot be slotted into `rpc:`.
  */
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
-declare const RequestTokenBrand: unique symbol
-export interface RequestToken<Input = unknown, Output = unknown> {
+const RequestTokenBrand: unique symbol = Symbol("@gent/core/RequestToken")
+declare const RequestTokenType: unique symbol
+export type RequestToken<Input = unknown, Output = unknown> = RequestCapability & {
   readonly [RequestTokenBrand]: true
+  readonly [RequestTokenType]?: {
+    readonly input: Input
+    readonly output: Output
+  }
   readonly id: RpcId
   readonly intent: "read" | "write"
   readonly public: true
@@ -156,8 +163,7 @@ export function request(input: {
     input: input.input,
     output: input.output,
   } as unknown as CapabilityRef
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
-  return {
+  const capability = Capability.Request.make({
     id: rpcId,
     intent: input.intent,
     public: true,
@@ -167,8 +173,13 @@ export function request(input: {
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: input.execute,
+    ref: refValue,
+  })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestToken brand applied at factory boundary
+  return Object.assign(capability, {
+    [RequestTokenBrand]: true as const,
     [REQUEST_REF]: refValue,
-  } as unknown as RequestToken
+  }) as unknown as RequestToken
 }
 
 export const ref = <Input, Output>(
