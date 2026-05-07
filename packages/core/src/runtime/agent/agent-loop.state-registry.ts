@@ -79,7 +79,7 @@ export interface AgentLoopStateRegistryService {
   /**
    * Removes ALL registry entries matching `(workspaceId, sessionId)` (any branch).
    * Used by `terminateSession` to keep registry cleanup in the same
-   * critical section as the legacy loopsRef cleanup, so no stale handle
+   * critical section as the legacy loop-map cleanup, so no stale handle
    * is observable to read-side callers between deletion and finalization.
    */
   readonly deregisterSession: (workspaceId: string, sessionId: SessionId) => Effect.Effect<void>
@@ -91,7 +91,7 @@ export interface AgentLoopStateRegistryService {
   /**
    * Lists the branchIds currently registered under `sessionId`. Used by
    * `terminateSession` to drive a cross-entity actor sweep without resurrecting
-   * the legacy `loopsRef` map.
+   * the legacy loop map.
    */
   readonly listForSession: (
     workspaceId: string,

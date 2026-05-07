@@ -60,6 +60,27 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
       "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
   },
   {
+    pattern: /\b(?:loopsRef|mutationSemaphoresRef|LoopDriverEvent|LoopHandle)\b/,
+    message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+  },
+  {
+    pattern: /\bProvider\.(?:Sequence|Signal|Debug|Failing)\b/,
+    message:
+      "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
+  },
+  {
+    pattern: /\b(?:findOpenPort|WORKER_HOST)\b/,
+    message: "Worker port preallocation is deleted; use server-selected ports",
+  },
+  {
+    pattern: /\bBun\.Glob\b/,
+    message: "Bun.Glob fallback is deleted; use the FileIndex service",
+  },
+  {
+    pattern: /\bWorkerLifecycleState\b/,
+    message: "WorkerLifecycleState is deleted; use the server lifecycle contract",
+  },
+  {
     pattern: /\bBun\.randomUUIDv7\b/,
     message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
   },
@@ -69,6 +90,14 @@ const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern: /^packages\/core\/src\/server\/rpcs\/actor\.ts$/,
     message: "Public actor RPC surface is deleted; use product RPCs",
+  },
+  {
+    pattern: /^packages\/core\/src\/domain\/auth-(?:storage|store|method)\.ts$/,
+    message: "Legacy auth domain module is deleted; use domain/auth",
+  },
+  {
+    pattern: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,
+    message: "SDK worker registry/http split is deleted; use server lock and server entrypoints",
   },
 ]
 
@@ -80,10 +109,14 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
 ]
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
-  ...bannedActiveSourcePatterns.filter(({ pattern }) =>
-    file === "packages/core/src/runtime/gent-platform-bun.ts"
-      ? pattern.source !== "\\bBun\\.randomUUIDv7\\b"
-      : true,
+  ...bannedActiveSourcePatterns.filter(
+    ({ pattern }) =>
+      !(
+        (file === "packages/core/src/runtime/gent-platform-bun.ts" &&
+          pattern.source === "\\bBun\\.randomUUIDv7\\b") ||
+        (file === "packages/core/src/test-utils/language-model.ts" &&
+          pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b")
+      ),
   ),
   ...(file === "packages/core/src/server/transport-contract.ts"
     ? bannedTransportContractPatterns

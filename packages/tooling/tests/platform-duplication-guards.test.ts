@@ -216,6 +216,153 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags deleted agent-loop dispatch infrastructure", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/agent/example.ts",
+        [
+          "const loops = loopsRef",
+          "const semaphores = mutationSemaphoresRef",
+          "type Event = LoopDriverEvent",
+          "type Handle = LoopHandle",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 1,
+        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 2,
+        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 3,
+        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+      },
+      {
+        file: "packages/core/src/runtime/agent/example.ts",
+        line: 4,
+        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+      },
+    ])
+  })
+
+  test("flags deleted provider test statics outside language-model utilities", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/providers/example.ts",
+        [
+          "const a = Provider.Sequence([])",
+          "const b = Provider.Signal(reply)",
+          "const c = Provider.Debug()",
+          "const d = Provider.Failing(error)",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/providers/example.ts",
+        line: 1,
+        message:
+          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
+      },
+      {
+        file: "packages/core/src/providers/example.ts",
+        line: 2,
+        message:
+          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
+      },
+      {
+        file: "packages/core/src/providers/example.ts",
+        line: 3,
+        message:
+          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
+      },
+      {
+        file: "packages/core/src/providers/example.ts",
+        line: 4,
+        message:
+          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/test-utils/language-model.ts",
+        "const a = Provider.Sequence([])",
+      ),
+    ).toEqual([])
+  })
+
+  test("flags deleted auth and sdk worker module paths", () => {
+    expect(
+      findPlatformDuplicationViolations("packages/core/src/domain/auth-storage.ts", ""),
+    ).toEqual([
+      {
+        file: "packages/core/src/domain/auth-storage.ts",
+        line: 1,
+        message: "Legacy auth domain module is deleted; use domain/auth",
+      },
+    ])
+    expect(findPlatformDuplicationViolations("packages/core/src/domain/auth.ts", "")).toEqual([])
+    expect(findPlatformDuplicationViolations("packages/sdk/src/server-registry.ts", "")).toEqual([
+      {
+        file: "packages/sdk/src/server-registry.ts",
+        line: 1,
+        message:
+          "SDK worker registry/http split is deleted; use server lock and server entrypoints",
+      },
+    ])
+    expect(findPlatformDuplicationViolations("packages/sdk/src/server.ts", "")).toEqual([])
+  })
+
+  test("flags deleted worker port preallocation and lifecycle symbols", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/sdk/src/example.ts",
+        [
+          "const port = findOpenPort()",
+          "const host = WORKER_HOST",
+          "type S = WorkerLifecycleState",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/sdk/src/example.ts",
+        line: 1,
+        message: "Worker port preallocation is deleted; use server-selected ports",
+      },
+      {
+        file: "packages/sdk/src/example.ts",
+        line: 2,
+        message: "Worker port preallocation is deleted; use server-selected ports",
+      },
+      {
+        file: "packages/sdk/src/example.ts",
+        line: 3,
+        message: "WorkerLifecycleState is deleted; use the server lifecycle contract",
+      },
+    ])
+  })
+
+  test("flags deleted Bun.Glob fallback", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/tui/src/utils/example.ts",
+        "const glob = new Bun.Glob(pattern)",
+      ),
+    ).toEqual([
+      {
+        file: "apps/tui/src/utils/example.ts",
+        line: 1,
+        message: "Bun.Glob fallback is deleted; use the FileIndex service",
+      },
+    ])
+  })
+
   test("flags Bun.randomUUIDv7 outside the platform adapter", () => {
     expect(
       findPlatformDuplicationViolations(

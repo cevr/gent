@@ -3,7 +3,7 @@
  *
  * Yields `ClientWorkspace` for cwd/home and `FileSystem.FileSystem` for the
  * empty-filter top-level directory listing. Non-empty filter goes through
- * the FFF-backed `searchFiles` Effect — no Bun.Glob fallback (deleted in
+ * the FFF-backed `searchFiles` Effect — no runtime glob fallback (deleted in
  *  with the "no native bun apis" mandate).
  */
 

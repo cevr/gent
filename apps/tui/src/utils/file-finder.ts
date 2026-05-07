@@ -5,7 +5,7 @@
  * cached `FileFinder` instance. The DB directory is created via Effect's
  * `FileSystem` (no direct Bun APIs).
  *
- * FFF is the *only* file-search path — there is no Bun.Glob fallback. If
+ * FFF is the *only* file-search path — there is no runtime glob fallback. If
  * `FileFinder.isAvailable()` is false the search Effect fails with
  * `FileFinderUnavailableError` and the popup adapter normalizes to `[]`.
  *
