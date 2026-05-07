@@ -960,7 +960,7 @@ Definition of done:
 - Extension surface lock tests prove forbidden imports fail.
 - `bun run gate`.
 
-Status: in progress.
+Status: complete.
 
 Sub-commit C46.1 complete: removed raw tool metadata helpers from the public
 extension API.
@@ -1011,6 +1011,7 @@ Verification on 2026-05-07:
 
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/activation.test.ts`
+- `bun run gate`; test wall `4339ms`
 
 #### C47: docs(examples): delete or migrate stale pipeline/subscription examples
 
@@ -1022,6 +1023,23 @@ Definition of done:
 - No example imports `pipeline` or `subscription`.
 - Examples compile if examples are part of test/lint; otherwise add a focused
   smoke check or delete stale examples.
+
+Status: complete.
+
+Implementation notes:
+
+- Migrated `examples/extensions/turn-counter.ts` to `reactions.turnAfter` plus
+  `reactions.systemPrompt`.
+- Migrated `examples/extensions/prompt-rules.ts` to `reactions.systemPrompt`.
+- Examples now teach the singular public authoring API; shipped defaults remain
+  only the starting extension set, not a privileged bucket.
+
+Verification on 2026-05-07:
+
+- `rg -n "pipeline|subscription" examples packages/core/src/extensions/api.ts packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `bun build examples/extensions/turn-counter.ts examples/extensions/prompt-rules.ts --outdir /tmp/gent-example-extension-check`
+- `bun -e 'await import("./examples/extensions/turn-counter.ts"); await import("./examples/extensions/prompt-rules.ts"); console.log("examples imported")'`
+- `bun run gate`; test wall `4232ms`
 
 ### Part E — Suppression Guardrails and Test Boundary Fixtures
 
