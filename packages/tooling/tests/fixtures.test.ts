@@ -19,6 +19,8 @@
 import { expect } from "bun:test"
 import { Effect } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
+import { readFile } from "node:fs/promises"
+import { resolve as pathResolve } from "node:path"
 import {
   runOxlint,
   type Diagnostic,
@@ -39,6 +41,48 @@ const countViolations = (diagnostics: ReadonlyArray<Diagnostic>, ruleId: string)
     return code === codeForm || code === ruleId || code.endsWith(`(${tail})`)
   }).length
 }
+
+const REPO_ROOT = pathResolve(import.meta.dir, "..", "..", "..")
+
+const readTextFile = (relativePath: string): Effect.Effect<string> =>
+  Effect.promise(() => readFile(pathResolve(REPO_ROOT, relativePath), "utf8"))
+
+const readJsonFile = (relativePath: string): Effect.Effect<unknown> =>
+  Effect.map(readTextFile(relativePath), (content) => JSON.parse(content))
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null
+
+const getRecordField = (
+  value: unknown,
+  field: string,
+): Effect.Effect<Readonly<Record<string, unknown>>> => {
+  if (!isRecord(value)) {
+    return Effect.fail(new Error(`expected object before reading "${field}"`))
+  }
+  const fieldValue = value[field]
+  if (!isRecord(fieldValue)) {
+    return Effect.fail(new Error(`expected object at "${field}"`))
+  }
+  return Effect.succeed(fieldValue)
+}
+
+const getArrayField = (value: unknown, field: string): Effect.Effect<ReadonlyArray<unknown>> => {
+  if (!isRecord(value)) {
+    return Effect.fail(new Error(`expected object before reading "${field}"`))
+  }
+  const fieldValue = value[field]
+  if (!Array.isArray(fieldValue)) {
+    return Effect.fail(new Error(`expected array at "${field}"`))
+  }
+  return Effect.succeed(fieldValue)
+}
+
+const WAVE_18_C31_LIVE_RULES = [
+  "gent/no-projection-writes",
+  "gent/no-runpromise-outside-boundary",
+  "gent/no-define-extension-throw",
+] as const
 
 interface RuleCase {
   readonly rule: string
@@ -65,6 +109,7 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-define-extension-throw",
     invalid: "no-define-extension-throw.invalid.ts",
     valid: "no-define-extension-throw.valid.ts",
+    expectedCount: 1,
   },
   {
     rule: "gent/no-r-equals-never-comment",
@@ -210,6 +255,38 @@ effectDescribe("custom lint rules", () => {
       const run = yield* Effect.promise(() => runOxlint(["runtime/fallback-adapter.ts"]))
       expect(run.exitCode).toBe(0)
       expect(countViolations(run.report.diagnostics, "gent/no-bun-outside-adapter")).toBe(0)
+    }),
+  )
+
+  it.live("Wave 18 C31 live rules have positive and negative fixtures", () =>
+    Effect.gen(function* () {
+      const rules = new Map(CASES.map((c) => [c.rule, c]))
+      for (const rule of WAVE_18_C31_LIVE_RULES) {
+        const c = rules.get(rule)
+        expect(c).toBeDefined()
+        expect(c?.invalid).toMatch(/\.invalid/)
+        expect(c?.valid).toMatch(/\.valid|boundary|platform-bun/)
+      }
+      yield* Effect.void
+    }),
+  )
+
+  it.live("retired all-errors-are-tagged surface is covered by extendsNativeError", () =>
+    Effect.gen(function* () {
+      const [tsconfigJson, oxlintConfig] = yield* Effect.all(
+        [readJsonFile("tsconfig.json"), readTextFile(".oxlintrc.json")],
+        { concurrency: "unbounded" },
+      )
+
+      const compilerOptions = yield* getRecordField(tsconfigJson, "compilerOptions")
+      const plugins = yield* getArrayField(compilerOptions, "plugins")
+      const effectPlugin = plugins.find(
+        (plugin) => isRecord(plugin) && plugin.name === "@effect/language-service",
+      )
+      const diagnosticSeverity = yield* getRecordField(effectPlugin, "diagnosticSeverity")
+      expect(diagnosticSeverity.extendsNativeError).toBe("error")
+
+      expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }),
   )
 })
