@@ -3,10 +3,12 @@ import {
   EventEnvelope,
   EventId,
   EventStore,
+  ExtensionStateChanged,
   type AgentEvent,
   type EventStoreError,
   type EventStoreService,
 } from "./event.js"
+import type { BranchId, ExtensionId, SessionId } from "./ids.js"
 
 export interface EventPublisherService {
   readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
@@ -16,6 +18,14 @@ export interface EventPublisherService {
 
 export interface ExtensionEventSinkService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
+}
+
+export interface ExtensionStatePublisherService {
+  readonly changed: (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly extensionId: ExtensionId
+  }) => Effect.Effect<void, EventStoreError>
 }
 
 export class EventPublisher extends Context.Service<EventPublisher, EventPublisherService>()(
@@ -39,6 +49,16 @@ export class ExtensionEventSink extends Context.Service<
   static Test = (): Layer.Layer<ExtensionEventSink> =>
     Layer.succeed(ExtensionEventSink, {
       publish: () => Effect.void,
+    })
+}
+
+export class ExtensionStatePublisher extends Context.Service<
+  ExtensionStatePublisher,
+  ExtensionStatePublisherService
+>()("@gent/core/src/domain/event-publisher/ExtensionStatePublisher") {
+  static Test = (): Layer.Layer<ExtensionStatePublisher> =>
+    Layer.succeed(ExtensionStatePublisher, {
+      changed: () => Effect.void,
     })
 }
 
@@ -95,10 +115,13 @@ const makePublisherContext = (publisher: EventPublisherService) =>
     Context.add(ExtensionEventSink, {
       publish: publisher.publish,
     }),
+    Context.add(ExtensionStatePublisher, {
+      changed: (params) => publisher.publish(ExtensionStateChanged.make(params)),
+    }),
   )
 
 export const EventPublisherLive: Layer.Layer<
-  EventPublisher | ExtensionEventSink,
+  EventPublisher | ExtensionEventSink | ExtensionStatePublisher,
   never,
   EventStore
 > = Layer.effectContext(

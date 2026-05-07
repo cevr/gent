@@ -50,7 +50,7 @@ export const TaskExtension = defineExtension({
   resources: [
     defineResource({
       scope: "process",
-      layer: Layer.merge(TaskStorage.Live, TaskService.Live),
+      layer: Layer.mergeAll(TaskStorage.Live, TaskService.Live),
     }),
   ],
 })

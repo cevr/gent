@@ -130,7 +130,7 @@ describe("TaskUpdateTool", () => {
     ),
   )
 
-  it.live("publishes completed event when status becomes completed", () =>
+  it.live("publishes state change when status becomes completed", () =>
     narrowR(
       Effect.gen(function* () {
         yield* setup
@@ -138,7 +138,11 @@ describe("TaskUpdateTool", () => {
         const eventStore = yield* EventStore
         const eventsFiber = yield* Effect.forkChild(
           eventStore.subscribe({ sessionId: SessionId.make("s1") }).pipe(
-            Stream.filter((envelope) => envelope.event._tag === "TaskCompleted"),
+            Stream.filter(
+              (envelope) =>
+                envelope.event._tag === "ExtensionStateChanged" &&
+                envelope.event.extensionId === "@gent/task-tools",
+            ),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -149,7 +153,7 @@ describe("TaskUpdateTool", () => {
         yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "completed" }, ctx)
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
-        expect(events).toContain("TaskCompleted")
+        expect(events).toContain("ExtensionStateChanged")
       }).pipe(Effect.provide(layer)),
     ),
   )

@@ -3,20 +3,15 @@ import {
   Task,
   TaskTransitionError,
   isValidTaskTransition,
-  TaskCreated,
-  TaskUpdated,
-  TaskCompleted,
-  TaskFailed,
-  TaskStopped,
-  TaskDeleted,
   TaskId,
+  ExtensionStatePublisher,
   type TaskStatus,
   type AgentName,
   type SessionId,
   type BranchId,
-  ExtensionEventSink,
 } from "@gent/core/extensions/api"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
+import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
 // Pure state management — no execution, no fibers, no agent spawning.
@@ -66,7 +61,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionEventSink>
+  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionStatePublisher>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -80,9 +75,9 @@ export interface TaskServiceApi {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskTransitionError, ExtensionEventSink>
+  ) => Effect.Effect<Task | undefined, TaskTransitionError, ExtensionStatePublisher>
 
-  readonly remove: (id: TaskId) => Effect.Effect<void, never, ExtensionEventSink>
+  readonly remove: (id: TaskId) => Effect.Effect<void, never, ExtensionStatePublisher>
 
   readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
@@ -119,7 +114,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.create(params),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* ExtensionEventSink
+                const extensionState = yield* ExtensionStatePublisher
                 const id = TaskId.make(yield* Random.nextUUIDv4)
                 const now = yield* DateTime.nowAsDate
                 const task = Task.make({
@@ -137,14 +132,11 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                   updatedAt: now,
                 })
                 yield* storage.createTask(task)
-                yield* eventSink.publish(
-                  TaskCreated.make({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    taskId: id,
-                    subject: params.subject,
-                  }),
-                )
+                yield* extensionState.changed({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  extensionId: TASK_TOOLS_EXTENSION_ID,
+                })
                 return task
               }).pipe(Effect.orDie),
           }),
@@ -179,7 +171,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.update(id, fields),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* ExtensionEventSink
+                const extensionState = yield* ExtensionStatePublisher
                 // Validate status transition if status is being changed
                 if (fields.status !== undefined) {
                   const existing = yield* storage.getTask(id)
@@ -196,50 +188,11 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 }
                 const updated = yield* storage.updateTask(id, fields)
                 if (updated !== undefined && fields.status !== undefined) {
-                  if (fields.status === "completed") {
-                    yield* eventSink.publish(
-                      TaskCompleted.make({
-                        sessionId: updated.sessionId,
-                        branchId: updated.branchId,
-                        taskId: id,
-                        owner: updated.owner,
-                      }),
-                    )
-                  } else if (fields.status === "failed") {
-                    const error =
-                      updated.metadata !== null &&
-                      updated.metadata !== undefined &&
-                      typeof updated.metadata === "object" &&
-                      "error" in updated.metadata &&
-                      typeof updated.metadata.error === "string"
-                        ? updated.metadata.error
-                        : undefined
-                    yield* eventSink.publish(
-                      TaskFailed.make({
-                        sessionId: updated.sessionId,
-                        branchId: updated.branchId,
-                        taskId: id,
-                        ...(error !== undefined ? { error } : {}),
-                      }),
-                    )
-                  } else if (fields.status === "stopped") {
-                    yield* eventSink.publish(
-                      TaskStopped.make({
-                        sessionId: updated.sessionId,
-                        branchId: updated.branchId,
-                        taskId: id,
-                      }),
-                    )
-                  } else {
-                    yield* eventSink.publish(
-                      TaskUpdated.make({
-                        sessionId: updated.sessionId,
-                        branchId: updated.branchId,
-                        taskId: id,
-                        status: fields.status,
-                      }),
-                    )
-                  }
+                  yield* extensionState.changed({
+                    sessionId: updated.sessionId,
+                    branchId: updated.branchId,
+                    extensionId: TASK_TOOLS_EXTENSION_ID,
+                  })
                 }
                 return updated
               }).pipe(Effect.orDie),
@@ -254,21 +207,19 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.remove(id),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventSink = yield* ExtensionEventSink
+                const extensionState = yield* ExtensionStatePublisher
                 const existing = yield* storage.getTask(id).pipe(Effect.orDie)
                 if (existing === undefined) {
                   yield* storage.deleteTask(id).pipe(Effect.orDie)
                   return
                 }
                 yield* storage.deleteTask(id).pipe(Effect.orDie)
-                yield* eventSink
-                  .publish(
-                    TaskDeleted.make({
-                      sessionId: existing.sessionId,
-                      branchId: existing.branchId,
-                      taskId: id,
-                    }),
-                  )
+                yield* extensionState
+                  .changed({
+                    sessionId: existing.sessionId,
+                    branchId: existing.branchId,
+                    extensionId: TASK_TOOLS_EXTENSION_ID,
+                  })
                   .pipe(Effect.catchEager(() => Effect.void))
               }),
           }),

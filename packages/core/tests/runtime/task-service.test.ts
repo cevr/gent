@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { TaskService, TaskServiceUnavailableError } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { ExtensionEventSink, EventPublisherLive } from "@gent/core/domain/event-publisher"
+import { EventPublisherLive, ExtensionStatePublisher } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -24,12 +24,9 @@ const makeLayer = () => {
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     GentPlatform.Test(),
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
-  const taskExtensionLayer = Layer.provide(
-    Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-    Layer.merge(baseDeps, eventPublisherLayer),
-  )
-  return Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
+  const runtimeLayer = Layer.provideMerge(EventPublisherLive, baseDeps)
+  const taskExtensionLayer = Layer.mergeAll(TaskStorage.Live, TaskService.Live)
+  return Layer.provideMerge(taskExtensionLayer, runtimeLayer)
 }
 
 describe("TaskService", () => {
@@ -49,11 +46,7 @@ describe("TaskService", () => {
       expect(reason !== undefined && Schema.is(TaskServiceUnavailableError)(reason.error)).toBe(
         true,
       )
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(TaskService.Live, ExtensionEventSink.Test(), GentPlatform.Test()),
-      ),
-    ),
+    }).pipe(Effect.provide(Layer.mergeAll(TaskService.Live, ExtensionStatePublisher.Test()))),
   )
 
   it.live("supports sibling layer composition used by extensions", () =>
@@ -75,7 +68,7 @@ describe("TaskService", () => {
     }),
   )
 
-  it.live("update with stopped status publishes TaskStopped event", () =>
+  it.live("update with stopped status publishes extension state change", () =>
     Effect.gen(function* () {
       const layer = makeLayer()
 

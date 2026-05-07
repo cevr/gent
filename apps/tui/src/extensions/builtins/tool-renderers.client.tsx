@@ -4,7 +4,7 @@
  * Transport-only widget. The widget owns its own Solid signal inside an
  * Effect-typed setup, fetched via the
  * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed
- * when task mutation events arrive on the active session stream.
+ * when task-tools state-change pulses arrive on the active session stream.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
  * `runtime.runPromise`. The Solid `createRoot` disposer and the pulse
@@ -189,13 +189,8 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
       )
     }
 
-    const isTaskMutation = (tag: string): boolean =>
-      tag === "TaskCreated" ||
-      tag === "TaskUpdated" ||
-      tag === "TaskCompleted" ||
-      tag === "TaskFailed" ||
-      tag === "TaskStopped" ||
-      tag === "TaskDeleted"
+    const isTaskMutation = (event: { readonly _tag: string; readonly extensionId?: string }) =>
+      event._tag === "ExtensionStateChanged" && event.extensionId === EXT_ID
 
     // Solid root + event subscription — both disposers registered with
     // `ClientLifecycle.addCleanup` so the provider's `onCleanup` reaps
@@ -222,7 +217,7 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
     })
 
     const unsubscribeEvents = transport.onSessionEvent((envelope) => {
-      if (!isTaskMutation(envelope.event._tag)) return
+      if (!isTaskMutation(envelope.event)) return
       const session = transport.currentSession()
       if (session === undefined) return
       runRefetch(session)

@@ -139,12 +139,6 @@ export {
   type Question,
   QuestionSchema,
   QuestionOptionSchema,
-  TaskCreated,
-  TaskUpdated,
-  TaskCompleted,
-  TaskFailed,
-  TaskStopped,
-  TaskDeleted,
 } from "../domain/event.js"
 export {
   SessionId,
@@ -194,8 +188,8 @@ export { isRecord, isRecordArray } from "../domain/guards.js"
 export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
-export { ExtensionEventSink } from "../domain/event-publisher.js"
-export type { ExtensionEventSinkService } from "../domain/event-publisher.js"
+export { ExtensionStatePublisher } from "../domain/event-publisher.js"
+export type { ExtensionStatePublisherService } from "../domain/event-publisher.js"
 export {
   type ExtensionContributions,
   type ExtensionReactions,

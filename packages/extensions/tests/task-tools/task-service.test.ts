@@ -6,7 +6,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { layer, narrowR, setup } from "./helpers.js"
 
 describe("TaskService.remove", () => {
-  it.live("publishes deleted event", () =>
+  it.live("publishes state change on delete", () =>
     narrowR(
       Effect.gen(function* () {
         yield* setup
@@ -14,7 +14,11 @@ describe("TaskService.remove", () => {
         const taskService = yield* TaskService
         const eventsFiber = yield* Effect.forkChild(
           eventStore.subscribe({ sessionId: SessionId.make("s1") }).pipe(
-            Stream.filter((envelope) => envelope.event._tag === "TaskDeleted"),
+            Stream.filter(
+              (envelope) =>
+                envelope.event._tag === "ExtensionStateChanged" &&
+                envelope.event.extensionId === "@gent/task-tools",
+            ),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -28,7 +32,7 @@ describe("TaskService.remove", () => {
         yield* taskService.remove(created.id)
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
-        expect(events).toContain("TaskDeleted")
+        expect(events).toContain("ExtensionStateChanged")
       }).pipe(Effect.provide(layer)),
     ),
   )

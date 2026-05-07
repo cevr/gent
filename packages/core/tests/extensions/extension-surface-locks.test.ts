@@ -343,6 +343,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
     // @ts-expect-error — ToolRunner is runtime engine plumbing; external drivers receive ctx.runTool
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
+    // @ts-expect-error — raw event publishing can forge core runtime events
+    type _BadExtensionEventSink = typeof PublicExtensionApi.ExtensionEventSink
+    // @ts-expect-error — task lifecycle events are private; extensions publish state pulses
+    type _BadTaskCreated = typeof PublicExtensionApi.TaskCreated
 
     expect(true).toBe(true)
   })
