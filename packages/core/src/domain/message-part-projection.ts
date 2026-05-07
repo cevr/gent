@@ -444,7 +444,7 @@ export const userMessagePartToPromptPart = (part: TextPart | FilePart): Prompt.U
 }
 
 export const assistantMessagePartToPromptPart = (
-  part: TextPart | ReasoningPart | FilePart | ToolCallPart,
+  part: TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart,
 ): Prompt.AssistantMessagePart => {
   switch (part.type) {
     case "text":
@@ -455,13 +455,17 @@ export const assistantMessagePartToPromptPart = (
       return part
     case "tool-call":
       return part
+    case "tool-approval-request":
+      return part
   }
 }
 
-export const toolMessagePartToPromptPart = (part: ToolResultPart): Prompt.ToolMessagePart => part
+export const toolMessagePartToPromptPart = (
+  part: ToolResultPart | Prompt.ToolApprovalResponsePart,
+): Prompt.ToolMessagePart => part
 
 export const assistantMessagePartToResponsePart = (
-  part: TextPart | ReasoningPart | FilePart | ToolCallPart,
+  part: TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart,
 ): Response.AnyPart => {
   switch (part.type) {
     case "text":
@@ -476,6 +480,11 @@ export const assistantMessagePartToResponsePart = (
         name: part.name,
         params: part.params,
         providerExecuted: part.providerExecuted,
+      })
+    case "tool-approval-request":
+      return Response.makePart("tool-approval-request", {
+        approvalId: part.approvalId,
+        toolCallId: part.toolCallId,
       })
   }
 }
@@ -501,7 +510,13 @@ export const responseFilePartToImagePart = (part: Response.FilePart): FilePart |
 
 export const responsePartToAssistantMessagePart = (
   part: Response.AnyPart,
-): TextPart | ReasoningPart | FilePart | ToolCallPart | undefined => {
+):
+  | TextPart
+  | ReasoningPart
+  | FilePart
+  | ToolCallPart
+  | Prompt.ToolApprovalRequestPart
+  | undefined => {
   switch (part.type) {
     case "text":
       return Prompt.textPart({ text: part.text })
@@ -515,6 +530,11 @@ export const responsePartToAssistantMessagePart = (
         name: part.name,
         params: part.params,
         providerExecuted: part.providerExecuted,
+      })
+    case "tool-approval-request":
+      return Prompt.toolApprovalRequestPart({
+        approvalId: part.approvalId,
+        toolCallId: part.toolCallId,
       })
     default:
       return undefined

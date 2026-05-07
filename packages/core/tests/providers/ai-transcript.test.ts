@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
-  GENT_MESSAGE_METADATA_FIELDS,
-  EFFECT_AI_CONTENT_FIELDS,
   normalizeResponseParts,
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
@@ -88,6 +86,10 @@ describe("AI transcript projection", () => {
               isFailure: false,
               result: { label: "diagram" },
             }),
+            Prompt.toolApprovalResponsePart({
+              approvalId: "approval-1",
+              approved: true,
+            }),
           ],
         }),
       ],
@@ -134,16 +136,21 @@ describe("AI transcript projection", () => {
       )
     }
 
-    expect(GENT_MESSAGE_METADATA_FIELDS).toEqual([
-      "_tag",
-      "id",
-      "sessionId",
-      "branchId",
-      "createdAt",
-      "turnDurationMs",
-      "metadata",
-    ])
-    expect(EFFECT_AI_CONTENT_FIELDS).toEqual(["role", "parts"])
+    const toolMessage = prompt.content[4]
+    expect(toolMessage?.role).toBe("tool")
+    if (toolMessage?.role === "tool") {
+      expect(toolMessage.content.map((part) => part.type)).toEqual([
+        "tool-result",
+        "tool-approval-response",
+      ])
+      expect(toolMessage.content[1]).toEqual(
+        expect.objectContaining({
+          type: "tool-approval-response",
+          approvalId: "approval-1",
+          approved: true,
+        }),
+      )
+    }
   })
 
   test("hidden metadata excludes messages from model context unless explicitly included", () => {
@@ -257,7 +264,11 @@ describe("AI transcript projection", () => {
     ])
 
     const projection = projectResponsePartsToMessageParts(responseParts)
-    expect(projection.assistant.map((part) => part.type)).toEqual(["text", "tool-call"])
+    expect(projection.assistant.map((part) => part.type)).toEqual([
+      "text",
+      "tool-call",
+      "tool-approval-request",
+    ])
     expect(projection.tool).toEqual([])
 
     const replayPrompt = promptFromResponseParts(responseParts)
@@ -347,6 +358,7 @@ describe("AI transcript projection", () => {
       "text",
       "reasoning",
       "tool-call",
+      "tool-approval-request",
       "file",
       "tool-result",
     ])

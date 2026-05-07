@@ -319,6 +319,20 @@ describe("message part projection", () => {
         result: { value: "encoded" },
       }),
     )
+
+    expect(
+      responsePartToAssistantMessagePart(
+        Response.makePart("tool-approval-request", {
+          approvalId: "approval-2",
+          toolCallId: "tc-approval-2",
+        }),
+      ),
+    ).toEqual(
+      Prompt.toolApprovalRequestPart({
+        approvalId: "approval-2",
+        toolCallId: "tc-approval-2",
+      }),
+    )
   })
 
   test("uses URL-backed images for Prompt and rejects them for Response", () => {

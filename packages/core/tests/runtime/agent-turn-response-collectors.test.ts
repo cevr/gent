@@ -134,7 +134,11 @@ describe("agent turn response collectors", () => {
       })
 
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["tool-call"])
-      expect(collected.messageProjection.tool.map((part) => part.name)).toEqual(["probe"])
+      expect(
+        collected.messageProjection.tool.flatMap((part) =>
+          part.type === "tool-result" ? [part.name] : [],
+        ),
+      ).toEqual(["probe"])
       expect(collected.messageProjection.usage).toEqual({ inputTokens: 7, outputTokens: 11 })
       const published = yield* Ref.get(events)
       expect(published.map((event) => event._tag)).toEqual(["ToolCallStarted", "ToolCallSucceeded"])

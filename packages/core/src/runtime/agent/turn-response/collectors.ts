@@ -1,4 +1,5 @@
 import { Deferred, Effect, Ref, Stream } from "effect"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
 import { TurnError } from "../../../domain/driver.js"
@@ -53,11 +54,18 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
   toolCallCount: 0,
 })
 
-type AssistantResponsePart = TextPart | ReasoningPart | FilePart | ToolCallPart
+type AssistantResponsePart =
+  | TextPart
+  | ReasoningPart
+  | FilePart
+  | ToolCallPart
+  | Prompt.ToolApprovalRequestPart
+
+type ToolResponsePart = ToolResultPart | Prompt.ToolApprovalResponsePart
 
 export interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
-  readonly tool: ReadonlyArray<ToolResultPart>
+  readonly tool: ReadonlyArray<ToolResponsePart>
   readonly usage?: AssistantDraft["usage"]
 }
 

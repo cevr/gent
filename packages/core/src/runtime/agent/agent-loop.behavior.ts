@@ -38,7 +38,7 @@ import {
   type AgentEvent,
 } from "../../domain/event.js"
 import type { EventPublisher } from "../../domain/event-publisher.js"
-import type { MessageMetadata, ToolCallPart, ToolResultPart } from "../../domain/message.js"
+import type { MessageMetadata, ToolCallPart } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -98,6 +98,7 @@ import {
   type AssistantResponsePart,
   type PricingLookup,
   type ResolvedTurnContext,
+  type ToolResponsePart,
   type TurnStorage,
 } from "./turn-helpers.js"
 
@@ -521,7 +522,7 @@ export const makeAgentLoopBehavior = (
           hostCtx: params.hostCtx,
         })
 
-      const persistToolPartsLocal = (parts: ReadonlyArray<ToolResultPart>, createdAt?: Date) =>
+      const persistToolPartsLocal = (parts: ReadonlyArray<ToolResponsePart>, createdAt?: Date) =>
         persistToolParts({
           storage: turnStorage,
           eventPublisher,

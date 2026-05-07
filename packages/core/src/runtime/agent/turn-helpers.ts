@@ -212,7 +212,14 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   tools: ReadonlyArray<ToolToken>
 }
 
-export type AssistantResponsePart = TextPart | ReasoningPart | FilePart | ToolCallPart
+export type AssistantResponsePart =
+  | TextPart
+  | ReasoningPart
+  | FilePart
+  | ToolCallPart
+  | Prompt.ToolApprovalRequestPart
+
+export type ToolResponsePart = ToolResultPart | Prompt.ToolApprovalResponsePart
 
 export const toolCallsFromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>,
@@ -310,7 +317,7 @@ export const persistToolParts = (params: {
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
-  parts: ReadonlyArray<ToolResultPart>
+  parts: ReadonlyArray<ToolResponsePart>
   createdAt?: Date
 }) =>
   persistMessageParts({

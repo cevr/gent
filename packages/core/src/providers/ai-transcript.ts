@@ -18,28 +18,16 @@ import {
   userMessagePartToPromptPart,
 } from "../domain/message-part-projection.js"
 
-export const GENT_MESSAGE_METADATA_FIELDS = [
-  "_tag",
-  "id",
-  "sessionId",
-  "branchId",
-  "createdAt",
-  "turnDurationMs",
-  "metadata",
-] as const satisfies ReadonlyArray<keyof Message>
-
-export const EFFECT_AI_CONTENT_FIELDS = ["role", "parts"] as const satisfies ReadonlyArray<
-  keyof Message
->
-
 export interface PromptTranscriptOptions {
   readonly systemPrompt?: string
   readonly includeHidden?: boolean
 }
 
 export interface MessagePartProjection {
-  readonly assistant: ReadonlyArray<TextPart | ReasoningPart | FilePart | ToolCallPart>
-  readonly tool: ReadonlyArray<ToolResultPart>
+  readonly assistant: ReadonlyArray<
+    TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart
+  >
+  readonly tool: ReadonlyArray<ToolResultPart | Prompt.ToolApprovalResponsePart>
 }
 
 const appendNormalizedTextPart = (parts: Array<Response.AnyPart>, text: string): void => {
@@ -251,6 +239,7 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
       case "reasoning":
       case "file":
       case "tool-call":
+      case "tool-approval-request":
         content.push(assistantMessagePartToPromptPart(part))
         break
       default:
@@ -264,7 +253,9 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
 const toToolMessage = (message: Message): Prompt.ToolMessage | undefined => {
   const content = message.parts.flatMap(
     (part): ReadonlyArray<Prompt.ToolMessagePart> =>
-      part.type === "tool-result" ? [toolMessagePartToPromptPart(part)] : [],
+      part.type === "tool-result" || part.type === "tool-approval-response"
+        ? [toolMessagePartToPromptPart(part)]
+        : [],
   )
 
   return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
@@ -326,6 +317,7 @@ export const responsePartsFromMessages = (
               case "reasoning":
               case "tool-call":
               case "file":
+              case "tool-approval-request":
                 return [assistantMessagePartToResponsePart(part)]
               default:
                 return []
@@ -346,8 +338,10 @@ export const projectResponsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): MessagePartProjection => {
   const normalized = normalizeResponseParts(parts)
-  const assistant: Array<TextPart | ReasoningPart | FilePart | ToolCallPart> = []
-  const tool: ToolResultPart[] = []
+  const assistant: Array<
+    TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart
+  > = []
+  const tool: Array<ToolResultPart | Prompt.ToolApprovalResponsePart> = []
 
   for (const part of normalized) {
     const assistantPart = responsePartToAssistantMessagePart(part)
