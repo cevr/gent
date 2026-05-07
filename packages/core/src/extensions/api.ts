@@ -252,8 +252,6 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-export { GentPlatform } from "../runtime/gent-platform.js"
-export type { GentPlatformShape } from "../runtime/gent-platform.js"
 
 // ── Public API ──
 

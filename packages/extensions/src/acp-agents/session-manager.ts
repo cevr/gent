@@ -19,7 +19,6 @@ import { ChildProcess } from "effect/unstable/process"
 // `ChildProcessSpawner` re-exported from `effect/unstable/process` is a
 // namespace — for the runtime tag value we need the deep module path.
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { GentPlatform, type GentPlatformShape } from "@gent/core/extensions/api"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import { AcpError, makeAcpConnection, type AcpClosedError, type AcpConnection } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
@@ -78,10 +77,8 @@ const fingerprintSession = (
  */
 export const createAcpSessionManager = (
   spawner: ChildProcessSpawner["Service"],
-  platform: GentPlatformShape,
 ): AcpSessionManager => {
   const spawnerContext = Context.make(ChildProcessSpawner, spawner)
-  const platformContext = Context.make(GentPlatform, platform)
   const sessions = new Map<string, AcpProcess>()
   const byDriver = new Map<string, Set<string>>()
 
@@ -159,7 +156,6 @@ export const createAcpSessionManager = (
         codemodeScope = localCodemodeScope
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
-          Effect.provide(platformContext),
           Effect.mapError((e) => new AcpError({ message: e.message, cause: e })),
           // Close codemode scope first so its bound port releases even if
           // startCodemodeServer fails after the HTTP server bound, then

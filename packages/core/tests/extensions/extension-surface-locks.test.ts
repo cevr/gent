@@ -355,6 +355,8 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadRunProcess = typeof PublicExtensionApi.runProcess
     // @ts-expect-error — process errors are paired with the non-public process runner
     type _BadProcessError = typeof PublicExtensionApi.ProcessError
+    // @ts-expect-error — host platform service is not public extension author API
+    type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
 
     expect(true).toBe(true)
   })

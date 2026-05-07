@@ -25,8 +25,9 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { GentPlatform, isRecord, TaggedEnumClass } from "@gent/core/extensions/api"
+import { isRecord, TaggedEnumClass } from "@gent/core/extensions/api"
 import { createServer } from "node:net"
+import * as os from "node:os"
 import { fileURLToPath } from "node:url"
 import { runProcess } from "../run-process.js"
 import {
@@ -137,10 +138,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
-        const platform = yield* GentPlatform
-        const osInfo = yield* platform.osInfo
-        const isWindows = osInfo.platform === "win32"
-        const execPath = yield* platform.execPath
+        const isWindows = os.platform() === "win32"
+        const execPath = process.execPath
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -471,10 +470,22 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // ── Graceful shutdown ──
 
         const isPidAlive = (pid: number) =>
-          platform.signal(pid, 0).pipe(
-            Effect.as(true),
-            Effect.catchTag("SignalError", () => Effect.succeed(false)),
-          )
+          Effect.sync(() => {
+            try {
+              return process.kill(pid, 0)
+            } catch {
+              return false
+            }
+          })
+
+        const signalPid = (pid: number, signal: NodeJS.Signals) =>
+          Effect.sync(() => {
+            try {
+              process.kill(pid, signal)
+            } catch {
+              // Process may have exited between liveness probe and signal.
+            }
+          })
 
         // OS-level grace period between SIGTERM and SIGKILL. The kernel
         // delivers the signal asynchronously and we have no in-process
@@ -483,10 +494,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const terminatePid = (pid: number) =>
           Effect.gen(function* () {
             if (!(yield* isPidAlive(pid))) return
-            yield* platform.signal(pid, "SIGTERM").pipe(Effect.ignore)
+            yield* signalPid(pid, "SIGTERM")
             yield* Effect.sleep(Duration.millis(SHUTDOWN_TIMEOUT_MS))
             if (yield* isPidAlive(pid)) {
-              yield* platform.signal(pid, "SIGKILL").pipe(Effect.ignore)
+              yield* signalPid(pid, "SIGKILL")
             }
           })
 

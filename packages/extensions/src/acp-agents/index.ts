@@ -27,7 +27,6 @@ import {
   ExternalDriverRef,
   resource,
   sectionPatternFor,
-  type GentPlatformShape,
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
@@ -47,19 +46,15 @@ import { generateToolDescription } from "./mcp-codemode.js"
 // matches the no-context Stream returned by `TurnExecutor`. Without this,
 // each turn would have to re-provide `BunServices.layer` at the leaf.
 let _sharedAcpManager: ReturnType<typeof createAcpSessionManager> | undefined
-const getAcpManager = (
-  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
-  platform: GentPlatformShape,
-) => {
-  if (_sharedAcpManager === undefined)
-    _sharedAcpManager = createAcpSessionManager(spawner, platform)
+const getAcpManager = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) => {
+  if (_sharedAcpManager === undefined) _sharedAcpManager = createAcpSessionManager(spawner)
   return _sharedAcpManager
 }
 
 let _sharedClaudeCodeManager: ReturnType<typeof createClaudeCodeSessionManager> | undefined
-const getClaudeCodeManager = (platform: GentPlatformShape) => {
+const getClaudeCodeManager = () => {
   if (_sharedClaudeCodeManager === undefined) {
-    _sharedClaudeCodeManager = createClaudeCodeSessionManager(claudeSdkLive, platform)
+    _sharedClaudeCodeManager = createClaudeCodeSessionManager(claudeSdkLive)
   }
   return _sharedClaudeCodeManager
 }
@@ -186,13 +181,13 @@ export const AcpAgentsExtension = defineExtension({
     systemPrompt: rewriteCodemodeSystemPrompt,
   },
   externalDrivers: ({ ctx }) => {
-    const acpManager = getAcpManager(ctx.spawner, ctx.platform)
+    const acpManager = getAcpManager(ctx.spawner)
     const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
     const claudeCode = {
       id: claudeCodeId,
-      executor: makeClaudeCodeTurnExecutor(getClaudeCodeManager(ctx.platform)),
+      executor: makeClaudeCodeTurnExecutor(getClaudeCodeManager()),
       toolSurface: "codemode" as const,
-      invalidate: () => getClaudeCodeManager(ctx.platform).invalidateDriver(claudeCodeId),
+      invalidate: () => getClaudeCodeManager().invalidateDriver(claudeCodeId),
     }
     const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => {
       const id = `acp-${name}`

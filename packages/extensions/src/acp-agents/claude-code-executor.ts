@@ -25,12 +25,10 @@
  *
  * @module
  */
-import { Context, Effect, Exit, Schema, Scope, Stream } from "effect"
+import { Effect, Exit, Schema, Scope, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
-  GentPlatform,
   TurnError,
-  type GentPlatformShape,
   type TurnContext,
   type TurnExecutor,
   type TurnStreamPart,
@@ -344,10 +342,8 @@ export type ClaudeCodeTokenReader = () => Effect.Effect<string, { readonly messa
 
 export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
-  platform: GentPlatformShape,
   tokenReader: ClaudeCodeTokenReader = readClaudeCodeOAuthToken,
 ): ClaudeCodeSessionManager => {
-  const platformContext = Context.make(GentPlatform, platform)
   const sessions = new Map<string, ClaudeCodeProcess>()
   // Parallel index from driverId → set of cache keys. Lets `invalidateDriver`
   // run in O(matched) rather than O(all sessions). Maintained alongside
@@ -407,7 +403,6 @@ export const createClaudeCodeSessionManager = (
         codemodeScope = localCodemodeScope
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
-          Effect.provide(platformContext),
           Effect.mapError(
             (e) => new ClaudeSdkError({ kind: "init", message: e.message, cause: e }),
           ),
