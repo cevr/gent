@@ -121,7 +121,7 @@ export const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<numbe
       if (!alive) return 0
       const now = yield* Clock.currentTimeMillis
       if (now >= deadline) return -1
-      yield* Effect.sleep("200 millis")
+      yield* Effect.sleep("50 millis")
       return yield* loop
     })
     return yield* loop

@@ -185,7 +185,7 @@ describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
             ? Effect.fail(
                 new WorkerSupervisorError({ message: "worker stdout closed before ready" }),
               )
-            : Effect.void,
+            : Effect.succeed({ port: 44123, url: "http://127.0.0.1:44123/rpc" }),
         stop: (proc) =>
           Effect.sync(() => {
             stopped.push(proc.pid)

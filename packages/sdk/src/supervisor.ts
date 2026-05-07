@@ -1,5 +1,4 @@
 // @effect-diagnostics asyncFunction:off — worker supervisor process launch helpers are Promise entry boundaries
-// @effect-diagnostics newPromise:off — net/server bridges callback APIs at the OS boundary
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   Cause,
@@ -17,7 +16,6 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class.js"
 import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
@@ -73,6 +71,7 @@ const MAX_RESTARTS_IN_WINDOW = 5
 const RESTART_WINDOW_MS = 60_000
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 16_000
+const UNKNOWN_WORKER_PORT = 0
 
 export interface WorkerSupervisorOptions {
   readonly cwd: string
@@ -85,7 +84,6 @@ export interface WorkerSupervisorOptions {
 }
 
 const SERVER_ENTRY_PATH = new URL("../../../apps/server/src/main.ts", import.meta.url).pathname
-const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
 const WORKER_READY_PREFIX = "GENT_WORKER_READY "
@@ -115,24 +113,6 @@ const resolveWorkerLaunch = async (options?: {
   }
 }
 
-export const findOpenPort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once("error", reject)
-    server.listen(0, WORKER_HOST, () => {
-      const address = server.address()
-      if (address === null || typeof address === "string") {
-        server.close(() => reject(new Error("failed to allocate worker port")))
-        return
-      }
-      const { port } = address
-      server.close((error) => {
-        if (error) reject(error)
-        else resolve(port)
-      })
-    })
-  })
-
 /**
  * Drain stdout of a `ChildProcessHandle` line by line. Settle the
  * provided `ready` Deferred when a `WORKER_READY_PREFIX` line is seen,
@@ -140,13 +120,15 @@ export const findOpenPort = (): Promise<number> =>
  */
 const watchReadiness = (
   proc: WorkerProcess,
-  ready: Deferred.Deferred<void, WorkerSupervisorError>,
+  ready: Deferred.Deferred<string, WorkerSupervisorError>,
 ): Effect.Effect<void> =>
   proc.handle.stdout.pipe(
     Stream.decodeText(),
     splitLines,
     Stream.tap((line) =>
-      line.startsWith(WORKER_READY_PREFIX) ? Deferred.succeed(ready, undefined) : Effect.void,
+      line.startsWith(WORKER_READY_PREFIX)
+        ? Deferred.succeed(ready, line.slice(WORKER_READY_PREFIX.length).trim())
+        : Effect.void,
     ),
     Stream.takeUntilEffect(() => Deferred.isDone(ready)),
     Stream.runDrain,
@@ -182,9 +164,9 @@ const splitLines = <E>(stream: Stream.Stream<string, E>): Stream.Stream<string, 
 const waitForWorkerReady = (
   proc: WorkerProcess,
   timeoutMs: number,
-): Effect.Effect<void, WorkerSupervisorError> =>
+): Effect.Effect<WorkerEndpoint, WorkerSupervisorError> =>
   Effect.gen(function* () {
-    const ready = yield* Deferred.make<void, WorkerSupervisorError>()
+    const ready = yield* Deferred.make<string, WorkerSupervisorError>()
     const watcherFiber = yield* Effect.forkChild(watchReadiness(proc, ready))
     const exitWatcherFiber = yield* Effect.forkChild(
       Effect.gen(function* () {
@@ -197,7 +179,7 @@ const waitForWorkerReady = (
         )
       }),
     )
-    return yield* Deferred.await(ready).pipe(
+    const readyUrl = yield* Deferred.await(ready).pipe(
       Effect.timeout(Duration.millis(timeoutMs)),
       Effect.catchTag("TimeoutError", () =>
         Effect.fail(
@@ -209,12 +191,33 @@ const waitForWorkerReady = (
       Effect.ensuring(Fiber.interrupt(watcherFiber)),
       Effect.ensuring(Fiber.interrupt(exitWatcherFiber)),
     )
+    return yield* parseWorkerReadyUrl(readyUrl)
   })
 
 const isRetryableStartupError = (error: WorkerSupervisorError): boolean =>
   error.message === "worker stdout closed before ready" ||
   error.message.startsWith("worker exited before ready") ||
   error.message.startsWith("failed to read worker readiness:")
+
+const parseWorkerReadyUrl = (
+  baseUrl: string,
+): Effect.Effect<WorkerEndpoint, WorkerSupervisorError> =>
+  Effect.try({
+    try: () => {
+      const parsed = new URL(baseUrl)
+      const port = Number(parsed.port)
+      if (!Number.isInteger(port) || port <= 0) {
+        throw new Error(`worker ready URL did not include a concrete port: ${baseUrl}`)
+      }
+      const hostname = parsed.hostname === "localhost" ? "127.0.0.1" : parsed.hostname
+      const host = hostname.includes(":") ? `[${hostname}]` : hostname
+      return { port, url: `${parsed.protocol}//${host}:${port}/rpc` }
+    },
+    catch: (error) =>
+      new WorkerSupervisorError({
+        message: `invalid worker ready URL: ${error instanceof Error ? error.message : String(error)}`,
+      }),
+  })
 
 const startupErrorFromCause = (
   cause: Cause.Cause<WorkerSupervisorError>,
@@ -225,19 +228,26 @@ const startupErrorFromCause = (
     : new WorkerSupervisorError({ message: String(squashed) })
 }
 
-interface StartedWorker<Proc extends { readonly pid: number }> {
+interface WorkerEndpoint {
   readonly port: number
   readonly url: string
+}
+
+interface SpawnedWorker<Proc extends { readonly pid: number }> {
+  readonly proc: Proc
+}
+
+interface StartedWorker<Proc extends { readonly pid: number }> extends WorkerEndpoint {
   readonly proc: Proc
 }
 
 interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }, R = never> {
   readonly maxAttempts?: number
   readonly retryDelayMs?: number
-  readonly spawn: Effect.Effect<StartedWorker<Proc>, WorkerSupervisorError, R>
+  readonly spawn: Effect.Effect<SpawnedWorker<Proc>, WorkerSupervisorError, R>
   readonly waitForReady: (
-    launched: StartedWorker<Proc>,
-  ) => Effect.Effect<void, WorkerSupervisorError>
+    launched: SpawnedWorker<Proc>,
+  ) => Effect.Effect<WorkerEndpoint, WorkerSupervisorError>
   readonly stop: (proc: Proc) => Effect.Effect<void>
   readonly setCurrent: (proc: Proc | undefined) => void
   readonly isCurrent: (proc: Proc) => boolean
@@ -288,7 +298,7 @@ const launchWorkerUntilReady = <Proc extends { readonly pid: number }, R = never
       const launched = yield* options.spawn
       options.setCurrent(launched.proc)
       const readyExit = yield* options.waitForReady(launched).pipe(Effect.exit)
-      if (Exit.isSuccess(readyExit)) return launched
+      if (Exit.isSuccess(readyExit)) return { ...readyExit.value, proc: launched.proc }
 
       const startupError = startupErrorFromCause(readyExit.cause)
       lastFailure = { pid: launched.proc.pid, error: startupError }
@@ -403,9 +413,9 @@ const killWorkerSync = (proc: WorkerProcess | undefined) => {
 
 const spawnWorkerProcess = (
   options: WorkerSupervisorOptions,
-  port: number,
+  port: number | undefined,
 ): Effect.Effect<
-  StartedWorker<WorkerProcess>,
+  SpawnedWorker<WorkerProcess>,
   WorkerSupervisorError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
@@ -415,7 +425,7 @@ const spawnWorkerProcess = (
     const env = {
       ...process.env,
       ...options.env,
-      GENT_PORT: String(port),
+      GENT_PORT: String(port ?? 0),
       GENT_SERVER_MODE: "worker",
       GENT_TRACE_ID: `worker-${Bun.randomUUIDv7()}`,
       ...(mode === "debug"
@@ -463,7 +473,7 @@ const spawnWorkerProcess = (
       exitCodeRef,
       exitWatcher,
     }
-    return { port, url: `http://${WORKER_HOST}:${port}/rpc`, proc }
+    return { proc }
   })
 
 export const waitForWorkerRunning = (
@@ -515,22 +525,15 @@ export const startWorkerSupervisor = (
     Effect.gen(function* () {
       const supervisorServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>()
       const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
-      const assignedPort = yield* Effect.promise(findOpenPort).pipe(
-        Effect.mapError(
-          (error) =>
-            new WorkerSupervisorError({
-              message: `failed to allocate worker port: ${String(error)}`,
-            }),
-        ),
-      )
       const listeners = new Set<(state: WorkerLifecycleState) => void>()
       let restartCount = 0
       let stopped = false
       const restartTimestamps: number[] = []
       let current: WorkerProcess | undefined
+      let endpoint: WorkerEndpoint | undefined
       let restartPromise: Promise<void> | undefined
       let state: WorkerLifecycleState = WorkerLifecycleState.Starting.make({
-        port: assignedPort,
+        port: UNKNOWN_WORKER_PORT,
         restartCount,
       })
       const isShared = options.shared === true
@@ -560,7 +563,7 @@ export const startWorkerSupervisor = (
           WorkerProcess,
           ChildProcessSpawner.ChildProcessSpawner
         >({
-          spawn: spawnWorkerProcess(options, assignedPort),
+          spawn: spawnWorkerProcess(options, endpoint?.port),
           waitForReady: (launched) => waitForWorkerReady(launched.proc, startupTimeoutMs),
           stop: stopWorker,
           setCurrent: (proc) => {
@@ -577,10 +580,11 @@ export const startWorkerSupervisor = (
         })
         if (readyWorker === undefined) return
 
+        endpoint = { port: readyWorker.port, url: readyWorker.url }
         restartPromise = undefined
         emit(
           WorkerLifecycleState.Running.make({
-            port: readyWorker.port,
+            port: endpoint.port,
             pid: readyWorker.proc.pid,
             restartCount,
           }),
@@ -600,7 +604,12 @@ export const startWorkerSupervisor = (
             // Shared mode: exit code 0 is intentional idle shutdown — don't restart
             if (isShared && code === 0) {
               stopped = true
-              emit(WorkerLifecycleState.Stopped.make({ port: assignedPort, restartCount }))
+              emit(
+                WorkerLifecycleState.Stopped.make({
+                  port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+                  restartCount,
+                }),
+              )
               return
             }
 
@@ -653,7 +662,7 @@ export const startWorkerSupervisor = (
               restartPromise = undefined
               emit(
                 WorkerLifecycleState.Failed.make({
-                  port: assignedPort,
+                  port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
                   restartCount,
                   message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
                   exitCode: input.exitCode,
@@ -665,7 +674,7 @@ export const startWorkerSupervisor = (
 
           emit(
             WorkerLifecycleState.Restarting.make({
-              port: assignedPort,
+              port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
               restartCount,
               previousPid: input?.previousPid,
               exitCode: input?.exitCode ?? null,
@@ -693,7 +702,7 @@ export const startWorkerSupervisor = (
                     restartPromise = undefined
                     emit(
                       WorkerLifecycleState.Failed.make({
-                        port: assignedPort,
+                        port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
                         restartCount,
                         message: error.message,
                         exitCode: input?.exitCode ?? current?.exitCodeRef.exitCode ?? null,
@@ -730,13 +739,22 @@ export const startWorkerSupervisor = (
         const proc = current
         current = undefined
         if (proc !== undefined) yield* stopWorker(proc)
-        emit(WorkerLifecycleState.Stopped.make({ port: assignedPort, restartCount }))
+        emit(
+          WorkerLifecycleState.Stopped.make({
+            port: endpoint?.port ?? UNKNOWN_WORKER_PORT,
+            restartCount,
+          }),
+        )
         yield* shutdownLog("supervisor.stop.done")
       }).pipe(Effect.catchEager(() => Effect.void))
 
       return {
-        url: `http://${WORKER_HOST}:${assignedPort}/rpc`,
-        port: assignedPort,
+        get url() {
+          return endpoint?.url ?? "http://127.0.0.1:0/rpc"
+        },
+        get port() {
+          return endpoint?.port ?? UNKNOWN_WORKER_PORT
+        },
         pid: () => (state._tag === "running" ? state.pid : null),
         getState: () => state,
         subscribe: (listener) => {

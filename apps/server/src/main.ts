@@ -2,7 +2,7 @@ import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/p
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
-import { HttpRouter } from "effect/unstable/http"
+import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Deferred, Effect, Layer, Option, Context } from "effect"
 import * as os from "node:os"
 import { seedDebugSession } from "@gent/core/debug/session.js"
@@ -77,12 +77,19 @@ const program = Effect.scoped(
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     const config = yield* resolveRuntimeConfig
+    const httpServerCtx = yield* Layer.buildWithScope(
+      BunHttpServer.layer({ port: config.port, idleTimeout: 0 }),
+      scope,
+    )
+    const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
+    const boundPort =
+      httpServer.address._tag === "TcpAddress" ? httpServer.address.port : config.port
+    const baseUrl = `http://localhost:${boundPort}`
 
     // Dependencies layer
     // Shared server URL: either passed via env or derived from this server's port
     const sharedServerUrl =
-      config.sharedServerUrl ??
-      (config.isWorker ? `http://localhost:${config.port}/rpc` : undefined)
+      config.sharedServerUrl ?? (config.isWorker ? `${baseUrl}/rpc` : undefined)
 
     const depsLive = createDependencies({
       cwd: config.cwd,
@@ -147,12 +154,11 @@ const program = Effect.scoped(
 
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
-      Layer.provide(BunHttpServer.layer({ port: config.port, idleTimeout: 0 })),
+      Layer.provide(Layer.succeedContext(httpServerCtx)),
       Layer.provide(coreServicesLive),
       Layer.provide(BunFileSystem.layer),
     )
 
-    const baseUrl = `http://localhost:${config.port}`
     if (config.isWorker && config.isDebug) {
       const seeded = yield* Effect.provideContext(seedDebugSession(config.cwd), coreServices)
       yield* Effect.forkScoped(
@@ -180,15 +186,16 @@ const program = Effect.scoped(
     // Idle shutdown: worker mode waits for idle, standalone runs forever
     if (config.isWorker) {
       const idleTimeoutMs = Number.isFinite(config.idleTimeoutMs) ? config.idleTimeoutMs : 30_000
+      const idleCheckIntervalMs = Math.max(50, Math.min(250, Math.floor(idleTimeoutMs / 4)))
       const shutdownDeferred = yield* Deferred.make<void>()
 
-      // Idle watcher fiber — polls connection count every second
+      // Idle watcher fiber — poll faster than the timeout so short-lived test workers exit promptly.
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           let idleStartMs: number | undefined
 
           while (true) {
-            yield* Effect.sleep("1 second")
+            yield* Effect.sleep(`${idleCheckIntervalMs} millis`)
             const count = yield* connectionTracker.count()
 
             if (count === 0) {

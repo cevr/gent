@@ -85,7 +85,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const idleTimeoutMs = 2_000
+          const idleTimeoutMs = 500
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
             spawnIdleServer({ dataDir, idleTimeoutMs, port }),
@@ -96,7 +96,7 @@ describe("server lifecycle", () => {
           const identityResp = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(identityResp.ok).toBe(true)
 
-          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 5_000)
+          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
           expect(exitCode).toBe(0)
         }),
       ),
@@ -147,7 +147,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = makeTempDir()
-          const idleTimeoutMs = 3_000
+          const idleTimeoutMs = 750
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
             spawnIdleServer({ dataDir, idleTimeoutMs, port }),
@@ -169,10 +169,10 @@ describe("server lifecycle", () => {
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
           yield* Scope.close(clientScope, Exit.void)
-          yield* sleepMillis(500)
+          yield* sleepMillis(100)
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
-          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 5_000)
+          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
           expect(exitCode).toBe(0)
         }),
       ),

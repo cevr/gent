@@ -7,7 +7,7 @@
  */
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context, Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class.js"
 import type { Scope } from "effect"
@@ -41,7 +41,6 @@ import {
   registryIdentityOf,
   signalIfIdentityOwned,
 } from "./server-registry.js"
-import { findOpenPort } from "./supervisor.js"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 // ── Types ──
@@ -175,12 +174,22 @@ const buildOwnedServer = (
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const platform = yield* GentPlatform
-      const port = yield* Effect.promise(findOpenPort).pipe(
+      const httpServerCtx = yield* Layer.buildWithScope(
+        BunHttpServer.layer({ port: 0, idleTimeout: 0 }),
+        scope,
+      ).pipe(
         Effect.mapError(
           (error) =>
-            new GentConnectionError({ message: `port allocation failed: ${String(error)}` }),
+            new GentConnectionError({ message: `server listener failed: ${String(error)}` }),
         ),
       )
+      const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
+      const port = httpServer.address._tag === "TcpAddress" ? httpServer.address.port : 0
+      if (port === 0) {
+        return yield* new GentConnectionError({
+          message: "server listener did not bind a concrete TCP port",
+        })
+      }
       const url = `http://127.0.0.1:${port}/rpc`
       const home = resolveHome(options, stateSpec)
       const serverId = yield* platform.randomId
@@ -257,7 +266,7 @@ const buildOwnedServer = (
       })
 
       const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
-        Layer.provide(BunHttpServer.layer({ port, idleTimeout: 0 })),
+        Layer.provide(Layer.succeedContext(httpServerCtx)),
         Layer.provide(coreServicesLive),
         Layer.provide(LocalPlatformLayer),
       )
