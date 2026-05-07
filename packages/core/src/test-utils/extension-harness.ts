@@ -16,14 +16,24 @@ import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { AgentLoopTestActor } from "../runtime/agent/agent-loop.actor.js"
+import { AgentLoopBehaviorDeps } from "../runtime/agent/agent-loop.behavior-deps.js"
+import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
+import { AgentLoopStateRegistry } from "../runtime/agent/agent-loop.state-registry.js"
+import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { ConfigService } from "../runtime/config-service.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
+import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
+import { ModelRegistry } from "../runtime/model-registry.js"
+import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
+import { Provider } from "../providers/provider.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 
 export interface ToolTestLayerConfig {
@@ -94,15 +104,22 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
       const activeExtensions = reconciled.resolved.extensions
       const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
-      const baseLayer = Layer.mergeAll(
+      const extensionRegistryLayer = ExtensionRegistry.fromResolved(reconciled.resolved)
+      const driverRegistryLayer = DriverRegistry.fromResolved(reconciled.resolved)
+      const baseDepsLayer = Layer.mergeAll(
         storageLayer,
         EventStore.Memory,
-        ExtensionRegistry.fromResolved(reconciled.resolved),
+        extensionRegistryLayer,
+        driverRegistryLayer,
         subagentRunnerLayer,
         PromptPresenter.Test(),
         Permission.Test(),
-        AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        Provider.Debug(),
+        ToolRunner.Test(),
+        ResourceManagerLive,
+        ConfigService.Test(),
+        ModelRegistry.Test(),
         // Required for resource layers below: `Layer.provideMerge(r.layer,
         // baseLayerAny)` (line 123) feeds extension Resource layers from
         // `baseLayerAny`, and many of them yield `GentPlatform`. Outer
@@ -111,11 +128,21 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         BunGentPlatformLive,
         ...(config.extraLayers ?? []),
       )
-      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseLayer)
-      const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
-        baseLayer,
+      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDepsLayer)
+      const baseWithRuntimeLayer = Layer.mergeAll(
+        baseDepsLayer,
         eventPublisherLayer,
+        AgentLoopStateRegistry.Live,
+        AgentLoopSessionGovernance.Live,
       )
+      const agentLoopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
+        Layer.provideMerge(
+          AgentLoopTestActor.pipe(Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] }))),
+        ),
+        Layer.provideMerge(baseWithRuntimeLayer),
+      )
+      const baseLayer = Layer.merge(baseWithRuntimeLayer, agentLoopLayer)
+      const baseLayerAny: Layer.Layer<never, never, object> = baseLayer
 
       const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
         (ext) =>

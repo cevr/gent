@@ -1,11 +1,6 @@
 import { Context, DateTime, Deferred, Effect, Layer, Stream, SubscriptionRef } from "effect"
-import {
-  AgentRunError,
-  DEFAULT_AGENT_NAME,
-  type RunSpec,
-  type AgentName as AgentNameType,
-} from "../../domain/agent.js"
-import { emptyQueueSnapshot, type QueueSnapshot } from "../../domain/queue.js"
+import { AgentRunError, type RunSpec, type AgentName as AgentNameType } from "../../domain/agent.js"
+import { type QueueSnapshot } from "../../domain/queue.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart } from "../../domain/message.js"
 import { MessageId, type BranchId, type SessionId } from "../../domain/ids.js"
@@ -17,11 +12,7 @@ import { EventStorage } from "../../storage/event-storage.js"
 import { StorageTransaction } from "../../storage/storage-transaction.js"
 import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import {
-  SessionRuntimeStateSchema,
-  projectRuntimeState,
-  type SessionRuntimeState,
-} from "./agent-loop.state.js"
+import { projectRuntimeState, type SessionRuntimeState } from "./agent-loop.state.js"
 import { AgentLoopError, SteerCommand } from "./agent-loop.commands.js"
 export { AgentLoopError, SteerCommand }
 import { persistMessageReceived, type TurnStorage } from "./turn-helpers.js"
@@ -193,21 +184,4 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         }
       }),
     )
-
-  static Test = (overrides: Partial<AgentLoopService> = {}): Layer.Layer<AgentLoop> =>
-    Layer.succeed(AgentLoop, {
-      runOnce: () => Effect.void,
-      getQueue: () => Effect.succeed(emptyQueueSnapshot()),
-      terminateSession: () => Effect.void,
-      restoreSession: () => Effect.void,
-      getState: () =>
-        Effect.succeed(
-          SessionRuntimeStateSchema.Idle.make({
-            agent: DEFAULT_AGENT_NAME,
-            queue: emptyQueueSnapshot(),
-          }),
-        ),
-      watchState: () => Effect.succeed(Stream.empty),
-      ...overrides,
-    })
 }
