@@ -48,7 +48,7 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
   createEffect(() => {
     const id = selectedId()
     const fiber = Effect.runFork(
-      Effect.sleep("10 millis").pipe(
+      Effect.yieldNow.pipe(
         Effect.andThen(
           waitFor(() => syncScroll(id), {
             label: `scroll-target ${id}`,
