@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
 import type { Scope } from "effect"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
 import {
@@ -30,10 +31,6 @@ import type {
   Message,
   MessagePart,
   ProjectedMessage,
-  TextPart,
-  ReasoningPart,
-  ToolCallPart,
-  ToolResultPart,
   ToolInteraction,
 } from "@gent/core/domain/message.js"
 import {
@@ -59,12 +56,13 @@ import {
 } from "./server.js"
 import { workspaceHeadersForCwd } from "./transport-headers.js"
 
+export type TextPart = Prompt.TextPart
+export type ReasoningPart = Prompt.ReasoningPart
+export type ToolCallPart = Prompt.ToolCallPart
+export type ToolResultPart = Prompt.ToolResultPart
+
 export type {
   MessagePart,
-  TextPart,
-  ReasoningPart,
-  ToolCallPart,
-  ToolResultPart,
   PermissionRule,
   AuthProviderInfo,
   AuthAuthorization,

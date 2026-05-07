@@ -6,7 +6,6 @@ import {
   type ToolCapability,
 } from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import type { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { formatSchemaError } from "../format-schema-error"
@@ -68,7 +67,7 @@ export interface ToolRunnerService {
     toolCall: ToolCall,
     ctx: ToolCapabilityContext,
     profileOverride?: ToolExecutionProfile,
-  ) => Effect.Effect<ToolResultPart, InteractionPendingError>
+  ) => Effect.Effect<Prompt.ToolResultPart, InteractionPendingError>
 }
 
 const allowAllPermission: PermissionService = {
@@ -128,7 +127,7 @@ const publishStarted = (params: {
 const publishCompleted = (params: {
   publishEvent?: PublishToolEvent
   ctx: ToolCapabilityContext
-  result: ToolResultPart
+  result: Prompt.ToolResultPart
 }) =>
   Effect.gen(function* () {
     if (params.publishEvent === undefined) return
@@ -331,7 +330,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               toolCall.toolName,
             )
 
-            const finish = (result: ToolResultPart) =>
+            const finish = (result: Prompt.ToolResultPart) =>
               Effect.gen(function* () {
                 yield* publishCompleted({
                   publishEvent: profileOverride?.publishEvent,

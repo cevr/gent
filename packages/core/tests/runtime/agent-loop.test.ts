@@ -42,7 +42,6 @@ import {
 } from "@gent/core/test-utils/language-model"
 import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import type { TextPart } from "@gent/core/domain/message"
 import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { type ToolCapabilityContext } from "@gent/core/domain/capability/tool"
@@ -733,7 +732,7 @@ describe("streaming", () => {
             .filter((message) => message.role === "user")
             .map((message) =>
               message.parts
-                .filter((part): part is TextPart => part.type === "text")
+                .filter((part): part is Prompt.TextPart => part.type === "text")
                 .map((part) => part.text)
                 .join("\n"),
             )

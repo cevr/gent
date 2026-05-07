@@ -1,7 +1,8 @@
 import { ReasoningEffort } from "../../domain/agent.js"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import type { AgentDefinition, ReasoningEffort as ReasoningEffortType } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
-import { type Message, type ToolResultPart } from "../../domain/message.js"
+import type { Message } from "../../domain/message.js"
 import {
   messagePartsReasoning,
   messagePartsText,
@@ -157,5 +158,5 @@ export const assistantDraftFromMessage = (message: Message): AssistantDraft => (
   toolCalls: messagePartsToolCallParts(message.parts),
 })
 
-export const toolResultsFromMessage = (message: Message): ReadonlyArray<ToolResultPart> =>
+export const toolResultsFromMessage = (message: Message): ReadonlyArray<Prompt.ToolResultPart> =>
   messagePartsToolResultParts(message.parts)

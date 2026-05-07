@@ -19,7 +19,6 @@ import {
   toolResultPartToResponsePart,
 } from "@gent/core/domain/message-part-projection"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { TextPart, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
@@ -28,7 +27,7 @@ describe("message part projection", () => {
   const makeMessage = (
     id: string,
     role: "assistant" | "tool",
-    parts: ReadonlyArray<TextPart | ToolCallPart | ToolResultPart>,
+    parts: ReadonlyArray<Prompt.TextPart | Prompt.ToolCallPart | Prompt.ToolResultPart>,
   ) =>
     Message.Regular.make({
       id: MessageId.make(id),

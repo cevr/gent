@@ -13,13 +13,6 @@ import {
   type AgentEvent,
 } from "../../../domain/event.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../../domain/ids.js"
-import type {
-  FilePart,
-  ReasoningPart,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-} from "../../../domain/message.js"
 import { hasMessage } from "../../../domain/guards.js"
 import type { AssistantDraft } from "../agent-loop.state.js"
 import {
@@ -55,13 +48,13 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
 })
 
 type AssistantResponsePart =
-  | TextPart
-  | ReasoningPart
-  | FilePart
-  | ToolCallPart
+  | Prompt.TextPart
+  | Prompt.ReasoningPart
+  | Prompt.FilePart
+  | Prompt.ToolCallPart
   | Prompt.ToolApprovalRequestPart
 
-type ToolResponsePart = ToolResultPart | Prompt.ToolApprovalResponsePart
+type ToolResponsePart = Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart
 
 export interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>

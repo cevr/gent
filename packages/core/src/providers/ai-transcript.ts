@@ -1,5 +1,5 @@
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type { Message, TextPart } from "../domain/message.js"
+import type { Message } from "../domain/message.js"
 import {
   assistantMessagePartToPromptPart,
   normalizeResponseParts,
@@ -26,7 +26,7 @@ export const isAiVisibleMessage = (message: Message): boolean => message.metadat
 
 const toSystemMessage = (message: Message): Prompt.SystemMessage | undefined => {
   const text = message.parts
-    .filter((part): part is TextPart => part.type === "text")
+    .filter((part): part is Prompt.TextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n")
 

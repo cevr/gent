@@ -13,7 +13,7 @@ import {
 } from "../../domain/agent.js"
 import type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
 export type { LoopQueueState, QueuedTurnItem } from "../../domain/agent-loop-queue-state.js"
-import { Message, ToolCallPart } from "../../domain/message.js"
+import { Message } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import {
   FollowUpQueueEntryInfo,
@@ -199,7 +199,7 @@ const RunningTurnFields = {
 export const AssistantDraftSchema = Schema.Struct({
   text: Schema.String,
   reasoning: Schema.String,
-  toolCalls: Schema.Array(ToolCallPart),
+  toolCalls: Schema.Array(Prompt.ToolCallPart),
   usage: Schema.optional(UsageSchema),
 })
 

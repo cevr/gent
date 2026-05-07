@@ -38,7 +38,8 @@ import {
   type AgentEvent,
 } from "../../domain/event.js"
 import type { EventPublisher } from "../../domain/event-publisher.js"
-import type { MessageMetadata, ToolCallPart } from "../../domain/message.js"
+import type * as Prompt from "effect/unstable/ai/Prompt"
+import type { MessageMetadata } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -462,7 +463,7 @@ export const makeAgentLoopBehavior = (
     const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
       messageId: RunningState["message"]["id"]
       step: number
-      toolCalls: ReadonlyArray<ToolCallPart>
+      toolCalls: ReadonlyArray<Prompt.ToolCallPart>
       currentTurnAgent: AgentNameType
       extensionRegistry: ExtensionRegistryService
       permission: PermissionService

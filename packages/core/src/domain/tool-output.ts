@@ -1,4 +1,4 @@
-import type { ToolResultPart } from "./message"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 
 export type ToolOutput = {
   readonly type: "json" | "error-json"
@@ -23,5 +23,5 @@ export const summarizeOutput = (output: ToolOutput): string => {
   return String(value)
 }
 
-export const summarizeToolOutput = (result: ToolResultPart): string =>
+export const summarizeToolOutput = (result: Prompt.ToolResultPart): string =>
   summarizeOutput({ type: result.isFailure ? "error-json" : "json", value: result.result })

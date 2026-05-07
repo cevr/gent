@@ -14,21 +14,6 @@ export const DateFromNumber = Schema.DateTimeUtcFromMillis.pipe(
   }),
 )
 
-export const TextPart = Prompt.TextPart
-export type TextPart = Prompt.TextPart
-
-export const FilePart = Prompt.FilePart
-export type FilePart = Prompt.FilePart
-
-export const ToolCallPart = Prompt.ToolCallPart
-export type ToolCallPart = Prompt.ToolCallPart
-
-export const ToolResultPart = Prompt.ToolResultPart
-export type ToolResultPart = Prompt.ToolResultPart
-
-export const ReasoningPart = Prompt.ReasoningPart
-export type ReasoningPart = Prompt.ReasoningPart
-
 export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
   id: ToolCallId,
   toolName: Schema.String,
@@ -39,15 +24,15 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
 }) {}
 
 export const MessagePart = Schema.Union([
-  TextPart,
-  FilePart,
-  ToolCallPart,
-  ToolResultPart,
-  ReasoningPart,
+  Prompt.TextPart,
+  Prompt.FilePart,
+  Prompt.ToolCallPart,
+  Prompt.ToolResultPart,
+  Prompt.ReasoningPart,
   Prompt.ToolApprovalRequestPart,
   Prompt.ToolApprovalResponsePart,
 ])
-export type MessagePart = typeof MessagePart.Type
+export type MessagePart = Prompt.Part
 
 // Message Role
 

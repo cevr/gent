@@ -16,14 +16,7 @@ import type { InteractionPendingError } from "../../domain/interaction-request.j
 import type { PromptSection } from "../../domain/prompt.js"
 import { compileSystemPrompt } from "../../domain/prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
-import {
-  Message,
-  type FilePart,
-  type ToolCallPart,
-  type ToolResultPart,
-  type ReasoningPart,
-  type TextPart,
-} from "../../domain/message.js"
+import { Message } from "../../domain/message.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import {
   ErrorOccurred,
@@ -208,19 +201,19 @@ export interface ResolvedTurnContext extends ResolvedTurn {
 }
 
 export type AssistantResponsePart =
-  | TextPart
-  | ReasoningPart
-  | FilePart
-  | ToolCallPart
+  | Prompt.TextPart
+  | Prompt.ReasoningPart
+  | Prompt.FilePart
+  | Prompt.ToolCallPart
   | Prompt.ToolApprovalRequestPart
 
-export type ToolResponsePart = ToolResultPart | Prompt.ToolApprovalResponsePart
+export type ToolResponsePart = Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart
 
 export const toolCallsFromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>,
-): ReadonlyArray<ToolCallPart> =>
+): ReadonlyArray<Prompt.ToolCallPart> =>
   parts.flatMap(
-    (part): ReadonlyArray<ToolCallPart> =>
+    (part): ReadonlyArray<Prompt.ToolCallPart> =>
       part.type === "tool-call"
         ? [
             Prompt.toolCallPart({
@@ -550,7 +543,7 @@ export class ToolInteractionPending {
 }
 
 export const executeToolCalls = (params: {
-  toolCalls: ReadonlyArray<ToolCallPart>
+  toolCalls: ReadonlyArray<Prompt.ToolCallPart>
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId

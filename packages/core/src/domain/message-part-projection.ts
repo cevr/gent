@@ -15,15 +15,10 @@ export class UrlBackedImageNotSupportedError extends Schema.TaggedErrorClass<Url
   }
 }
 import {
-  type FilePart,
   type Message,
   type MessagePart,
   type ProjectedMessage,
-  type ReasoningPart,
-  type TextPart,
-  type ToolCallPart,
   type ToolInteraction,
-  type ToolResultPart,
   projectMessage,
 } from "./message.js"
 
@@ -74,9 +69,13 @@ export interface MessagePartsDisplayTextOptions {
 
 export interface MessagePartProjection {
   readonly assistant: ReadonlyArray<
-    TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart
+    | Prompt.TextPart
+    | Prompt.ReasoningPart
+    | Prompt.FilePart
+    | Prompt.ToolCallPart
+    | Prompt.ToolApprovalRequestPart
   >
-  readonly tool: ReadonlyArray<ToolResultPart | Prompt.ToolApprovalResponsePart>
+  readonly tool: ReadonlyArray<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart>
 }
 
 const truncateDisplayText = (text: string, max: number): string =>
@@ -87,7 +86,7 @@ const stringifyDisplayValue = (value: unknown): string => {
   return encoded === undefined ? String(value) : encoded
 }
 
-const filePartDataToDisplay = (part: FilePart): string => {
+const filePartDataToDisplay = (part: Prompt.FilePart): string => {
   if (typeof part.data === "string") return part.data
   if (part.data instanceof URL) return part.data.toString()
   return `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`
@@ -176,7 +175,8 @@ export const messagePartsToolCalls = (
 
 export const messagePartsToolCallParts = (
   parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<ToolCallPart> => parts.flatMap((part) => (part.type === "tool-call" ? [part] : []))
+): ReadonlyArray<Prompt.ToolCallPart> =>
+  parts.flatMap((part) => (part.type === "tool-call" ? [part] : []))
 
 export const messagePartsToolResults = (
   parts: ReadonlyArray<MessagePart>,
@@ -188,7 +188,7 @@ export const messagePartsToolResults = (
 
 export const messagePartsToolResultParts = (
   parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<ToolResultPart> =>
+): ReadonlyArray<Prompt.ToolResultPart> =>
   parts.flatMap((part) => (part.type === "tool-result" ? [part] : []))
 
 const buildToolResultMapFromMessages = (
@@ -386,7 +386,7 @@ export const messagePartsSearchText = (parts: ReadonlyArray<MessagePart>): strin
     .filter((text) => text.length > 0)
     .join("\n")
 
-export const fileDataFromImage = (part: FilePart): string | URL | Uint8Array => {
+export const fileDataFromImage = (part: Prompt.FilePart): string | URL | Uint8Array => {
   if (typeof part.data !== "string") return part.data
   if (part.data.startsWith("data:")) return part.data
   try {
@@ -576,7 +576,7 @@ export const normalizeResponseParts = (
   return state.normalized
 }
 
-export const imagePartToResponseFilePart = (part: FilePart): Response.FilePart => {
+export const imagePartToResponseFilePart = (part: Prompt.FilePart): Response.FilePart => {
   let data: Uint8Array | undefined
   if (typeof part.data === "string") {
     data = dataUrlToBytes(part.data)
@@ -613,7 +613,9 @@ export const messagePartToPromptPart = (
   }
 }
 
-export const userMessagePartToPromptPart = (part: TextPart | FilePart): Prompt.UserMessagePart => {
+export const userMessagePartToPromptPart = (
+  part: Prompt.TextPart | Prompt.FilePart,
+): Prompt.UserMessagePart => {
   switch (part.type) {
     case "text":
       return part
@@ -623,7 +625,12 @@ export const userMessagePartToPromptPart = (part: TextPart | FilePart): Prompt.U
 }
 
 export const assistantMessagePartToPromptPart = (
-  part: TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart,
+  part:
+    | Prompt.TextPart
+    | Prompt.ReasoningPart
+    | Prompt.FilePart
+    | Prompt.ToolCallPart
+    | Prompt.ToolApprovalRequestPart,
 ): Prompt.AssistantMessagePart => {
   switch (part.type) {
     case "text":
@@ -640,11 +647,16 @@ export const assistantMessagePartToPromptPart = (
 }
 
 export const toolMessagePartToPromptPart = (
-  part: ToolResultPart | Prompt.ToolApprovalResponsePart,
+  part: Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart,
 ): Prompt.ToolMessagePart => part
 
 export const assistantMessagePartToResponsePart = (
-  part: TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart,
+  part:
+    | Prompt.TextPart
+    | Prompt.ReasoningPart
+    | Prompt.FilePart
+    | Prompt.ToolCallPart
+    | Prompt.ToolApprovalRequestPart,
 ): Response.AnyPart => {
   switch (part.type) {
     case "text":
@@ -668,7 +680,7 @@ export const assistantMessagePartToResponsePart = (
   }
 }
 
-export const toolResultPartToResponsePart = (part: ToolResultPart): Response.AnyPart =>
+export const toolResultPartToResponsePart = (part: Prompt.ToolResultPart): Response.AnyPart =>
   Response.makePart("tool-result", {
     id: part.id,
     name: part.name,
@@ -679,7 +691,7 @@ export const toolResultPartToResponsePart = (part: ToolResultPart): Response.Any
     preliminary: false,
   })
 
-export const responseFilePartToImagePart = (part: Response.FilePart): FilePart | undefined =>
+export const responseFilePartToImagePart = (part: Response.FilePart): Prompt.FilePart | undefined =>
   part.mediaType.startsWith("image/")
     ? Prompt.filePart({
         data: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
@@ -690,10 +702,10 @@ export const responseFilePartToImagePart = (part: Response.FilePart): FilePart |
 export const responsePartToAssistantMessagePart = (
   part: Response.AnyPart,
 ):
-  | TextPart
-  | ReasoningPart
-  | FilePart
-  | ToolCallPart
+  | Prompt.TextPart
+  | Prompt.ReasoningPart
+  | Prompt.FilePart
+  | Prompt.ToolCallPart
   | Prompt.ToolApprovalRequestPart
   | undefined => {
   switch (part.type) {
@@ -720,7 +732,9 @@ export const responsePartToAssistantMessagePart = (
   }
 }
 
-export const responsePartToToolResultPart = (part: Response.AnyPart): ToolResultPart | undefined =>
+export const responsePartToToolResultPart = (
+  part: Response.AnyPart,
+): Prompt.ToolResultPart | undefined =>
   part.type === "tool-result" && part.preliminary !== true
     ? Prompt.toolResultPart({
         id: part.id,
@@ -765,9 +779,13 @@ export const projectResponsePartsToMessageParts = (
 ): MessagePartProjection => {
   const normalized = normalizeResponseParts(parts)
   const assistant: Array<
-    TextPart | ReasoningPart | FilePart | ToolCallPart | Prompt.ToolApprovalRequestPart
+    | Prompt.TextPart
+    | Prompt.ReasoningPart
+    | Prompt.FilePart
+    | Prompt.ToolCallPart
+    | Prompt.ToolApprovalRequestPart
   > = []
-  const tool: Array<ToolResultPart | Prompt.ToolApprovalResponsePart> = []
+  const tool: Array<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart> = []
 
   for (const part of normalized) {
     const assistantPart = responsePartToAssistantMessagePart(part)
