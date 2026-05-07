@@ -755,7 +755,7 @@ reserved for C24-C30.
 Implementation notes:
 
 - Added an executable STM prototype in
-  `packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`.
+  `packages/core/tests/runtime/agent-loop-stm-queue.test.ts`.
 - `TxRef` proves the important reservation invariant directly: concurrent
   idle submissions atomically produce exactly one start and enqueue the other.
 - `TxQueue` proves priority dequeue can be transactional across steering and
@@ -779,7 +779,7 @@ Decision:
 Verification on 2026-05-07:
 
 - `bun run --cwd packages/core typecheck`
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-queue.test.ts`
 - `bun run gate` after splitting `auto-integration.test.ts` into two
   name-filtered package-test lanes and balancing core chunks at `-n 8 -P 4`;
   test wall `4899ms`.
@@ -819,7 +819,7 @@ Status: complete in `f5ed06c0 refactor(runtime): use transactional state ref`.
 Verification on 2026-05-07:
 
 - `bun run --cwd packages/core typecheck`
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-prototype.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-queue.test.ts`
 - `bun run gate`; test wall `4847ms`
 - Pre-commit `bun run test`; test wall `4684ms`
 
@@ -1452,6 +1452,9 @@ Recursive audit findings accepted on 2026-05-07:
   `TaskStorage` metadata/delete behavior, and delegate background mode.
 - P2: extension package tests still used private `ExtensionHostContext` types
   for fake tool contexts, teaching the wrong authoring boundary.
+- P3: active runtime test file
+  `packages/core/tests/runtime/agent-loop-stm-prototype.test.ts` used a
+  process-shaped name after the STM proof became retained behavior coverage.
 
 Completed sub-commits:
 
@@ -1470,6 +1473,9 @@ Completed sub-commits:
 - C97.4 migrated extension tests away from private `ExtensionHostContext`
   imports and onto public `ToolCapabilityContext` / public extension API
   exports.
+- C97.5 renamed the retained STM proof to
+  `packages/core/tests/runtime/agent-loop-stm-queue.test.ts` and changed the
+  suite language from prototype to queue transaction behavior.
 
 Verification on 2026-05-07:
 
@@ -1482,6 +1488,7 @@ Verification on 2026-05-07:
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/task-tools/task-tool-execution.test.ts packages/extensions/tests/task-tools/task-service.test.ts packages/extensions/tests/task-tools/task-storage.test.ts packages/extensions/tests/delegate/delegate-background.test.ts`
 - `bun run lint`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/plan-tool.test.ts packages/extensions/tests/review/review-tool.test.ts packages/extensions/tests/audit/audit-tool.test.ts packages/extensions/tests/handoff.test.ts packages/extensions/tests/delegate/delegate-tool.test.ts packages/extensions/tests/counsel/counsel-tool.test.ts packages/extensions/tests/research/research-tool.test.ts packages/extensions/tests/artifacts/artifact-persistence.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-stm-queue.test.ts`
 
 #### C98: docs: update architecture and AGENTS receipts
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, TxQueue, TxRef, TxSubscriptionRef } from "effect"
 
-type PrototypeRuntimeState = {
+type RuntimeQueueState = {
   readonly state: "idle" | "running"
   readonly startingState: string | undefined
   readonly steering: ReadonlyArray<string>
@@ -9,11 +9,11 @@ type PrototypeRuntimeState = {
 }
 
 const reserveWithTxRef = (
-  stateRef: TxRef.TxRef<PrototypeRuntimeState>,
+  stateRef: TxRef.TxRef<RuntimeQueueState>,
   item: string,
 ): Effect.Effect<string | undefined> =>
   Effect.tx(
-    TxRef.modify(stateRef, (state): [string | undefined, PrototypeRuntimeState] => {
+    TxRef.modify(stateRef, (state): [string | undefined, RuntimeQueueState] => {
       if (state.startingState !== undefined || state.state !== "idle") {
         return [
           undefined,
@@ -35,10 +35,10 @@ const reserveWithTxRef = (
   )
 
 const finishAndTakeNextWithTxRef = (
-  stateRef: TxRef.TxRef<PrototypeRuntimeState>,
+  stateRef: TxRef.TxRef<RuntimeQueueState>,
 ): Effect.Effect<string | undefined> =>
   Effect.tx(
-    TxRef.modify(stateRef, (state): [string | undefined, PrototypeRuntimeState] => {
+    TxRef.modify(stateRef, (state): [string | undefined, RuntimeQueueState] => {
       const [nextSteering, ...restSteering] = state.steering
       if (nextSteering !== undefined) {
         return [
@@ -77,7 +77,7 @@ const finishAndTakeNextWithTxRef = (
   )
 
 const drainQueueWithTxRef = (
-  stateRef: TxRef.TxRef<PrototypeRuntimeState>,
+  stateRef: TxRef.TxRef<RuntimeQueueState>,
 ): Effect.Effect<{
   readonly steering: ReadonlyArray<string>
   readonly followUp: ReadonlyArray<string>
@@ -89,10 +89,10 @@ const drainQueueWithTxRef = (
     ]),
   )
 
-describe("AgentLoop STM queue prototype", () => {
+describe("AgentLoop STM queue transactions", () => {
   it.live("TxSubscriptionRef provides transactional state with committed change streams", () =>
     Effect.gen(function* () {
-      const stateRef = yield* TxSubscriptionRef.make<PrototypeRuntimeState>({
+      const stateRef = yield* TxSubscriptionRef.make<RuntimeQueueState>({
         state: "idle",
         startingState: undefined,
         steering: [],
@@ -105,7 +105,7 @@ describe("AgentLoop STM queue prototype", () => {
           const initial = yield* Effect.tx(TxQueue.take(changes))
           const reserved = yield* TxSubscriptionRef.modify(
             stateRef,
-            (state): [string, PrototypeRuntimeState] => [
+            (state): [string, RuntimeQueueState] => [
               "reserved",
               {
                 ...state,
@@ -127,7 +127,7 @@ describe("AgentLoop STM queue prototype", () => {
 
   it.live("TxRef atomically reserves exactly one concurrent idle start", () =>
     Effect.gen(function* () {
-      const stateRef = yield* TxRef.make<PrototypeRuntimeState>({
+      const stateRef = yield* TxRef.make<RuntimeQueueState>({
         state: "idle",
         startingState: undefined,
         steering: [],
@@ -152,7 +152,7 @@ describe("AgentLoop STM queue prototype", () => {
 
   it.live("TxRef queues during the private startingState reservation window", () =>
     Effect.gen(function* () {
-      const stateRef = yield* TxRef.make<PrototypeRuntimeState>({
+      const stateRef = yield* TxRef.make<RuntimeQueueState>({
         state: "idle",
         startingState: "reserved",
         steering: [],
@@ -170,7 +170,7 @@ describe("AgentLoop STM queue prototype", () => {
 
   it.live("TxRef can atomically take steering before follow-up and clear reservation", () =>
     Effect.gen(function* () {
-      const stateRef = yield* TxRef.make<PrototypeRuntimeState>({
+      const stateRef = yield* TxRef.make<RuntimeQueueState>({
         state: "running",
         startingState: "current",
         steering: ["steering"],
@@ -192,7 +192,7 @@ describe("AgentLoop STM queue prototype", () => {
 
   it.live("TxRef can return a durable queue snapshot while clearing observable queues", () =>
     Effect.gen(function* () {
-      const stateRef = yield* TxRef.make<PrototypeRuntimeState>({
+      const stateRef = yield* TxRef.make<RuntimeQueueState>({
         state: "running",
         startingState: "current",
         steering: ["steering"],
@@ -247,7 +247,7 @@ describe("AgentLoop STM queue prototype", () => {
     }),
   )
 
-  it.live("TxQueue public draining API consumes items, so durable snapshots need a mirror", () =>
+  it.live("TxQueue draining consumes items, so durable snapshots need a mirror", () =>
     Effect.gen(function* () {
       const queue = yield* TxQueue.unbounded<string>()
 
