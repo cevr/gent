@@ -953,40 +953,6 @@ export const runTurnStreamPhase = (params: {
     return collected
   })
 
-export const executeToolsPhase = (params: {
-  messageId: MessageId
-  step: number
-  toolCalls: ReadonlyArray<ToolCallPart>
-  publishEvent: PublishEvent
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  sessionId: SessionId
-  branchId: BranchId
-  currentTurnAgent: AgentNameType
-  hostCtx: ExtensionHostContext
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  permission?: PermissionService
-  resourceManager: ResourceManagerService
-  storage: TurnStorage
-}) =>
-  Effect.gen(function* () {
-    if (params.toolCalls.length === 0) return
-
-    const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
-    const existing = yield* params.storage.messages.getMessage(toolResultMessageId)
-    if (existing !== undefined) return
-
-    const toolResults = yield* executeToolCalls(params)
-    yield* persistToolParts({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: toolResultMessageId,
-      parts: toolResults,
-    })
-  })
-
 export const invokeToolPhase = (params: {
   assistantMessageId: MessageId
   toolResultMessageId: MessageId

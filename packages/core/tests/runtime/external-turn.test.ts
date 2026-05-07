@@ -412,7 +412,7 @@ describe("external turn execution", () => {
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
           // TurnCompleted fires (loop completed), ToolCallStarted fires (observability),
-          // but no additional ToolCallSucceeded from executeToolsPhase (which would
+          // but no additional ToolCallSucceeded from loop-owned tool execution (which would
           // come from ToolRunner, not the external executor)
           expect(tags).toContain("TurnCompleted")
           // Only one ToolCallStarted (from external events), not two (no re-execution)

@@ -31,7 +31,7 @@ import {
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { AgentSwitched, ErrorOccurred, TurnCompleted, type AgentEvent } from "../../domain/event.js"
 import type { EventPublisher } from "../../domain/event-publisher.js"
-import type { MessageMetadata } from "../../domain/message.js"
+import type { MessageMetadata, ToolCallPart } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -73,9 +73,10 @@ import { AgentLoopError } from "./agent-loop.commands.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response/collectors.js"
 import {
   ToolInteractionPending,
-  executeToolsPhase,
+  executeToolCalls,
   findPersistedEvent,
   persistMessageReceived,
+  persistToolParts,
   resolveTurnContext,
   runTurnBeforeHook,
   runTurnStreamPhase,
@@ -444,6 +445,43 @@ export const makeAgentLoopBehavior = (
     })
     type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
 
+    const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
+      messageId: RunningState["message"]["id"]
+      step: number
+      toolCalls: ReadonlyArray<ToolCallPart>
+      currentTurnAgent: AgentNameType
+      extensionRegistry: ExtensionRegistryService
+      permission: PermissionService
+      hostCtx: ExtensionHostContext
+    }) {
+      if (params.toolCalls.length === 0) return
+
+      const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
+      const existing = yield* messageStorage.getMessage(toolResultMessageId)
+      if (existing !== undefined) return
+
+      const toolResults = yield* executeToolCalls({
+        toolCalls: params.toolCalls,
+        publishEvent: publishEventOrDie,
+        sessionId,
+        branchId,
+        currentTurnAgent: params.currentTurnAgent,
+        hostCtx: params.hostCtx,
+        toolRunner,
+        extensionRegistry: params.extensionRegistry,
+        permission: params.permission,
+        resourceManager,
+      })
+      yield* persistToolParts({
+        storage: turnStorage,
+        eventPublisher,
+        sessionId,
+        branchId,
+        messageId: toolResultMessageId,
+        parts: toolResults,
+      })
+    })
+
     const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (params: {
       messageId: RunningState["message"]["id"]
       startedAtMs: number
@@ -558,21 +596,14 @@ export const makeAgentLoopBehavior = (
             .pipe(Effect.orElseSucceed(() => undefined))
           if (existingResults === undefined) {
             yield* Effect.logInfo("turn.resume-tools")
-            const interactionSignal = yield* executeToolsPhase({
+            const interactionSignal = yield* executeTools({
               messageId: state.message.id,
               step: resumeStep,
               toolCalls,
-              publishEvent: publishEventOrDie,
-              eventPublisher,
-              sessionId,
-              branchId,
               currentTurnAgent,
               hostCtx: turnHostCtx,
-              toolRunner,
               extensionRegistry: turnExtensionRegistry,
               permission: turnPermission,
-              resourceManager,
-              storage: turnStorage,
             }).pipe(
               Effect.as(undefined as ToolInteractionPending | undefined),
               Effect.catchIf(
@@ -685,21 +716,14 @@ export const makeAgentLoopBehavior = (
         const toolCalls = toolCallsFromResponseParts(collected.responseParts)
         if (toolCalls.length === 0) break
 
-        const interactionSignal = yield* executeToolsPhase({
+        const interactionSignal = yield* executeTools({
           messageId: state.message.id,
           step,
           toolCalls,
-          publishEvent: publishEventOrDie,
-          eventPublisher,
-          sessionId,
-          branchId,
           currentTurnAgent: resolved.currentTurnAgent,
           hostCtx: turnHostCtx,
-          toolRunner,
           extensionRegistry: turnExtensionRegistry,
           permission: turnPermission,
-          resourceManager,
-          storage: turnStorage,
         }).pipe(
           Effect.as(undefined as ToolInteractionPending | undefined),
           Effect.catchIf(
