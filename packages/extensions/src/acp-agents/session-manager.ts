@@ -160,6 +160,7 @@ export const createAcpSessionManager = (
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
+          Effect.mapError((e) => new AcpError({ message: e.message, cause: e })),
           // Close codemode scope first so its bound port releases even if
           // startCodemodeServer fails after the HTTP server bound, then
           // tear down the spawned ACP child process.

@@ -29,6 +29,13 @@ export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCode
   }
 }
 
+export class McpCodemodeServerError extends Schema.TaggedErrorClass<McpCodemodeServerError>()(
+  "McpCodemodeServerError",
+  {
+    message: Schema.String,
+  },
+) {}
+
 // ── Types ──
 
 export interface CodemodeServer {
@@ -220,7 +227,7 @@ const createMcpServerForRequest = (
 
 export const startCodemodeServer = (
   config: CodemodeConfig,
-): Effect.Effect<CodemodeServer, never, Scope.Scope> =>
+): Effect.Effect<CodemodeServer, McpCodemodeServerError, Scope.Scope> =>
   Effect.gen(function* () {
     const { tools, runTool } = config
     const proxy = makeGentProxy(tools, runTool)
@@ -258,9 +265,9 @@ export const startCodemodeServer = (
     const ctx = yield* Layer.buildWithScope(HttpLive, scope)
     const server = Context.get(ctx, HttpServer.HttpServer)
     if (server.address._tag !== "TcpAddress") {
-      return yield* Effect.die(
-        new Error("startCodemodeServer: expected TcpAddress from BunHttpServer"),
-      )
+      return yield* new McpCodemodeServerError({
+        message: "startCodemodeServer: expected TcpAddress from BunHttpServer",
+      })
     }
     const port = server.address.port
     return {

@@ -408,6 +408,9 @@ export const createClaudeCodeSessionManager = (
         codemode = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
           Effect.provide(platformContext),
+          Effect.mapError(
+            (e) => new ClaudeSdkError({ kind: "init", message: e.message, cause: e }),
+          ),
           // Close codemode scope on startup failure so the bound HTTP port
           // is released even if startCodemodeServer fails after acquireRelease
           // resolved.
