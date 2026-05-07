@@ -108,7 +108,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Test philosophy
 
-- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `SqliteStorage.TestWithSql()` with in-memory SQLite + `LanguageModelLayers.sequence(...)` for LLM responses.
+- **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
 - **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
@@ -138,9 +138,8 @@ import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
 const layer = baseLocalLayer()
 
 // RPC acceptance harness (real per-request scopes)
-// Import relative from test file, e.g. "./helpers/rpc-harness"
-import { createRpcHarness } from "./helpers/rpc-harness"
-const { client } = yield * createRpcHarness({ providerLayer, extensions })
+import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
+const { client, sessionId, branchId } = yield * createRpcHarness({ providerLayer, extensions })
 
 // Sequence recording for event assertions
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"

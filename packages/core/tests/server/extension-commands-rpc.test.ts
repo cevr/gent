@@ -12,12 +12,10 @@ import {
   listSlashCommands,
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
-import { setupExtension } from "../../src/runtime/extensions/loader"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
-import { Gent } from "@gent/sdk"
+import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
 import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
@@ -86,14 +84,6 @@ describe("extension command RPCs", () => {
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
     Layer.provideMerge(ApprovalService.Test()),
   )
-  const setupCommandsExt = Effect.provide(
-    setupExtension(
-      { extension: TestCommandsExtension, scope: "builtin", sourcePath: "builtin" },
-      "/test/cwd",
-      "/test/home",
-    ),
-    BunPlatformLive,
-  )
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
     addRule: () => Effect.void,
@@ -153,12 +143,11 @@ describe("extension command RPCs", () => {
       yield* narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const ext = yield* setupCommandsExt
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const { client } = yield* Gent.test(
-              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-            )
-            const { sessionId, branchId } = yield* client.session.create({
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [TestCommandsExtension],
               cwd: "/tmp/gent-extension-request-session",
             })
             createdSessionId = sessionId
@@ -224,10 +213,10 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const { client } = yield* Gent.test(
-              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-            )
-            const { sessionId, branchId } = yield* client.session.create({
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [ext],
               cwd: "/tmp/gent-extension-queue-follow-up",
             })
             yield* client.extension.request({
@@ -258,10 +247,11 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const ext = yield* setupCommandsExt
-            const { client } = yield* Gent.test(
-              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-            )
+            const { client } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [TestCommandsExtension],
+            })
             const result = yield* Effect.exit(
               client.extension.request({
                 sessionId: SessionId.make("missing-extension-request-session"),
@@ -292,11 +282,10 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const ext = yield* setupCommandsExt
-            const { client } = yield* Gent.test(
-              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-            )
-            const { sessionId } = yield* client.session.create({
+            const { client, sessionId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [TestCommandsExtension],
               cwd: "/tmp/gent-extension-request-missing-branch",
             })
             const result = yield* Effect.exit(
@@ -328,11 +317,13 @@ describe("extension command RPCs", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const ext = yield* setupCommandsExt
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-request-first" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [TestCommandsExtension],
+            cwd: "/tmp/gent-extension-request-first",
+          })
+          const first = { sessionId, branchId }
           const second = yield* client.session.create({
             cwd: "/tmp/gent-extension-request-second",
           })
@@ -399,15 +390,13 @@ describe("extension command RPCs", () => {
               new Map([[profileCwd, profile]]),
             )
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const { client } = yield* Gent.test(
-              createE2ELayer({
-                ...e2ePreset,
-                providerLayer,
-                extensions: [],
-                sessionProfileCacheLayer,
-              }),
-            )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+              cwd: profileCwd,
+            })
             const result = yield* client.extension.request({
               sessionId,
               extensionId: ExtensionId.make("@test/profile-service-request"),
@@ -468,15 +457,13 @@ describe("extension command RPCs", () => {
             ),
           ) as Layer.Layer<SessionProfileCache>
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [],
-              sessionProfileCacheLayer,
-            }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer,
+            cwd: profileCwd,
+          })
           const result = yield* client.extension.request({
             sessionId,
             extensionId: ExtensionId.make("@test/live-profile-service-request"),
@@ -506,14 +493,12 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const { client } = yield* Gent.test(
-              createE2ELayer({
-                ...e2ePreset,
-                providerLayer,
-                extensionInputs: [failingExtension],
-              }),
-            )
-            const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+            const { client, sessionId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [failingExtension],
+              cwd: "/tmp",
+            })
             const status = yield* client.extension.listStatus({ sessionId })
             expect(status._tag).toBe("degraded")
             if (status._tag !== "degraded") return
@@ -559,10 +544,12 @@ describe("extension command RPCs", () => {
             toolCallStep("create-branch", {}),
             textStep("done"),
           ])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+            cwd: "/tmp",
+          })
           yield* client.message.send({
             sessionId,
             branchId,
@@ -635,10 +622,12 @@ describe("extension command RPCs", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
-          )
-          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+            cwd: "/tmp",
+          })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
         }).pipe(Effect.timeout("4 seconds")),
@@ -687,14 +676,12 @@ describe("extension command RPCs", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [builtinExt, projectExt],
-            }),
-          )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [builtinExt, projectExt],
+            cwd: "/tmp",
+          })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
           const result = yield* Effect.exit(
@@ -756,14 +743,12 @@ describe("extension command RPCs", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [builtinExt, projectExt],
-            }),
-          )
-          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [builtinExt, projectExt],
+            cwd: "/tmp",
+          })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
@@ -810,14 +795,12 @@ describe("extension command RPCs", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              extensions: [builtinExt, projectExt],
-            }),
-          )
-          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [builtinExt, projectExt],
+            cwd: "/tmp",
+          })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
         }).pipe(Effect.timeout("4 seconds")),
@@ -842,15 +825,14 @@ describe("extension command RPCs", () => {
               ]),
             )
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-            const { client } = yield* Gent.test(
-              createE2ELayer({
-                ...e2ePreset,
-                providerLayer,
-                extensions: [],
-                sessionProfileCacheLayer,
-              }),
-            )
-            const alpha = yield* client.session.create({ cwd: alphaCwd })
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+              cwd: alphaCwd,
+            })
+            const alpha = { sessionId, branchId }
             const beta = yield* client.session.create({ cwd: betaCwd })
             const alphaCommands = yield* client.extension.listSlashCommands({
               sessionId: alpha.sessionId,

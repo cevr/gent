@@ -212,7 +212,7 @@ Receipts:
 
 `packages/core/src/extensions/api.ts` is the only intended public authoring
 surface, but it re-exports agents/run specs, turn contexts, events, tasks,
-messages, host seams, platform seams, and builtin-oriented helpers.
+messages, host seams, platform seams, and shipped-default helpers.
 
 Receipts:
 
@@ -374,7 +374,7 @@ Receipts:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/rpc-harness.ts:1`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/rpc-harness.ts:58`
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts:158`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/skills/skills-rpc.test.ts:105`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/skills/skills-rpc.test.ts:105`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/e2e-layer.ts:59`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/e2e-layer.ts:100`
 
@@ -1285,9 +1285,27 @@ that manually compose lower-level layers.
 
 Definition of done:
 
-- `extension-commands-rpc` and `skills-rpc` use `createRpcHarness` unless they
-  test the harness itself.
+- `extension-commands-rpc` uses `createRpcHarness`; `skills-rpc` already uses
+  the same helper after moving under `@gent/extensions`.
 - Docs/AGENTS test section names the default helper.
+
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- Replaced all raw `Gent.test(createE2ELayer(...))` composition in
+  `extension-commands-rpc` with `createRpcHarness`.
+- Kept profile-cache overrides as explicit harness inputs instead of hand-built
+  layers.
+- Updated `AGENTS.md` so extension acceptance tests default to
+  `createRpcHarness`; raw `createE2ELayer` is documented as advanced
+  host/profile wiring only.
+- Corrected Wave 20 wording so shipped/default extensions are not framed as a
+  privileged builtin tier.
+
+Verification on 2026-05-07:
+
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
 
 #### C77-C85: test(core): split god tests by behavior area
 
