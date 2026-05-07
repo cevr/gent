@@ -37,7 +37,7 @@ export type { TaskEntry } from "./identity.js"
 export const TaskExtension = defineExtension({
   id: TASK_TOOLS_EXTENSION_ID,
   tools: [TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool],
-  rpc: [
+  requests: [
     TaskGetRequest,
     TaskListRequest,
     TaskGetDepsRequest,

@@ -17,8 +17,8 @@ import { getToolMetadata } from "../../domain/capability/tool.js"
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
   [
     ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),
-    ...(cs.commands ?? []).map((command) => command.prompt),
-    ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
+    ...(cs.actions ?? []).map((command) => command.prompt),
+    ...(cs.requests ?? []).map((rpc) => rpc.prompt),
   ].filter((p): p is PromptSection => p !== undefined)
 
 // Discovery — scan directories for extension files

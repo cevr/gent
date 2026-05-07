@@ -59,13 +59,13 @@ export interface ExtensionContributions {
    * dispatch surface: every entry is an `ActionToken` — no runtime tag check
    * needed downstream.
    */
-  readonly commands?: ReadonlyArray<ActionToken>
+  readonly actions?: ReadonlyArray<ActionToken>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * Bucket name IS the dispatch surface: every entry is a `RequestToken` — no
    * runtime tag check needed downstream.
    */
-  readonly rpc?: ReadonlyArray<RequestToken>
+  readonly requests?: ReadonlyArray<RequestToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
@@ -90,18 +90,18 @@ export const modelCapabilities = (contribs: ExtensionContributions): ReadonlyArr
 /**
  * Read all human-surface capabilities (slash / palette) from a contributions
  * bag. Bucket name IS the dispatch discrimination — every entry in
- * `commands:` is an action leaf by construction.
+ * `actions:` is an action leaf by construction.
  */
 export const humanCapabilities = (contribs: ExtensionContributions): ReadonlyArray<ActionToken> =>
-  contribs.commands ?? []
+  contribs.actions ?? []
 
 /**
  * Read all extension-to-extension RPC capabilities from a contributions bag.
- * Bucket name IS the dispatch discrimination — every entry in `rpc:` is a
+ * Bucket name IS the dispatch discrimination — every entry in `requests:` is a
  * request leaf by construction.
  */
 export const rpcCapabilities = (contribs: ExtensionContributions): ReadonlyArray<RequestToken> =>
-  contribs.rpc ?? []
+  contribs.requests ?? []
 
 // ── Smart constructors ──
 //

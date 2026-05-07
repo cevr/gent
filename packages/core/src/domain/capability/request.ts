@@ -36,8 +36,8 @@ import type { ReadOnlyTag } from "../read-only.js"
 
 /**
  * `RequestToken` — `request({...})` return type. The
- * `ExtensionContributions.rpc` bucket is the discrimination; non-request
- * leaves (`tool`, `action`) cannot be slotted into `rpc:`.
+ * `ExtensionContributions.requests` bucket is the discrimination; non-request
+ * leaves (`tool`, `action`) cannot be slotted into `requests:`.
  */
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
 const RequestTokenBrand: unique symbol = Symbol("@gent/core/RequestToken")

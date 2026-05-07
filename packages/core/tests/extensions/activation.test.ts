@@ -251,7 +251,7 @@ describe("extension activation isolation", () => {
             }),
           ],
         }),
-        makeLoaded("rpc-only", { rpc: [rawRpcLeaf("shared_name")] }),
+        makeLoaded("rpc-only", { requests: [rawRpcLeaf("shared_name")] }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
@@ -380,7 +380,7 @@ describe("extension activation isolation", () => {
       // RPC requests don't ship to the LLM as tools, so empty description is
       // fine. Only model-callable tool leaves require a description.
       const result = yield* validateLoadedExtensions([
-        makeLoaded("rpc-no-desc", { rpc: [rawRpcLeaf("internal")] }),
+        makeLoaded("rpc-no-desc", { requests: [rawRpcLeaf("internal")] }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("rpc-no-desc")])

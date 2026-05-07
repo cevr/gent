@@ -25,12 +25,12 @@ const ctx: CapabilityCoreContext = {
 }
 const extWith = (
   scope: "builtin" | "user" | "project",
-  rpc: ReadonlyArray<RequestToken>,
+  requests: ReadonlyArray<RequestToken>,
 ): LoadedExtension => ({
   manifest: { id: extensionId },
   scope,
   sourcePath: `/test/${scope}`,
-  contributions: { rpc },
+  contributions: { requests },
 })
 
 const echoRequest = (params?: { readonly id?: string; readonly value?: string }) =>
@@ -101,7 +101,7 @@ describe("extension capability registries", () => {
         manifest: { id: extensionId },
         scope: "builtin",
         sourcePath: "/test/rpc",
-        contributions: { rpc: [cap] },
+        contributions: { requests: [cap] },
       }
       const resolved = resolveExtensions([ext])
       const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
@@ -126,7 +126,7 @@ describe("extension capability registries", () => {
         manifest: { id: extensionId },
         scope: "builtin",
         sourcePath: "/test/private-action",
-        contributions: { commands: [cap] },
+        contributions: { actions: [cap] },
       }
       const resolved = resolveExtensions([ext])
       const result = yield* expectRpcFailure(
@@ -163,13 +163,13 @@ describe("extension capability registries", () => {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "/test/builtin-request",
-          contributions: { rpc: [builtin] },
+          contributions: { requests: [builtin] },
         },
         {
           manifest: { id: extensionId },
           scope: "project",
           sourcePath: "/test/project-private-action",
-          contributions: { commands: [project] },
+          contributions: { actions: [project] },
         },
       ])
       const result = yield* expectRpcFailure(
@@ -190,13 +190,13 @@ describe("extension capability registries", () => {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "/test/builtin-request",
-          contributions: { rpc: [builtin] },
+          contributions: { requests: [builtin] },
         },
         {
           manifest: { id: extensionId },
           scope: "project",
           sourcePath: "/test/project-public-action",
-          contributions: { commands: [project] },
+          contributions: { actions: [project] },
         },
       ])
       const result = yield* expectRpcFailure(
@@ -217,7 +217,7 @@ describe("extension capability registries", () => {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "/test/builtin-request",
-          contributions: { rpc: [builtin] },
+          contributions: { requests: [builtin] },
         },
         {
           manifest: { id: extensionId },
@@ -244,7 +244,7 @@ describe("extension capability registries", () => {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "/test/builtin-request",
-          contributions: { rpc: [builtin] },
+          contributions: { requests: [builtin] },
         },
         {
           manifest: { id: extensionId },

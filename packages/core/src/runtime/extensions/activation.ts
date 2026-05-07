@@ -295,8 +295,8 @@ export const collectValidationFailures = (
         ...(cs.tools ?? []).map((tool) =>
           isToolToken(tool) ? getToolMetadata(tool).prompt : undefined,
         ),
-        ...(cs.commands ?? []).map((command) => command.prompt),
-        ...(cs.rpc ?? []).map((rpc) => rpc.prompt),
+        ...(cs.actions ?? []).map((command) => command.prompt),
+        ...(cs.requests ?? []).map((rpc) => rpc.prompt),
       ].filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,
     "prompt section",

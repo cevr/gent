@@ -130,7 +130,7 @@ const makeExecutorExtension = (overrides?: {
     scope: "builtin",
     sourcePath: "builtin",
     contributions: {
-      rpc: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
+      requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
       resources: [
         defineResource({
           scope: "process",

@@ -34,6 +34,6 @@ export const SkillsExtension = defineExtension({
         }
       }),
   },
-  rpc: [SkillsRpc.ListSkills, SkillsRpc.GetSkillContent],
+  requests: [SkillsRpc.ListSkills, SkillsRpc.GetSkillContent],
   tools: [SkillsTool, SearchSkillsTool],
 })

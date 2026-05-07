@@ -122,7 +122,7 @@ const ArtifactClearTool = tool({
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
   resources: [defineResource({ scope: "process", layer: ArtifactsStoreLive })],
-  rpc: [
+  requests: [
     ArtifactRpc.Save,
     ArtifactRpc.Read,
     ArtifactRpc.Update,

@@ -252,7 +252,7 @@ const turnProjection = () =>
 export const AutoExtension = defineExtension({
   id: AUTO_EXTENSION_ID,
   tools: [AutoCheckpointTool],
-  rpc: [
+  requests: [
     AutoRpc.StartAuto,
     AutoRpc.RequestHandoff,
     AutoRpc.CancelAuto,

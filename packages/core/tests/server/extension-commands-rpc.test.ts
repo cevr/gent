@@ -49,13 +49,13 @@ describe("extension command RPCs", () => {
     cwd: string
   }> = []
   // Server-visible slash commands are slash-decorated RPC requests. Local
-  // human-only commands stay in the `commands:` bucket and are not listed by
+  // human-only commands stay in the `actions:` bucket and are not listed by
   // the transport API.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
     setup: () =>
       Effect.succeed({
-        rpc: [
+        requests: [
           request({
             id: "greet",
             extensionId: ExtensionId.make("@test/commands"),
@@ -70,7 +70,7 @@ describe("extension command RPCs", () => {
               }),
           }),
         ],
-        commands: [
+        actions: [
           action({
             id: "noop",
             name: "noop",
@@ -121,7 +121,7 @@ describe("extension command RPCs", () => {
     scope: "builtin",
     sourcePath: "test",
     contributions: {
-      rpc: [
+      requests: [
         request({
           id: commandId,
           extensionId: ExtensionId.make(extensionId),
@@ -198,7 +198,7 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "test",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "queue-follow-up",
               extensionId,
@@ -375,7 +375,7 @@ describe("extension command RPCs", () => {
               }),
             }),
           ],
-          rpc: [
+          requests: [
             request({
               id: "read-profile-token",
               extensionId: ExtensionId.make("@test/profile-service-request") as ExtensionId,
@@ -440,7 +440,7 @@ describe("extension command RPCs", () => {
                 }),
               }),
             ],
-            rpc: [
+            requests: [
               request({
                 id: "read-live-profile-token",
                 extensionId: ExtensionId.make("@test/live-profile-service-request") as ExtensionId,
@@ -607,7 +607,7 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "test",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "visible",
               extensionId,
@@ -618,7 +618,7 @@ describe("extension command RPCs", () => {
               execute: () => Effect.void,
             }),
           ],
-          commands: [
+          actions: [
             action({
               id: "hidden",
               name: "hidden",
@@ -652,7 +652,7 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "builtin",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "shadowed",
               extensionId,
@@ -670,7 +670,7 @@ describe("extension command RPCs", () => {
         scope: "project",
         sourcePath: "project",
         contributions: {
-          commands: [
+          actions: [
             action({
               id: "shadowed",
               name: "shadowed private",
@@ -722,7 +722,7 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "builtin",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "shadowed",
               extensionId,
@@ -740,7 +740,7 @@ describe("extension command RPCs", () => {
         scope: "project",
         sourcePath: "project",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "shadowed",
               extensionId,
@@ -777,7 +777,7 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "builtin",
         contributions: {
-          rpc: [
+          requests: [
             request({
               id: "shadowed",
               extensionId,

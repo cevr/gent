@@ -17,7 +17,7 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   tools: [ExecuteTool, ResumeTool],
-  rpc: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
+  requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
   resources: ({ ctx }) => {
     const executorDependencies = Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)
     const executorLayer = Layer.provideMerge(ExecutorControllerLive(ctx.cwd), executorDependencies)

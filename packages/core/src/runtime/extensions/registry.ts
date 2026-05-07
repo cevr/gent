@@ -37,7 +37,7 @@ import {
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
 
-// SlashCommand — public-facing slash entry. Built from `commands:` bucket
+// SlashCommand — public-facing slash entry. Built from `actions:` / `requests:` bucket
 // winners. Read- and write-intent both surface as commands; the bucket is the
 // load-bearing filter.
 export interface SlashCommand {
@@ -142,14 +142,14 @@ const compileCapabilityWinners = (
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.commands ?? []) {
+    for (const cap of ext.contributions.actions ?? []) {
       winners.set(String(cap.id), {
         kind: "command",
         extensionId: ext.manifest.id,
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.rpc ?? []) {
+    for (const cap of ext.contributions.requests ?? []) {
       winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
   }
@@ -164,10 +164,10 @@ const compileCapabilityEntries = (
     for (const capability of ext.contributions.tools ?? []) {
       entries.push({ kind: "tool", extensionId: ext.manifest.id, capability })
     }
-    for (const capability of ext.contributions.commands ?? []) {
+    for (const capability of ext.contributions.actions ?? []) {
       entries.push({ kind: "command", extensionId: ext.manifest.id, capability })
     }
-    for (const capability of ext.contributions.rpc ?? []) {
+    for (const capability of ext.contributions.requests ?? []) {
       entries.push({ kind: "rpc", extensionId: ext.manifest.id, capability })
     }
   }
@@ -598,14 +598,14 @@ export const listSlashCommands = (
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.commands ?? []) {
+    for (const cap of ext.contributions.actions ?? []) {
       winners.set(String(cap.id), {
         kind: "command",
         extensionId: ext.manifest.id,
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.rpc ?? []) {
+    for (const cap of ext.contributions.requests ?? []) {
       winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
   }

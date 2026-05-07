@@ -373,7 +373,7 @@ describe("defineExtension", () => {
       })
       const rpcExt = defineExtension({
         id: "helper-rpc",
-        rpc: [readSnapshot],
+        requests: [readSnapshot],
       })
       const uiClient = { setup: Effect.succeed([]) }
       const uiExt = defineExtension({
@@ -382,11 +382,11 @@ describe("defineExtension", () => {
       })
 
       const toolContribs = yield* setupOf(toolExt)
-      const rpcContribs = yield* setupOf(rpcExt)
+      const requestContribs = yield* setupOf(rpcExt)
       const uiContribs = yield* setupOf(uiExt)
 
       expect(toolContribs.tools?.map((t) => String(getToolId(t)))).toEqual(["helper-tool-call"])
-      expect(rpcContribs.rpc?.map((r) => String(r.id))).toEqual(["read-snapshot"])
+      expect(requestContribs.requests?.map((r) => String(r.id))).toEqual(["read-snapshot"])
       expect(uiExt.client).toBe(uiClient)
       expect(uiContribs).toEqual({})
     }),

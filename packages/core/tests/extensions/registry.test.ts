@@ -63,8 +63,8 @@ const makeExt = (
   scope: "builtin" | "user" | "project",
   opts?: {
     tools?: ToolToken[]
-    commands?: ActionToken[]
-    rpc?: RequestToken[]
+    actions?: ActionToken[]
+    requests?: RequestToken[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
@@ -80,8 +80,8 @@ const makeExt = (
     sourcePath: `/test/${id}`,
     contributions: {
       ...(tools.length > 0 ? { tools } : {}),
-      ...(opts?.commands !== undefined ? { commands: opts.commands } : {}),
-      ...(opts?.rpc !== undefined ? { rpc: opts.rpc } : {}),
+      ...(opts?.actions !== undefined ? { actions: opts.actions } : {}),
+      ...(opts?.requests !== undefined ? { requests: opts.requests } : {}),
       agents: opts?.agents,
       modelDrivers: opts?.modelDrivers,
     },
@@ -576,7 +576,7 @@ describe("resolveExtensions — slash command discovery", () => {
       description: "Echo the args back.",
       promptSnippet: "Echo the args back.",
     })
-    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { commands: [cap] })])
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { actions: [cap] })])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
@@ -597,7 +597,7 @@ describe("resolveExtensions — slash command discovery", () => {
       output: Schema.Unknown,
       execute: () => Effect.void,
     })
-    const resolved = resolveExtensions([makeExt("@test/request", "builtin", { rpc: [cap] })])
+    const resolved = resolveExtensions([makeExt("@test/request", "builtin", { requests: [cap] })])
     const command = listSlashCommands(resolved.extensions).find((c) => c.name === "inspect")
     expect(cap.description).toBe("Registry description.")
     expect(command?.displayName).toBe("Inspect")
@@ -607,16 +607,16 @@ describe("resolveExtensions — slash command discovery", () => {
   })
   test("project palette command shadows builtin slash command", () => {
     const builtinCap = makeCommand("act")
-    const builtin = makeExt("@test/shadow", "builtin", { commands: [builtinCap] })
+    const builtin = makeExt("@test/shadow", "builtin", { actions: [builtinCap] })
     const projectCap = makeCommand("act", { surface: "palette" })
-    const project = makeExt("@test/shadow", "project", { commands: [projectCap] })
+    const project = makeExt("@test/shadow", "project", { actions: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
   test("palette-only command does not appear in the slash-backed command list", () => {
     const cap = makeCommand("palette-only", { surface: "palette" })
-    const resolved = resolveExtensions([makeExt("@test/palette", "builtin", { commands: [cap] })])
+    const resolved = resolveExtensions([makeExt("@test/palette", "builtin", { actions: [cap] })])
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).not.toContain("palette-only")
   })
@@ -635,14 +635,14 @@ describe("resolveExtensions — slash command discovery", () => {
   test("project rpc shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("act")] })
     const projectCap = makeRequest("act", { intent: "write" })
-    const project = makeExt("@test/shadow", "project", { rpc: [projectCap] })
+    const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("act")).toBe(false)
   })
   test("project command shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
     const projectCap = makeCommand("look")
-    const project = makeExt("@test/shadow", "project", { commands: [projectCap] })
+    const project = makeExt("@test/shadow", "project", { actions: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("look")).toBe(false)
   })
@@ -682,7 +682,7 @@ describe("resolveExtensions — slash command discovery", () => {
   })
   test("rpc does not appear as a tool", () => {
     const cap = makeRequest("rpc-only")
-    const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { rpc: [cap] })])
+    const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { requests: [cap] })])
     expect(resolved.modelCapabilities.has("rpc-only")).toBe(false)
   })
 })

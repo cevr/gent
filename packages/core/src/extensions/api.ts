@@ -312,14 +312,14 @@ export interface DefineExtensionInput<Client = unknown> {
    * the dispatch surface: every entry must be an `ActionToken` — `tool({...})`
    * and `request({...})` outputs cannot be slotted here.
    */
-  readonly commands?: FieldSpec<ActionToken>
+  readonly actions?: FieldSpec<ActionToken>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * The bucket name is the dispatch surface: every entry must be a
    * `RequestToken` — `tool({...})` and `action({...})` outputs cannot be
    * slotted here.
    */
-  readonly rpc?: FieldSpec<RequestToken>
+  readonly requests?: FieldSpec<RequestToken>
   readonly agents?: FieldSpec<AgentDefinition>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
@@ -440,8 +440,8 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolToken>): string | undefi
 
 const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
   const tools = contribs.tools ?? []
-  const commands = contribs.commands ?? []
-  const rpc = contribs.rpc ?? []
+  const commands = contribs.actions ?? []
+  const rpc = contribs.requests ?? []
   const toolErr = checkToolDescriptions(tools)
   if (toolErr !== undefined) return toolErr
   // Validate id-uniqueness across all buckets in declaration order so error
@@ -485,8 +485,8 @@ const validateDriverIds = (contribs: ExtensionContributions): string | undefined
 const allowedContributionBuckets = new Set([
   "resources",
   "tools",
-  "commands",
-  "rpc",
+  "actions",
+  "requests",
   "agents",
   "reactions",
   "modelDrivers",
@@ -580,8 +580,8 @@ export function defineExtension(
         }
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
-        const commands = yield* resolveField(manifest, "commands", params.commands, ctx)
-        const rpc = yield* resolveField(manifest, "rpc", params.rpc, ctx)
+        const actions = yield* resolveField(manifest, "actions", params.actions, ctx)
+        const requests = yield* resolveField(manifest, "requests", params.requests, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
         const externalDrivers = yield* resolveField(
@@ -593,8 +593,8 @@ export function defineExtension(
         const contribs: ExtensionContributions = {
           ...(resources.length > 0 ? { resources } : {}),
           ...(tools.length > 0 ? { tools } : {}),
-          ...(commands.length > 0 ? { commands } : {}),
-          ...(rpc.length > 0 ? { rpc } : {}),
+          ...(actions.length > 0 ? { actions } : {}),
+          ...(requests.length > 0 ? { requests } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),

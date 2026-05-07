@@ -32,8 +32,8 @@ export type ActionSurface = "slash" | "palette" | "both"
 
 /**
  * `ActionToken` — `action({...})` return type. The
- * `ExtensionContributions.commands` bucket is the discrimination; non-action
- * leaves (`tool`, `request`) cannot be slotted into `commands:`.
+ * `ExtensionContributions.actions` bucket is the discrimination; non-action
+ * leaves (`tool`, `request`) cannot be slotted into `actions:`.
  */
 const ActionTokenBrand: unique symbol = Symbol("@gent/core/ActionToken")
 declare const ActionTokenType: unique symbol

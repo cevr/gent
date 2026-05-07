@@ -111,7 +111,7 @@ const CapabilityMetadataFields = {
 
 /**
  * Canonical callable leaf shape. Buckets still preserve the product surfaces
- * (`tools`, `commands`, `rpc`), but every callable contribution now carries the
+ * (`tools`, `actions`, `requests`), but every callable contribution now carries the
  * same discriminator and shared metadata fields.
  */
 export const Capability = TaggedEnumClass("Capability", {
