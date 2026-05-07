@@ -341,19 +341,20 @@ describe("Auto extension E2E", () => {
 
         yield* auto.start({ goal: "Test handoff dedup" })
 
+        const eventStore = yield* EventStore
+        const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
+        yield* Effect.forkChild(
+          eventStore.subscribe({ sessionId, branchId }).pipe(
+            Stream.runForEach((env) => Ref.update(envelopesRef, (curr) => [...curr, env])),
+            Effect.catchCause(() => Effect.void),
+          ),
+        )
+
         yield* runAgentMessage(makeMessage("begin"))
 
         expect(yield* Ref.get(presentCalled)).toBe(false)
 
         // Also verify no HandoffPresented events were published
-        const eventStore = yield* EventStore
-        const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
-        yield* eventStore.subscribe({ sessionId, branchId }).pipe(
-          Stream.take(100),
-          Stream.runForEach((env) => Ref.update(envelopesRef, (curr) => [...curr, env])),
-          Effect.timeout("100 millis"),
-          Effect.catchEager(() => Effect.void),
-        )
         const envelopes = yield* Ref.get(envelopesRef)
         const handoffEvents = envelopes.filter(
           (e) => (e.event._tag as string) === "HandoffPresented",

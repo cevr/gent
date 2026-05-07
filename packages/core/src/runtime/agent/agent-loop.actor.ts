@@ -50,7 +50,6 @@ import {
   Option,
 } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
-import { CurrentAddress } from "effect/unstable/cluster/Entity"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema } from "../../domain/agent.js"
@@ -397,11 +396,6 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
   },
 })
 
-type WithoutCurrentAddress<L> =
-  L extends Layer.Layer<infer ROut, infer E, infer RIn>
-    ? Layer.Layer<ROut, E, Exclude<RIn, CurrentAddress>>
-    : never
-
 const buildQueuedTurnItem = (operation: {
   readonly message: MessageType
   readonly agentOverride?: typeof AgentName.Type
@@ -476,16 +470,16 @@ const failIfTurnFailedAfterEpoch = (
  * `Actor.toLayer` handler layer for `AgentLoop`.
  *
  * C5.4.4.c.1.b transfers per-(sessionId, branchId) loop ownership from the
- * legacy `AgentLoop.Live` map into the actor entity instance. Upstream
- * `Entity.CurrentAddress` is available inside the underlying cluster entity
- * build; effect-encore does not re-export it, so import from Effect directly.
+ * legacy `AgentLoop.Live` map into the actor entity instance. Encore exposes
+ * `CurrentAddress` while keeping that entity-provided service out of the
+ * resulting layer requirements.
  */
 const buildAgentLoopActorHandlers = Effect.gen(function* () {
   const rawDeps = yield* AgentLoopBehaviorDeps
   const stateRegistry = yield* AgentLoopStateRegistry
   const sessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
-  const addr = yield* CurrentAddress
+  const addr = yield* Actor.CurrentAddress
   const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
     Effect.orDie,
   )
@@ -1164,7 +1158,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   }
 })
 
-const AgentLoopLiveActorLayer = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
+export const AgentLoopLiveActor = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
   // Long-lived ops (Submit/RunTurn) park inside the loop body via
   // actor-owned queue/side mutation gates. `concurrency: "unbounded"` keeps short ops
   // (RecordToolResult, RespondInteraction, Steer) from blocking the
@@ -1172,20 +1166,7 @@ const AgentLoopLiveActorLayer = Actor.toLayer(AgentLoop, buildAgentLoopActorHand
   concurrency: "unbounded",
 })
 
-// effect-encore forwards to Effect Cluster, which provides CurrentAddress
-// internally for entity handlers; its wrapper type does not yet exclude that
-// internal requirement. Keep the cast at this boundary until encore's d.ts
-// catches up with upstream Entity.toLayer.
-// oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- effect-encore's wrapper type leaks CurrentAddress even though Effect Cluster provides it inside Entity.toLayer.
-export const AgentLoopLiveActor = AgentLoopLiveActorLayer as WithoutCurrentAddress<
-  typeof AgentLoopLiveActorLayer
->
-
-const AgentLoopTestActorLayer = Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers, {
+export const AgentLoopTestActor = Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers, {
   // Match the production mailbox behavior used by AgentLoopLiveActor.
   concurrency: "unbounded",
 }).pipe(Layer.provide(ShardingConfig.layerDefaults))
-
-export const AgentLoopTestActor = AgentLoopTestActorLayer as WithoutCurrentAddress<
-  typeof AgentLoopTestActorLayer
->

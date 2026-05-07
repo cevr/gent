@@ -411,12 +411,22 @@ Prefer the explicit handler context if the type surface is cleaner. Use
 `exhaust-the-design-space`: sketch both approaches in code/tests, keep the one
 with smaller author burden.
 
+Status: complete in upstream commit `762bf25 feat: hide current address context`.
+
+Chosen API: `Actor.CurrentAddress` / named `CurrentAddress` export. This keeps
+the existing request-first handler shape and mirrors Effect Cluster's own
+entity-provided context exclusion. The explicit second handler-context
+parameter would add author burden without removing a layer requirement that
+Effect Cluster already owns internally.
+
 Definition of done:
 
 - Type regression proves a handler can access entity address without the final
   layer requiring `CurrentAddress`.
 - Gent no longer needs `WithoutCurrentAddress` or the actor-layer casts.
-- `bun run gate` in `effect-encore`.
+- `bun run gate` in `effect-encore` passed on 2026-05-07.
+- `bun run --cwd packages/core typecheck`, the core test runner, and full
+  `bun run gate` in Gent passed on 2026-05-07.
 
 #### C3: feat(effect-encore): add live actor state protocol
 
