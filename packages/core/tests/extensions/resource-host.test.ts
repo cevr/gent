@@ -115,8 +115,8 @@ describe("buildResourceLayer", () => {
 //
 // Codex  review flagged two BLOCK findings that these tests lock down:
 //
-//   - BLOCK 1: a `stop` may not run when its corresponding `start` failed.
-//     (Pre-fix `withLifecycle` registered `stop` unconditionally.)
+//   - BLOCK 1: a failed `start` must fail the Resource layer instead of
+//     leaving dependent extension contributions active.
 //   - BLOCK 2: lifecycle teardown order must be reverse-of-start, not
 //     racing parallel finalizers.
 //     (Pre-fix `Layer.mergeAll` of per-Resource lifecycle layers raced.)
@@ -147,7 +147,7 @@ describe("buildResourceLayer lifecycle", () => {
       }),
     ))
 
-  test("failed start logs cause and skips that Resource's stop registration", () =>
+  test("failed start fails the layer and stops previously started Resources", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const log: string[] = []
@@ -168,9 +168,12 @@ describe("buildResourceLayer lifecycle", () => {
             stop: append("stop-should-not-run"),
           }),
         ])
-        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-        // Good start ran, good stop ran on teardown; failed Resource's stop
-        // never registered, so it never appears in the log.
+        const exit = yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process"))).pipe(
+          Effect.exit,
+        )
+        expect(exit._tag).toBe("Failure")
+        // Good start ran, its stop ran on failure teardown; failed Resource's
+        // stop never registered, so it never appears in the log.
         expect(log).toEqual(["start-good-1", "stop-good-1"])
       }),
     ))

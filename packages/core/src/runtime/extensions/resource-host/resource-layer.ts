@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceScope } from "../../../domain/resource.js"
@@ -23,6 +23,14 @@ export interface ResourceEntry {
   readonly extensionId: ExtensionId
   readonly resource: AnyResourceContribution
 }
+
+class ResourceStartError extends Schema.TaggedErrorClass<ResourceStartError>()(
+  "ResourceStartError",
+  {
+    extensionId: Schema.String,
+    cause: Schema.String,
+  },
+) {}
 
 export const collectResourceEntries = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -41,10 +49,11 @@ const mergeResourceServiceLayers = (entries: ReadonlyArray<ResourceEntry>): Eras
     emptyErasedResourceLayer,
   )
 
-const buildLifecycleLayer = (entries: ReadonlyArray<ResourceEntry>): Layer.Layer<never> =>
+const buildLifecycleLayer = (
+  entries: ReadonlyArray<ResourceEntry>,
+): Layer.Layer<never, ResourceStartError> =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const successfullyStarted: ResourceEntry[] = []
       for (const entry of entries) {
         const start = entry.resource.start
         if (start !== undefined) {
@@ -54,14 +63,13 @@ const buildLifecycleLayer = (entries: ReadonlyArray<ResourceEntry>): Layer.Layer
             yield* Effect.logError("resource.start.failed").pipe(
               Effect.annotateLogs({ extensionId: entry.extensionId, cause: String(exit.cause) }),
             )
-            continue
+            return yield* new ResourceStartError({
+              extensionId: entry.extensionId,
+              cause: String(exit.cause),
+            })
           }
         }
-        successfullyStarted.push(entry)
-      }
-
-      for (const { resource } of successfullyStarted) {
-        const stop = resource.stop
+        const stop = entry.resource.stop
         if (stop !== undefined) {
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
           yield* Effect.addFinalizer(() => exitErasedEffect(() => stop).pipe(Effect.asVoid))
