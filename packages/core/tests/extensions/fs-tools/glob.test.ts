@@ -64,9 +64,9 @@ describe("GlobTool", () => {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/old.ts`, "old")
-      // Small delay to ensure different mtime
-      yield* Effect.sleep(50)
       yield* fs.writeFileString(`${tmpDir}/new.ts`, "new")
+      yield* fs.utimes(`${tmpDir}/old.ts`, 1_000, 1_000)
+      yield* fs.utimes(`${tmpDir}/new.ts`, 2_000, 2_000)
 
       const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
