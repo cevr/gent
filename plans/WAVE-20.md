@@ -890,6 +890,22 @@ Definition of done:
 - `ARCHITECTURE.md` and `docs/extensions.md` agree.
 - No code moved yet; this commit locks the target.
 
+Status: complete in this Gent commit.
+
+Implementation notes:
+
+- `ARCHITECTURE.md` now names `packages/core/src/extensions/api.ts` as the
+  third-party authoring surface and `packages/core/src/extensions/internal.ts`
+  / `packages/extensions/internal/builtin.ts` as the privileged builtin seam.
+- `docs/extensions.md` now contains a public-vs-builtin-internal API inventory
+  that separates authoring primitives from host/runtime/storage/event/test
+  internals.
+- No imports were migrated in C31; the inventory is the contract for C32-C46.
+
+Verification on 2026-05-07:
+
+- `bun run typecheck`
+
 #### C32-C45: refactor(extensions): move builtin-only imports behind internal API
 
 Migrate builtins away from public `@gent/core/extensions/api` exports that

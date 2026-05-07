@@ -40,10 +40,10 @@ packages/
 │   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
 │   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
 │   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
-│   ├── extensions/# api.ts only — public authoring surface for extensions
+│   ├── extensions/# api.ts public authoring surface + internal.ts builtin seam
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
-├── extensions/    # all 27 builtin extensions (imports only @gent/core/extensions/api)
+├── extensions/    # all 27 builtin extensions + private internal/builtin bridge
 └── sdk/           # direct + RPC transports over one client contract
 ```
 
@@ -298,12 +298,56 @@ Core never imports from extensions. Composition roots (apps, SDK) pass `BuiltinE
 
 ### Extension boundary contract
 
-Extensions (builtin and third-party) may import from:
+Third-party extensions may import from:
 
 - `@gent/core/extensions/api` — the authoring surface
 - `effect`, `@effect/*` — as peer deps
 
-Extensions may NOT import from `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`, `@gent/core/providers/*`. The `no-extension-internal-imports` oxlint rule enforces this.
+Third-party extensions may NOT import from `@gent/core/domain/*`,
+`@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`,
+`@gent/core/providers/*`, or `@gent/core/extensions/internal`. The
+`no-extension-internal-imports` oxlint rule enforces this.
+
+Gent-owned builtins have one privileged bridge:
+`packages/extensions/internal/builtin.ts`, which re-exports the small set of
+runtime/app services that builtins need but third-party authors must not see.
+Builtins should import privileged services from that bridge, not from public
+`@gent/core/extensions/api` and not from core internals directly.
+
+### Extension API Inventory
+
+`@gent/core/extensions/api` is the third-party authoring API. It should expose
+only:
+
+- extension shape: `defineExtension`, `GentExtension`,
+  `ExtensionSetupContext`, `DefineExtensionInput`;
+- typed leaves: `tool`, `request`, `ref`, `action`;
+- scoped resources: `defineResource`, `resource`, resource scope/schedule
+  types, `ReadOnly` helpers;
+- turn hooks: the public reaction input/output types needed to author
+  `reactions`;
+- agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
+  helpers needed for turn-scoped subagent dispatch;
+- stable ids and author-facing schemas: `ExtensionId`, `TaskId`,
+  `ArtifactId`, `ToolCallId`, `PermissionRule`, output/message projection
+  helpers that are safe to serialize across the extension boundary;
+- author-facing errors: capability, provider-auth, agent-run, and typed
+  transition errors that extension code can intentionally return or inspect.
+
+Everything else is builtin/internal:
+
+- raw runtime host context and hook plumbing (`ExtensionHostContext`,
+  `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
+  internals);
+- storage, event publisher, event store, task/session mutation services, and
+  interaction pending readers;
+- runtime/platform services (`GentPlatform`, `ToolRunner`, agent loop/session
+  runtime internals, process runners used as implementation details);
+- raw event/task/message domain internals that are not part of the serialized
+  authoring contract;
+- driver registry internals and provider auth persistence machinery;
+- test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
+  constructors.
 
 Rules:
 
