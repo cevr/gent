@@ -24,7 +24,7 @@ import {
 } from "./agent-loop.state.js"
 import { AgentLoopError, SteerCommand } from "./agent-loop.commands.js"
 export { AgentLoopError, SteerCommand }
-import { persistMessageReceived, type TurnStorage } from "./phases/turn.js"
+import { persistMessageReceived, type TurnStorage } from "./turn-helpers.js"
 import { AgentLoop as AgentLoopActor } from "./agent-loop.actor.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
 

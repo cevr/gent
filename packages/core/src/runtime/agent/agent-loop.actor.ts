@@ -97,7 +97,7 @@ import { AgentLoopBehaviorDeps } from "./agent-loop.behavior-deps.js"
 import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { AgentLoopStateRegistry } from "./agent-loop.state-registry.js"
-import { invokeToolPhase, recordToolResultPhase } from "./phases/turn.js"
+import { invokeTool, recordToolResult } from "./turn-helpers.js"
 
 const TurnSubmissionFields = {
   message: Message,
@@ -994,7 +994,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         Effect.andThen(markWrite),
         Effect.andThen(
           handle.sideMutationSemaphore.withPermits(1)(
-            recordToolResultPhase({
+            recordToolResult({
               storage: deps.turnStorage,
               eventPublisher: deps.eventPublisher,
               toolResultMessageId:
@@ -1020,7 +1020,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
             Effect.gen(function* () {
               const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
               const environment = yield* handle.resolveTurnProfile
-              yield* invokeToolPhase({
+              yield* invokeTool({
                 assistantMessageId: assistantMessageIdForCommand(operation.commandId),
                 toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
                 toolCallId: toolCallIdForCommand(operation.commandId),

@@ -7,14 +7,14 @@ import {
   type AgentRunOverrides,
   type AgentName as AgentNameType,
   type RunSpec,
-} from "../../../domain/agent.js"
-import { type ToolToken } from "../../../domain/capability/tool.js"
-import { calculateCost, type ModelId } from "../../../domain/model.js"
-import { ConfigService } from "../../config-service.js"
-import type { InteractionPendingError } from "../../../domain/interaction-request.js"
-import type { PromptSection } from "../../../domain/prompt.js"
-import { compileSystemPrompt } from "../../../domain/prompt.js"
-import { DEFAULTS } from "../../../domain/defaults.js"
+} from "../../domain/agent.js"
+import { type ToolToken } from "../../domain/capability/tool.js"
+import { calculateCost, type ModelId } from "../../domain/model.js"
+import { ConfigService } from "../config-service.js"
+import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import type { PromptSection } from "../../domain/prompt.js"
+import { compileSystemPrompt } from "../../domain/prompt.js"
+import { DEFAULTS } from "../../domain/defaults.js"
 import {
   Message,
   ToolCallPart,
@@ -22,8 +22,8 @@ import {
   type ImagePart,
   type ReasoningPart,
   type TextPart,
-} from "../../../domain/message.js"
-import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../../domain/ids.js"
+} from "../../domain/message.js"
+import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import {
   ErrorOccurred,
   MessageReceived,
@@ -31,41 +31,41 @@ import {
   ToolCallFailed,
   ToolCallSucceeded,
   type EventEnvelope,
-} from "../../../domain/event.js"
-import type { EventPublisherService } from "../../../domain/event-publisher.js"
-import { summarizeToolOutput, stringifyOutput } from "../../../domain/tool-output.js"
-import type { PermissionService } from "../../../domain/permission.js"
-import type { ExtensionHostContext } from "../../../domain/extension-host-context.js"
-import type { ProviderAuthError, TurnError } from "../../../domain/driver.js"
-import type { StorageError } from "../../../domain/storage-error.js"
-import type { EventStorageService } from "../../../storage/event-storage.js"
-import type { MessageStorageService } from "../../../storage/message-storage.js"
-import type { SessionStorageService } from "../../../storage/session-storage.js"
-import type { StorageTransactionService } from "../../../storage/storage-transaction.js"
+} from "../../domain/event.js"
+import type { EventPublisherService } from "../../domain/event-publisher.js"
+import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
+import type { PermissionService } from "../../domain/permission.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import type { ProviderAuthError, TurnError } from "../../domain/driver.js"
+import type { StorageError } from "../../domain/storage-error.js"
+import type { EventStorageService } from "../../storage/event-storage.js"
+import type { MessageStorageService } from "../../storage/message-storage.js"
+import type { SessionStorageService } from "../../storage/session-storage.js"
+import type { StorageTransactionService } from "../../storage/storage-transaction.js"
 import {
   ProviderError,
   type ProviderService,
   type ProviderStreamPart,
-} from "../../../providers/provider.js"
-import { toPrompt } from "../../../providers/ai-transcript.js"
+} from "../../providers/provider.js"
+import { toPrompt } from "../../providers/ai-transcript.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
-import { withRetry } from "../../retry"
-import { withWideEvent, WideEvent, providerStreamBoundary } from "../../wide-event-boundary"
-import type { DriverRegistryService } from "../../extensions/driver-registry.js"
-import type { ExtensionRegistryService } from "../../extensions/registry.js"
-import type { ResourceManagerService } from "../../resource-manager.js"
-import { convertTools, type ToolRunnerService } from "../tool-runner"
-import { buildTurnPromptSections, resolveReasoning } from "../agent-loop.utils.js"
-import type { ResolvedTurn } from "../agent-loop.state.js"
+import { withRetry } from "../retry"
+import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
+import type { DriverRegistryService } from "../extensions/driver-registry.js"
+import type { ExtensionRegistryService } from "../extensions/registry.js"
+import type { ResourceManagerService } from "../resource-manager.js"
+import { convertTools, type ToolRunnerService } from "./tool-runner"
+import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
+import type { ResolvedTurn } from "./agent-loop.state.js"
 import {
   collectFailedModelTurnResponse,
   formatStreamErrorMessage,
   type ActiveStreamHandle,
   type CollectedTurnResponse,
   type PublishEvent,
-} from "../turn-response/collectors.js"
+} from "./turn-response/collectors.js"
 
 type CommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
@@ -137,7 +137,7 @@ export const persistMessageReceived = (params: {
     }),
   })
 
-export const recordToolResultPhase = (params: {
+export const recordToolResult = (params: {
   storage: TurnStorage
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   toolResultMessageId: MessageId
@@ -769,7 +769,7 @@ export const computeStreamEndedCost = (params: {
     return calculateCost(params.usage, pricing)
   })
 
-export const invokeToolPhase = (params: {
+export const invokeTool = (params: {
   assistantMessageId: MessageId
   toolResultMessageId: MessageId
   toolCallId: ToolCallId

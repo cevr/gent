@@ -28,7 +28,7 @@ import { ResourceManager, type ResourceManagerService } from "../resource-manage
 import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { PricingLookup, TurnStorage } from "./phases/turn.js"
+import type { PricingLookup, TurnStorage } from "./turn-helpers.js"
 
 /**
  * Snapshot of layer-level dependencies and configuration captured at runtime
