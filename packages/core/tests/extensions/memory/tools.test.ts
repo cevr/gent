@@ -19,7 +19,7 @@ import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const memoryToolTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
 

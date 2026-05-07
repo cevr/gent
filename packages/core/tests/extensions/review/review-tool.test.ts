@@ -8,7 +8,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))

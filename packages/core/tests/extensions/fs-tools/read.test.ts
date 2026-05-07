@@ -6,7 +6,7 @@ import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const ctx: ToolCapabilityContext = testToolContext({
   sessionId: SessionId.make("test-session"),

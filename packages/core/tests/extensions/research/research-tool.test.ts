@@ -11,7 +11,7 @@ const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never>
   e as Effect.Effect<A, E, never>
 import { BunFileSystem } from "@effect/platform-bun"
 import { GitReader } from "@gent/extensions/librarian"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const TEST_HOME = "/tmp/test-research-fixture"
 

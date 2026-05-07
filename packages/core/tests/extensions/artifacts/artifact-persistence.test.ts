@@ -22,7 +22,7 @@ import {
   SessionId,
 } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"

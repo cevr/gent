@@ -12,7 +12,7 @@ import {
 } from "@gent/extensions/fs-tools/edit"
 import { FileLockService } from "@gent/core/domain/file-lock"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
     expect(detectRedaction("old code", "new code")).toBeUndefined()

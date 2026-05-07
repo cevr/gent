@@ -7,7 +7,7 @@ import { SkillsTool } from "@gent/extensions/skills/skills-tool"
 import { SearchSkillsTool } from "@gent/extensions/skills/search-skills"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const testSkills = [
   new Skill({

@@ -53,7 +53,6 @@ import type { AgentDefinition } from "../domain/agent.js"
 import type { ActionCapability } from "../domain/capability/action.js"
 import type { RequestCapability } from "../domain/capability/request.js"
 import {
-  getToolEffect,
   getToolId,
   getToolMetadata,
   isToolCapability,
@@ -215,7 +214,6 @@ export {
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
 export {
   getToolId,
-  getToolEffect,
   tool,
   type ToolCapabilityContext,
   type GentToolMetadata,

@@ -8,7 +8,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.

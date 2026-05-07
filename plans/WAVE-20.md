@@ -979,6 +979,22 @@ Verification on 2026-05-07:
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/domain/capability-ref.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/activation.test.ts packages/core/tests/extensions/registry.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts`
 
+Sub-commit C46.2 complete: removed direct tool-effect extraction from the
+public extension API.
+
+Implementation notes:
+
+- `@gent/core/extensions/api` no longer exports `getToolEffect`.
+- Direct tool behavior tests now import `getToolEffect` from the owning
+  capability domain module instead of the authoring API.
+- `extension-surface-locks.test.ts` now proves `getToolEffect` is not public
+  extension API.
+
+Verification on 2026-05-07:
+
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/interaction-tools/prompt.test.ts packages/core/tests/extensions/task-tools/task-tools.test.ts packages/core/tests/extensions/executor-integration.test.ts packages/core/tests/extensions/fs-tools/read.test.ts packages/core/tests/extensions/fs-tools/glob.test.ts packages/core/tests/extensions/fs-tools/grep.test.ts packages/core/tests/extensions/fs-tools/edit.test.ts`
+
 #### C47: docs(examples): delete or migrate stale pipeline/subscription examples
 
 Migrate examples to reactions or delete them if they no longer teach a live

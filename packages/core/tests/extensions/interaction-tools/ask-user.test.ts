@@ -10,7 +10,7 @@ import { ApprovalService } from "../../../src/runtime/approval-service"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const makeCtx = (approvalService: {
   present: ToolCapabilityContext["interaction"]["approve"]

@@ -6,7 +6,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>

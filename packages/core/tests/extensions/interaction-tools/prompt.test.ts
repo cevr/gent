@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PromptTool } from "@gent/extensions/interaction-tools/prompt"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>

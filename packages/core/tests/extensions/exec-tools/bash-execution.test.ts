@@ -4,7 +4,7 @@ import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { BashTool } from "@gent/extensions/exec-tools/bash"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { getToolEffect } from "@gent/core/extensions/api"
+import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const makePlatformLayer = () =>
   Layer.mergeAll(
