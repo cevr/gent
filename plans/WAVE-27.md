@@ -815,6 +815,11 @@ jobs should be their own extension contribution.
 
 ## Commit 23: refactor(executor): use scoped lifecycle replacement
 
+**Status**: Current code already satisfies the scoped replacement lane.
+`ExecutorControllerLive` uses `ScopedRef` to replace the in-flight connection
+scope, and the remaining `Semaphore` + generation guard is race protection for
+disconnect-during-connect, not accidental lifecycle ownership.
+
 **Justification**: Executor connection lifecycle manually tracks gate,
 in-flight fiber, generation, read/write, and runtime layers. Effect's scoped
 replacement primitive can own much of this.
@@ -829,11 +834,12 @@ replacement primitive can own much of this.
 
 **Changes**
 
-| File                                                                                     | Change                                                               | Lines                      |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/actor.ts`           | Keep pure volatile state machine.                                    | `16-27`, `41-56`, `92-143` |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/controller.ts`      | Replace manual connect/disconnect lifecycle with scoped replacement. | `23-34`, `50-66`, `70-193` |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/executor/executor.test.ts` | Preserve transitions and views.                                      | `17-162`                   |
+| File                                                                                             | Change                                                                                                 | Lines                      |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | -------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/actor.ts`                   | Pure volatile state machine remains cohesive and merits its split from side-effectful lifecycle code.  | `16-27`, `41-56`, `92-143` |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/controller.ts`              | Uses `ScopedRef` for scoped connection replacement; keeps the semaphore/generation guard for ordering. | `72-155`                   |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/executor-integration.test.ts` | Locks disconnect-during-connect so late sidecar completion cannot return the runtime to Ready.         | `560-596`                  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/executor/executor.test.ts`         | Preserves pure transitions and projections.                                                            | `17-162`                   |
 
 **Verification**
 
