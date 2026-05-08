@@ -62,17 +62,6 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("client facet is preserved on the shared extension artifact", () =>
-    Effect.gen(function* () {
-      const client = { setup: Effect.succeed([]) }
-      const ext = defineExtension({ id: "shared-client", client })
-      const contributions = yield* setupOf(ext)
-
-      expect(ext.client).toBe(client)
-      expect(contributions).toEqual({})
-    }),
-  )
-
   it.live("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
       // PermissionRule + PromptSection are bundled on the Capability
@@ -350,7 +339,7 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("defineExtension preserves contribution buckets and client facets", () =>
+  it.live("defineExtension preserves contribution buckets", () =>
     Effect.gen(function* () {
       const readSnapshot = request({
         id: "read-snapshot",
@@ -376,20 +365,11 @@ describe("defineExtension", () => {
         id: "helper-rpc",
         requests: [readSnapshot],
       })
-      const uiClient = { setup: Effect.succeed([]) }
-      const uiExt = defineExtension({
-        id: "helper-ui",
-        client: uiClient,
-      })
-
       const toolContribs = yield* setupOf(toolExt)
       const requestContribs = yield* setupOf(rpcExt)
-      const uiContribs = yield* setupOf(uiExt)
 
       expect(toolContribs.tools?.map((t) => String(getToolId(t)))).toEqual(["helper-tool-call"])
       expect(requestContribs.requests?.map((r) => String(r.id))).toEqual(["read-snapshot"])
-      expect(uiExt.client).toBe(uiClient)
-      expect(uiContribs).toEqual({})
     }),
   )
 })

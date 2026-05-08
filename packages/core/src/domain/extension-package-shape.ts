@@ -96,7 +96,7 @@ const allowedContributionBuckets = new Set([
   "externalDrivers",
 ])
 
-const allowedExtensionInputKeys = new Set(["id", "client", ...allowedContributionBuckets])
+const allowedExtensionInputKeys = new Set(["id", ...allowedContributionBuckets])
 
 const unknownBucketMessage = (key: string) =>
   `unknown contribution bucket "${key}"; supported buckets are ${Array.from(

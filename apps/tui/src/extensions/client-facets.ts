@@ -25,7 +25,7 @@
 //   - autocomplete: collected (no winner), scope-ordered
 
 import { Schema, type Effect, type ManagedRuntime } from "effect"
-import type { ActiveInteraction, ApprovalResult, GentExtension } from "@gent/core/extensions/api"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core/extensions/api"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../headless-tool-renderers"
@@ -313,11 +313,6 @@ export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientD
 }
 
 export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
-export type UnifiedClientExtension<R extends ClientRuntimeServices = ClientDeps> = GentExtension & {
-  readonly client: {
-    readonly setup: ExtensionClientSetup<R>
-  }
-}
 
 /**
  * Standalone factory for TUI client modules. Server extensions and TUI
@@ -341,19 +336,13 @@ export function defineClientExtension<R extends ClientRuntimeServices = ClientDe
   spec: { readonly setup: ExtensionClientSetup<R> },
 ): ExtensionClientModule<R>
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
-  extension: UnifiedClientExtension<R>,
-): ExtensionClientModule<R>
-export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
-  idOrExtension: string | UnifiedClientExtension<R>,
-  spec?: { readonly setup: ExtensionClientSetup<R> },
+  id: string,
+  spec: { readonly setup: ExtensionClientSetup<R> },
 ): ExtensionClientModule<R> {
-  if (typeof idOrExtension === "string") {
-    if (spec === undefined) {
-      throw new DefineClientExtensionError({ reason: "missing-spec" })
-    }
-    return standaloneClientModule(idOrExtension, spec)
+  if (spec === undefined) {
+    throw new DefineClientExtensionError({ reason: "missing-spec" })
   }
-  return standaloneClientModule(String(idOrExtension.manifest.id), idOrExtension.client)
+  return standaloneClientModule(id, spec)
 }
 
 /**

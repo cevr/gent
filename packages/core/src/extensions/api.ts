@@ -283,17 +283,8 @@ export type FieldSpec<A, R = never> =
       readonly ctx: ExtensionSetupContext
     }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
-export interface DefineExtensionInput<Client = unknown, R = never> {
+export interface DefineExtensionInput<R = never> {
   readonly id: string
-  /**
-   * Optional client-side facet owned by the same extension artifact.
-   *
-   * Core keeps this intentionally opaque: the server loader ignores it, while
-   * clients that know their UI runtime can lower it into their local
-   * contribution shape. This lets one conceptual extension carry one id and
-   * one server/client pairing without making core depend on a TUI package.
-   */
-  readonly client?: Client
   readonly resources?: FieldSpec<AnyResourceContribution, R>
   readonly scheduledJobs?: FieldSpec<ScheduledJobContribution, R>
   /**
@@ -404,22 +395,11 @@ const resolveField = <A, R>(
  * })
  * ```
  */
-export function defineExtension<R = never>(
-  params: DefineExtensionInput<unknown, R> & { readonly client?: undefined },
-): GentExtension<R>
-export function defineExtension<Client, R = never>(
-  params: DefineExtensionInput<Client, R> & { readonly client: Client },
-): GentExtension<R> & { readonly client: Client }
-export function defineExtension<Client, R = never>(
-  params: DefineExtensionInput<Client, R>,
-): GentExtension<R> & { readonly client?: Client }
-export function defineExtension<Client, R>(
-  params: DefineExtensionInput<Client, R>,
-): GentExtension<R> & { readonly client?: Client } {
+export function defineExtension<R = never>(params: DefineExtensionInput<R>): GentExtension<R>
+export function defineExtension<R>(params: DefineExtensionInput<R>): GentExtension<R> {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,
-    ...(params.client !== undefined ? { client: params.client } : {}),
     setup: (ctx) =>
       Effect.gen(function* () {
         const inputMessage = validateKnownExtensionInputBuckets(params)
