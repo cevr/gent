@@ -886,6 +886,13 @@ is redundant.
 
 ## Commit 25: spike(storage): prove workspace-scoped storage boundary
 
+**Status**: The spike did not find a safe storage-level deletion. Workspace
+identity enters at RPC ingress, but long-lived actor entities outlive that RPC
+fiber and must restore workspace context from the actor entity id. Storage
+predicates remain load-bearing for direct storage calls, entity recovery, and
+default-workspace compatibility. The batch adds a public two-workspace RPC
+regression instead of weakening the boundary.
+
 **Justification**: Workspace identity is an ingress concern, but current storage
 and actor code reapply it at many lower layers. This can delete substantial
 boilerplate only if cross-workspace isolation remains structurally proven.
@@ -901,13 +908,13 @@ boilerplate only if cross-workspace isolation remains structurally proven.
 
 **Changes**
 
-| File                                                                                     | Change                                                                              | Lines                 |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/workspace-rpc.ts`           | Keep ingress workspace reference/middleware as source.                              | all                   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Reduce `withWorkspace` wrappers only after worked storage example proves isolation. | `508-550`, `772-1072` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/event-storage.ts`          | Worked example for workspace-scoped query boundary.                                 | multiple              |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/*-storage.ts`              | Delegate mechanical migration after the worked example.                             | multiple              |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/workspace-rpc.test.ts`    | Add two-workspace isolation regression if missing.                                  | multiple              |
+| File                                                                                     | Change                                                                                                        | Lines                            |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/workspace-rpc.ts`           | Keep ingress workspace reference/middleware as request-scope source.                                          | `5-56`                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Keep actor `withWorkspace` restoration because actor handlers run from entity id, not the original RPC fiber. | `467-528`, `733-764`, `883-1034` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/session-storage.ts`        | Keep workspace predicates as the durable isolation boundary for session reads/writes.                         | `63-156`                         |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/event-storage.ts`          | Keep workspace predicates as the durable isolation boundary for event reads/writes.                           | `71-183`                         |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/workspace-rpc.test.ts`    | Add a two-workspace RPC isolation regression through `x-gent-workspace-id`.                                   | `55-84`                          |
 
 **Verification**
 
