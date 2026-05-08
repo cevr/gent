@@ -13,9 +13,9 @@ import { SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
-} from "@gent/extensions/acp-agents/executor"
-import { SessionNotification } from "@gent/extensions/acp-agents/schema"
-import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
+} from "../../src/acp-agents/executor.js"
+import { SessionNotification } from "../../src/acp-agents/schema.js"
+import { startCodemodeServer } from "../../src/acp-agents/mcp-codemode.js"
 import { makeAcpRunTool } from "../../src/acp-agents/executor-boundary.js"
 import { runMcpToolHandler } from "../../src/acp-agents/mcp-codemode-boundary.js"
 // ── ACP → response part mapping ──

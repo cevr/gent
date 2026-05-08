@@ -8,8 +8,8 @@ import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
 import { toolCallStep } from "@gent/core-internal/debug/provider"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { AgentsExtension } from "@gent/extensions/agents"
-import { FsToolsExtension } from "@gent/extensions/fs-tools"
+import { AgentsExtension } from "../../src/agents.js"
+import { FsToolsExtension } from "../../src/fs-tools/index.js"
 import { e2ePreset } from "../helpers/test-preset"
 
 describe("FsToolsExtension via model turn", () => {

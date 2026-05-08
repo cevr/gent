@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { PromptTool } from "@gent/extensions/interaction-tools/prompt"
+import { PromptTool } from "../../src/interaction-tools/prompt.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 

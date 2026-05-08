@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import { TaskService } from "@gent/extensions/task-tools-service"
+import { TaskService } from "../../src/task-tools-service.js"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { SqlClient } from "effect/unstable/sql"

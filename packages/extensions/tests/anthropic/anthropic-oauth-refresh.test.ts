@@ -16,7 +16,7 @@ import {
   shouldFallBackToCli,
   shouldFallBackToCredentialsFile,
   updateCredentialBlob,
-} from "@gent/extensions/anthropic/oauth"
+} from "../../src/anthropic/oauth.js"
 
 describe("parseOAuthResponse", () => {
   it("parses a well-formed Anthropic refresh response", () => {

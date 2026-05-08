@@ -39,7 +39,7 @@ import {
   TaskDeleteRequest,
   TaskListRequest,
   TaskUpdateRequest,
-} from "@gent/extensions/task-tools/requests.js"
+} from "@gent/extensions/client.js"
 
 const TaskCreateRef = ref(TaskCreateRequest)
 const TaskDeleteRef = ref(TaskDeleteRequest)

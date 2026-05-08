@@ -28,9 +28,11 @@ import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
-import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
-import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity.js"
-import { TaskListRequest } from "@gent/extensions/task-tools/requests.js"
+import {
+  type TaskEntry,
+  TASK_TOOLS_EXTENSION_ID,
+  TaskListRequest,
+} from "@gent/extensions/client.js"
 import { ref } from "@gent/core/extensions/api"
 import { ClientTransport, requestExtension } from "../client-transport"
 import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"

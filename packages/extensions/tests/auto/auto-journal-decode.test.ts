@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { AutoJournal } from "@gent/extensions/auto/journal"
+import { AutoJournal } from "../../src/auto/journal.js"
 const autoJournalLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 

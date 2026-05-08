@@ -28,13 +28,13 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Ref, Schema, SynchronizedRef } from "effect"
-import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "@gent/extensions/anthropic"
+import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "../../src/anthropic/index.js"
 import {
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCell,
-} from "@gent/extensions/anthropic/credential-service"
-import { EMPTY_BETA_CELL, type BetaCacheCell } from "@gent/extensions/anthropic/beta-cache"
-import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "@gent/extensions/anthropic/oauth"
+} from "../../src/anthropic/credential-service.js"
+import { EMPTY_BETA_CELL, type BetaCacheCell } from "../../src/anthropic/beta-cache.js"
+import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
 import { ExtensionHostProcessError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import {

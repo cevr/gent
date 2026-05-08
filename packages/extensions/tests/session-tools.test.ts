@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { SessionToolsExtension } from "@gent/extensions/session-tools"
-import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { SessionToolsExtension } from "../src/session-tools/index.js"
+import { getBuiltinAgent } from "../src/all-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
 import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 

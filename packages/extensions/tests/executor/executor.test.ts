@@ -6,13 +6,13 @@ import {
   transitionConnectionFailed,
   transitionDisconnect,
   viewForState,
-} from "@gent/extensions/executor/actor"
+} from "../../src/executor/actor.js"
 import {
   resolveSettings,
   ExecutorSettingsDefaults,
   type ExecutorSettings,
-} from "@gent/extensions/executor/domain"
-import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/mcp-bridge"
+} from "../../src/executor/domain.js"
+import { readExecutionId, normalizeToolResult } from "../../src/executor/mcp-bridge.js"
 
 // ── State machine ──
 //

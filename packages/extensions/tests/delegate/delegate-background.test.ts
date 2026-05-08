@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
+import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { layer, makeCtx, narrowR, setup, withTaskWrite } from "../task-tools/helpers.js"

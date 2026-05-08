@@ -13,13 +13,13 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { TaskExtension } from "@gent/extensions/task-tools"
+import { TaskExtension } from "../../src/task-tools/index.js"
 import {
   TaskCreateRequest,
   TaskDeleteRequest,
   TaskListRequest,
   TaskUpdateRequest,
-} from "@gent/extensions/task-tools/requests"
+} from "../../src/task-tools/requests.js"
 import { ref } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"

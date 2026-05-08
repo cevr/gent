@@ -18,7 +18,7 @@ import {
   type AgentName,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "../../src/all-agents.js"
 import {
   ArtifactId,
   BranchId,
@@ -26,10 +26,10 @@ import {
   SessionId,
 } from "@gent/core-internal/domain/ids"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import type { Artifact } from "@gent/extensions/artifacts-protocol"
-import { PlanTool } from "@gent/extensions/plan-tool"
-import { AuditTool } from "@gent/extensions/audit/audit-tool"
-import { ReviewTool } from "@gent/extensions/review/review-tool"
+import type { Artifact } from "../../src/artifacts-protocol.js"
+import { PlanTool } from "../../src/plan-tool.js"
+import { AuditTool } from "../../src/audit/audit-tool.js"
+import { ReviewTool } from "../../src/review/review-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import {

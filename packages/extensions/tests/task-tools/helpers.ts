@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { TaskExtension } from "@gent/extensions/task-tools"
+import { AllBuiltinAgents } from "../../src/all-agents.js"
+import { TaskExtension } from "../../src/task-tools/index.js"
 import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"

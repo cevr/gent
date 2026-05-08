@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { GitReader, GitReaderError } from "@gent/extensions/librarian"
+import { GitReader, GitReaderError } from "../../src/librarian/index.js"
 import { $ } from "bun"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 // ---------------------------------------------------------------------------

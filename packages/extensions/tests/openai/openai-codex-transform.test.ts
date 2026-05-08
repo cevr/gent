@@ -16,13 +16,13 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type { Cause } from "effect"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { buildCodexTransformClient } from "@gent/extensions/openai/codex-transform"
+import { buildCodexTransformClient } from "../../src/openai/codex-transform.js"
 import {
   OpenAICredentialService,
   type OpenAICredentialIO,
   type OpenAICredentialServiceShape,
   type OpenAICredentials,
-} from "@gent/extensions/openai/credential-service"
+} from "../../src/openai/credential-service.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Fake HttpClient ──

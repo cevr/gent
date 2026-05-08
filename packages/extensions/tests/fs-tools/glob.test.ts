@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { GlobTool } from "@gent/extensions/fs-tools/glob"
+import { GlobTool } from "../../src/fs-tools/glob.js"
 import { FsRead } from "../../src/fs-tools/read-service"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"

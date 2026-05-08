@@ -4,10 +4,10 @@ import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
+import { TaskStorage, TaskStorageReadOnly } from "../../src/task-tools-storage.js"
 import { dateFromMillis, Session, Branch } from "@gent/core-internal/domain/message"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { Task, TaskId } from "@gent/extensions/task-tools/domain"
+import { Task, TaskId } from "../../src/task-tools/domain.js"
 import { capabilityAccessNeedsLayer } from "@gent/core-internal/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)

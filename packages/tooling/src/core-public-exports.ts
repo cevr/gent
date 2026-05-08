@@ -14,6 +14,11 @@ export interface CorePublicSurfaceFinding {
   readonly message: string
 }
 
+export interface ExtensionsPublicSurfaceFinding {
+  readonly path: string
+  readonly message: string
+}
+
 const publicCoreExports = new Set(["./extensions/api", "./extensions/api.js"])
 const forbiddenPublicExportPrefixes = [
   "./debug",
@@ -89,6 +94,52 @@ export const findCorePublicExportFindings = (
           "@gent/core-internal should only mirror core source through the private wildcard lane",
       })
     }
+  }
+
+  return findings
+}
+
+const publicExtensionsExports = new Set([".", "./index.js", "./client", "./client.js"])
+const publicExtensionsPaths = new Set([
+  "@gent/extensions",
+  "@gent/extensions/index.js",
+  "@gent/extensions/client",
+  "@gent/extensions/client.js",
+])
+
+export const findExtensionsPublicExportFindings = (
+  packageJson: PackageJson,
+  tsconfigJson: TsConfigJson,
+): ReadonlyArray<ExtensionsPublicSurfaceFinding> => {
+  const findings: ExtensionsPublicSurfaceFinding[] = []
+
+  if (packageJson.private !== true) {
+    findings.push({
+      path: "packages/extensions/package.json private",
+      message:
+        "@gent/extensions is the builtin composition package; publish only root/client contracts",
+    })
+  }
+
+  const exportsMap = packageJson.exports ?? {}
+  for (const key of Object.keys(exportsMap)) {
+    if (publicExtensionsExports.has(key)) continue
+    findings.push({
+      path: `packages/extensions/package.json exports["${key}"]`,
+      message:
+        "@gent/extensions may only expose root composition and ./client; use relative source imports for internal extension tests",
+    })
+  }
+
+  const paths = tsconfigJson.compilerOptions?.paths ?? {}
+  for (const key of Object.keys(paths)) {
+    if (!key.startsWith("@gent/extensions/")) continue
+    if (publicExtensionsPaths.has(key)) continue
+    findings.push({
+      path: `tsconfig.json compilerOptions.paths["${key}"]`,
+      message:
+        "Do not create public-looking @gent/extensions/* aliases for extension implementation internals",
+    })
   }
 
   return findings

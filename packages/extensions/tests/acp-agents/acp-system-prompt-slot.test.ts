@@ -8,7 +8,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Schema } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
+import { AcpAgentsExtension } from "../../src/acp-agents/index.js"
 import {
   AgentDefinition,
   ExternalDriverRef,

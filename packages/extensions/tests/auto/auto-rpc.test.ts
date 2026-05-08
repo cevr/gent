@@ -8,8 +8,8 @@ import { textStep } from "@gent/core-internal/debug/provider"
 import { ref } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { AutoExtension } from "@gent/extensions/auto"
-import { AutoRpc } from "@gent/extensions/auto/protocol"
+import { AutoExtension } from "../../src/auto/index.js"
+import { AutoRpc } from "../../src/auto/protocol.js"
 import { e2ePreset } from "../helpers/test-preset"
 
 const StartAutoRef = ref(AutoRpc.StartAuto)

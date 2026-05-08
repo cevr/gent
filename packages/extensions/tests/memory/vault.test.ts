@@ -8,7 +8,7 @@ import {
   projectKey,
   projectDisplayName,
   type MemoryFrontmatter,
-} from "@gent/extensions/memory/vault"
+} from "../../src/memory/vault.js"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 
 const vaultTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))

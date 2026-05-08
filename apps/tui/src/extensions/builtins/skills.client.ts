@@ -1,7 +1,7 @@
 import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
 import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
-import { SkillsRpc } from "@gent/extensions/skills/protocol"
+import { SkillsRpc } from "@gent/extensions/client.js"
 import { requestExtension } from "../client-transport"
 
 // Effect-typed setup. The setup itself takes no dependencies; the

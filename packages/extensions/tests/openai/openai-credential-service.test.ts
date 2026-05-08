@@ -19,7 +19,7 @@ import {
   type CredentialCacheCell,
   type OpenAICredentialIO,
   type OpenAICredentials,
-} from "@gent/extensions/openai/credential-service"
+} from "../../src/openai/credential-service.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 // ── Helpers ──
 const makeCreds = (label: string, expires: number): OpenAICredentials => ({

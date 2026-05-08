@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { findCorePublicExportFindings } from "../src/core-public-exports"
+import {
+  findCorePublicExportFindings,
+  findExtensionsPublicExportFindings,
+} from "../src/core-public-exports"
 
 describe("core public export guard", () => {
   test("allows only extension api plus null internal export tombstones", () => {
@@ -91,6 +94,73 @@ describe("core public export guard", () => {
         path: "packages/core-internal/package.json exports",
         message:
           "@gent/core-internal should only mirror core source through the private wildcard lane",
+      },
+    ])
+  })
+})
+
+describe("extensions public export guard", () => {
+  test("allows only root composition and client contracts", () => {
+    expect(
+      findExtensionsPublicExportFindings(
+        {
+          private: true,
+          exports: {
+            ".": "./src/index.ts",
+            "./index.js": "./src/index.ts",
+            "./client": "./src/client.ts",
+            "./client.js": "./src/client.ts",
+          },
+        },
+        {
+          compilerOptions: {
+            paths: {
+              "@gent/extensions": ["./packages/extensions/src/index.ts"],
+              "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
+              "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
+              "@gent/extensions/client.js": ["./packages/extensions/src/client.ts"],
+            },
+          },
+        },
+      ),
+    ).toEqual([])
+  })
+
+  test("flags extension implementation subpaths", () => {
+    expect(
+      findExtensionsPublicExportFindings(
+        {
+          private: false,
+          exports: {
+            ".": "./src/index.ts",
+            "./task-tools-storage": "./src/task-tools-storage.ts",
+          },
+        },
+        {
+          compilerOptions: {
+            paths: {
+              "@gent/extensions/task-tools-storage": [
+                "./packages/extensions/src/task-tools-storage.ts",
+              ],
+            },
+          },
+        },
+      ),
+    ).toEqual([
+      {
+        path: "packages/extensions/package.json private",
+        message:
+          "@gent/extensions is the builtin composition package; publish only root/client contracts",
+      },
+      {
+        path: 'packages/extensions/package.json exports["./task-tools-storage"]',
+        message:
+          "@gent/extensions may only expose root composition and ./client; use relative source imports for internal extension tests",
+      },
+      {
+        path: 'tsconfig.json compilerOptions.paths["@gent/extensions/task-tools-storage"]',
+        message:
+          "Do not create public-looking @gent/extensions/* aliases for extension implementation internals",
       },
     ])
   })

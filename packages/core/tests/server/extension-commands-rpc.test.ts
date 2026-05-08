@@ -35,7 +35,7 @@ import {
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
-import { TaskStorage } from "@gent/extensions/task-tools-storage"
+import { TaskStorage } from "../../../extensions/src/task-tools-storage.js"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {

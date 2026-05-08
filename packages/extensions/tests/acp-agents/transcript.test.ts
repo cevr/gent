@@ -7,7 +7,7 @@
  * instructions.
  */
 import { describe, test, expect } from "bun:test"
-import { composePromptWithTranscript } from "@gent/extensions/acp-agents/transcript"
+import { composePromptWithTranscript } from "../../src/acp-agents/transcript.js"
 
 describe("composePromptWithTranscript", () => {
   test("returns the live user text unchanged when there is no prior history", () => {

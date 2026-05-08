@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test"
-import { getModelBetas, isLongContextError } from "@gent/extensions/anthropic/oauth"
+import { getModelBetas, isLongContextError } from "../../src/anthropic/oauth.js"
 
 describe("getModelBetas", () => {
   it("includes context-1m for opus 4.6", () => {

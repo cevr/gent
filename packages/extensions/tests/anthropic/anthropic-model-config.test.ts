@@ -12,7 +12,7 @@ import {
   getModelOverride,
   MODEL_CONFIG,
   supports1mContext,
-} from "@gent/extensions/anthropic/model-config"
+} from "../../src/anthropic/model-config.js"
 
 describe("MODEL_CONFIG", () => {
   test("ccVersion is the currently-advertised Claude Code CLI version", () => {

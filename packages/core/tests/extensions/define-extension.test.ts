@@ -9,7 +9,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Layer, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import {
   defineExtension,
   defineResource,

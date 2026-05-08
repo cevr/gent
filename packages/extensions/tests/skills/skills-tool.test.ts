@@ -3,9 +3,9 @@ import { Effect } from "effect"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-import { SkillsTool } from "@gent/extensions/skills/skills-tool"
-import { SearchSkillsTool } from "@gent/extensions/skills/search-skills"
-import { Skill, Skills } from "@gent/extensions/skills/skills"
+import { SkillsTool } from "../../src/skills/skills-tool.js"
+import { SearchSkillsTool } from "../../src/skills/search-skills.js"
+import { Skill, Skills } from "../../src/skills/skills.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 

@@ -9,7 +9,7 @@ import {
   normalizeWhitespace,
   findMatch,
   EditTool,
-} from "@gent/extensions/fs-tools/edit"
+} from "../../src/fs-tools/edit.js"
 import { FileLockService } from "@gent/core-internal/domain/file-lock"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"

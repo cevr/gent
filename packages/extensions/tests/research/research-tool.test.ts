@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path } from "effect"
-import { ResearchTool } from "@gent/extensions/research/research-tool"
+import { ResearchTool } from "../../src/research/research-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   AgentRunResult,
@@ -12,7 +12,7 @@ import {
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { BunFileSystem } from "@effect/platform-bun"
-import { GitReader } from "@gent/extensions/librarian"
+import { GitReader } from "../../src/librarian/index.js"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const TEST_HOME = "/tmp/test-research-fixture"

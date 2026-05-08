@@ -5,7 +5,7 @@
  * stringify-throws fallback.
  */
 import { describe, expect, test } from "bun:test"
-import { inspectForMcp } from "@gent/extensions/acp-agents/mcp-codemode"
+import { inspectForMcp } from "../../src/acp-agents/mcp-codemode.js"
 
 describe("inspectForMcp", () => {
   test("renders plain JSON-able values", () => {

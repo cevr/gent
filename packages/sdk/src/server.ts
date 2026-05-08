@@ -17,7 +17,7 @@ import { resolve as pathResolve, join as pathJoin } from "node:path"
 import * as os from "node:os"
 
 import { createDependencies } from "@gent/core-internal/server/dependencies.js"
-import { BuiltinExtensions } from "@gent/extensions/index.js"
+import { BuiltinExtensions } from "@gent/extensions"
 import { AppServicesLive } from "@gent/core-internal/server/index.js"
 import { GentLogger, GentLogLevel } from "@gent/core-internal/runtime/logger.js"
 import { GentTracerLive } from "@gent/core-internal/runtime/tracer.js"

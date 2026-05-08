@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { parseRelativeDate } from "@gent/extensions/session-tools/search-sessions"
+import { parseRelativeDate } from "../../src/session-tools/search-sessions.js"
 
 const NOW_MS = 1_700_000_000_000
 

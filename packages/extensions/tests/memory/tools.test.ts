@@ -9,12 +9,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { MemoryRememberTool, MemoryForgetTool } from "@gent/extensions/memory/tools"
+import { MemoryRememberTool, MemoryForgetTool } from "../../src/memory/tools.js"
 import {
   type MemoryVault,
   Test as MemoryVaultTest,
   projectKey as projectKeyOf,
-} from "@gent/extensions/memory/vault"
+} from "../../src/memory/vault.js"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"

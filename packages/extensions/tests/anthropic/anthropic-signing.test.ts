@@ -11,7 +11,7 @@ import {
   computeCch,
   computeVersionSuffix,
   extractFirstUserMessageText,
-} from "@gent/extensions/anthropic/signing"
+} from "../../src/anthropic/signing.js"
 
 describe("extractFirstUserMessageText", () => {
   it("returns the empty string when no messages", () => {

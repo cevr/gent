@@ -9,8 +9,8 @@ import {
   ToolCallId,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { PlanTool } from "@gent/extensions/plan-tool"
+import { AllBuiltinAgents } from "../src/all-agents.js"
+import { PlanTool } from "../src/plan-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 

@@ -16,7 +16,7 @@ import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
-import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol.js"
+import { ArtifactRpc, type ArtifactType } from "@gent/extensions/client.js"
 import { requestExtension, ClientTransport } from "../client-transport"
 import { ClientLifecycle } from "../client-services"
 
@@ -34,12 +34,12 @@ export default defineClientExtension(EXT_ID, {
     type Keyed = {
       readonly sessionId: string
       readonly branchId: string
-      readonly items: readonly Artifact[]
+      readonly items: readonly ArtifactType[]
     }
     let getState: () => Keyed | undefined = () => undefined
     let setState: (next: Keyed | undefined) => void = () => {}
 
-    const liveItems = (): readonly Artifact[] => {
+    const liveItems = (): readonly ArtifactType[] => {
       const s = getState()
       const cur = transport.currentSession()
       if (s === undefined || cur === undefined) return []

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { CounselTool } from "@gent/extensions/counsel/counsel-tool"
+import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   AgentRunResult,

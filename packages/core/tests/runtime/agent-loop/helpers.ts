@@ -32,7 +32,7 @@ import {
 } from "@gent/core-internal/test-utils/language-model"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "../../../../extensions/src/all-agents.js"
 import { type AnyResourceContribution, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core-internal/domain/permission"
 import {

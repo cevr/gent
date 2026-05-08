@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 

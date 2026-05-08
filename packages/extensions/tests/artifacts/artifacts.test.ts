@@ -5,8 +5,8 @@ import { ArtifactId, BranchId, type SessionId } from "@gent/core-internal/domain
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { ArtifactsExtension } from "@gent/extensions/artifacts"
-import { ArtifactRpc, type Artifact } from "@gent/extensions/artifacts-protocol"
+import { ArtifactsExtension } from "../../src/artifacts/index.js"
+import { ArtifactRpc, type Artifact } from "../../src/artifacts-protocol.js"
 import { e2ePreset } from "../helpers/test-preset.js"
 
 const forgedBranchId = BranchId.make("art-test-branch")

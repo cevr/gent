@@ -2,9 +2,9 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { Task, TaskId } from "@gent/extensions/task-tools/domain"
-import { TaskService } from "@gent/extensions/task-tools-service"
-import { TaskStorage } from "@gent/extensions/task-tools-storage"
+import { Task, TaskId } from "../../src/task-tools/domain.js"
+import { TaskService } from "../../src/task-tools-service.js"
+import { TaskStorage } from "../../src/task-tools-storage.js"
 import { FIXTURE_DATE, layer, narrowR, setup, withTaskWrite } from "./helpers.js"
 
 describe("TaskStorage metadata boundary", () => {

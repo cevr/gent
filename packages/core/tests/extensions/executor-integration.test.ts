@@ -21,17 +21,20 @@ import {
   type ResolvedExecutorSettings,
   ExecutorSettingsDefaults,
   EXECUTOR_EXTENSION_ID,
-} from "@gent/extensions/executor/domain"
-import { ExecutorMcpBridge } from "@gent/extensions/executor/mcp-bridge"
-import { ExecutorSidecar } from "@gent/extensions/executor/sidecar"
-import { ExecutorRpc, type ExecutorSnapshotReply } from "@gent/extensions/executor/protocol"
+} from "../../../extensions/src/executor/domain.js"
+import { ExecutorMcpBridge } from "../../../extensions/src/executor/mcp-bridge.js"
+import { ExecutorSidecar } from "../../../extensions/src/executor/sidecar.js"
+import {
+  ExecutorRpc,
+  type ExecutorSnapshotReply,
+} from "../../../extensions/src/executor/protocol.js"
 import {
   ExecutorControllerLive,
   ExecutorRead,
   ExecutorWrite,
-} from "@gent/extensions/executor/controller"
-import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
-import { ExecutorExtension } from "@gent/extensions/executor"
+} from "../../../extensions/src/executor/controller.js"
+import { ExecuteTool, ResumeTool } from "../../../extensions/src/executor/tools.js"
+import { ExecutorExtension } from "../../../extensions/src/executor/index.js"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { defineResource } from "@gent/core-internal/domain/contribution"
@@ -41,7 +44,7 @@ import { e2ePreset } from "./helpers/test-preset"
 import { withReadOnly } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.

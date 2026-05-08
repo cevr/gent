@@ -23,7 +23,7 @@ import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { tool } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "../../../extensions/src/all-agents.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── Session constants ──────────────────────────────────────────────────────

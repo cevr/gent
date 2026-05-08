@@ -1,5 +1,5 @@
 import { Show, For } from "solid-js"
-import type { Task } from "@gent/extensions/task-tools/domain.js"
+import type { TaskStatusType } from "@gent/extensions/client.js"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
@@ -18,7 +18,7 @@ const MAX_DISPLAY = 10
 
 export interface TaskPreview {
   subject: string
-  status: Task["status"]
+  status: TaskStatusType
 }
 
 export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
@@ -44,14 +44,14 @@ export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
 
   const overflow = () => Math.max(0, props.previewTasks.length - MAX_DISPLAY)
 
-  const statusIcon = (status: Task["status"]) => {
+  const statusIcon = (status: TaskStatusType) => {
     if (status !== "in_progress") {
       return STATUS_ICONS[status] ?? "?"
     }
     return IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length] ?? STATUS_ICONS["in_progress"]
   }
 
-  const statusColor = (status: Task["status"]) => {
+  const statusColor = (status: TaskStatusType) => {
     switch (status) {
       case "in_progress":
         return theme.warning

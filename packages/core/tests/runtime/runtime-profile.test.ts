@@ -21,7 +21,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
-import { getBuiltinAgent } from "@gent/extensions/all-agents"
+import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import {
   defineExtension,
   defineResource,

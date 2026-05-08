@@ -29,7 +29,7 @@ import {
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
 } from "@gent/core-internal/domain/agent"
-import { AllBuiltinAgents, getBuiltinAgent } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents, getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import {
   BranchId,
   ExtensionId,

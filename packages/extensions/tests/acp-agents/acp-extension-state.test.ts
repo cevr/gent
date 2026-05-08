@@ -2,9 +2,9 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
-import { makeAcpAgentsExtension } from "@gent/extensions/acp-agents"
-import type { AcpSessionManager } from "@gent/extensions/acp-agents/executor"
-import type { ClaudeCodeSessionManager } from "@gent/extensions/acp-agents/claude-code-executor"
+import { makeAcpAgentsExtension } from "../../src/acp-agents/index.js"
+import type { AcpSessionManager } from "../../src/acp-agents/executor.js"
+import type { ClaudeCodeSessionManager } from "../../src/acp-agents/claude-code-executor.js"
 
 const spawnerLayer = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),

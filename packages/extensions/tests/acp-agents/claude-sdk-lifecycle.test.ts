@@ -21,12 +21,9 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Stream } from "effect"
-import { createClaudeCodeSessionManager } from "@gent/extensions/acp-agents/claude-code-executor"
-import type { ExternalSessionKey } from "@gent/extensions/acp-agents/executor"
-import type {
-  ClaudeSdkServiceShape,
-  ClaudeSdkSession,
-} from "@gent/extensions/acp-agents/claude-sdk"
+import { createClaudeCodeSessionManager } from "../../src/acp-agents/claude-code-executor.js"
+import type { ExternalSessionKey } from "../../src/acp-agents/executor.js"
+import type { ClaudeSdkServiceShape, ClaudeSdkSession } from "../../src/acp-agents/claude-sdk.js"
 
 interface CountingSession extends ClaudeSdkSession {
   readonly id: string

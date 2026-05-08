@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { ReviewTool } from "@gent/extensions/review/review-tool"
+import { ReviewTool } from "../../src/review/review-tool.js"
 import {
   AgentName,
   AgentRunResult,
@@ -8,7 +8,7 @@ import {
   SessionId,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents"
+import { AllBuiltinAgents } from "../../src/all-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"

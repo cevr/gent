@@ -21,9 +21,8 @@ import {
   clientCommandContribution,
   overlayContribution,
 } from "../client-facets.js"
-import type { AutoSnapshotReply } from "@gent/extensions/auto/protocol.js"
-import { AutoRpc } from "@gent/extensions/auto/protocol.js"
-import { AutoExtension } from "@gent/extensions/auto/index.js"
+import { AutoExtension } from "@gent/extensions"
+import { AutoRpc, type AutoSnapshotReplyType } from "@gent/extensions/client.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 import { requestExtension, ClientTransport } from "../client-transport"
 import { ClientShell, ClientLifecycle } from "../client-services"
@@ -46,12 +45,12 @@ export default defineClientExtension({
       type Keyed = {
         readonly sessionId: string
         readonly branchId: string
-        readonly model: AutoSnapshotReply
+        readonly model: AutoSnapshotReplyType
       }
       let getState!: () => Keyed | undefined
       let setState!: (next: Keyed | undefined) => void
 
-      const liveModel = (): AutoSnapshotReply | undefined => {
+      const liveModel = (): AutoSnapshotReplyType | undefined => {
         const s = getState()
         const cur = transport.currentSession()
         if (s === undefined || cur === undefined) return undefined

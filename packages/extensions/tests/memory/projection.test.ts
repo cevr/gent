@@ -1,12 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { projectMemoryVaultTurn } from "@gent/extensions/memory/projection"
+import { projectMemoryVaultTurn } from "../../src/memory/projection.js"
 import {
   Test as MemoryVaultTest,
   projectKey,
   type MemoryFrontmatter,
-} from "@gent/extensions/memory/vault"
+} from "../../src/memory/vault.js"
 import type { ProjectionTurnContext } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"

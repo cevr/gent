@@ -1,9 +1,5 @@
 import { describe, test, expect } from "effect-bun-test"
-import {
-  splitCdCommand,
-  injectGitTrailers,
-  stripBackground,
-} from "@gent/extensions/exec-tools/bash"
+import { splitCdCommand, injectGitTrailers, stripBackground } from "../../src/exec-tools/bash.js"
 
 import { SessionId } from "@gent/core-internal/domain/ids"
 

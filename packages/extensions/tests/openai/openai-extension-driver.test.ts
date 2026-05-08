@@ -17,12 +17,12 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, SynchronizedRef } from "effect"
-import { buildOpenAIModelDriver } from "@gent/extensions/openai"
+import { buildOpenAIModelDriver } from "../../src/openai/index.js"
 import {
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCell,
   type OpenAICredentials,
-} from "@gent/extensions/openai/credential-service"
+} from "../../src/openai/credential-service.js"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   makeFakeFetchState,

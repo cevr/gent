@@ -4,7 +4,7 @@ import {
   resolveSkillName,
   formatSkillsForPrompt,
   parseSkillFile,
-} from "@gent/extensions/skills/skills"
+} from "../../src/skills/skills.js"
 
 const makeSkill = (name: string, level: "local" | "global", description = `${name} skill`) =>
   new Skill({

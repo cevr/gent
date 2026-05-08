@@ -12,9 +12,7 @@ import { createSignal, createEffect, Show, For } from "solid-js"
 import { Effect } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
 import { ref } from "@gent/core/extensions/api"
-import type { TaskId } from "@gent/extensions/task-tools/domain.js"
-import { TaskUpdateRequest } from "@gent/extensions/task-tools/requests.js"
-import { type TaskEntry } from "@gent/extensions/task-tools/identity.js"
+import { type TaskEntry, type TaskIdType, TaskUpdateRequest } from "@gent/extensions/client.js"
 import { ChromePanel } from "./chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useClient } from "../client/context"
@@ -47,7 +45,7 @@ export function BackgroundTasksDialog(props: {
   const tick = useSpinnerClock()
 
   const [selectedIdx, setSelectedIdx] = createSignal(0)
-  const [detailTaskId, setDetailTaskId] = createSignal<TaskId | undefined>(undefined)
+  const [detailTaskId, setDetailTaskId] = createSignal<TaskIdType | undefined>(undefined)
 
   // Reset selection when tasks change
   createEffect(() => {
@@ -57,7 +55,7 @@ export function BackgroundTasksDialog(props: {
     }
   })
 
-  const stopTask = (taskId: TaskId) => {
+  const stopTask = (taskId: TaskIdType) => {
     const session = clientCtx.session()
     if (session === undefined || session === null) return
     const updateRef = ref(TaskUpdateRequest)

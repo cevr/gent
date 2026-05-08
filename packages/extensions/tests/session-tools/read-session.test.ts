@@ -4,7 +4,7 @@ import {
   truncate,
   renderMessageParts,
   renderSessionTree,
-} from "@gent/extensions/session-tools/read-session"
+} from "../../src/session-tools/read-session.js"
 import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-projection"
 import {
   dateFromMillis,

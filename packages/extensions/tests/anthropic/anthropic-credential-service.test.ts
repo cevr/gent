@@ -14,9 +14,9 @@ import { TestClock } from "effect/testing"
 import {
   AnthropicCredentialService,
   type AnthropicCredentialIO,
-} from "@gent/extensions/anthropic/credential-service"
+} from "../../src/anthropic/credential-service.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
-import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
+import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 const credLayer = (

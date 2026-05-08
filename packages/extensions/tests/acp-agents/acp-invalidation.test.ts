@@ -18,7 +18,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
 import { BadArgument, PlatformError } from "effect/PlatformError"
-import { makeAcpConnection } from "@gent/extensions/acp-agents/protocol"
+import { makeAcpConnection } from "../../src/acp-agents/protocol.js"
 /**
  * Build a never-closing stdout stream and a write-spy stdin sink so
  * `makeAcpConnection` can be exercised without a child process.

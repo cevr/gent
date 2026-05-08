@@ -9,7 +9,7 @@ import { describe, test, expect } from "bun:test"
 import {
   makeSdkResponsePartMapper,
   mapSdkMessageToResponseParts,
-} from "@gent/extensions/acp-agents/claude-code-executor"
+} from "../../src/acp-agents/claude-code-executor.js"
 type SDKMessage = Parameters<typeof mapSdkMessageToResponseParts>[0]
 type StreamEventMessage = Extract<SDKMessage, { type: "stream_event" }>
 type AssistantMessage = Extract<SDKMessage, { type: "assistant" }>

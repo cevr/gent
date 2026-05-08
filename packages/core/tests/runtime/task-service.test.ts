@@ -1,8 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
-import { TaskService, TaskServiceUnavailableError } from "@gent/extensions/task-tools-service"
-import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { TaskTransitionError } from "@gent/extensions/task-tools/domain"
+import {
+  TaskService,
+  TaskServiceUnavailableError,
+} from "../../../extensions/src/task-tools-service.js"
+import { TaskStorage } from "../../../extensions/src/task-tools-storage.js"
+import { TaskTransitionError } from "../../../extensions/src/task-tools/domain.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import {
   EventPublisherLive,

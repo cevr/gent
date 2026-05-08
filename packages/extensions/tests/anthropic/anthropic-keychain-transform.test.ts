@@ -17,18 +17,15 @@ import { TestClock } from "effect/testing"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { buildKeychainTransformClient } from "@gent/extensions/anthropic/keychain-transform"
-import { initAnthropicKeychainEnv } from "@gent/extensions/anthropic/oauth"
+import { buildKeychainTransformClient } from "../../src/anthropic/keychain-transform.js"
+import { initAnthropicKeychainEnv } from "../../src/anthropic/oauth.js"
 import type {
   AnthropicCredentialServiceShape,
   AnthropicCredentialIO,
-} from "@gent/extensions/anthropic/credential-service"
-import { AnthropicCredentialService } from "@gent/extensions/anthropic/credential-service"
-import {
-  AnthropicBetaCache,
-  type AnthropicBetaCacheShape,
-} from "@gent/extensions/anthropic/beta-cache"
-import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
+} from "../../src/anthropic/credential-service.js"
+import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
+import { AnthropicBetaCache, type AnthropicBetaCacheShape } from "../../src/anthropic/beta-cache.js"
+import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { runEffectBoundary } from "../run-effect-boundary.js"

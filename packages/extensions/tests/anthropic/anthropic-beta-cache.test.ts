@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { AnthropicBetaCache } from "@gent/extensions/anthropic/beta-cache"
+import { AnthropicBetaCache } from "../../src/anthropic/beta-cache.js"
 const run = <A, E>(eff: Effect.Effect<A, E, AnthropicBetaCache>) =>
   Effect.scoped(eff.pipe(Effect.provide(AnthropicBetaCache.layer)))
 describe("AnthropicBetaCache — basic record / get", () => {
