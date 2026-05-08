@@ -120,6 +120,7 @@ Commits landed in this wave so far:
 - `4a7eba38 refactor(runtime): accept submissions through actor ops`
 - `16c733eb fix(runtime): keep actor acceptance serialized`
 - `06724c8d fix(tui): isolate client extension setup failures`
+- `04f6a90d fix(runtime): fence queued turns and read authority`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -200,6 +201,15 @@ classes of privilege and races, but the deeper P1s remain:
   only generic machine/event telemetry. Any remaining core names that read as
   product "task" should be treated as naming debt unless they are genuinely
   machine execution signals.
+- Second recursive verification at `376d1af2` again found no P0 but found
+  remaining P1s. The actor lane found a durable dequeue-before-worker handoff
+  gap. Extension authority lanes found that setup still smuggled platform
+  services through `ExtensionSetupContext`, read tool needs did not fence
+  write-capable Effect services, and read-intent RPC handlers received the
+  wide runtime host object at runtime. The current fix batch adds durable
+  `inFlight` queue handoff, removes setup-time `fs`/`path`/`spawner` from
+  setup `ctx`, adds `CapabilityAccess`, narrows read RPC runtime context, and
+  makes task writes require write access.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -243,6 +253,17 @@ Fresh re-audit receipts to carry into the remaining batches:
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/context.tsx:88`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/loader-boundary.ts:72`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-effect.ts:29`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:554`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:1107`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:1117`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/loader.ts:245`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:347`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:170`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:247`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools-service.ts:56`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools/task-get.ts:25`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts:516`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts:277`
 
 ## P1 Findings
 
@@ -1044,7 +1065,8 @@ Goal: independently prove there are no P0/P1 findings left.
 Status: in progress. First recursive audit batch at `c570d693` found no P0,
 but it did find P1s. Runtime actor/authority P1s were closed by `16c733eb`; TUI
 client extension setup isolation was closed by `06724c8d`. A fresh recursive
-batch must now run against the post-fix head before this wave can close.
+batch at `376d1af2` found no P0, but more P1s remained and must be verified
+again after the current fix batch.
 
 First recursive audit results:
 
@@ -1059,6 +1081,19 @@ First recursive audit results:
   `06724c8d`.
 - Feynman: no P0/P1 at `c570d693`; residual findings were P2/P3 architecture
   and documentation follow-ups.
+- Mencius at `376d1af2`: P1 durable queue-to-worker handoff could lose a
+  queued turn if the process died after durable dequeue but before
+  `MessageReceived`/worker handoff.
+- Planck at `376d1af2`: P1 extension setup still smuggled platform authority
+  through `ctx.fs`, `ctx.path`, and `ctx.spawner` rather than Effect
+  requirements.
+- Anscombe at `376d1af2`: P1 read task needs could yield the full write-capable
+  `TaskService` from the selected capability context.
+- Kierkegaard at `376d1af2`: P1 read-intent RPC runtime handlers received the
+  wide host object, so erased/raw handlers could still reach session mutation
+  and agent-run surfaces.
+- Raman at `376d1af2`: no P0/P1; residual findings were P2 guardrail/docs/test
+  follow-ups.
 
 Work:
 
@@ -1082,6 +1117,10 @@ Validation:
 - No P0/P1 findings.
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/runtime/agent-loop-queue.test.ts tests/runtime/session-runtime.test.ts`
 - `cd apps/tui && bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-effect-setup.test.ts`
+- `bun run typecheck`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/task-service.test.ts tests/server/extension-commands-rpc.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/acp-agents/acp-extension-state.test.ts tests/acp-agents/acp-system-prompt-slot.test.ts tests/task-tools/task-tool-execution.test.ts`
+- `bun run lint`
 - `bun run gate`
 - `bun run test:e2e`
 - `bun run smoke`
