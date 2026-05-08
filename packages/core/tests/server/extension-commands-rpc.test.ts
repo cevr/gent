@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, Exit, FileSystem, Layer, Schema } from "effect"
+import { Cause, Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
 import {
   ExtensionLoadError,
   type GentExtension,
@@ -34,10 +34,8 @@ import {
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { Task, TaskId } from "@gent/extensions/task-tools/domain"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -831,29 +829,12 @@ describe("extension command RPCs", () => {
                 output: Schema.Struct({
                   hasSessionMutations: Schema.Boolean,
                   hasAgentRun: Schema.Boolean,
-                  directStorageWriteDenied: Schema.Boolean,
+                  writeStorageUnavailable: Schema.Boolean,
                 }),
                 execute: (_input, ctx) =>
                   narrowR(
                     Effect.gen(function* () {
-                      const taskStorage = yield* TaskStorage
-                      const now = dateFromMillis(1_767_225_600_000)
-                      const directWrite = yield* taskStorage
-                        .createTask(
-                          Task.make({
-                            id: TaskId.make("read-rpc-direct-storage-write"),
-                            sessionId: ctx.sessionId,
-                            branchId: ctx.branchId,
-                            subject: "blocked",
-                            status: "pending",
-                            createdAt: now,
-                            updatedAt: now,
-                          }),
-                        )
-                        .pipe(Effect.exit)
-                      const directStorageWriteDenied =
-                        Exit.isFailure(directWrite) &&
-                        Schema.is(CapabilityError)(Cause.squash(directWrite.cause))
+                      const taskStorage = yield* Effect.serviceOption(TaskStorage)
                       return {
                         hasSessionMutations:
                           "session" in ctx &&
@@ -865,7 +846,7 @@ describe("extension command RPCs", () => {
                           typeof ctx.agent === "object" &&
                           ctx.agent !== null &&
                           "run" in ctx.agent,
-                        directStorageWriteDenied,
+                        writeStorageUnavailable: Option.isNone(taskStorage),
                       }
                     }),
                   ),
@@ -893,7 +874,7 @@ describe("extension command RPCs", () => {
           expect(result).toEqual({
             hasSessionMutations: false,
             hasAgentRun: false,
-            directStorageWriteDenied: true,
+            writeStorageUnavailable: true,
           })
         }).pipe(Effect.timeout("4 seconds")),
       )

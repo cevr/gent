@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GrepTool } from "@gent/extensions/fs-tools/grep"
+import { FsRead } from "../../src/fs-tools/read-service"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
@@ -26,6 +27,7 @@ const PlatformLayer = Layer.mergeAll(
   }),
   Layer.provide(TestFileIndexLive, BunServices.layer),
 )
+const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
 
 describe("GrepTool", () => {
   it.scopedLive("finds pattern in files", () =>
@@ -38,7 +40,7 @@ describe("GrepTool", () => {
 
       const result = yield* getToolEffect(GrepTool)({ pattern: "foo", path: tmpDir }, ctx)
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 
   it.scopedLive("respects glob filter", () =>
@@ -54,7 +56,7 @@ describe("GrepTool", () => {
       )
       expect(result.matches.length).toBe(1)
       expect(result.matches[0]!.file).toContain("file1.ts")
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 
   it.scopedLive("searches single file directly", () =>
@@ -68,6 +70,6 @@ describe("GrepTool", () => {
         ctx,
       )
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 })

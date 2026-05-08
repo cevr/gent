@@ -16,22 +16,26 @@
  *     `MyServiceAdmin` carrying the writes). The Live layer can
  *     provide both Tags from the same underlying state.
  *
- * The brand is a phantom property — no runtime cost, no instance
- * marker. It is invisible to JavaScript value-comparison and lives
- * only at the type level.
+ * The value brand is also applied as a non-enumerable runtime marker by
+ * `withReadOnly(...)`. Read-intent hosts use that marker to derive a
+ * context that contains only read-only service values, so the type
+ * fence has a matching runtime fence.
  *
  * @module
  */
 
+import { Context } from "effect"
+
 /**
- * Phantom brand symbol — exported so per-Tag classes can declare
+ * Read-only brand symbol — exported so per-Tag classes can declare
  * the brand directly on their identifier (`declare readonly
  * [ReadOnlyBrand]: true`). The symbol value exists at runtime (so
- * `import { ReadOnlyBrand }` resolves through the bundler) but the
- * brand itself is type-only — class declarations use `declare readonly`,
- * never assigning the property at runtime.
+ * `import { ReadOnlyBrand }` resolves through the bundler). Tag class
+ * declarations use `declare readonly`; service values get the runtime
+ * marker through `withReadOnly(...)`.
  */
-export const ReadOnlyBrand: unique symbol = Symbol("@gent/core/ReadOnlyBrand")
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- process-global symbol keeps the runtime brand stable across package subpath aliases
+export const ReadOnlyBrand: unique symbol = Symbol.for("@gent/core/ReadOnlyBrand") as never
 
 /** Phantom brand applied to read-only service identifiers + shapes. */
 export interface ReadOnlyTag {
@@ -42,9 +46,8 @@ export interface ReadOnlyTag {
 export type ReadOnly<S> = S & ReadOnlyTag
 
 /**
- * Brand a service-shape value as read-only. Type-level fence only —
- * the runtime value is unchanged. Use at Tag construction sites where
- * the shape carries only read methods.
+ * Brand a service-shape value as read-only. Use at Tag construction
+ * sites where the shape carries only read methods.
  *
  * The companion brand on the Tag identifier is declared on the Tag class
  * itself:
@@ -62,6 +65,33 @@ export type ReadOnly<S> = S & ReadOnlyTag
  * }
  * ```
  */
-export const withReadOnly = <S>(value: S): ReadOnly<S> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-  value as ReadOnly<S>
+export const withReadOnly = <S>(value: S): ReadOnly<S> => {
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.defineProperty(value, ReadOnlyBrand, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    })
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type/runtime boundary
+  return value as ReadOnly<S>
+}
+
+const hasReadOnlyRuntimeBrand = (value: unknown): value is ReadOnlyTag =>
+  ((typeof value === "object" && value !== null) || typeof value === "function") &&
+  ReadOnlyBrand in value
+
+export const readOnlyCapabilityContext = (
+  context: Context.Context<never> | undefined,
+): Context.Context<never> | undefined => {
+  if (context === undefined) return undefined
+  const map = new Map<string, unknown>()
+  for (const [key, value] of context.mapUnsafe) {
+    if (hasReadOnlyRuntimeBrand(value)) {
+      map.set(key, value)
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read-only runtime membrane filters erased extension services
+  return Context.makeUnsafe(map) as Context.Context<never>
+}

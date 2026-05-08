@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/extensions/fs-tools/read"
+import { FsRead } from "../../src/fs-tools/read-service"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
@@ -24,9 +25,10 @@ const PlatformLayer = Layer.merge(
     platform: "test",
   }),
 )
+const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
 
 describe("ReadTool", () => {
-  const readTest = it.scopedLive.layer(PlatformLayer)
+  const readTest = it.scopedLive.layer(ToolLayer)
 
   readTest("reads a file", () =>
     Effect.gen(function* () {

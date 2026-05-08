@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GlobTool } from "@gent/extensions/fs-tools/glob"
+import { FsRead } from "../../src/fs-tools/read-service"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
@@ -26,6 +27,7 @@ const PlatformLayer = Layer.mergeAll(
   }),
   Layer.provide(TestFileIndexLive, BunServices.layer),
 )
+const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
 
 describe("GlobTool", () => {
   it.scopedLive("finds files matching pattern", () =>
@@ -39,7 +41,7 @@ describe("GlobTool", () => {
       const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.files.every((f: string) => f.endsWith(".ts"))).toBe(true)
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 
   it.scopedLive("respects limit", () =>
@@ -56,7 +58,7 @@ describe("GlobTool", () => {
       )
       expect(result.files.length).toBe(2)
       expect(result.truncated).toBe(true)
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 
   it.scopedLive("sorts by mtime descending", () =>
@@ -73,6 +75,6 @@ describe("GlobTool", () => {
       // Newest first
       expect(result.files[0]).toContain("new.ts")
       expect(result.files[1]).toContain("old.ts")
-    }).pipe(Effect.provide(PlatformLayer)),
+    }).pipe(Effect.provide(ToolLayer)),
   )
 })

@@ -185,7 +185,7 @@ export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-bu
 export { ExtensionHostError, ExtensionHostSearchResult } from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
-export { FileIndex } from "../domain/file-index.js"
+export { FileIndex, FileIndexError, type FileIndexService } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
 export { ExtensionStatePublisher } from "../domain/event-publisher.js"
 export type { ExtensionStatePublisherService } from "../domain/event-publisher.js"

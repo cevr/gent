@@ -17,6 +17,7 @@ import type { ResourceManagerService } from "../resource-manager.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
+import { readOnlyCapabilityContext } from "../../domain/read-only.js"
 import type { Option } from "effect"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -69,11 +70,25 @@ type ToolRuntimeContext = ToolCoreContext &
 
 const provideCapabilityContext = <A, E, R>(
   ctx: ToolCoreContext,
+  intent: "read" | "write",
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  ctx.capabilityContext === undefined
+): Effect.Effect<A, E, R> => {
+  if (intent === "read") {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane supplies the erased R channel from the filtered read-only context
+    const closed = effect as Effect.Effect<A, E, never>
+    const masked = closed.pipe(
+      Effect.updateContext(
+        (current: Context.Context<never>) =>
+          readOnlyCapabilityContext(ctx.capabilityContext ?? current) ?? Context.empty(),
+      ),
+    )
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane replaces the erased runtime context with the filtered read-only context
+    return masked as Effect.Effect<A, E, R>
+  }
+  return ctx.capabilityContext === undefined
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+}
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
@@ -158,6 +173,7 @@ const readSessionFacet = (
 
 const deriveToolContext = (
   ctx: ToolCapabilityContext,
+  intent: "read" | "write",
   needs: ReadonlyArray<ToolNeed> | undefined,
 ): ToolRuntimeContext => {
   const writeAgent = needsAccess(needs, "agent", "write")
@@ -170,7 +186,14 @@ const deriveToolContext = (
     cwd: ctx.cwd,
     home: ctx.home,
     host: ctx.host,
-    ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
+    ...(ctx.capabilityContext !== undefined
+      ? {
+          capabilityContext:
+            intent === "read"
+              ? readOnlyCapabilityContext(ctx.capabilityContext)
+              : ctx.capabilityContext,
+        }
+      : {}),
     ...(needsTag(needs, "agent")
       ? { agent: writeAgent ? ctx.agent : readAgentFacet(ctx.agent) }
       : {}),
@@ -234,7 +257,7 @@ const makeExecutionToolkit = (params: {
   const metadata = getToolMetadata(params.tool)
   const toolkit = convertTools([params.tool])
   const toolName = String(getToolId(params.tool))
-  const toolCtx = deriveToolContext(params.ctx, metadata.needs)
+  const toolCtx = deriveToolContext(params.ctx, metadata.intent, metadata.needs)
 
   const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
@@ -250,6 +273,7 @@ const makeExecutionToolkit = (params: {
           () =>
             provideCapabilityContext(
               toolCtx,
+              metadata.intent,
               provideCapabilityAccessNeeds(metadata.needs)(
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 metadata

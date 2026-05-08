@@ -1,6 +1,7 @@
-import { Effect, Schema, Path } from "effect"
-import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
+import { FsRead } from "./read-service.js"
 
 // Glob Tool Error
 
@@ -47,13 +48,12 @@ export const GlobTool = tool({
   params: GlobParams,
   output: GlobResult,
   execute: Effect.fn("GlobTool.execute")(function* (params, ctx) {
-    const pathService = yield* Path.Path
-    const fileIndex = yield* FileIndex
+    const fs = yield* FsRead
 
-    const basePath = params.path !== undefined ? pathService.resolve(params.path) : ctx.cwd
+    const basePath = params.path !== undefined ? fs.resolve(params.path) : ctx.cwd
     const limit = params.limit ?? 100
 
-    const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
+    const allFiles = yield* fs.listFiles({ cwd: basePath })
     const matches = yield* Effect.try({
       try: () => picomatch(params.pattern, { dot: true }),
       catch: (e) =>

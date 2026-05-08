@@ -1,6 +1,7 @@
-import { Effect, Option, Schema, FileSystem, Path } from "effect"
-import { tool, FileIndex, ToolNeeds } from "@gent/core/extensions/api"
+import { Effect, Option, Schema } from "effect"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
+import { FsRead } from "./read-service.js"
 
 // Grep Tool Error
 
@@ -76,11 +77,9 @@ export const GrepTool = tool({
   params: GrepParams,
   output: GrepResult,
   execute: Effect.fn("GrepTool.execute")(function* (params, ctx) {
-    const fs = yield* FileSystem.FileSystem
-    const pathService = yield* Path.Path
-    const fileIndex = yield* FileIndex
+    const fs = yield* FsRead
 
-    const basePath = params.path !== undefined ? pathService.resolve(params.path) : ctx.cwd
+    const basePath = params.path !== undefined ? fs.resolve(params.path) : ctx.cwd
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     const flags = params.caseSensitive === false ? "gi" : "g"
@@ -102,7 +101,7 @@ export const GrepTool = tool({
       context?: { before: string[]; after: string[] }
     }> = []
 
-    const searchFile = (filePath: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+    const searchFile = (filePath: string): Effect.Effect<void> =>
       Effect.gen(function* () {
         const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
         if (Option.isNone(contentResult)) return
@@ -145,7 +144,7 @@ export const GrepTool = tool({
       yield* searchFile(basePath)
     } else {
       // Use FileIndex for directory file discovery
-      const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
+      const allFiles = yield* fs.listFiles({ cwd: basePath })
       const globPattern = params.glob ?? "**/*"
       const matchesGlob = yield* Effect.try({
         try: () => picomatch(globPattern, { dot: true }),

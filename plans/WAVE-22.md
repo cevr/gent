@@ -295,7 +295,7 @@ Validation:
 
 ### W22.9 — Scoped Model Resolution
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `df79e0ef`.
 
 Work:
 
@@ -312,3 +312,25 @@ Validation:
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/providers/provider-resolution.test.ts tests/runtime/session-runtime.test.ts tests/server/session-command-persistence.test.ts`
 - `bun run typecheck`
 - `bun run lint`
+
+### W22.10 — Read-Intent Runtime Membrane
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Apply `ReadOnlyBrand` as a runtime marker through `withReadOnly(...)`.
+- Derive a filtered read-only capability context from profile extension layers.
+- Execute read-intent RPCs and read-intent tools in that filtered context using
+  `Effect.updateContext(...)`, so write-capable services are absent rather than
+  merely denied by voluntary `requireCapabilityWrite(...)` calls.
+- Keep read-only service values available to read handlers and tool bodies.
+- Move fs read tools behind a branded `FsRead` extension resource so read tools
+  no longer yield raw `FileSystem` / `Path` / `FileIndex` host services.
+
+Validation:
+
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/server/extension-commands-rpc.test.ts tests/extensions/extension-surface-locks.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt:check`

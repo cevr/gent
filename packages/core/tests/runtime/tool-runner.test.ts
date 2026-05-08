@@ -2,7 +2,14 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { tool, ToolNeeds, type ToolCoreContext } from "@gent/core/extensions/api"
+import {
+  ReadOnlyBrand,
+  tool,
+  ToolNeeds,
+  type ReadOnly,
+  type ToolCoreContext,
+  withReadOnly,
+} from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
@@ -24,6 +31,23 @@ class ToolProfileToken extends Context.Service<
     readonly read: () => Effect.Effect<string>
   }
 >()("@gent/core/tests/runtime/tool-runner.test/ToolProfileToken") {}
+
+interface ToolReadTokenShape {
+  readonly read: () => Effect.Effect<string>
+}
+
+class ToolReadToken extends Context.Service<ToolReadToken, ReadOnly<ToolReadTokenShape>>()(
+  "@gent/core/tests/runtime/tool-runner.test/ToolReadToken",
+) {
+  declare readonly [ReadOnlyBrand]: true
+}
+
+class ToolWriteToken extends Context.Service<
+  ToolWriteToken,
+  {
+    readonly write: () => Effect.Effect<string>
+  }
+>()("@gent/core/tests/runtime/tool-runner.test/ToolWriteToken") {}
 
 class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()(
   "@gent/core/tests/runtime/tool-runner.test/ToolRunnerTestError",
@@ -528,6 +552,73 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
+    }),
+  )
+  it.live("read tools execute with a read-only capability context", () =>
+    Effect.gen(function* () {
+      const ReadContextTool = tool({
+        id: "read_context_tool",
+        intent: "read",
+        description: "Reads only read-only profile-scoped context",
+        params: Schema.Struct({}),
+        output: Schema.Struct({
+          readValue: Schema.String,
+          writeUnavailable: Schema.Boolean,
+        }),
+        execute: () =>
+          Effect.gen(function* () {
+            const readToken = yield* ToolReadToken
+            const writeToken = yield* Effect.serviceOption(ToolWriteToken)
+            return {
+              readValue: yield* readToken.read(),
+              writeUnavailable: writeToken._tag === "None",
+            }
+          }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [ReadContextTool] },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        Layer.succeed(ToolWriteToken, { write: () => Effect.succeed("outer-write") }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const capabilityContext = Context.empty().pipe(
+        Context.add(ToolReadToken, withReadOnly({ read: () => Effect.succeed("read-ok") })),
+        Context.add(ToolWriteToken, { write: () => Effect.succeed("write-leak") }),
+      ) as Context.Context<never>
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          {
+            toolCallId: ToolCallId.make("tc-read-context"),
+            toolName: "read_context_tool",
+            input: {},
+          },
+          testToolContext({
+            sessionId: SessionId.make("session-read-context"),
+            branchId: BranchId.make("branch-read-context"),
+            toolCallId: ToolCallId.make("tc-read-context"),
+            agentName: AgentName.make("cowork"),
+            capabilityContext,
+          }),
+        )
+      }).pipe(Effect.provide(layer))
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({
+        readValue: "read-ok",
+        writeUnavailable: true,
+      })
     }),
   )
   it.live("re-raises interaction pending instead of converting it to a tool result", () =>

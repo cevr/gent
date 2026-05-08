@@ -35,6 +35,7 @@ import { SessionStorage, type SessionStorageService } from "../storage/session-s
 import type { Message, MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
+import { readOnlyCapabilityContext } from "../domain/read-only.js"
 
 export interface ExtensionSessionControlService {
   readonly queueFollowUp: (input: {
@@ -634,7 +635,9 @@ export const readOnlyExtensionHostContext = (
   cwd: ctx.cwd,
   home: ctx.home,
   host: ctx.host,
-  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
+  ...(ctx.capabilityContext !== undefined
+    ? { capabilityContext: readOnlyCapabilityContext(ctx.capabilityContext) }
+    : {}),
   agent: {
     get: ctx.agent.get,
     require: ctx.agent.require,
