@@ -4,7 +4,6 @@ import type { EventEnvelope } from "@gent/core-internal/domain/event"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import type { GentClientBundle } from "@gent/sdk"
 import { toTestFailure, transportCases, waitFor } from "./transport-harness-boundary"
-import { waitDeferred } from "../src/effect-test-adapters"
 
 type EventsClient = GentClientBundle["client"]
 
@@ -26,7 +25,7 @@ const startCollecting = (
       ),
       Effect.forkScoped,
     )
-    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return { events, fiber }
   })
 

@@ -16,7 +16,6 @@ import {
   stripAnsi,
   type TestContext,
 } from "../src/pty-fixture"
-import { raceWithNullTimeout } from "../src/effect-test-adapters"
 import { runTestCleanupBoundary } from "../src/test-cleanup-boundary"
 
 const TEST_TIMEOUT = 30_000
@@ -27,6 +26,15 @@ const CTRL_C = "\x03"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 const ESC_KEY_DECODE_MS = 650
+
+const raceWithNullTimeout = <A>(
+  promise: PromiseLike<A>,
+  timeoutMs: number,
+): Effect.Effect<A | null> =>
+  Effect.race(
+    Effect.promise(() => promise),
+    Effect.sleep(`${timeoutMs} millis`).pipe(Effect.as(null)),
+  )
 
 let testContext: TestContext | null = null
 

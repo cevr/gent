@@ -7,7 +7,6 @@ import { Effect, Exit, Random, Scope } from "effect"
 import { extractText, Gent } from "@gent/sdk"
 import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
 import { toTestFailure, waitFor } from "./transport-harness-boundary"
-import { fromPromise, ignoreSyncDefect, sleepMillis } from "../src/effect-test-adapters"
 import {
   killProcess,
   spawnIdleServer,
@@ -37,10 +36,10 @@ describe("server lifecycle", () => {
           )
 
           const baseUrl = url.replace("/rpc", "")
-          const response = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
+          const response = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(response.ok).toBe(true)
 
-          const identity = yield* fromPromise(() => response.json())
+          const identity = yield* Effect.promise(() => response.json())
           expect(identity.pid).toBe(proc.pid)
           expect(identity.hostname).toBeTruthy()
           expect(identity.dbPath).toBeTruthy()
@@ -92,7 +91,7 @@ describe("server lifecycle", () => {
           )
 
           const baseUrl = url.replace("/rpc", "")
-          const identityResp = yield* fromPromise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
+          const identityResp = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(identityResp.ok).toBe(true)
 
           const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
@@ -215,7 +214,7 @@ describe("server lifecycle", () => {
             ({ proc }) => killProcess(proc),
           )
 
-          yield* sleepMillis(idleTimeoutMs * 0.6)
+          yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
 
           const clientScope = yield* Scope.make()
           const bundle = yield* Gent.client(url).pipe(
@@ -226,11 +225,11 @@ describe("server lifecycle", () => {
           const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
 
-          yield* sleepMillis(idleTimeoutMs * 0.6)
+          yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
           yield* Scope.close(clientScope, Exit.void)
-          yield* sleepMillis(100)
+          yield* Effect.sleep("100 millis")
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
           const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
@@ -268,7 +267,7 @@ describe("server lifecycle", () => {
           expect(states).toContain("connected")
 
           serverRef.current.proc.kill("SIGKILL")
-          yield* fromPromise(() => serverRef.current.proc.exited)
+          yield* Effect.promise(() => serverRef.current.proc.exited)
 
           const sawReconnecting = yield* waitUntil(() => states.includes("reconnecting"), 5_000)
           expect(sawReconnecting).toBe(true)
@@ -285,7 +284,7 @@ describe("server lifecycle", () => {
           expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* Scope.close(clientScope, Exit.void)
-          yield* ignoreSyncDefect(() => serverRef.current.proc.kill())
+          yield* killProcess(serverRef.current.proc)
         }),
       ),
     30_000,

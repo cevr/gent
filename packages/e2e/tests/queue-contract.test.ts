@@ -3,7 +3,6 @@ import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, toTestFailure, waitFor } from "./transport-harness-boundary"
-import { waitDeferred } from "../src/effect-test-adapters"
 
 const flattenRestoreText = (snapshot: {
   steering: ReadonlyArray<{ content: string }>
@@ -28,7 +27,7 @@ const collectRuntime = <A, E>(
     // Resolve once the first value has been written into `values`. Cap at 50ms
     // because some streams (events-after-cursor) only emit when state changes
     // — downstream waitFor() polls absorb any remaining race.
-    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 

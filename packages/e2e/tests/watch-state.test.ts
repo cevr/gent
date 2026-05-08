@@ -8,7 +8,6 @@ import {
   transportCases,
   waitFor,
 } from "./transport-harness-boundary"
-import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectSnapshots = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -28,7 +27,7 @@ const collectSnapshots = <A, E>(
     // Resolve once the first value has been written into `values`.
     // watchRuntime emits the current snapshot on subscribe, so this typically
     // resolves in <1ms. Cap at 50ms as a safety net.
-    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 

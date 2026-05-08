@@ -2,7 +2,6 @@ import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
 import { Clock, Config, Effect, Option } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"
-import { ignoreSyncDefect, sleepMillis } from "./effect-test-adapters"
 
 const CTRL_C = "\x03"
 const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
@@ -45,6 +44,9 @@ const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<void> =>
     })
     return yield* loop
   })
+
+const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
+  Effect.sync(evaluate).pipe(Effect.catchCause(() => Effect.void))
 
 export const spawnWithDir = (
   tempDir: string,
@@ -140,7 +142,7 @@ export const ptyWaitFor = (
   opts: { timeout: number },
 ): Effect.Effect<void> => Effect.promise(() => pty.waitFor(text, opts))
 
-export const shortPause = (ms: number): Effect.Effect<void> => sleepMillis(ms)
+export const shortPause = (ms: number): Effect.Effect<void> => Effect.sleep(`${ms} millis`)
 
 const escape = "\\u001b"
 const bell = "\\u0007"

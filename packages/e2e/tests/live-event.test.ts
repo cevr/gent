@@ -7,7 +7,6 @@ import {
   transportCases,
   waitFor,
 } from "./transport-harness-boundary"
-import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -27,7 +26,7 @@ const collectLiveEvents = <A, E>(
     // Resolve once the first value has been written into `values`. Cap at 50ms
     // because events-after-cursor only emits when new events are appended —
     // downstream waitFor() polls absorb any remaining race.
-    yield* waitDeferred(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 
