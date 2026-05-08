@@ -35,7 +35,6 @@ import { Effect, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpBody, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import * as os from "node:os"
 import type { OpenAICredentialServiceShape } from "./credential-service.js"
 
 // ── Codex routing ──
@@ -76,6 +75,7 @@ const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
  */
 const CODEX_BETA_TOKEN = "responses=experimental"
 const CODEX_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
+const CODEX_USER_AGENT = "gent"
 
 /**
  * Merge `requiredToken` into a comma-separated `OpenAI-Beta` header
@@ -273,11 +273,7 @@ const buildOauthHeaders = (
     headers = Headers.set(headers, "originator", "gent")
   }
   if (headers["user-agent"] === undefined) {
-    headers = Headers.set(
-      headers,
-      "user-agent",
-      `gent (${os.platform()} ${os.release()}; ${os.arch()})`,
-    )
+    headers = Headers.set(headers, "user-agent", CODEX_USER_AGENT)
   }
   return headers
 }

@@ -7,7 +7,6 @@
 
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
 import { createHash } from "node:crypto"
-import { homedir } from "node:os"
 import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // ── Types ──
@@ -465,7 +464,8 @@ export const makeMemoryVault = (
 
 // ── Layers ──
 
-const defaultVaultPath = (path: Path.Path): string => path.join(homedir(), ".gent", "memory")
+const defaultVaultPath = (path: Path.Path, home: string): string =>
+  path.join(home, ".gent", "memory")
 
 /**
  * Provide BOTH `MemoryVault` (write surface) and `MemoryVaultReadOnly`
@@ -496,12 +496,13 @@ const layerFor = (
   )
 
 export const Live = (
+  home: string,
   pathOverride?: string,
 ): Layer.Layer<MemoryVault | MemoryVaultReadOnly, never, FileSystem.FileSystem | Path.Path> =>
   layerFor(
     Effect.gen(function* () {
       const path = yield* Path.Path
-      const vaultPath = pathOverride ?? defaultVaultPath(path)
+      const vaultPath = pathOverride ?? defaultVaultPath(path, home)
       return yield* makeMemoryVault(vaultPath)
     }),
   )

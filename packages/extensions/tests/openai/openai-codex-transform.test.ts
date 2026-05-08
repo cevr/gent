@@ -225,7 +225,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
         ),
       )
       expect(fakeState.captured[0]!.headers["originator"]).toBe("gent")
-      expect(fakeState.captured[0]!.headers["user-agent"]).toMatch(/^gent \(/)
+      expect(fakeState.captured[0]!.headers["user-agent"]).toBe("gent")
     }),
   )
   it.live("preserves upstream originator + user-agent when already set", () =>
