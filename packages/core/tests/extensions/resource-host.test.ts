@@ -78,9 +78,8 @@ describe("defineResource", () => {
 })
 
 describe("buildResourceLayer", () => {
-  test("returns Layer.empty when no Resources match the requested scope", () => {
-    const ext = makeStubExtension("ext", [defineResource({ scope: "session", layer: layerA })])
-    // Layer.empty is itself a Layer; assert build succeeds with no contributions.
+  test("returns Layer.empty when an extension has no Resources", () => {
+    const ext = makeStubExtension("ext", [])
     const layer = buildResourceLayer([ext], "process")
     return Effect.runPromise(
       Effect.scoped(

@@ -192,31 +192,9 @@ describe("scheduled jobs", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("collectSchedules filters by process scope by default", () =>
+  it.live("collectSchedules ignores extensions without Resources", () =>
     Effect.sync(() => {
-      const sessionExt = makeLoaded("@gent/test-session", [])
-      // Override the default makeLoaded process Resource with a session one
-      const sessionLoaded: LoadedExtension = {
-        ...sessionExt,
-        contributions: {
-          resources: [
-            defineResource({
-              scope: "session",
-              layer: Layer.empty,
-              schedule: [
-                {
-                  id: "session-only",
-                  cron: "* * * * *",
-                  target: {
-                    agent: AgentName.make("session-agent"),
-                    prompt: "session prompt",
-                  },
-                },
-              ],
-            }) as never,
-          ],
-        },
-      }
+      const emptyExt = makeLoaded("@gent/test-empty", [])
       const processExt = makeLoaded("@gent/test-process", [
         {
           id: "process-only",
@@ -224,7 +202,7 @@ describe("scheduled jobs", () => {
           target: { agent: AgentName.make("p"), prompt: "p" },
         },
       ])
-      const collected = collectSchedules([sessionLoaded, processExt])
+      const collected = collectSchedules([emptyExt, processExt])
       expect(collected.map((c) => c.schedule.id)).toEqual(["process-only"])
     }),
   )

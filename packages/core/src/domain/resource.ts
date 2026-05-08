@@ -6,41 +6,32 @@
  * carries the unifying concept: "this extension owns a long-lived service
  * with optional periodic work and optional startup/shutdown."
  *
- * The `scope` discriminator is load-bearing: every Resource declares its
- * lifetime as one of:
+ * The `scope` discriminator is intentionally narrow. Today the host owns
+ * exactly one long-lived resource lifetime:
  *
- *   - `"process"`  — survives for the server's lifetime; requires `ServerScope`
- *   - `"cwd"`      — survives per-cwd; requires `CwdScope`
- *   - `"session"`  — survives per-session; requires `EphemeralScope`
- *   - `"branch"`   — survives per-branch; requires `EphemeralScope`
+ *   - `"process"` — survives for the server's lifetime; requires `ServerScope`
  *
- * The `ScopeOf<S>` mapped type threads the runtime literal into the type
- * level, so the host can route `scope: "session"` Resources to the
- * ephemeral install path and refuse to install them at process scope.
+ * Add more scope literals only with their host lifecycle implementation in the
+ * same wave. Advertising `session`/`branch`/`cwd` without a runtime owner makes
+ * impossible lifetimes look supported.
  *
  * @module
  */
 
 import type { Context, Effect, Layer } from "effect"
 import type { AgentName } from "./agent.js"
-import type { CwdScope, EphemeralScope, ServerScope } from "./scope-brand.js"
+import type { ServerScope } from "./scope-brand.js"
 
 // ── Scope discriminator + brand mapping ──
 
 /** Runtime literal-string union for Resource lifetimes. */
-export type ResourceScope = "process" | "cwd" | "session" | "branch"
+export type ResourceScope = "process"
 
 /**
  * Type-level mapping from the `scope` literal to the corresponding nominal
- * scope brand. The brand flows into the `R` channel of the Resource's
- * `layer`, so a `scope: "session"` Resource cannot be instantiated at
- * process scope (the brand types do not unify).
+ * scope brand. The brand flows into the `R` channel of the Resource's `layer`.
  */
-export type ScopeOf<S extends ResourceScope> = S extends "process"
-  ? ServerScope
-  : S extends "cwd"
-    ? CwdScope
-    : EphemeralScope
+export type ScopeOf<S extends ResourceScope> = S extends "process" ? ServerScope : never
 
 // ── Schedule sub-shape ──
 
@@ -151,7 +142,7 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
  * Author-facing factory for a {@link ResourceContribution}.
  *
  * The factory is identity at runtime — its purpose is to (a) infer the
- * generics from the inputs (so authors don't write `<MyService, "session", never, never>`)
+ * generics from the inputs (so authors don't write `<MyService, "process", never, never>`)
  * and (b) anchor the public API surface so future shape changes have one
  * call site to migrate.
  *
