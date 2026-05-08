@@ -110,6 +110,7 @@ Commits landed in this wave so far:
 - `99e6b35d refactor(acp): own managers per extension setup`
 - `53847ae1 test(extensions): lock resource-owned state`
 - `d7b9f61f refactor(extensions): remove ambient host reads`
+- `1891457c refactor(executor): isolate sidecar platform reads`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -157,6 +158,9 @@ classes of privilege and races, but the deeper P1s remain:
   code. Commit `d7b9f61f` routes the memory vault default through public
   `ctx.home` and removes the `node:os` user-agent decoration from the Codex
   transform.
+- Executor sidecar orchestration no longer mixes host reads into the sidecar
+  service. Commit `1891457c` isolates `node:net`, `node:os`, `process.execPath`,
+  and `process.kill` behind `ExecutorPlatform`, an extension-local adapter.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -728,7 +732,8 @@ moving cron install/remove behind `CronRuntime` and wiring `BunCronRuntimeLive`
 at the platform boundary. Commit `6338d9b7` moves SDK server-lock hostname,
 PID-liveness, and SIGTERM ownership through `GentPlatform`. Shipped-extension
 ambient process reads remain open in this lane, but incidental Memory/OpenAI
-reads are closed by `d7b9f61f`.
+reads are closed by `d7b9f61f` and Executor sidecar host control is isolated by
+`1891457c`.
 
 Work:
 
@@ -738,6 +743,8 @@ Work:
       `GentPlatform`.
 - [x] Remove incidental Memory/OpenAI host reads from shipped extensions.
       Done in `d7b9f61f`.
+- [x] Isolate Executor sidecar host process/port/OS reads behind an
+      extension-local adapter. Done in `1891457c`.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -757,6 +764,14 @@ Validation:
 - `bun run lint`
 - `bun run fmt`
 - `bun run gate`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/executor-integration.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/executor/executor.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate` (first run hit a Bun 1.3.13 segmentation fault in a core
+  shard after type/style/build had passed and tests reported no failures; rerun
+  passed unchanged)
 - Guard tests.
 - `bun run lint`
 - `bun run gate`
