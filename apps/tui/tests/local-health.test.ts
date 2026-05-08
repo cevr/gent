@@ -5,6 +5,12 @@ import { Effect, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "@gent/core/runtime/gent-platform"
 import {
+  ExtensionHealth,
+  ExtensionHealthIssue,
+  ExtensionHealthSnapshot,
+} from "@gent/core/server/transport-contract"
+import {
+  extensionHealthFromSnapshot,
   formatDoctorReport,
   inspectStorage,
   makeDoctorReport,
@@ -40,6 +46,39 @@ describe("local health", () => {
       expect(report).toContain("Gent doctor")
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
+      expect(report).toContain("Extensions:")
+      expect(report).toContain("No live shared server.")
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+  )
+
+  it.scopedLive("doctor report includes degraded extension resource health", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const extensionHealth = extensionHealthFromSnapshot(
+        ExtensionHealthSnapshot.Degraded.make({
+          healthyExtensions: [],
+          degradedExtensions: [
+            ExtensionHealth.Degraded.make({
+              manifest: { id: "@test/broken-resource" },
+              scope: "builtin",
+              sourcePath: "builtin",
+              issues: [
+                ExtensionHealthIssue.ActivationFailed.make({
+                  phase: "startup",
+                  error: "resource start boom",
+                }),
+              ],
+            }),
+          ],
+        }),
+      )
+
+      const report = formatDoctorReport(yield* makeDoctorReport(home, undefined, extensionHealth))
+      expect(report).toContain("Extensions:")
+      expect(report).toContain("degraded (1 degraded, 0 healthy)")
+      expect(report).toContain("@test/broken-resource:")
+      expect(report).toContain("activation failed during startup: resource start boom")
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import { DateTime, Effect, FileSystem, Option } from "effect"
+import type { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/sdk"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 
 const LOG_DIR = "/tmp/gent/logs"
@@ -27,11 +28,19 @@ export interface LogHealth {
   readonly latestClient?: string
 }
 
+export interface ExtensionDoctorHealth {
+  readonly status: "unavailable" | "healthy" | "degraded" | "error"
+  readonly summary: string
+  readonly snapshot?: ExtensionHealthSnapshot
+  readonly error?: string
+}
+
 export interface DoctorReport {
   readonly home: string
   readonly storage: StorageHealth
   readonly server: ServerHealth
   readonly logs: LogHealth
+  readonly extensions: ExtensionDoctorHealth
 }
 
 export interface StorageResetResult {
@@ -164,16 +173,54 @@ export const inspectServer = (entry: unknown): Effect.Effect<ServerHealth, never
       : { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
   })
 
+export const extensionHealthUnavailable = (summary: string): ExtensionDoctorHealth => ({
+  status: "unavailable",
+  summary,
+})
+
+export const extensionHealthError = (error: string): ExtensionDoctorHealth => ({
+  status: "error",
+  summary: "Extension health query failed.",
+  error,
+})
+
+export const extensionHealthFromSnapshot = (
+  snapshot: ExtensionHealthSnapshot,
+): ExtensionDoctorHealth => {
+  if (snapshot._tag === "healthy") {
+    return {
+      status: "healthy",
+      summary: `healthy (${snapshot.extensions.length} active extension${snapshot.extensions.length === 1 ? "" : "s"})`,
+      snapshot,
+    }
+  }
+
+  return {
+    status: "degraded",
+    summary: `degraded (${snapshot.degradedExtensions.length} degraded, ${snapshot.healthyExtensions.length} healthy)`,
+    snapshot,
+  }
+}
+
 export const makeDoctorReport = (
   home: string,
   serverEntry: unknown,
+  extensions?: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
+    const server = yield* inspectServer(serverEntry)
     return {
       home,
       storage: yield* inspectStorage(home),
-      server: yield* inspectServer(serverEntry),
+      server,
       logs: yield* inspectLogs(),
+      extensions:
+        extensions ??
+        extensionHealthUnavailable(
+          server.status === "alive"
+            ? "Extension health was not queried."
+            : "No live shared server.",
+        ),
     }
   })
 
@@ -221,6 +268,31 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+const formatIssue = (issue: ExtensionHealthIssue): string => {
+  switch (issue._tag) {
+    case "activation-failed":
+      return `activation failed during ${issue.phase}: ${issue.error}`
+    case "scheduled-job-failed":
+      return `scheduled job ${issue.jobId} failed: ${issue.error}`
+  }
+}
+
+const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<string> => {
+  const lines = [`  Status: ${extensions.summary}`]
+  if (extensions.error !== undefined) lines.push(`  Error: ${extensions.error}`)
+  const snapshot = extensions.snapshot
+  if (snapshot?._tag !== "degraded") return lines
+
+  for (const extension of snapshot.degradedExtensions) {
+    lines.push(`  ${extension.manifest.id}:`)
+    for (const issue of extension.issues) {
+      lines.push(`    - ${formatIssue(issue)}`)
+    }
+  }
+
+  return lines
+}
+
 export const formatDoctorReport = (report: DoctorReport): string => {
   const storage = report.storage
   const storageLine =
@@ -243,6 +315,9 @@ export const formatDoctorReport = (report: DoctorReport): string => {
     "",
     "Server:",
     `  ${report.server.summary}`,
+    "",
+    "Extensions:",
+    ...formatExtensions(report.extensions),
     "",
     "Logs:",
     `  Directory: ${report.logs.dir}`,

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
+import type { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
 import {
   Cause,
@@ -64,6 +65,7 @@ import {
   isPidAlive,
   getLocalHostname,
   signalIfIdentityOwned,
+  type ServerLockEntry,
 } from "@gent/sdk/server-lock"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
@@ -75,7 +77,15 @@ import {
   makeClientWorkspaceLayer,
 } from "./extensions/client-services"
 import type { ClientRuntime } from "./extensions/client-facets.js"
-import { formatDoctorReport, makeDoctorReport, resetStorage } from "./ops/local-health"
+import {
+  extensionHealthError,
+  extensionHealthFromSnapshot,
+  extensionHealthUnavailable,
+  formatDoctorReport,
+  makeDoctorReport,
+  resetStorage,
+  type ExtensionDoctorHealth,
+} from "./ops/local-health"
 
 // Clear client log on startup
 clearClientLog()
@@ -586,11 +596,38 @@ const server = Command.make("server", {}, () =>
   Console.log("Usage: gent server <status|stop>"),
 ).pipe(Command.withSubcommands([serverStatus, serverStop]))
 
+const readDoctorExtensionHealth = (
+  entry: ServerLockEntry,
+): Effect.Effect<ExtensionDoctorHealth, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const validation = yield* validateServerLockEntry(entry)
+    if (!validation.valid) {
+      return extensionHealthUnavailable(
+        validation.reason === "dead-pid"
+          ? "Shared server lock is stale."
+          : "Shared server is not local to this host.",
+      )
+    }
+
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
+        yield* bundle.runtime.lifecycle.waitForReady
+        const snapshot = yield* bundle.client.extension.listStatus({})
+        return extensionHealthFromSnapshot(snapshot)
+      }),
+    ).pipe(Effect.catch((error: unknown) => Effect.succeed(extensionHealthError(String(error)))))
+  })
+
 const doctor = Command.make("doctor", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
     const entry = yield* readServerLock(home)
-    const report = yield* makeDoctorReport(home, entry)
+    const extensions =
+      entry === undefined
+        ? extensionHealthUnavailable("No shared server.")
+        : yield* readDoctorExtensionHealth(entry)
+    const report = yield* makeDoctorReport(home, entry, extensions)
     yield* Console.log(formatDoctorReport(report))
   }),
 )

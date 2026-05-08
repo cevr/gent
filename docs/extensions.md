@@ -230,12 +230,15 @@ optional schedule and lifecycle hooks. Extension-owned state should live in
 scoped services/resources; true actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension authoring buckets.
 
-| Scope     | Lifetime                |
-| --------- | ----------------------- |
-| `process` | Server lifetime         |
-| `cwd`     | Per working directory   |
-| `session` | Per session (ephemeral) |
-| `branch`  | Per branch (ephemeral)  |
+| Scope     | Lifetime        |
+| --------- | --------------- |
+| `process` | Server lifetime |
+
+`process` is the only public Resource scope today. `cwd`, `session`, and
+`branch` are intentionally absent until those lifetimes have real host owners.
+A `start` failure degrades only the owning extension, removes its dependent
+contributions from active registries, and appears in extension health surfaces
+including `gent doctor`.
 
 ```ts
 import { defineExtension, defineResource } from "@gent/core/extensions/api"
