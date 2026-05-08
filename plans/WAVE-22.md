@@ -8,8 +8,9 @@ to hide inside a bugfix commit. Gent still has more than one owner for host
 platform access, and the ephemeral agent runtime still behaves like a second
 composition root. Wave 22 exists to subtract those duplicate ownership paths.
 
-Wave 22 is complete only when a fresh five-lane recursive audit reports no
-P0/P1. Scope is not a constraint.
+Wave 22 was superseded by Wave 23 after recursive verification at `2ae1dd53`
+reported new P1s in durable idempotency, extension authority, test guardrails,
+and composition-root ownership. Scope is not a constraint.
 
 ## Principles Applied
 
