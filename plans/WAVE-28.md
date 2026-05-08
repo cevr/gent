@@ -560,6 +560,8 @@ rules and local reasoned exceptions.
 
 ## Commit 14: refactor(structure): collapse files that do not earn existence
 
+**Status**: Completed in this wave.
+
 **Justification**: The wave already collapsed obvious extension wrapper files,
 but the final audit should not be the first place this principle becomes
 repo-wide. Run the file-existence audit across `packages/` and `apps/`, then
@@ -575,17 +577,41 @@ collapse any remaining tiny one-importer files whose split is only aesthetic.
 
 **Changes**
 
-| File set                                                                | Change                                                                                              |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/**/src/**/*.ts`            | Collapse one-importer helpers/services/classes/wrappers that do not encode real package boundaries. |
-| `/Users/cvr/Developer/personal/gent/apps/**/src/**/*.ts(x)`             | Collapse tiny TUI/client files where the split only names one local implementation detail.          |
-| `/Users/cvr/Developer/personal/gent/tests/**` and package test fixtures | Retarget tests through public behavior when they only exist to reach collapsed internals.           |
-| `/Users/cvr/Developer/personal/gent/plans/WAVE-28.md`                   | Record before/after file-count and `<=120 LOC` counts plus explicit keep reasons for small files.   |
+| File                                                                                         | Change                                                                                              |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/index.ts`               | Owns tiny connection, handoff, and skills client contributions directly at the builtin registry.    |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/connection.client.ts`   | Deleted one-importer widget wrapper.                                                                |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/handoff.client.ts`      | Deleted one-importer interaction-renderer wrapper.                                                  |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/skills.client.ts`       | Deleted one-importer autocomplete wrapper.                                                          |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`                         | Owns the route-local `ExtensionWidgets` render helper directly.                                     |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/components/extension-widgets.tsx`           | Deleted one-route component wrapper.                                                                |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                        | Owns the `rename_session` tool beside `SessionToolsExtension`, the only extension that installs it. |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/session-tools/rename-session.ts` | Deleted one-importer one-tool file.                                                                 |
+| `/Users/cvr/Developer/personal/gent/plans/WAVE-28.md`                                        | Recorded file-count receipts and the file-existence rule as a first-class audit lane.               |
+
+**Explicit keep reasons**
+
+- Package entrypoints such as
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/theme/index.ts` and
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client/index.ts`
+  earn their files as public import membranes.
+- Runtime/platform boundary files such as
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/wide-event-boundary.ts`
+  and `/Users/cvr/Developer/personal/gent/apps/tui/src/platform/path-runtime.ts`
+  earn their files because they isolate external context or environment edges.
+- Shared domain schemas, tagged errors, and pure reducers stay split when they
+  have multiple importers, independent tests, or a stable conceptual boundary.
 
 **Verification**
 
-- Before/after file-count and `<=120 LOC` report for `packages/` and `apps/`.
-- Focused tests for every collapsed area.
+- Before file-count: `417` TypeScript source files under `packages/` and
+  `apps/`; after file-count: `412`.
+- Before `<=120 LOC` count: `223`; after `<=120 LOC` count: `218`.
+- `bun run --cwd apps/tui typecheck`
+- `cd apps/tui && env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-integration.test.ts tests/extension-lifecycle.test.ts`
+- `cd apps/tui && env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-integration.test.ts tests/extension-lifecycle.test.ts tests/autocomplete-effect-items.test.ts`
+- `cd packages/extensions && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/session-tools.test.ts tests/skills/skills-rpc.test.ts`
+- `cd apps/tui && env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts integration/session-feed-boundary.test.tsx integration/session-lifecycle.test.tsx tests/extension-integration.test.ts`
 - `bun run typecheck`
 - `bun run gate`
 

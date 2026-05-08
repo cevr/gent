@@ -2,7 +2,7 @@
  * Session route - message list, composer, streaming
  */
 
-import { createMemo } from "solid-js"
+import { createMemo, For } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
@@ -23,11 +23,10 @@ import {
 import { buildTopRightLabels } from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
-import { ExtensionWidgets } from "../components/extension-widgets"
 import { useExtensionUI } from "../extensions/context"
 import { Auth } from "./auth"
 import { Permissions } from "./permissions"
-import type { BorderLabelColor } from "../extensions/client-facets.js"
+import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -35,6 +34,20 @@ export interface SessionProps {
   initialPrompt?: string
   debugMode?: boolean
   missingAuthProviders?: readonly string[]
+}
+
+function ExtensionWidgets(props: { slot: WidgetSlot }) {
+  const ext = useExtensionUI()
+  const slotWidgets = () => ext.widgets().filter((w) => w.slot === props.slot)
+
+  return (
+    <For each={slotWidgets()}>
+      {(widget) => {
+        const Widget = widget.component
+        return <Widget />
+      }}
+    </For>
+  )
 }
 
 export function Session(props: SessionProps) {
