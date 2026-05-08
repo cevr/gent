@@ -11,11 +11,12 @@
  */
 
 import { Context, Effect, Layer } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
-import { StorageTransaction } from "../../storage/storage-transaction.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
@@ -70,7 +71,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
     | MessageStorage
     | AgentLoopQueueStorage
     | EventStorage
-    | StorageTransaction
+    | SqlClient.SqlClient
     | ModelResolver
     | ExtensionRegistry
     | DriverRegistry
@@ -89,7 +90,8 @@ export class AgentLoopBehaviorDeps extends Context.Service<
         const messageStorage = yield* MessageStorage
         const queueStorage = yield* AgentLoopQueueStorage
         const eventStorage = yield* EventStorage
-        const storageTransaction = yield* StorageTransaction
+        const sql = yield* SqlClient.SqlClient
+        const storageTransaction = makeStorageTransaction(sql)
         const turnStorage: TurnStorage = {
           transaction: storageTransaction,
           events: eventStorage,

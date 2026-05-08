@@ -14,7 +14,6 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { SqliteStorage } from "../../storage/sqlite-storage.js"
-import type { StorageTransaction } from "../../storage/storage-transaction.js"
 import { ApprovalService } from "../approval-service.js"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -42,7 +41,6 @@ type EphemeralStorageProvides =
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | StorageTransaction
   | InteractionStorage
   | SearchStorage
 

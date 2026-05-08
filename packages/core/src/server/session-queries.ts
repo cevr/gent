@@ -1,4 +1,5 @@
 import { Effect, Layer, Context } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type {
@@ -15,7 +16,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { StorageTransaction } from "../storage/storage-transaction.js"
+import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { buildBranchTree } from "./session-utils.js"
@@ -61,7 +62,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
-      const storageTransaction = yield* StorageTransaction
+      const sql = yield* SqlClient.SqlClient
+      const storageTransaction = makeStorageTransaction(sql)
       const sessionRuntime = yield* SessionRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {

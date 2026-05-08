@@ -1,5 +1,6 @@
 import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient } from "effect/unstable/sql"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -29,8 +30,7 @@ import {
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/session-operation-storage.js"
-import type { StorageError } from "../storage/sqlite-storage.js"
-import { StorageTransaction } from "../storage/storage-transaction.js"
+import { makeStorageTransaction, type StorageError } from "../storage/sqlite-storage.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -185,7 +185,7 @@ export interface SessionCommandsService {
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
-  | StorageTransaction
+  | SqlClient.SqlClient
   | EventStore
   | EventPublisher
   | SessionStorage
@@ -195,7 +195,8 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionRuntime
   | GentPlatform
 > = Effect.gen(function* () {
-  const storageTransaction = yield* StorageTransaction
+  const sql = yield* SqlClient.SqlClient
+  const storageTransaction = makeStorageTransaction(sql)
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -572,7 +573,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
-      const storageTransaction = yield* StorageTransaction
+      const sql = yield* SqlClient.SqlClient
+      const storageTransaction = makeStorageTransaction(sql)
       const sessionOperationStorage = yield* SessionOperationStorage
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher

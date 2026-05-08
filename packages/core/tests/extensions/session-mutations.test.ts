@@ -21,7 +21,7 @@ import type { BranchStorageService } from "@gent/core-internal/storage/branch-st
 import type { MessageStorageService } from "@gent/core-internal/storage/message-storage"
 import type { RelationshipStorageService } from "@gent/core-internal/storage/relationship-storage"
 import type { SessionStorageService } from "@gent/core-internal/storage/session-storage"
-import type { StorageTransactionService } from "../../src/storage/storage-transaction"
+import type { StorageTransactionService } from "../../src/storage/sqlite-storage"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {

@@ -1,6 +1,6 @@
 import type { PlatformError } from "effect"
 import { Effect, Layer, FileSystem, Path } from "effect"
-import type { SqlClient } from "effect/unstable/sql"
+import { SqlError, type SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import type { EncoreMessageStorage } from "effect-encore"
@@ -14,11 +14,34 @@ import { AgentLoopQueueStorage } from "./agent-loop-queue-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
-import { StorageTransaction } from "./storage-transaction.js"
 import { StorageError } from "../domain/storage-error.js"
 export { StorageError }
 
 import { StorageInitLive } from "./schema.js"
+
+export interface StorageTransactionService {
+  readonly withTransaction: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | StorageError, R>
+}
+
+export const withStorageTransaction = <A, E, R>(
+  sql: SqlClient.SqlClient,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | StorageError, R> =>
+  sql
+    .withTransaction(effect)
+    .pipe(
+      Effect.catchIf(SqlError.isSqlError, (error) =>
+        Effect.fail(
+          new StorageError({ message: "Failed to run storage transaction", cause: error }),
+        ),
+      ),
+    )
+
+export const makeStorageTransaction = (sql: SqlClient.SqlClient): StorageTransactionService => ({
+  withTransaction: (effect) => withStorageTransaction(sql, effect),
+})
 
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
@@ -34,7 +57,6 @@ type FocusedStorage =
   | EventStorage
   | RelationshipStorage
   | SessionOperationStorage
-  | StorageTransaction
   | ClusterMessageStorage.MessageStorage
   | EncoreMessageStorage
 
@@ -51,7 +73,6 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(EventStorage.Live, base),
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(SessionOperationStorage.Live, base),
-    Layer.provide(StorageTransaction.Live, base),
     Layer.provide(encoreSqlMessageStorage(), base),
     interactionStorage,
     Layer.provide(SearchStorage.Live, base),

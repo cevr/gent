@@ -215,13 +215,13 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/core/src/runtime/agent/ephemeral-root.ts",
-    line: 87,
+    line: 85,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane",
   },
   {
     file: "packages/core/src/runtime/agent/ephemeral-root.ts",
-    line: 110,
+    line: 108,
     kind: "effect-diagnostics",
     text: ": // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane",
   },

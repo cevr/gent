@@ -12,6 +12,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
+import { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
@@ -60,9 +61,9 @@ import {
   type RelationshipStorageService,
 } from "../../storage/relationship-storage.js"
 import {
-  StorageTransaction,
+  makeStorageTransaction,
   type StorageTransactionService,
-} from "../../storage/storage-transaction.js"
+} from "../../storage/sqlite-storage.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
@@ -748,7 +749,7 @@ export const InProcessRunner = (
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | StorageTransaction
+  | SqlClient.SqlClient
   | EventStore
   | EventPublisher
   | SessionRuntime
@@ -770,7 +771,8 @@ export const InProcessRunner = (
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
-      const storageTransaction = yield* StorageTransaction
+      const sql = yield* SqlClient.SqlClient
+      const storageTransaction = makeStorageTransaction(sql)
       const agentRunStorage: AgentRunStorage = {
         transaction: storageTransaction,
         sessions: sessionStorage,
@@ -957,7 +959,7 @@ export const SubprocessRunner = (
   | MessageStorage
   | EventStorage
   | RelationshipStorage
-  | StorageTransaction
+  | SqlClient.SqlClient
   | EventStore
   | EventPublisher
   | ExtensionRegistry
@@ -978,7 +980,8 @@ export const SubprocessRunner = (
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
-      const storageTransaction = yield* StorageTransaction
+      const sql = yield* SqlClient.SqlClient
+      const storageTransaction = makeStorageTransaction(sql)
       const agentRunStorage: AgentRunStorage = {
         transaction: storageTransaction,
         sessions: sessionStorage,
