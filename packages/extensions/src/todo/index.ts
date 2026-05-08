@@ -14,10 +14,7 @@
  */
 import { Layer } from "effect"
 import { defineExtension, defineResource } from "@gent/core/extensions/api"
-import { TodoCreateTool } from "./todo-create.js"
-import { TodoListTool } from "./todo-list.js"
-import { TodoGetTool } from "./todo-get.js"
-import { TodoUpdateTool } from "./todo-update.js"
+import { TodoCreateTool, TodoGetTool, TodoListTool, TodoUpdateTool } from "./tools.js"
 import { TodoStorage } from "../todo-storage.js"
 import { TodoService } from "../todo-service.js"
 import { TODO_EXTENSION_ID } from "./identity.js"

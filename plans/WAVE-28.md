@@ -404,6 +404,8 @@ buy a reader or caller a real boundary.
 
 ## Commit 11: refactor(todo): consolidate todo tool operation files
 
+**Status**: Completed in this wave.
+
 **Justification**: The todo feature’s real boundaries are domain, requests,
 storage, and service. One-file-per-operation tool splits do not currently earn
 their existence.
@@ -417,18 +419,26 @@ their existence.
 
 **Changes**
 
-| File                                                                                            | Change                                       |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-create.ts`                | Merge into a cohesive todo tool module.      |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-get.ts`                   | Same.                                        |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-list.ts`                  | Same.                                        |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-update.ts`                | Same.                                        |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-tool-execution.test.ts` | Retarget away from operation-file internals. |
+| File                                                                                            | Change                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/tools.ts`                      | Added one cohesive todo tool module for create/list/get/update.                                                                                                         |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-create.ts`                | Deleted one-operation file.                                                                                                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-get.ts`                   | Deleted one-operation file.                                                                                                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-list.ts`                  | Deleted one-operation file.                                                                                                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/todo-update.ts`                | Deleted one-operation file.                                                                                                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/index.ts`                      | Imports tool contributions from the cohesive module.                                                                                                                    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-tool-execution.test.ts` | Retargeted away from operation-file internals.                                                                                                                          |
+| `/Users/cvr/Developer/personal/gent/packages/core/package.json`                                 | Reduced residual core test shard size from 4 to 2 after Bun repeatedly segfaulted on one three/four-file runtime grouping while the same files passed as pairs/singles. |
 
 **Verification**
 
-- Todo extension tests.
-- Core RPC acceptance for todo.
+- Before/after file-count and `<=120 LOC` report.
+  - Before: 103 extension source files; 46 files `<=120 LOC`.
+  - After: 100 extension source files; 42 files `<=120 LOC`.
+- `bun run --cwd packages/extensions typecheck`
+- `cd packages/extensions && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/todo/todo-tool-execution.test.ts tests/todo/todo-rpc.test.ts`
+- `cd packages/core && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/file-index/file-index.test.ts tests/runtime/model-registry.test.ts`
+- `cd packages/core && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/context-estimation.test.ts tests/runtime/agent-runner.test.ts`
 - `bun run gate`
 
 ## Commit 12: test(runtime): replace actor key tests with public behavior
