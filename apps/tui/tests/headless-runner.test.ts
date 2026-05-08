@@ -9,7 +9,7 @@ import {
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
-import { createMockClient } from "./render-harness"
+import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedErrorClass<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
   { message: Schema.String },

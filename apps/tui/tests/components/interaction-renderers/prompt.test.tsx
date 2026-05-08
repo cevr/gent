@@ -4,8 +4,8 @@ import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event"
 import { PromptRenderer } from "../../../src/components/interaction-renderers/prompt"
-import { destroyRenderSetup, renderWithProviders } from "../../render-harness"
-import { waitForRenderedFrame } from "../../helpers"
+import { destroyRenderSetup, renderWithProviders } from "../../render-harness-boundary"
+import { waitForRenderedFrame } from "../../helpers-boundary"
 
 const interaction = (text: string, metadata?: unknown): ActiveInteraction =>
   ({

@@ -28,7 +28,7 @@ class ExtensionIntegrationTestError extends Schema.TaggedErrorClass<ExtensionInt
 ) {}
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { builtinClientModules } from "../src/extensions/builtins/index"
-import { createMockRuntime } from "./render-harness"
+import { createMockRuntime } from "./render-harness-boundary"
 const throwOnAccess = (label: string): never => {
   throw new Error(`unexpected transport call in pure load test: ${label}`)
 }

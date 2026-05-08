@@ -10,7 +10,7 @@ import { ComposerState } from "../src/components/composer-state"
 import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
 import { SessionUiState } from "../src/routes/session-ui-state"
 import { Effect } from "effect"
-import { renderFrame, renderWithProviders } from "./render-harness"
+import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (content: string, mode?: "queue" | "interject") => void

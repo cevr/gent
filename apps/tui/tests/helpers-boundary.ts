@@ -1,4 +1,4 @@
-import { renderFrame, type renderWithProviders } from "./render-harness"
+import { renderFrame, type renderWithProviders } from "./render-harness-boundary"
 import { Clock, Effect, Schema } from "effect"
 
 export { renderFrame }

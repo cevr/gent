@@ -3,7 +3,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PromptSearchPalette } from "../src/components/prompt-search-palette"
 import { PromptSearchState, transitionPromptSearch } from "../src/components/prompt-search-state"
-import { renderFrame, renderWithProviders } from "./render-harness"
+import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 const buildOpenState = (draftBeforeOpen: string, entries: readonly string[]) => {
   let state = PromptSearchState.open(draftBeforeOpen)
   for (const event of [

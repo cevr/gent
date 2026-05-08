@@ -289,7 +289,7 @@ Validation:
 
 ### W24.5 — Strict Guardrail Closure
 
-Status: planned.
+Status: done in `test(tooling): tighten strict guardrails`.
 
 Work:
 
@@ -301,12 +301,34 @@ Work:
 - Replace file-level suppression inventory with exact reviewed suppression
   entries and red fixtures proving new unlisted suppressions fail.
 
+Receipts:
+
+- `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts` now applies
+  `gent/no-promise-control-flow-in-tests` to every TypeScript file under a
+  `/tests/` directory, except explicit `*-boundary` files, and extends
+  `gent/no-extension-internal-imports` to `ExportNamedDeclaration`,
+  `ExportAllDeclaration`, and `ImportExpression`.
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/render-harness-boundary.tsx`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-test-harness-boundary.ts`,
+  and `/Users/cvr/Developer/personal/gent/apps/tui/tests/helpers-boundary.ts`
+  make the TUI test Promise adapters explicit boundary files; imports were
+  updated to those names.
+- `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/packages/extensions/src/no-extension-internal-imports.invalid.ts`
+  now includes import, re-export, export-all, and dynamic import violations.
+- `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`
+  replaced file-level Effect diagnostic approvals with exact reviewed
+  file/line/kind/text entries.
+- `/Users/cvr/Developer/personal/gent/packages/tooling/tests/suppression-inventory.test.ts`
+  proves an approved file at an unapproved line is still rejected.
+
 Validation:
 
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/fixtures.test.ts packages/tooling/tests/suppression-inventory.test.ts`
-- `bun packages/tooling/src/check-suppression-inventory.ts`
-- `bun packages/tooling/src/check-core-public-exports.ts`
-- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/fixtures.test.ts packages/tooling/tests/suppression-inventory.test.ts` — 32 pass, 0 fail
+- `bun packages/tooling/src/check-suppression-inventory.ts` — pass
+- `bun packages/tooling/src/check-core-public-exports.ts` — covered by `bun run lint`, pass
+- `bun run typecheck` — pass
+- `bun run lint` — pass, 0 warnings/errors
+- `bun run fmt:check` — pass
 
 ### W24.6 — Recursive Verification
 

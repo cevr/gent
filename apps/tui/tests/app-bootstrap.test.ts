@@ -11,7 +11,7 @@ import {
   resolveStartupAuthState,
   type InitialState,
 } from "../src/app-bootstrap"
-import { createMockClient } from "./render-harness"
+import { createMockClient } from "./render-harness-boundary"
 
 const expectAppBootstrapFailure = (
   effect: Effect.Effect<unknown, AppBootstrapError | GentRpcError>,

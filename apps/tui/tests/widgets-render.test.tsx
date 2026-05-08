@@ -8,7 +8,7 @@ import { MessageList, type Message, type SessionItem } from "../src/components/m
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
+import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"

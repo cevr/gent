@@ -21,7 +21,7 @@ import type { SessionRuntimeState } from "@gent/core-internal/server/transport-c
 import { emptyQueueSnapshot, type SessionSnapshot } from "@gent/sdk"
 import { useSessionFeed } from "../src/hooks/use-session-feed"
 import type { Session } from "../src/client"
-import { createMockClient, createMockRuntime } from "./render-harness"
+import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 

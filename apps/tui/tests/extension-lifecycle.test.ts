@@ -11,7 +11,7 @@ import {
   makeActiveSessionRef,
   makeClientExtensionRuntime,
   runClientExtensionSetup,
-} from "./extension-test-harness"
+} from "./extension-test-harness-boundary"
 describe("transport-only extension widgets", () => {
   test("cleanups fire in registration order", () => {
     const calls: string[] = []

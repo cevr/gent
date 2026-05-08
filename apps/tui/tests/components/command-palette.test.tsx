@@ -9,8 +9,8 @@ import { useCommand } from "../../src/command"
 import { Route, useRouter, type RouterContextValue } from "../../src/router"
 import { useClient } from "../../src/client"
 import type { ClientContextValue } from "../../src/client/context"
-import { createMockClient, renderFrame, renderWithProviders } from "../render-harness"
-import { waitForRenderedFrame } from "../helpers"
+import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { waitForRenderedFrame } from "../helpers-boundary"
 
 function OpenPaletteOnMount() {
   const command = useCommand()

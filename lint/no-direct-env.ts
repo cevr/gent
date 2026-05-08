@@ -122,7 +122,8 @@ const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined =>
   return typeof line === "number" ? line : undefined
 }
 
-const isTestFilename = (filename: string): boolean => /\.test\.tsx?$/.test(filename)
+const isTestFilename = (filename: string): boolean =>
+  /\.test\.tsx?$/.test(filename) || /\/tests\/.*\.[cm]?tsx?$/.test(filename)
 
 const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
 
@@ -418,35 +419,53 @@ const plugin: Plugin = {
         // Allowed @gent/core subpaths (everything else is forbidden)
         const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
 
+        const reportForbiddenSource = (node: AstNode, source: string) => {
+          if (INTERNAL_RELATIVE.test(source)) {
+            context.report({
+              message: `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`,
+              node,
+            })
+            return
+          }
+
+          if (source.startsWith("@gent/core-internal")) {
+            context.report({
+              message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
+              node,
+            })
+            return
+          }
+
+          if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
+            context.report({
+              message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
+              node,
+            })
+          }
+        }
+
+        const sourceValue = (node: AstNode): string | undefined => {
+          const source = getNodeField(node, "source")
+          if (source === undefined) return undefined
+          return getStringField(source, "value")
+        }
+
         return {
-          ImportDeclaration(node: { source: { value: string }; type: string }) {
-            const source = node.source.value
-
-            // Relative imports escaping into core internals
-            if (INTERNAL_RELATIVE.test(source)) {
-              context.report({
-                message: `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`,
-                node,
-              })
-              return
-            }
-
-            if (source.startsWith("@gent/core-internal")) {
-              context.report({
-                message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
-                node,
-              })
-              return
-            }
-
-            // Package imports into core internals (skip allowed paths)
-            if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
-              context.report({
-                message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
-                node,
-              })
-              return
-            }
+          ImportDeclaration(node) {
+            const source = sourceValue(node)
+            if (source !== undefined) reportForbiddenSource(node, source)
+          },
+          ExportNamedDeclaration(node) {
+            const source = sourceValue(node)
+            if (source !== undefined) reportForbiddenSource(node, source)
+          },
+          ExportAllDeclaration(node) {
+            const source = sourceValue(node)
+            if (source !== undefined) reportForbiddenSource(node, source)
+          },
+          ImportExpression(node) {
+            const source = sourceValue(node)
+            if (source !== undefined) reportForbiddenSource(node, source)
           },
         }
       },

@@ -43,12 +43,50 @@ describe("suppression inventory guard", () => {
     ).toEqual([{ file: "sample.ts", line: 1, kind: "effect-diagnostics" }])
   })
 
-  test("allows effect diagnostics in reviewed files", () => {
+  test("allows exact reviewed effect diagnostics only", () => {
+    expect(
+      findSuppressionInventoryFindings(
+        "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
+        [
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          `// ${effectDiagnostics} anyUnknownInErrorContext:off`,
+        ].join("\n"),
+      ),
+    ).toEqual([])
+
     expect(
       findSuppressionInventoryFindings(
         "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
         `// ${effectDiagnostics} anyUnknownInErrorContext:off`,
       ),
-    ).toEqual([])
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
+        line: 1,
+        kind: "effect-diagnostics",
+      },
+    ])
   })
 })
