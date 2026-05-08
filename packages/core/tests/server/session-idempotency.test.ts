@@ -10,6 +10,8 @@ import { EventStore } from "@gent/core-internal/domain/event"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
+import { Gent } from "@gent/sdk"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
@@ -23,6 +25,7 @@ import {
   sessionCommandsLayer,
   sessionRuntimeLayer,
 } from "./session-commands/helpers"
+import { e2ePreset } from "../extensions/helpers/test-preset"
 
 describe("requestId idempotency", () => {
   const makePersistentSessionCommandsLayer = (dbPath: string) => {
@@ -350,6 +353,110 @@ describe("requestId idempotency", () => {
       // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+  )
+
+  it.live("duplicate public branch.create requestId converges through RPC handlers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-create-idem" })
+
+        const first = yield* client.branch.create({
+          sessionId: created.sessionId,
+          name: "rpc durable branch",
+          requestId: "req-rpc-create-branch",
+        })
+        const second = yield* client.branch.create({
+          sessionId: created.sessionId,
+          name: "retry name should not win",
+          requestId: "req-rpc-create-branch",
+        })
+        const branches = yield* client.branch.list({ sessionId: created.sessionId })
+
+        expect(second.branchId).toBe(first.branchId)
+        expect(branches).toHaveLength(2)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("duplicate public branch.switch requestId converges through RPC handlers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-switch-idem" })
+        const target = yield* client.branch.create({
+          sessionId: created.sessionId,
+          name: "target",
+          requestId: "req-rpc-switch-target-create",
+        })
+
+        yield* client.branch.switch({
+          sessionId: created.sessionId,
+          fromBranchId: created.branchId,
+          toBranchId: target.branchId,
+          summarize: false,
+          requestId: "req-rpc-switch-branch",
+        })
+        yield* client.branch.switch({
+          sessionId: created.sessionId,
+          fromBranchId: created.branchId,
+          toBranchId: target.branchId,
+          summarize: true,
+          requestId: "req-rpc-switch-branch",
+        })
+        const session = yield* client.session.get({ sessionId: created.sessionId })
+
+        expect(session?.activeBranchId).toBe(target.branchId)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("duplicate public branch.fork requestId converges through RPC handlers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-fork-idem" })
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "seed public fork",
+          requestId: "req-rpc-fork-seed-message",
+        })
+        const snapshot = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        const userMessage = snapshot.messages.find((message) => message.role === "user")
+        if (userMessage === undefined) {
+          return yield* Effect.die("expected seeded user message")
+        }
+
+        const first = yield* client.branch.fork({
+          sessionId: created.sessionId,
+          fromBranchId: created.branchId,
+          atMessageId: userMessage.id,
+          name: "rpc durable fork",
+          requestId: "req-rpc-fork-branch",
+        })
+        const second = yield* client.branch.fork({
+          sessionId: created.sessionId,
+          fromBranchId: created.branchId,
+          atMessageId: userMessage.id,
+          name: "retry fork name should not win",
+          requestId: "req-rpc-fork-branch",
+        })
+        const branches = yield* client.branch.list({ sessionId: created.sessionId })
+
+        expect(second.branchId).toBe(first.branchId)
+        expect(branches).toHaveLength(2)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
   // Dedup-cache TTL eviction. The cache schedules a delayed

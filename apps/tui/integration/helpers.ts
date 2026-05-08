@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import * as path from "node:path"
-import { renderFrame, type renderWithProviders } from "../tests/render-harness"
+import { renderFrame, type renderWithProviders } from "../tests/render-harness-boundary"
 
 export { renderFrame }
 

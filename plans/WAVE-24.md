@@ -332,21 +332,24 @@ Validation:
 
 ### W24.6 — Recursive Verification
 
-Status: planned.
+Status: found Wave 25 blockers.
 
 Work:
 
-- Re-run the same six W23.10 lanes independently.
-- If any P0/P1 remains, synthesize Wave 25 and continue.
+- Re-ran the same six W23.10 lanes independently against `3af43a3d`.
+- Four lanes found no P0/P1:
+  - Effect / Effect AI / native primitives.
+  - Root/platform/composition.
+  - Extension API/task/builtins.
+  - Owned upstream libraries.
+- Two lanes found P1 blockers:
+  - Idempotency/restart durability found dropped branch RPC request IDs and
+    non-convergent background bash terminal notification state.
+  - Guardrails/tests found TUI e2e import drift after the W24.5 boundary
+    harness rename.
+- Synthesized `/Users/cvr/Developer/personal/gent/plans/WAVE-25.md`.
 
 Validation:
 
-- No P0/P1 findings.
-- `bun run typecheck`
-- `bun run lint`
-- `bun run fmt:check`
-- `bun run build`
-- `bun run smoke`
-- `bun run test:e2e`
-- Isolated package/focused test evidence if `bun run test` still hits the Bun
-  signal-5 runner crash.
+- P0/P1 remained, so W24 cannot close.
+- Wave 25 carries the closure work and final recursive verification batch.

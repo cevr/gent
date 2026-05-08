@@ -7,7 +7,7 @@ import { resolveInitialState, resolveInteractiveBootstrap } from "../src/app-boo
 import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
-import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness"
+import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
 import { baseLocalLayer as _baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/src/all-agents.js"
 import { GitReader } from "../../../packages/extensions/src/librarian/index.js"

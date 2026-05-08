@@ -38,6 +38,8 @@ export interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
 
 export const BackgroundBashTerminalState = Schema.Struct({
   status: BackgroundBashTerminalStatus,
+  command: Schema.String,
+  exitCode: Schema.optional(Schema.Number),
   message: Schema.optional(Schema.String),
 })
 export type BackgroundBashTerminalState = typeof BackgroundBashTerminalState.Type
@@ -52,7 +54,9 @@ export const BackgroundBashClaim = TaggedEnumClass("BackgroundBashClaim", {
 export type BackgroundBashClaim = typeof BackgroundBashClaim.Type
 
 interface BackgroundBashJobRow {
+  readonly command: string
   readonly status: BackgroundBashStatus
+  readonly exit_code: number | null
   readonly message: string | null
 }
 
@@ -76,6 +80,8 @@ const mapError = (message: string) => (cause: unknown) =>
 
 const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState => ({
   status: row.status === "running" ? "interrupted" : row.status,
+  command: row.command,
+  exitCode: row.exit_code ?? undefined,
   message: row.message ?? undefined,
 })
 
@@ -113,7 +119,7 @@ export class BackgroundBashStorage extends Context.Service<
           key: BackgroundBashJobKeyFields,
         ) {
           const rows = yield* sql<BackgroundBashJobRow>`
-          SELECT status, message
+          SELECT command, status, exit_code, message
           FROM background_bash_jobs
           WHERE session_id = ${key.sessionId}
             AND branch_id = ${key.branchId}

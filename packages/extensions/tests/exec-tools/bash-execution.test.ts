@@ -264,6 +264,76 @@ describe("BashTool execution", () => {
   )
 
   it.live(
+    "terminal background job retries replay durable completion instead of spawning work",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+          const toolCallId = ToolCallId.make("tc-terminal-retry")
+          const ctx: ToolCapabilityContext = {
+            ...stubCtx,
+            toolCallId,
+            session: {
+              ...stubCtx.session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: () =>
+                Effect.succeed([
+                  new Branch({
+                    id: stubCtx.branchId,
+                    sessionId: stubCtx.sessionId,
+                    createdAt: now,
+                  }),
+                ]),
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+          const millis = yield* Clock.currentTimeMillis
+          const storageLayer = SqliteStorage.LiveWithSql(
+            `/tmp/gent-background-bash-terminal-${millis}.db`,
+          ).pipe(Layer.provide(BunServices.layer))
+
+          yield* Effect.gen(function* () {
+            const storage = yield* BackgroundBashStorage
+            const claim = yield* storage.claimStart({
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+              toolCallId,
+              command: "printf stored-terminal",
+              cwd: ctx.cwd,
+            })
+            expect(claim._tag).toBe("Started")
+            yield* storage.markCompleted(
+              { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+              { exitCode: 0, message: "stored output" },
+            )
+          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+
+          const retried = yield* getToolEffect(BashTool)(
+            { command: "printf should-not-run", run_in_background: true },
+            ctx,
+          ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+          expect(retried.exitCode).toBe(0)
+
+          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+          expect(message.sourceId).toBe("bash:tc-terminal-retry:complete")
+          expect(message.content).toContain("Background command completed (exit code 0)")
+          expect(message.content).toContain("$ printf stored-terminal")
+          expect(message.content).toContain("stored output")
+          expect(message.content).not.toContain("should-not-run")
+        }),
+      ),
+    processTestTimeout,
+  )
+
+  it.live(
     "background job interrupted by restart is reconciled once",
     () =>
       withProcessTimeout(

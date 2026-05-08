@@ -28,6 +28,7 @@ import {
 import { classify } from "./bash-guardrails.js"
 import {
   BackgroundBashStorage,
+  type BackgroundBashTerminalState,
   type BackgroundBashJobKeyFields,
   type BackgroundBashStorageError,
 } from "./bash-storage.js"
@@ -190,6 +191,24 @@ const queueBackgroundFollowUp = (params: {
       .pipe(Effect.catchEager(() => Effect.void))
   })
 
+const queueTerminalFollowUp = (ctx: ToolCapabilityContext, state: BackgroundBashTerminalState) => {
+  const command = state.command
+  const message = state.message ?? ""
+  if (state.status === "completed") {
+    const exitCode = state.exitCode ?? 0
+    return queueBackgroundFollowUp({
+      ctx,
+      sourceId: `bash:${ctx.toolCallId}:complete`,
+      content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
+    })
+  }
+  return queueBackgroundFollowUp({
+    ctx,
+    sourceId: `bash:${ctx.toolCallId}:failure`,
+    content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
+  })
+}
+
 export interface BackgroundBashSupervisorService {
   readonly start: (
     job: BackgroundBashJob,
@@ -252,12 +271,13 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         }
       }
 
-      yield* queueBackgroundFollowUp({
-        ctx: job.ctx,
-        sourceId: `bash:${job.ctx.toolCallId}:complete`,
-        content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${job.command}\n${outputText}\n\`\`\``,
-      })
       yield* storage.markCompleted(backgroundJobKeyFields(job.ctx), {
+        exitCode: bgResult.exitCode,
+        message: outputText,
+      })
+      yield* queueTerminalFollowUp(job.ctx, {
+        status: "completed",
+        command: job.command,
         exitCode: bgResult.exitCode,
         message: outputText,
       })
@@ -267,11 +287,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       storage.markFailed(backgroundJobKeyFields(job.ctx), message).pipe(
         Effect.catchEager(() => Effect.void),
         Effect.andThen(
-          queueBackgroundFollowUp({
-            ctx: job.ctx,
-            sourceId: `bash:${job.ctx.toolCallId}:failure`,
-            content: `Background command failed:\n\`\`\`\n$ ${job.command}\n${message}\n\`\`\``,
-          }),
+          queueTerminalFollowUp(job.ctx, { status: "failed", command: job.command, message }),
         ),
       )
 
@@ -288,12 +304,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           })
           if (claim._tag === "AlreadyRunning") return
           if (claim._tag === "Terminal") {
-            if (claim.state.status === "interrupted") {
-              yield* queueFailure(
-                job,
-                claim.state.message ?? "Background command interrupted by server restart",
-              )
-            }
+            yield* queueTerminalFollowUp(job.ctx, claim.state)
             yield* Ref.update(state, (s) => markJobCompleted(s, key))
             return
           }

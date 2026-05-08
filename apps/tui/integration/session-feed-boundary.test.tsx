@@ -8,7 +8,7 @@ import {
   createMockRuntime,
   destroyRenderSetup,
   renderWithProviders,
-} from "../tests/render-harness"
+} from "../tests/render-harness-boundary"
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/src/all-agents.js"
 import { GitReader } from "../../../packages/extensions/src/librarian/index.js"

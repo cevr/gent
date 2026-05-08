@@ -205,28 +205,37 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
   "branch.list": ({ sessionId }: SessionIdPayload) => deps.queries.listBranches(sessionId),
 
-  "branch.create": ({ sessionId, name }: CreateBranchInput) =>
+  "branch.create": ({ sessionId, name, requestId }: CreateBranchInput) =>
     deps.commands.createBranch({
       sessionId,
       ...(name !== undefined ? { name } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
     }),
 
   "branch.getTree": ({ sessionId }: SessionIdPayload) => deps.queries.getBranchTree(sessionId),
 
-  "branch.switch": ({ sessionId, fromBranchId, toBranchId, summarize }: SwitchBranchInput) =>
+  "branch.switch": ({
+    sessionId,
+    fromBranchId,
+    toBranchId,
+    summarize,
+    requestId,
+  }: SwitchBranchInput) =>
     deps.commands.switchBranch({
       sessionId,
       fromBranchId,
       toBranchId,
       ...(summarize !== undefined ? { summarize } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
     }),
 
-  "branch.fork": ({ sessionId, fromBranchId, atMessageId, name }: ForkBranchInput) =>
+  "branch.fork": ({ sessionId, fromBranchId, atMessageId, name, requestId }: ForkBranchInput) =>
     deps.commands.forkBranch({
       sessionId,
       fromBranchId,
       atMessageId,
       ...(name !== undefined ? { name } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
     }),
 
   "message.send": ({

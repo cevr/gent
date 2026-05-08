@@ -151,6 +151,11 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 11,
   },
   {
+    rule: "gent/no-promise-control-flow-in-tests",
+    invalid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.invalid.module.ts",
+    valid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts",
+  },
+  {
     rule: "gent/no-projection-writes",
     invalid: "no-projection-writes.invalid.ts",
     valid: "no-projection-writes.valid.ts",
