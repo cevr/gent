@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, PubSub, Queue, Ref, Schema, Stream } from "effect"
 
 import { Message } from "./message"
 import {
@@ -343,6 +343,7 @@ export class EventStoreError extends Schema.TaggedErrorClass<EventStoreError>()(
 export interface EventStoreService {
   readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
   readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
+  readonly deliver: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
   readonly subscribe: (params: {
     sessionId: SessionId
@@ -352,6 +353,48 @@ export interface EventStoreService {
   /** Remove session PubSub, shutting down any active subscribers. */
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void>
 }
+
+type EventDeliveryJob = {
+  readonly envelope: EventEnvelope
+  readonly ack: Deferred.Deferred<void>
+}
+
+export const makeSerializedEventDelivery = (
+  broadcast: (envelope: EventEnvelope) => Effect.Effect<void>,
+) =>
+  Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<EventDeliveryJob>()
+    const delivered = new Set<EventEnvelope["id"]>()
+    const maxDeliveredIds = 1024
+    yield* Queue.take(queue).pipe(
+      Effect.flatMap((job) =>
+        Effect.gen(function* () {
+          if (delivered.has(job.envelope.id)) {
+            yield* Deferred.succeed(job.ack, void 0)
+            return
+          }
+          const exit = yield* Effect.exit(broadcast(job.envelope))
+          if (exit._tag === "Success") {
+            delivered.add(job.envelope.id)
+            if (delivered.size > maxDeliveredIds) {
+              const oldest = delivered.values().next().value
+              if (oldest !== undefined) delivered.delete(oldest)
+            }
+          }
+          yield* Deferred.done(job.ack, exit)
+        }),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+
+    return (envelope: EventEnvelope) =>
+      Effect.gen(function* () {
+        const ack = yield* Deferred.make<void>()
+        yield* Queue.offer(queue, { envelope, ack })
+        yield* Deferred.await(ack)
+      })
+  })
 
 const matchEventSessionId = AgentEvent.match({
   SessionStarted: (e) => e.sessionId,
@@ -456,6 +499,18 @@ const makeMemoryEventStore = Effect.gen(function* () {
   const eventsRef = yield* Ref.make<EventEnvelope[]>([])
   const idRef = yield* Ref.make(0)
 
+  const broadcast = (envelope: EventEnvelope) => {
+    const eventSessionId = getEventSessionId(envelope.event)
+    if (eventSessionId !== undefined) {
+      return Effect.gen(function* () {
+        const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
+        yield* PubSub.publish(ps, envelope)
+      })
+    }
+    return Effect.void
+  }
+  const deliver = yield* makeSerializedEventDelivery(broadcast)
+
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
       const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
@@ -472,20 +527,12 @@ const makeMemoryEventStore = Effect.gen(function* () {
       return envelope
     }),
 
-    broadcast: (envelope) => {
-      const eventSessionId = getEventSessionId(envelope.event)
-      if (eventSessionId !== undefined) {
-        return Effect.gen(function* () {
-          const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
-          yield* PubSub.publish(ps, envelope)
-        })
-      }
-      return Effect.void
-    },
+    broadcast,
+    deliver,
 
     publish: Effect.fn("EventStore.publish")(function* (event) {
       const envelope = yield* service.append(event)
-      yield* service.broadcast(envelope)
+      yield* deliver(envelope)
     }),
 
     subscribe: ({ sessionId, branchId, after }) =>

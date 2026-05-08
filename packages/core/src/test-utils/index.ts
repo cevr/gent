@@ -87,6 +87,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         return envelope
       }),
       broadcast: () => Effect.void,
+      deliver: () => Effect.void,
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
         yield* service.append(event)
         yield* recorder.record({

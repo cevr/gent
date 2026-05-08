@@ -5,6 +5,8 @@ import {
   type EventEnvelope,
   EventId,
   EventStore,
+  type EventStoreService,
+  makeSerializedEventDelivery,
 } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
@@ -59,6 +61,28 @@ const makeEvent = (
 }
 // Tests reference these by their real tag names in expectations.
 const TAG = TAG_MAP satisfies Record<SyntheticTag, RealTag>
+
+const makeEventStoreLayer = (
+  input: Pick<EventStoreService, "append" | "broadcast">,
+): Layer.Layer<EventStore> =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const deliver = yield* makeSerializedEventDelivery(input.broadcast)
+      const service: EventStoreService = {
+        append: input.append,
+        broadcast: input.broadcast,
+        deliver,
+        publish: Effect.fn("TestEventStore.publish")(function* (event) {
+          const envelope = yield* input.append(event)
+          yield* deliver(envelope)
+        }),
+        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
+        removeSession: () => Effect.void,
+      }
+      return Layer.succeed(EventStore, service)
+    }),
+  )
+
 // EventPublisher delivery is observable through EventStore append/broadcast.
 describe("EventPublisher", () => {
   it.live("normal publish appends and broadcasts the committed event", () =>
@@ -66,7 +90,7 @@ describe("EventPublisher", () => {
       const persisted: string[] = []
       const broadcasted: string[] = []
       let nextId = 0
-      const baseLayer = Layer.succeed(EventStore, {
+      const baseLayer = makeEventStoreLayer({
         append: (event: AgentEvent) =>
           Effect.sync(() => {
             persisted.push(event._tag)
@@ -77,9 +101,6 @@ describe("EventPublisher", () => {
           Effect.sync(() => {
             broadcasted.push(envelope.event._tag)
           }),
-        publish: () => Effect.void,
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
-        removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, baseLayer)
       yield* Effect.gen(function* () {
@@ -97,7 +118,7 @@ describe("EventPublisher", () => {
       // broadcast acknowledgment before returning.
       const broadcastStarted = yield* Deferred.make<void>()
       const releaseBroadcast = yield* Deferred.make<void>()
-      const customEventStore = Layer.succeed(EventStore, {
+      const customEventStore = makeEventStoreLayer({
         append: (event) =>
           Effect.succeed({
             id: EventId.make(1),
@@ -109,9 +130,6 @@ describe("EventPublisher", () => {
             yield* Deferred.succeed(broadcastStarted, void 0)
             yield* Deferred.await(releaseBroadcast)
           }),
-        publish: () => Effect.void,
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
-        removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
       yield* Effect.gen(function* () {
@@ -137,7 +155,7 @@ describe("EventPublisher", () => {
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
       } as EventEnvelope
-      const customEventStore = Layer.succeed(EventStore, {
+      const customEventStore = makeEventStoreLayer({
         append: (event) => Effect.succeed({ ...envelope, event }),
         broadcast: () =>
           Effect.gen(function* () {
@@ -145,9 +163,6 @@ describe("EventPublisher", () => {
             yield* Deferred.succeed(firstBroadcastStarted, void 0)
             yield* Deferred.await(releaseFirstBroadcast)
           }),
-        publish: () => Effect.void,
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
-        removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
       yield* Effect.gen(function* () {
@@ -171,15 +186,12 @@ describe("EventPublisher", () => {
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
       } as EventEnvelope
-      const customEventStore = Layer.succeed(EventStore, {
+      const customEventStore = makeEventStoreLayer({
         append: (event) => Effect.succeed({ ...envelope, event }),
         broadcast: () =>
           Ref.updateAndGet(attempts, (count) => count + 1).pipe(
             Effect.flatMap((count) => (count === 1 ? Effect.die("broadcast defect") : Effect.void)),
           ),
-        publish: () => Effect.void,
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
-        removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
       yield* Effect.gen(function* () {
@@ -198,7 +210,7 @@ describe("EventPublisher server layer", () => {
       const persisted: string[] = []
       const broadcasted: string[] = []
       let nextId = 0
-      const baseLayer = Layer.succeed(EventStore, {
+      const baseLayer = makeEventStoreLayer({
         append: (event: AgentEvent) =>
           Effect.sync(() => {
             persisted.push(event._tag)
@@ -209,9 +221,6 @@ describe("EventPublisher server layer", () => {
           Effect.sync(() => {
             broadcasted.push(envelope.event._tag)
           }),
-        publish: () => Effect.void,
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
-        removeSession: () => Effect.void,
       })
       const layer = Layer.provide(EventPublisherLive, baseLayer)
       yield* Effect.gen(function* () {

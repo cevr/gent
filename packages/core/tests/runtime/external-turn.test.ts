@@ -263,6 +263,7 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
         })
       }),
     broadcast: () => Effect.void,
+    deliver: () => Effect.void,
     publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
     subscribe: () => Stream.empty,
     removeSession: () => Effect.void,

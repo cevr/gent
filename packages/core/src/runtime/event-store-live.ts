@@ -4,6 +4,7 @@ import {
   EventStoreError,
   getEventBranchId,
   getEventSessionId,
+  makeSerializedEventDelivery,
 } from "../domain/event.js"
 import type { EventEnvelope, EventStoreService } from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
@@ -41,6 +42,18 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
       const sessionStorage = yield* SessionStorage
       const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
 
+      const broadcast = (envelope: EventEnvelope) => {
+        const eventSessionId = getEventSessionId(envelope.event)
+        if (eventSessionId !== undefined) {
+          return Effect.gen(function* () {
+            const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
+            yield* PubSub.publish(ps, envelope)
+          })
+        }
+        return Effect.void
+      }
+      const deliver = yield* makeSerializedEventDelivery(broadcast)
+
       const service: EventStoreService = {
         append: Effect.fn("EventStore.append")(function* (event) {
           const currentSpan = yield* Effect.currentParentSpan.pipe(
@@ -53,20 +66,12 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
           return envelope
         }),
 
-        broadcast: (envelope) => {
-          const eventSessionId = getEventSessionId(envelope.event)
-          if (eventSessionId !== undefined) {
-            return Effect.gen(function* () {
-              const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
-              yield* PubSub.publish(ps, envelope)
-            })
-          }
-          return Effect.void
-        },
+        broadcast,
+        deliver,
 
         publish: Effect.fn("EventStore.publish")(function* (event) {
           const envelope = yield* service.append(event)
-          yield* service.broadcast(envelope)
+          yield* deliver(envelope)
         }),
 
         subscribe: ({ sessionId, branchId, after }) =>

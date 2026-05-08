@@ -454,18 +454,18 @@ semantics are real; the surface can be smaller.
 
 **Changes**
 
-| File                                                                                    | Change                                                      | Lines                |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                  | Absorb publish/subscribe semantics into event log boundary. | `343-354`, `442-523` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`      | Keep one live event-log implementation.                     | `19-125`             |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event-publisher.ts`        | Delete or reduce to private implementation detail.          | `13-29`, `69-144`    |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/event-publisher.test.ts` | Preserve behavior tests under event log naming.             | `62-194`             |
+| File                                                                                    | Change                                                                         | Lines                |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                  | Add event-log owned serialized delivery and route memory `publish` through it. | `343-395`, `502-535` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`      | Use the shared serialized delivery primitive in the live event log.            | `45-75`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event-publisher.ts`        | Reduce publisher to a compatibility adapter over `EventStore.append/deliver`.  | `13-95`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/event-publisher.test.ts` | Preserve publish/deliver behavior through EventStore-owned delivery semantics. | `62-207`             |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/index.ts`              | Add `deliver` to recording event-store fixture.                                | `71-95`              |
 
 **Verification**
 
-- Event publishing tests.
-- Session command/runtime tests.
-- `bun run test`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/domain/event-publisher.test.ts tests/runtime/agent-loop-streaming.test.ts tests/runtime/session-runtime.test.ts tests/runtime/external-turn.test.ts`
 - `bun run gate`
 
 ## Commit 12: refactor(server): use one request dedup primitive
