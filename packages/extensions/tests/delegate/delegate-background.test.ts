@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import { layer, makeCtx, narrowR, setup, withTaskWrite } from "../task-tools/helpers.js"
+import { layer, makeCtx, narrowR, setup, withTodoWrite } from "../todo/helpers.js"
 
 describe("DelegateTool background mode", () => {
   it.live("returns running status via background param", () =>
@@ -14,17 +14,17 @@ describe("DelegateTool background mode", () => {
         const result = yield* getToolEffect(DelegateTool)(
           {
             agent: AgentName.make("explore"),
-            task: "analyze the codebase",
+            todo: "analyze the codebase",
             background: true,
           },
           ctx,
         )
-        if (!("taskId" in result) || result.taskId === undefined) {
-          throw new Error("expected background delegate task")
+        if (!("todoId" in result) || result.todoId === undefined) {
+          throw new Error("expected background delegate todo")
         }
-        expect(result.taskId).toBeDefined()
+        expect(result.todoId).toBeDefined()
         expect(result.status).toBe("running")
-      }).pipe(withTaskWrite, Effect.provide(layer)),
+      }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
 })

@@ -79,7 +79,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     role: "assistant",
     parts: [
       Prompt.reasoningPart({
-        text: "Need tool chrome parity, queue semantics, and task widget behavior.",
+        text: "Need tool chrome parity, queue semantics, and todo widget behavior.",
       }),
       makeText("Inspected the relevant files and compared the renderer chrome paths."),
       makeToolCall({
@@ -152,7 +152,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         truncated: false,
       }),
       makeJsonResult(asToolCallId("dbg-bash"), "bash", {
-        stdout: "$ turbo run typecheck\nTasks: 4 successful, 4 total",
+        stdout: "$ turbo run typecheck\nTodos: 4 successful, 4 total",
         stderr: "",
         exitCode: 0,
       }),
@@ -224,17 +224,17 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeToolCall({
         id: asToolCallId("dbg-delegate"),
         name: "delegate",
-        params: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+        params: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
       }),
       makeToolCall({
         id: asToolCallId("dbg-explore"),
         name: "delegate",
-        params: { agent: "explore", task: "Where is the double-border coming from?" },
+        params: { agent: "explore", todo: "Where is the double-border coming from?" },
       }),
       makeToolCall({
         id: asToolCallId("dbg-review"),
         name: "delegate",
-        params: { agent: "explore", task: "Sanity-check the debug session bootstrap." },
+        params: { agent: "explore", todo: "Sanity-check the debug session bootstrap." },
       }),
       makeToolCall({
         id: asToolCallId("dbg-review-tool"),

@@ -1,10 +1,10 @@
 /**
- * Task tools RPC acceptance test — exercises `client.extension.request`
+ * Todo tools RPC acceptance test — exercises `client.extension.request`
  * through the full per-request scope path that
  * production uses (Gent.test → RpcServer → registry dispatch → handler).
  *
  * Locks the  transport boundary the per-commit unit tests don't cover:
- *  - request(write) creates a task → request(read) lists it → request(write)
+ *  - request(write) creates a todo → request(read) lists it → request(write)
  *    updates → request(read) confirms
  *  - bad input fails as ExtensionProtocolError (Schema rejects at the boundary)
  *  - missing capability id fails as ExtensionProtocolError (NotFound mapped)
@@ -13,26 +13,26 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { TaskExtension } from "../../src/task-tools/index.js"
+import { TodoExtension } from "../../src/todo/index.js"
 import {
-  TaskCreateRequest,
-  TaskDeleteRequest,
-  TaskListRequest,
-  TaskUpdateRequest,
-} from "../../src/task-tools/requests.js"
+  TodoCreateRequest,
+  TodoDeleteRequest,
+  TodoListRequest,
+  TodoUpdateRequest,
+} from "../../src/todo/requests.js"
 import { ref } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
 
 // Hoisted refs — every test reuses the same capability tokens.
-const TaskCreateRef = ref(TaskCreateRequest)
-const TaskDeleteRef = ref(TaskDeleteRequest)
-const TaskListRef = ref(TaskListRequest)
-const TaskUpdateRef = ref(TaskUpdateRequest)
+const TodoCreateRef = ref(TodoCreateRequest)
+const TodoDeleteRef = ref(TodoDeleteRequest)
+const TodoListRef = ref(TodoListRequest)
+const TodoUpdateRef = ref(TodoUpdateRequest)
 
-describe("TaskExtension via RPC", () => {
+describe("TodoExtension via RPC", () => {
   it.live(
-    "request(TaskCreate/TaskList/TaskUpdate) round-trip",
+    "request(TodoCreate/TodoList/TodoUpdate) round-trip",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -40,16 +40,16 @@ describe("TaskExtension via RPC", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensionInputs: [TaskExtension],
+            extensionInputs: [TodoExtension],
           })
 
           // request: create
           const created = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskCreateRef.extensionId,
-            capabilityId: TaskCreateRef.capabilityId,
-            intent: TaskCreateRef.intent,
+            extensionId: TodoCreateRef.extensionId,
+            capabilityId: TodoCreateRef.capabilityId,
+            intent: TodoCreateRef.intent,
             input: { subject: "Inspect repo" },
           })) as { id: string; subject: string; status: string }
           expect(created.id).toBeDefined()
@@ -60,9 +60,9 @@ describe("TaskExtension via RPC", () => {
           const listed = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: TodoListRef.extensionId,
+            capabilityId: TodoListRef.capabilityId,
+            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; subject: string; status: string }>
           expect(listed).toHaveLength(1)
@@ -72,18 +72,18 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskUpdateRef.extensionId,
-            capabilityId: TaskUpdateRef.capabilityId,
-            intent: TaskUpdateRef.intent,
-            input: { taskId: created.id, status: "in_progress" },
+            extensionId: TodoUpdateRef.extensionId,
+            capabilityId: TodoUpdateRef.capabilityId,
+            intent: TodoUpdateRef.intent,
+            input: { todoId: created.id, status: "in_progress" },
           })
 
           const afterUpdate = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: TodoListRef.extensionId,
+            capabilityId: TodoListRef.capabilityId,
+            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
@@ -92,17 +92,17 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskDeleteRef.extensionId,
-            capabilityId: TaskDeleteRef.capabilityId,
-            intent: TaskDeleteRef.intent,
-            input: { taskId: created.id },
+            extensionId: TodoDeleteRef.extensionId,
+            capabilityId: TodoDeleteRef.capabilityId,
+            intent: TodoDeleteRef.intent,
+            input: { todoId: created.id },
           })
           const afterDelete = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: TodoListRef.extensionId,
+            capabilityId: TodoListRef.capabilityId,
+            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
@@ -120,16 +120,16 @@ describe("TaskExtension via RPC", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensionInputs: [TaskExtension],
+            extensionInputs: [TodoExtension],
           })
 
           const result = yield* Effect.exit(
             client.extension.request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
-              capabilityId: TaskCreateRef.capabilityId,
-              intent: TaskCreateRef.intent,
+              extensionId: TodoCreateRef.extensionId,
+              capabilityId: TodoCreateRef.capabilityId,
+              intent: TodoCreateRef.intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
             }),
@@ -152,14 +152,14 @@ describe("TaskExtension via RPC", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensionInputs: [TaskExtension],
+            extensionInputs: [TodoExtension],
           })
 
           const result = yield* Effect.exit(
             client.extension.request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
+              extensionId: TodoCreateRef.extensionId,
               capabilityId: "not-a-real-capability",
               intent: "write",
               input: {},
@@ -182,15 +182,15 @@ describe("TaskExtension via RPC", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensionInputs: [TaskExtension],
+            extensionInputs: [TodoExtension],
           })
 
           const result = yield* Effect.exit(
             client.extension.request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
-              capabilityId: TaskCreateRef.capabilityId,
+              extensionId: TodoCreateRef.extensionId,
+              capabilityId: TodoCreateRef.capabilityId,
               intent: "read",
               input: { subject: "Inspect repo" },
             }),

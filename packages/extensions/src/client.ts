@@ -21,21 +21,21 @@ export {
   type SkillEntry as SkillEntryType,
 } from "./skills/protocol.js"
 export {
-  TASK_TOOLS_EXTENSION_ID,
-  TaskEntrySchema,
-  TaskUiModel,
-  type TaskEntry,
-  type TaskUiModel as TaskUiModelType,
-} from "./task-tools/identity.js"
+  TODO_EXTENSION_ID,
+  TodoEntrySchema,
+  TodoUiModel,
+  type TodoEntry,
+  type TodoUiModel as TodoUiModelType,
+} from "./todo/identity.js"
 export {
-  TaskId,
-  TaskStatus,
-  type TaskId as TaskIdType,
-  type TaskStatus as TaskStatusType,
-} from "./task-tools/domain.js"
+  TodoId,
+  TodoStatus,
+  type TodoId as TodoIdType,
+  type TodoStatus as TodoStatusType,
+} from "./todo/domain.js"
 export {
-  TaskCreateRequest,
-  TaskDeleteRequest,
-  TaskListRequest,
-  TaskUpdateRequest,
-} from "./task-tools/requests.js"
+  TodoCreateRequest,
+  TodoDeleteRequest,
+  TodoListRequest,
+  TodoUpdateRequest,
+} from "./todo/requests.js"

@@ -35,7 +35,7 @@ import {
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
-import { TaskStorage } from "../../../extensions/src/task-tools-storage.js"
+import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -834,7 +834,7 @@ describe("extension command RPCs", () => {
                 execute: (_input, ctx) =>
                   narrowR(
                     Effect.gen(function* () {
-                      const taskStorage = yield* Effect.serviceOption(TaskStorage)
+                      const todoStorage = yield* Effect.serviceOption(TodoStorage)
                       return {
                         hasSessionMutations:
                           "session" in ctx &&
@@ -846,7 +846,7 @@ describe("extension command RPCs", () => {
                           typeof ctx.agent === "object" &&
                           ctx.agent !== null &&
                           "run" in ctx.agent,
-                        writeStorageUnavailable: Option.isNone(taskStorage),
+                        writeStorageUnavailable: Option.isNone(todoStorage),
                       }
                     }),
                   ),

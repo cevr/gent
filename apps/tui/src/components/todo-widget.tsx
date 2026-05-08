@@ -1,5 +1,5 @@
 import { Show, For } from "solid-js"
-import type { TaskStatusType } from "@gent/extensions/client.js"
+import type { TodoStatusType } from "@gent/extensions/client.js"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
@@ -16,17 +16,17 @@ const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] as const
 
 const MAX_DISPLAY = 10
 
-export interface TaskPreview {
+export interface TodoPreview {
   subject: string
-  status: TaskStatusType
+  status: TodoStatusType
 }
 
-export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
+export function TodoWidget(props: { previewTodos: readonly TodoPreview[] }) {
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
   const summary = () => {
-    const t = props.previewTasks
+    const t = props.previewTodos
     const pending = t.filter((x) => x.status === "pending").length
     const active = t.filter((x) => x.status === "in_progress").length
     const done = t.filter((x) => x.status === "completed").length
@@ -37,21 +37,21 @@ export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
     if (active > 0) parts.push(`${active} active`)
     if (pending > 0) parts.push(`${pending} pending`)
     if (failed > 0) parts.push(`${failed} failed`)
-    return `${t.length} tasks (${parts.join(", ")})`
+    return `${t.length} todos (${parts.join(", ")})`
   }
 
-  const displayTasks = () => props.previewTasks.slice(0, MAX_DISPLAY)
+  const displayTodos = () => props.previewTodos.slice(0, MAX_DISPLAY)
 
-  const overflow = () => Math.max(0, props.previewTasks.length - MAX_DISPLAY)
+  const overflow = () => Math.max(0, props.previewTodos.length - MAX_DISPLAY)
 
-  const statusIcon = (status: TaskStatusType) => {
+  const statusIcon = (status: TodoStatusType) => {
     if (status !== "in_progress") {
       return STATUS_ICONS[status] ?? "?"
     }
     return IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length] ?? STATUS_ICONS["in_progress"]
   }
 
-  const statusColor = (status: TaskStatusType) => {
+  const statusColor = (status: TodoStatusType) => {
     switch (status) {
       case "in_progress":
         return theme.warning
@@ -65,22 +65,22 @@ export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
   }
 
   return (
-    <Show when={props.previewTasks.length > 0}>
+    <Show when={props.previewTodos.length > 0}>
       <InlineChrome.Root paddingLeft={2} marginTop={1} marginBottom={1}>
         <InlineChrome.Header
           accentColor={theme.info}
           leading={<span style={{ fg: theme.info }}>•</span>}
-          title={<span style={{ fg: theme.info, bold: true }}>tasks</span>}
+          title={<span style={{ fg: theme.info, bold: true }}>todos</span>}
           subtitle={summary()}
           subtitleColor={theme.textMuted}
         />
         <InlineChrome.Body accentColor={theme.info}>
-          <For each={displayTasks()}>
-            {(task) => (
+          <For each={displayTodos()}>
+            {(todo) => (
               <text>
                 <span style={{ fg: theme.info }}>{"│ "}</span>
-                <span style={{ fg: statusColor(task.status) }}>{statusIcon(task.status)}</span>
-                <span style={{ fg: theme.text }}> {task.subject}</span>
+                <span style={{ fg: statusColor(todo.status) }}>{statusIcon(todo.status)}</span>
+                <span style={{ fg: theme.text }}> {todo.subject}</span>
               </text>
             )}
           </For>

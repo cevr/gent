@@ -188,14 +188,14 @@ describe("formatToolInput", () => {
   })
 
   test("formats delegate with correct fields", () => {
-    expect(formatToolInput("delegate", { agent: "explore", task: "find the bug" })).toBe(
+    expect(formatToolInput("delegate", { agent: "explore", todo: "find the bug" })).toBe(
       "explore:find the bug",
     )
     expect(
       formatToolInput("delegate", {
-        tasks: [
-          { agent: "a", task: "x" },
-          { agent: "b", task: "y" },
+        todos: [
+          { agent: "a", todo: "x" },
+          { agent: "b", todo: "y" },
         ],
       }),
     ).toBe("2 parallel")

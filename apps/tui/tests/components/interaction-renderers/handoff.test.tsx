@@ -25,7 +25,7 @@ describe("HandoffRenderer", () => {
         renderWithProviders(
           () => (
             <HandoffRenderer
-              event={interaction("Task complete. Ready to hand off to the user.")}
+              event={interaction("Todo complete. Ready to hand off to the user.")}
               resolve={(r) => results.push(r)}
             />
           ),

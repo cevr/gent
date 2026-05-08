@@ -263,10 +263,10 @@ describe("resolveExtensions", () => {
 })
 describe("resolveExtensions — disabled filtering", () => {
   test("disabled extensions are excluded when filtered before resolve", () => {
-    const disabledSet = new Set(["@gent/task-tools"])
+    const disabledSet = new Set(["@gent/todo"])
     const extensions = [
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
-      makeExt("@gent/task-tools", "builtin", { tools: [makeTool("add_todo")] }),
+      makeExt("@gent/todo", "builtin", { tools: [makeTool("add_todo")] }),
     ]
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
     const resolved = resolveExtensions(enabled)
@@ -299,9 +299,9 @@ describe("resolveExtensions — disabled filtering", () => {
     expect(resolved.modelDrivers.has("openai")).toBe(false)
   })
   test("multiple disabled extensions are all excluded", () => {
-    const disabledSet = new Set(["@gent/task-tools", "@gent/agents", "@gent/openai"])
+    const disabledSet = new Set(["@gent/todo", "@gent/agents", "@gent/openai"])
     const extensions = [
-      makeExt("@gent/task-tools", "builtin", { tools: [makeTool("add_todo")] }),
+      makeExt("@gent/todo", "builtin", { tools: [makeTool("add_todo")] }),
       makeExt("@gent/agents", "builtin", {
         agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
       }),

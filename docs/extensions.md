@@ -185,7 +185,7 @@ export default defineExtension({
 ```
 
 `intent: "read"` RPCs have a **ReadOnly-branded R channel** — the handler can
-only yield read-only services (`TaskStorageReadOnly`, `MemoryVaultReadOnly`,
+only yield read-only services (`TodoStorageReadOnly`, `MemoryVaultReadOnly`,
 etc.). Write-tagged services fail to compile.
 
 ### action — human-triggered UI affordance
@@ -305,7 +305,7 @@ builtin).
 | Extension                               | Demonstrates                                 |
 | --------------------------------------- | -------------------------------------------- |
 | `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
-| `packages/extensions/src/task-tools`    | `tool` + `request` + scoped storage resource |
+| `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource |
 | `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
 | `packages/extensions/src/auto/index.ts` | `reactions:` + scoped workflow services      |
 

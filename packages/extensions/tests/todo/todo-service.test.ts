@@ -1,65 +1,65 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import { TaskService } from "../../src/task-tools-service.js"
+import { TodoService } from "../../src/todo-service.js"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { SqlClient } from "effect/unstable/sql"
-import { layer, narrowR, setup, withTaskWrite } from "./helpers.js"
+import { layer, narrowR, setup, withTodoWrite } from "./helpers.js"
 
-describe("TaskService.remove", () => {
+describe("TodoService.remove", () => {
   it.live("publishes state change on delete", () =>
     narrowR(
       Effect.gen(function* () {
         yield* setup
         const eventStore = yield* EventStore
-        const taskService = yield* TaskService
+        const todoService = yield* TodoService
         const eventsFiber = yield* Effect.forkChild(
           eventStore.subscribe({ sessionId: SessionId.make("s1") }).pipe(
             Stream.filter(
               (envelope) =>
                 envelope.event._tag === "ExtensionStateChanged" &&
-                envelope.event.extensionId === "@gent/task-tools",
+                envelope.event.extensionId === "@gent/todo",
             ),
             Stream.take(1),
             Stream.runCollect,
           ),
         )
         yield* Effect.yieldNow
-        const created = yield* taskService.create({
+        const created = yield* todoService.create({
           sessionId: SessionId.make("s1"),
           branchId: BranchId.make("b1"),
-          subject: "Ephemeral debug task",
+          subject: "Ephemeral debug todo",
         })
-        yield* taskService.remove(created.id)
+        yield* todoService.remove(created.id)
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
         expect(events).toContain("ExtensionStateChanged")
-      }).pipe(withTaskWrite, Effect.provide(layer)),
+      }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
 
-  it.live("removes dependency edges referencing the deleted task", () =>
+  it.live("removes dependency edges referencing the deleted todo", () =>
     narrowR(
       Effect.gen(function* () {
         yield* setup
-        const taskService = yield* TaskService
-        const blocker = yield* taskService.create({
+        const todoService = yield* TodoService
+        const blocker = yield* todoService.create({
           sessionId: SessionId.make("s1"),
           branchId: BranchId.make("b1"),
           subject: "Blocker",
         })
-        const blocked = yield* taskService.create({
+        const blocked = yield* todoService.create({
           sessionId: SessionId.make("s1"),
           branchId: BranchId.make("b1"),
           subject: "Blocked",
         })
 
-        yield* taskService.addDep(blocked.id, blocker.id)
-        expect(yield* taskService.getDeps(blocked.id)).toEqual([blocker.id])
+        yield* todoService.addDep(blocked.id, blocker.id)
+        expect(yield* todoService.getDeps(blocked.id)).toEqual([blocker.id])
 
-        yield* taskService.remove(blocker.id)
-        expect(yield* taskService.getDeps(blocked.id)).toEqual([])
-      }).pipe(withTaskWrite, Effect.provide(layer)),
+        yield* todoService.remove(blocker.id)
+        expect(yield* todoService.getDeps(blocked.id)).toEqual([])
+      }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
 
@@ -67,28 +67,28 @@ describe("TaskService.remove", () => {
     narrowR(
       Effect.gen(function* () {
         yield* setup
-        const taskService = yield* TaskService
+        const todoService = yield* TodoService
         const sql = yield* SqlClient.SqlClient
-        const task = yield* taskService.create({
+        const todo = yield* todoService.create({
           sessionId: SessionId.make("s1"),
           branchId: BranchId.make("b1"),
           subject: "Delete failure stays typed",
         })
 
         yield* sql.unsafe(`
-        CREATE TRIGGER fail_task_service_delete
-        BEFORE DELETE ON tasks
-        WHEN OLD.id = '${task.id}'
+        CREATE TRIGGER fail_todo_service_delete
+        BEFORE DELETE ON todos
+        WHEN OLD.id = '${todo.id}'
         BEGIN
           SELECT RAISE(ABORT, 'typed service failure');
         END;
       `)
 
-        const error = yield* taskService.remove(task.id).pipe(Effect.flip)
+        const error = yield* todoService.remove(todo.id).pipe(Effect.flip)
 
-        expect(error._tag).toBe("TaskStorageError")
-        expect(error.message).toBe("Failed to delete task")
-      }).pipe(withTaskWrite, Effect.provide(layer)),
+        expect(error._tag).toBe("TodoStorageError")
+        expect(error.message).toBe("Failed to delete todo")
+      }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
 })

@@ -7,7 +7,7 @@ import type { ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
-import { TaskWidget } from "../src/components/task-widget"
+import { TodoWidget } from "../src/components/todo-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
@@ -123,7 +123,7 @@ describe("TUI renderer surfaces", () => {
           id: "assistant-1",
           role: "assistant",
           content: "Switching now",
-          reasoning: "Considering current task state",
+          reasoning: "Considering current todo state",
           images: [],
           createdAt: 0,
           toolCalls: undefined,
@@ -143,7 +143,7 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer]")
       expect(frame).toContain("Stop and switch agent")
-      expect(frame).toContain("Considering current task state")
+      expect(frame).toContain("Considering current todo state")
     }),
   )
   it.live("QueueWidget renders steer and queued summaries", () =>
@@ -176,12 +176,12 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("cmd+up restore")
     }),
   )
-  it.live("TaskWidget preview renders summary and overflow", () =>
+  it.live("TodoWidget preview renders summary and overflow", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
-          <TaskWidget
-            previewTasks={[
+          <TodoWidget
+            previewTodos={[
               { subject: "Resolve transport DTOs", status: "completed" },
               { subject: "Add renderer coverage", status: "in_progress" },
               { subject: "Clean debug boot", status: "pending" },
@@ -198,8 +198,8 @@ describe("TUI renderer surfaces", () => {
         )),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("tasks")
-      expect(frame).toContain("11 tasks")
+      expect(frame).toContain("todos")
+      expect(frame).toContain("11 todos")
       expect(frame).toContain("Resolve transport DTOs")
       expect(frame).toContain("Add renderer coverage")
       expect(frame).toContain("+1 more")

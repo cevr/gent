@@ -152,17 +152,17 @@ Special prefixes at input start trigger different modes:
 
 Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 
-| File                                 | Extension ID                                                   | What                                               |
-| ------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------- |
-| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/task-tools` / `@gent/interaction-tools` | Tool renderers, task widget, interaction renderers |
-| `builtins/plan.client.ts`            | `@gent/plan`                                                   | /plan and /audit slash commands                    |
-| `builtins/artifacts.client.ts`       | `@gent/artifacts`                                              | Artifact count border label                        |
-| `builtins/auto.client.ts`            | `@gent/auto`                                                   | Auto loop progress                                 |
-| `builtins/connection.client.ts`      | `@gent/connection`                                             | Connection status widget                           |
-| `builtins/handoff.client.ts`         | `@gent/handoff`                                                | Handoff interaction renderer                       |
-| `builtins/skills.client.ts`          | `@gent/skills-ui`                                              | `$` autocomplete: skills popup                     |
-| `builtins/files.client.ts`           | `@gent/files-ui`                                               | `@` autocomplete: file search popup                |
-| `builtins/driver.client.ts`          | `@gent/driver-ui`                                              | `/driver` slash command                            |
+| File                                 | Extension ID                                             | What                                               |
+| ------------------------------------ | -------------------------------------------------------- | -------------------------------------------------- |
+| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/todo` / `@gent/interaction-tools` | Tool renderers, todo widget, interaction renderers |
+| `builtins/plan.client.ts`            | `@gent/plan`                                             | /plan and /audit slash commands                    |
+| `builtins/artifacts.client.ts`       | `@gent/artifacts`                                        | Artifact count border label                        |
+| `builtins/auto.client.ts`            | `@gent/auto`                                             | Auto loop progress                                 |
+| `builtins/connection.client.ts`      | `@gent/connection`                                       | Connection status widget                           |
+| `builtins/handoff.client.ts`         | `@gent/handoff`                                          | Handoff interaction renderer                       |
+| `builtins/skills.client.ts`          | `@gent/skills-ui`                                        | `$` autocomplete: skills popup                     |
+| `builtins/files.client.ts`           | `@gent/files-ui`                                         | `@` autocomplete: file search popup                |
+| `builtins/driver.client.ts`          | `@gent/driver-ui`                                        | `/driver` slash command                            |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
 

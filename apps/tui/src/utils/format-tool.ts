@@ -94,15 +94,15 @@ function summarizeScopedPattern(
 
 function summarizeDelegate(args: Record<string, unknown>): string {
   const agent = getStringArg(args, "agent")
-  const task = getStringArg(args, "task")
-  const tasks = Array.isArray(args["tasks"]) ? args["tasks"] : undefined
+  const todo = getStringArg(args, "todo")
+  const todos = Array.isArray(args["todos"]) ? args["todos"] : undefined
   const chain = Array.isArray(args["chain"]) ? args["chain"] : undefined
 
-  if (tasks !== undefined) return `${tasks.length} parallel`
+  if (todos !== undefined) return `${todos.length} parallel`
   if (chain !== undefined) return `${chain.length} chain`
   if (agent.length === 0) return ""
-  if (task.length === 0) return agent
-  return `${agent}:${truncateText(task, 40)}`
+  if (todo.length === 0) return agent
+  return `${agent}:${truncateText(todo, 40)}`
 }
 
 type ToolArgFormatter = (args: Record<string, unknown>) => string

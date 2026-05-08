@@ -22,7 +22,7 @@ import { LibrarianExtension } from "./librarian/index.js"
 import { AcpAgentsExtension } from "./acp-agents/index.js"
 import { AutoExtension } from "./auto/index.js"
 import { PlanExtension } from "./plan.js"
-import { TaskExtension } from "./task-tools/index.js"
+import { TodoExtension } from "./todo/index.js"
 import { HandoffExtension } from "./handoff.js"
 import { InteractionToolsExtension } from "./interaction-tools/index.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
@@ -46,7 +46,7 @@ export {
   AcpAgentsExtension,
   AutoExtension,
   PlanExtension,
-  TaskExtension,
+  TodoExtension,
   HandoffExtension,
   InteractionToolsExtension,
   ArtifactsExtension,
@@ -64,7 +64,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
-  TaskExtension,
+  TodoExtension,
   AuditExtension,
   AgentsExtension,
   PlanExtension,

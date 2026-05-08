@@ -288,7 +288,7 @@ describe("Effect-purity locks (compile-time)", () => {
         id: "bad-read-tool",
         description: "bad",
         intent: "read",
-        needs: [ToolNeeds.write("task")] as const,
+        needs: [ToolNeeds.write("todo")] as const,
         params: Schema.Struct({}),
         output: Schema.String,
         execute: () => Effect.succeed("x"),
@@ -364,12 +364,12 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
     // @ts-expect-error — raw event publishing can forge core runtime events
     type _BadExtensionEventSink = typeof PublicExtensionApi.ExtensionEventSink
-    // @ts-expect-error — task lifecycle events are private; extensions publish state pulses
-    type _BadTaskCreated = typeof PublicExtensionApi.TaskCreated
-    // @ts-expect-error — task schemas belong to @gent/task-tools, not core author API
-    type _BadTask = typeof PublicExtensionApi.Task
-    // @ts-expect-error — task ids belong to @gent/task-tools, not core author API
-    type _BadTaskId = typeof PublicExtensionApi.TaskId
+    // @ts-expect-error — todo lifecycle events are private; extensions publish state pulses
+    type _BadTodoCreated = typeof PublicExtensionApi.TodoCreated
+    // @ts-expect-error — todo schemas belong to @gent/todo, not core author API
+    type _BadTodo = typeof PublicExtensionApi.Todo
+    // @ts-expect-error — todo ids belong to @gent/todo, not core author API
+    type _BadTodoId = typeof PublicExtensionApi.TodoId
     // @ts-expect-error — process spawning is an extension-owned service, not core author API
     type _BadRunProcess = typeof PublicExtensionApi.runProcess
     // @ts-expect-error — process errors are paired with the non-public process runner

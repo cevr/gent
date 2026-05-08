@@ -35,16 +35,16 @@ import type {
 } from "@gent/core-internal/domain/capability.js"
 import { ExtensionHostProcessError, ref } from "@gent/core/extensions/api"
 import {
-  TaskCreateRequest,
-  TaskDeleteRequest,
-  TaskListRequest,
-  TaskUpdateRequest,
+  TodoCreateRequest,
+  TodoDeleteRequest,
+  TodoListRequest,
+  TodoUpdateRequest,
 } from "@gent/extensions/client.js"
 
-const TaskCreateRef = ref(TaskCreateRequest)
-const TaskDeleteRef = ref(TaskDeleteRequest)
-const TaskListRef = ref(TaskListRequest)
-const TaskUpdateRef = ref(TaskUpdateRequest)
+const TodoCreateRef = ref(TodoCreateRequest)
+const TodoDeleteRef = ref(TodoDeleteRequest)
+const TodoListRef = ref(TodoListRequest)
+const TodoUpdateRef = ref(TodoUpdateRequest)
 
 export interface DebugScenarioParams {
   sessionId: SessionId
@@ -84,13 +84,13 @@ const createParentTurnMessages = (
       role: "assistant",
       parts: [
         Prompt.reasoningPart({
-          text: "Scripted debug scenario. Exercise child sessions, task chrome, retries, and tool output renderers.",
+          text: "Scripted debug scenario. Exercise child sessions, todo chrome, retries, and tool output renderers.",
         }),
         makeText(`Running debug inspection cycle ${iteration}.`),
         Prompt.toolCallPart({
           id: delegateToolCallId,
           name: "delegate",
-          params: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+          params: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
           providerExecuted: false,
         }),
         Prompt.toolCallPart({
@@ -114,7 +114,7 @@ const createParentTurnMessages = (
           },
           providerExecuted: false,
         }),
-        makeText("Inspection pass complete. Check the live tool timeline and task widget."),
+        makeText("Inspection pass complete. Check the live tool timeline and todo widget."),
       ],
       createdAt: dateFromMillis(nowMillis + 1),
     })
@@ -423,7 +423,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         branchId: params.branchId,
         toolCallId: delegateToolCallId,
         toolName: "delegate",
-        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
+        input: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
       }),
     )
     yield* runDelegateScenario(params, iteration, delegateToolCallId)
@@ -550,7 +550,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       StreamChunk.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        chunk: "Inspection pass complete. Check the live tool timeline and task widget.",
+        chunk: "Inspection pass complete. Check the live tool timeline and todo widget.",
       }),
     )
     yield* eventStore.publish(
@@ -577,7 +577,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
   })
 
-const runTaskLifecycle = (params: DebugScenarioParams) =>
+const runTodoLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimeEnvironment
@@ -640,25 +640,25 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
     }
 
     while (true) {
-      const existing = yield* invoke<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})
-      for (const task of existing) {
-        yield* invoke<null>(TaskDeleteRef, { taskId: task.id }).pipe(
+      const existing = yield* invoke<ReadonlyArray<{ readonly id: string }>>(TodoListRef, {})
+      for (const todo of existing) {
+        yield* invoke<null>(TodoDeleteRef, { todoId: todo.id }).pipe(
           Effect.catchEager(() => Effect.void),
         )
       }
 
-      const inspect = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
+      const inspect = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
         subject: "Inspect codebase",
       })
-      const verify = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
+      const verify = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
         subject: "Run verification",
       })
-      const summarize = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
+      const summarize = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
         subject: "Summarize outcome",
       })
 
-      const setStatus = (taskId: string, status: "in_progress" | "completed") =>
-        invoke<unknown>(TaskUpdateRef, { taskId, status })
+      const setStatus = (todoId: string, status: "in_progress" | "completed") =>
+        invoke<unknown>(TodoUpdateRef, { todoId, status })
 
       yield* setStatus(inspect.id, "in_progress")
       yield* Effect.sleep("2 seconds")
@@ -671,12 +671,12 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       yield* setStatus(summarize.id, "completed")
       yield* Effect.sleep("2 seconds")
 
-      const deleteTask = (taskId: string) =>
-        invoke<null>(TaskDeleteRef, { taskId }).pipe(Effect.catchEager(() => Effect.void))
+      const deleteTodo = (todoId: string) =>
+        invoke<null>(TodoDeleteRef, { todoId }).pipe(Effect.catchEager(() => Effect.void))
 
-      yield* deleteTask(inspect.id)
-      yield* deleteTask(verify.id)
-      yield* deleteTask(summarize.id)
+      yield* deleteTodo(inspect.id)
+      yield* deleteTodo(verify.id)
+      yield* deleteTodo(summarize.id)
       yield* Effect.sleep("2 seconds")
     }
   })
@@ -695,6 +695,6 @@ const runTurnLifecycle = (params: DebugScenarioParams) =>
 export const startDebugScenario = Effect.fn("DebugScenario.start")(function* (
   params: DebugScenarioParams,
 ) {
-  yield* Effect.forkScoped(runTaskLifecycle(params))
+  yield* Effect.forkScoped(runTodoLifecycle(params))
   yield* Effect.forkScoped(runTurnLifecycle(params))
 })

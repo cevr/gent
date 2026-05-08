@@ -133,15 +133,13 @@ describe("extensions public export guard", () => {
           private: false,
           exports: {
             ".": "./src/index.ts",
-            "./task-tools-storage": "./src/task-tools-storage.ts",
+            "./todo-storage": "./src/todo-storage.ts",
           },
         },
         {
           compilerOptions: {
             paths: {
-              "@gent/extensions/task-tools-storage": [
-                "./packages/extensions/src/task-tools-storage.ts",
-              ],
+              "@gent/extensions/todo-storage": ["./packages/extensions/src/todo-storage.ts"],
             },
           },
         },
@@ -153,12 +151,12 @@ describe("extensions public export guard", () => {
           "@gent/extensions is the builtin composition package; publish only root/client contracts",
       },
       {
-        path: 'packages/extensions/package.json exports["./task-tools-storage"]',
+        path: 'packages/extensions/package.json exports["./todo-storage"]',
         message:
           "@gent/extensions may only expose root composition and ./client; use relative source imports for internal extension tests",
       },
       {
-        path: 'tsconfig.json compilerOptions.paths["@gent/extensions/task-tools-storage"]',
+        path: 'tsconfig.json compilerOptions.paths["@gent/extensions/todo-storage"]',
         message:
           "Do not create public-looking @gent/extensions/* aliases for extension implementation internals",
       },

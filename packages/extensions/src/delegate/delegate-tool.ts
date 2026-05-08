@@ -12,36 +12,36 @@ import {
   type SessionId,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
-import { TaskService } from "../task-tools-service.js"
-import type { Task, TaskId } from "../task-tools/domain.js"
+import { TodoService } from "../todo-service.js"
+import type { Todo, TodoId } from "../todo/domain.js"
 
-const MAX_PARALLEL_TASKS = 8
+const MAX_PARALLEL_TODOS = 8
 const MAX_CONCURRENCY = 4
 
 const DelegateItem = Schema.Struct({
   agent: AgentName,
-  task: Schema.String,
+  todo: Schema.String,
 })
 type DelegateItemType = typeof DelegateItem.Type
 
 export const DelegateParams = Schema.Struct({
   agent: Schema.optionalKey(AgentName),
-  task: Schema.optionalKey(Schema.String),
-  tasks: Schema.optionalKey(Schema.Array(DelegateItem)),
+  todo: Schema.optionalKey(Schema.String),
+  todos: Schema.optionalKey(Schema.Array(DelegateItem)),
   chain: Schema.optionalKey(Schema.Array(DelegateItem)),
   description: Schema.optionalKey(Schema.String),
   background: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "Run in the background via task-tools. Returns immediately with taskId. Poll with task_get.",
+        "Run in the background via todo. Returns immediately with todoId. Poll with todo_get.",
     }),
   ),
 })
 
 export const DelegateResult = Schema.Struct({
   error: Schema.optional(Schema.String),
-  taskId: Schema.optional(Schema.String),
-  taskIds: Schema.optional(Schema.Array(Schema.String)),
+  todoId: Schema.optional(Schema.String),
+  todoIds: Schema.optional(Schema.Array(Schema.String)),
   status: Schema.optional(Schema.Literals(["running"])),
   count: Schema.optional(Schema.Number),
   output: Schema.optional(Schema.String),
@@ -65,14 +65,14 @@ export const DelegateResult = Schema.Struct({
 
 export const DelegateTool = tool({
   id: "delegate",
-  needs: [ToolNeeds.write("agent"), ToolNeeds.write("task")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("todo")],
   description:
-    "Delegate work to specialized agents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
+    "Delegate work to specialized agents. Modes: single (agent+todo), parallel (todos[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
   promptSnippet: "Delegate work to specialized subagents",
   promptGuidelines: [
     "Use for work that benefits from specialized focus or parallelism",
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
-    "Each task prompt must be self-contained — delegated agents have no conversation history",
+    "Each todo prompt must be self-contained — delegated agents have no conversation history",
     "For parallel exploration: don't share preliminary findings between agents — let each form independent conclusions",
     "Prefer focused tools: review (code review), counsel (second opinion), research (repo understanding)",
   ],
@@ -83,12 +83,12 @@ export const DelegateTool = tool({
     ctx: ToolCapabilityContext,
   ) {
     const hasChain = (params.chain?.length ?? 0) > 0
-    const hasTasks = (params.tasks?.length ?? 0) > 0
-    const hasSingle = params.agent !== undefined && params.task !== undefined
+    const hasTodos = (params.todos?.length ?? 0) > 0
+    const hasSingle = params.agent !== undefined && params.todo !== undefined
 
-    const modes = [hasChain, hasTasks, hasSingle].filter(Boolean).length
+    const modes = [hasChain, hasTodos, hasSingle].filter(Boolean).length
     if (modes !== 1) {
-      return { error: "Specify exactly one mode: agent+task, tasks[], or chain[]" }
+      return { error: "Specify exactly one mode: agent+todo, todos[], or chain[]" }
     }
 
     const resolveAgent = (agentName: string) =>
@@ -106,31 +106,31 @@ export const DelegateTool = tool({
       return `${error}\n\nFull session: session://${sessionId}`
     }
 
-    const summarizeTaskSubject = (task: string) => {
-      if (task.length <= 60) return task
-      return `${task.slice(0, 60)}…`
+    const summarizeTodoSubject = (todo: string) => {
+      if (todo.length <= 60) return todo
+      return `${todo.slice(0, 60)}…`
     }
 
-    /** Check if task is still in a non-terminal state before writing completion */
-    const isTaskStillActive = (taskId: TaskId) =>
+    /** Check if todo is still in a non-terminal state before writing completion */
+    const isTodoStillActive = (todoId: TodoId) =>
       Effect.gen(function* () {
-        const taskService = yield* TaskService
-        const task = yield* taskService.get(taskId)
-        return task !== undefined && task.status !== "stopped" && task.status !== "failed"
+        const todoService = yield* TodoService
+        const todo = yield* todoService.get(todoId)
+        return todo !== undefined && todo.status !== "stopped" && todo.status !== "failed"
       }).pipe(Effect.catchEager(() => Effect.succeed(false)))
 
-    const spawnBackgroundTask = (task: Task, agent: { name: AgentName }) =>
+    const spawnBackgroundTodo = (todo: Todo, agent: { name: AgentName }) =>
       Effect.gen(function* () {
-        const taskService = yield* TaskService
-        // Set task to in_progress
-        yield* taskService
-          .update(task.id, { status: "in_progress" })
+        const todoService = yield* TodoService
+        // Set todo to in_progress
+        yield* todoService
+          .update(todo.id, { status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
         const resolvedAgent = yield* ctx.agent.get(agent.name)
         if (resolvedAgent === undefined) {
-          yield* taskService
-            .update(task.id, {
+          yield* todoService
+            .update(todo.id, {
               status: "failed",
               metadata: { error: `Unknown agent: ${agent.name}` },
             })
@@ -138,38 +138,38 @@ export const DelegateTool = tool({
           return
         }
 
-        // Background tasks need durable sessions so users can navigate to them
+        // Background todos need durable sessions so users can navigate to them
         // via the stored childSessionId after the run completes.
         const result = yield* ctx.agent.run({
           agent: resolvedAgent,
-          prompt: task.prompt ?? task.subject,
+          prompt: todo.prompt ?? todo.subject,
           runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
         })
 
-        // Guard: if task was stopped/failed while running, don't overwrite terminal state
-        const active = yield* isTaskStillActive(task.id)
+        // Guard: if todo was stopped/failed while running, don't overwrite terminal state
+        const active = yield* isTodoStillActive(todo.id)
         if (!active) return
 
         if (result._tag === "success") {
-          yield* taskService
-            .update(task.id, {
+          yield* todoService
+            .update(todo.id, {
               status: "completed",
               owner: result.sessionId,
               metadata: {
-                ...(typeof task.metadata === "object" && task.metadata !== null
-                  ? task.metadata
+                ...(typeof todo.metadata === "object" && todo.metadata !== null
+                  ? todo.metadata
                   : {}),
                 childSessionId: result.sessionId,
               },
             })
             .pipe(Effect.catchEager(() => Effect.void))
         } else {
-          yield* taskService
-            .update(task.id, {
+          yield* todoService
+            .update(todo.id, {
               status: "failed",
               metadata: {
-                ...(typeof task.metadata === "object" && task.metadata !== null
-                  ? task.metadata
+                ...(typeof todo.metadata === "object" && todo.metadata !== null
+                  ? todo.metadata
                   : {}),
                 error: result.error,
               },
@@ -182,58 +182,58 @@ export const DelegateTool = tool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const taskService = yield* TaskService
-      const task = yield* taskService
+      const todoService = yield* TodoService
+      const todo = yield* todoService
         .create({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
-          subject: params.description ?? params.task ?? "background task",
+          subject: params.description ?? params.todo ?? "background todo",
           agentType: resolved.agent.name,
-          prompt: params.task,
+          prompt: params.todo,
           cwd: ctx.cwd,
         })
         .pipe(
           Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
           Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
         )
-      if (task === undefined)
-        return { error: "Background tasks unavailable — task-tools extension is disabled" }
+      if (todo === undefined)
+        return { error: "Background todos unavailable — todo extension is disabled" }
 
-      yield* Effect.forkChild(spawnBackgroundTask(task, resolved.agent))
-      return { taskId: task.id, status: "running" as const }
+      yield* Effect.forkChild(spawnBackgroundTodo(todo, resolved.agent))
+      return { todoId: todo.id, status: "running" as const }
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
-      const tasks = params.tasks ?? []
-      if (tasks.length > MAX_PARALLEL_TASKS) {
-        return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
+      const todos = params.todos ?? []
+      if (todos.length > MAX_PARALLEL_TODOS) {
+        return { error: `Too many parallel todos (max ${MAX_PARALLEL_TODOS})` }
       }
 
-      const taskIds: string[] = []
-      for (const item of tasks) {
+      const todoIds: string[] = []
+      for (const item of todos) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const taskService = yield* TaskService
-        const task = yield* taskService
+        const todoService = yield* TodoService
+        const todo = yield* todoService
           .create({
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,
-            subject: summarizeTaskSubject(item.task),
+            subject: summarizeTodoSubject(item.todo),
             agentType: resolved.agent.name,
-            prompt: item.task,
+            prompt: item.todo,
             cwd: ctx.cwd,
           })
           .pipe(
             Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
             Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
           )
-        if (task === undefined) {
-          return { error: "Background tasks unavailable — task-tools extension is disabled" }
+        if (todo === undefined) {
+          return { error: "Background todos unavailable — todo extension is disabled" }
         }
-        yield* Effect.forkChild(spawnBackgroundTask(task, resolved.agent))
-        taskIds.push(task.id)
+        yield* Effect.forkChild(spawnBackgroundTodo(todo, resolved.agent))
+        todoIds.push(todo.id)
       }
-      return { taskIds, status: "running" as const, count: taskIds.length }
+      return { todoIds, status: "running" as const, count: todoIds.length }
     })
 
     const foregroundChain = Effect.fn("DelegateTool.foregroundChain")(function* () {
@@ -244,10 +244,10 @@ export const DelegateTool = tool({
         const resolved = yield* resolveAgent(step.agent)
         if (!resolved.ok) return { error: resolved.error }
 
-        const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput)
+        const todoWithContext = step.todo.replace(/\{previous\}/g, previousOutput)
         const result = yield* ctx.agent.run({
           agent: resolved.agent,
-          prompt: taskWithContext,
+          prompt: todoWithContext,
           runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
         })
 
@@ -278,15 +278,15 @@ export const DelegateTool = tool({
     })
 
     const foregroundParallel = Effect.fn("DelegateTool.foregroundParallel")(function* () {
-      const tasks = params.tasks ?? []
-      if (tasks.length > MAX_PARALLEL_TASKS) {
-        return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
+      const todos = params.todos ?? []
+      if (todos.length > MAX_PARALLEL_TODOS) {
+        return { error: `Too many parallel todos (max ${MAX_PARALLEL_TODOS})` }
       }
 
-      const runTask = (
-        task: DelegateItemType,
+      const runTodo = (
+        todo: DelegateItemType,
       ): Effect.Effect<AgentRunResult, AgentRunError, never> =>
-        resolveAgent(task.agent).pipe(
+        resolveAgent(todo.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {
               return Effect.succeed<AgentRunResult>({
@@ -296,13 +296,13 @@ export const DelegateTool = tool({
             }
             return ctx.agent.run({
               agent: resolved.agent,
-              prompt: task.task,
+              prompt: todo.todo,
               runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
             })
           }),
         )
 
-      const results = yield* Effect.forEach(tasks, runTask, { concurrency: MAX_CONCURRENCY })
+      const results = yield* Effect.forEach(todos, runTodo, { concurrency: MAX_CONCURRENCY })
       const successes = results.filter(
         (r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success",
       )
@@ -327,7 +327,7 @@ export const DelegateTool = tool({
 
       const result = yield* ctx.agent.run({
         agent: resolved.agent,
-        prompt: params.task ?? "",
+        prompt: params.todo ?? "",
         runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
       })
 
@@ -351,16 +351,16 @@ export const DelegateTool = tool({
       }
     })
 
-    // Background mode: create durable task and fire-and-forget
+    // Background mode: create durable todo and fire-and-forget
     if (params.background === true) {
       if (hasSingle) return yield* backgroundSingle()
-      if (hasTasks) return yield* backgroundParallel()
+      if (hasTodos) return yield* backgroundParallel()
       return { error: "Background mode only supports single and parallel modes, not chain" }
     }
 
     // Foreground mode: blocking subagent dispatch
     if (hasChain) return yield* foregroundChain()
-    if (hasTasks) return yield* foregroundParallel()
+    if (hasTodos) return yield* foregroundParallel()
     return yield* foregroundSingle()
   }),
 })

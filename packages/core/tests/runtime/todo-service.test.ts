@@ -1,11 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
-import {
-  TaskService,
-  TaskServiceUnavailableError,
-} from "../../../extensions/src/task-tools-service.js"
-import { TaskStorage } from "../../../extensions/src/task-tools-storage.js"
-import { TaskTransitionError } from "../../../extensions/src/task-tools/domain.js"
+import { TodoService, TodoServiceUnavailableError } from "../../../extensions/src/todo-service.js"
+import { TodoStorage } from "../../../extensions/src/todo-storage.js"
+import { TodoTransitionError } from "../../../extensions/src/todo/domain.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import {
   EventPublisherLive,
@@ -20,9 +17,9 @@ import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
 
-const sessionId = SessionId.make("task-test-session")
-const branchId = BranchId.make("task-test-branch")
-const withTaskWrite = provideCapabilityAccessNeeds([{ tag: "task", access: "write" }])
+const sessionId = SessionId.make("todo-test-session")
+const branchId = BranchId.make("todo-test-branch")
+const withTodoWrite = provideCapabilityAccessNeeds([{ tag: "todo", access: "write" }])
 
 const makeLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql()
@@ -35,30 +32,30 @@ const makeLayer = () => {
     GentPlatform.Test(),
   )
   const runtimeLayer = Layer.provideMerge(EventPublisherLive, baseDeps)
-  const taskExtensionLayer = Layer.mergeAll(TaskStorage.Live, TaskService.Live)
-  return Layer.provideMerge(taskExtensionLayer, runtimeLayer)
+  const todoExtensionLayer = Layer.mergeAll(TodoStorage.Live, TodoService.Live)
+  return Layer.provideMerge(todoExtensionLayer, runtimeLayer)
 }
 
-describe("TaskService", () => {
-  it.live("create fails with typed unavailable error when task storage is absent", () =>
+describe("TodoService", () => {
+  it.live("create fails with typed unavailable error when todo storage is absent", () =>
     Effect.gen(function* () {
-      const taskService = yield* TaskService
-      const exit = yield* taskService
+      const todoService = yield* TodoService
+      const exit = yield* todoService
         .create({
           sessionId,
           branchId,
-          subject: "Missing storage task",
+          subject: "Missing storage todo",
         })
         .pipe(Effect.exit)
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return yield* Effect.die("expected unavailable failure")
       const reason = exit.cause.reasons.find(Cause.isFailReason)
-      expect(reason !== undefined && Schema.is(TaskServiceUnavailableError)(reason.error)).toBe(
+      expect(reason !== undefined && Schema.is(TodoServiceUnavailableError)(reason.error)).toBe(
         true,
       )
     }).pipe(
-      withTaskWrite,
-      Effect.provide(Layer.mergeAll(TaskService.Live, ExtensionStatePublisher.Test())),
+      withTodoWrite,
+      Effect.provide(Layer.mergeAll(TodoService.Live, ExtensionStatePublisher.Test())),
     ),
   )
 
@@ -68,16 +65,16 @@ describe("TaskService", () => {
 
       yield* Effect.gen(function* () {
         yield* ensureStorageParents({ sessionId, branchId })
-        const taskService = yield* TaskService
-        const created = yield* taskService.create({
+        const todoService = yield* TodoService
+        const created = yield* todoService.create({
           sessionId,
           branchId,
-          subject: "Sibling layer task",
+          subject: "Sibling layer todo",
         })
-        expect(created.subject).toBe("Sibling layer task")
-        const loaded = yield* taskService.get(created.id)
+        expect(created.subject).toBe("Sibling layer todo")
+        const loaded = yield* todoService.get(created.id)
         expect(loaded?.id).toBe(created.id)
-      }).pipe(withTaskWrite, Effect.provide(layer))
+      }).pipe(withTodoWrite, Effect.provide(layer))
     }),
   )
 
@@ -87,18 +84,18 @@ describe("TaskService", () => {
 
       yield* Effect.gen(function* () {
         yield* ensureStorageParents({ sessionId, branchId })
-        const taskService = yield* TaskService
-        const task = yield* taskService.create({
+        const todoService = yield* TodoService
+        const todo = yield* todoService.create({
           sessionId,
           branchId,
-          subject: "Stoppable task",
+          subject: "Stoppable todo",
         })
 
         // pending → stopped is a valid transition
-        const updated = yield* taskService.update(task.id, { status: "stopped" })
+        const updated = yield* todoService.update(todo.id, { status: "stopped" })
         expect(updated).toBeDefined()
         expect(updated!.status).toBe("stopped")
-      }).pipe(withTaskWrite, Effect.provide(layer))
+      }).pipe(withTodoWrite, Effect.provide(layer))
     }),
   )
 
@@ -108,31 +105,31 @@ describe("TaskService", () => {
 
       yield* Effect.gen(function* () {
         yield* ensureStorageParents({ sessionId, branchId })
-        const taskService = yield* TaskService
-        const task = yield* taskService.create({
+        const todoService = yield* TodoService
+        const todo = yield* todoService.create({
           sessionId,
           branchId,
-          subject: "Terminal task",
+          subject: "Terminal todo",
         })
-        yield* taskService.update(task.id, { status: "in_progress" })
-        yield* taskService.update(task.id, { status: "completed" })
-        const exit = yield* taskService.update(task.id, { status: "in_progress" }).pipe(Effect.exit)
+        yield* todoService.update(todo.id, { status: "in_progress" })
+        yield* todoService.update(todo.id, { status: "completed" })
+        const exit = yield* todoService.update(todo.id, { status: "in_progress" }).pipe(Effect.exit)
         expect(Exit.isFailure(exit)).toBe(true)
         if (!Exit.isFailure(exit)) return yield* Effect.die("expected transition failure")
         const reason = exit.cause.reasons.find(Cause.isFailReason)
-        expect(reason !== undefined && Schema.is(TaskTransitionError)(reason.error)).toBe(true)
-      }).pipe(withTaskWrite, Effect.provide(layer))
+        expect(reason !== undefined && Schema.is(TodoTransitionError)(reason.error)).toBe(true)
+      }).pipe(withTodoWrite, Effect.provide(layer))
     }),
   )
 
-  it.live("read task access cannot call write methods on the full task service", () =>
+  it.live("read todo access cannot call write methods on the full todo service", () =>
     Effect.gen(function* () {
       const layer = makeLayer()
 
       yield* Effect.gen(function* () {
         yield* ensureStorageParents({ sessionId, branchId })
-        const taskService = yield* TaskService
-        const exit = yield* taskService
+        const todoService = yield* TodoService
+        const exit = yield* todoService
           .create({
             sessionId,
             branchId,
@@ -144,7 +141,7 @@ describe("TaskService", () => {
         const reason = exit.cause.reasons.find(Cause.isFailReason)
         expect(reason !== undefined && Schema.is(CapabilityError)(reason.error)).toBe(true)
       }).pipe(
-        provideCapabilityAccessNeeds([{ tag: "task", access: "read" }]),
+        provideCapabilityAccessNeeds([{ tag: "todo", access: "read" }]),
         Effect.provide(layer),
       )
     }),

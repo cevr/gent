@@ -60,7 +60,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), task: "hello" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
           if (!("output" in result) || result.output === undefined) {
             throw new Error("expected delegate output")
@@ -88,7 +88,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("cowork"), task: "hello" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("cowork"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
           if (!("output" in result) || result.output === undefined) {
             throw new Error("expected delegate output")
@@ -120,8 +120,8 @@ describe("Delegate Tool", () => {
       getToolEffect(DelegateTool)(
         {
           chain: [
-            { agent: AgentName.make("explore"), task: "first" },
-            { agent: AgentName.make("explore"), task: "second" },
+            { agent: AgentName.make("explore"), todo: "first" },
+            { agent: AgentName.make("explore"), todo: "second" },
           ],
         },
         ctx,
@@ -155,9 +155,9 @@ describe("Delegate Tool", () => {
     return narrowR(
       getToolEffect(DelegateTool)(
         {
-          tasks: [
-            { agent: AgentName.make("explore"), task: "a" },
-            { agent: AgentName.make("explore"), task: "b" },
+          todos: [
+            { agent: AgentName.make("explore"), todo: "a" },
+            { agent: AgentName.make("explore"), todo: "b" },
           ],
         },
         ctx,
@@ -191,7 +191,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), task: "go" }, ctx).pipe(
+      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), todo: "go" }, ctx).pipe(
         Effect.map(() => {
           expect(capturedRunSpec?.persistence).toBe("ephemeral")
         }),
@@ -219,8 +219,8 @@ describe("Delegate Tool", () => {
       getToolEffect(DelegateTool)(
         {
           chain: [
-            { agent: AgentName.make("explore"), task: "a" },
-            { agent: AgentName.make("explore"), task: "b" },
+            { agent: AgentName.make("explore"), todo: "a" },
+            { agent: AgentName.make("explore"), todo: "b" },
           ],
         },
         ctx,
@@ -233,7 +233,7 @@ describe("Delegate Tool", () => {
     )
   })
 
-  it.live("parallel mode delegates with ephemeral persistence per task", () => {
+  it.live("parallel mode delegates with ephemeral persistence per todo", () => {
     const captured: Array<{ persistence?: string }> = []
     const ctx = makeCtx({
       agentRun: (params) => {
@@ -252,9 +252,9 @@ describe("Delegate Tool", () => {
     return narrowR(
       getToolEffect(DelegateTool)(
         {
-          tasks: [
-            { agent: AgentName.make("explore"), task: "a" },
-            { agent: AgentName.make("explore"), task: "b" },
+          todos: [
+            { agent: AgentName.make("explore"), todo: "a" },
+            { agent: AgentName.make("explore"), todo: "b" },
           ],
         },
         ctx,

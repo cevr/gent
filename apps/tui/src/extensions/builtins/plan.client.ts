@@ -15,7 +15,7 @@ export default defineClientExtension("@gent/plan", {
         slash: "plan",
         onSelect: () =>
           shell.sendMessage(
-            "Use the plan tool to create an implementation plan for the current task.",
+            "Use the plan tool to create an implementation plan for the current todo.",
           ),
         onSlash: (args) =>
           shell.sendMessage(

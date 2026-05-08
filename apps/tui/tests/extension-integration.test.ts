@@ -396,7 +396,7 @@ export default defineClientExtension("@test/b", {
         )
         const widgetIds = new Set(resolved.widgets.map((widget) => widget.id))
         const borderPositions = new Set(resolved.borderLabels.map((label) => label.position))
-        expect(widgetIds.has("tasks")).toBe(true)
+        expect(widgetIds.has("todos")).toBe(true)
         expect(borderPositions.has("top-left")).toBe(true)
         expect(borderPositions.has("bottom-right")).toBe(true)
         expect(borderPositions.has("bottom-left")).toBe(true)

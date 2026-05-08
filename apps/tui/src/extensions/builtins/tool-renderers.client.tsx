@@ -1,10 +1,10 @@
 /**
- * Task-tools TUI widget — transport-only.
+ * Todo-tools TUI widget — transport-only.
  *
  * Transport-only widget. The widget owns its own Solid signal inside an
  * Effect-typed setup, fetched via the
- * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed
- * when task-tools state-change pulses arrive on the active session stream.
+ * typed transport (`requestExtension(ref(TodoListRequest))`) and refreshed
+ * when todo state-change pulses arrive on the active session stream.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
  * `runtime.runPromise`. The Solid `createRoot` disposer and the pulse
@@ -23,22 +23,18 @@ import {
   rendererContribution,
   widgetContribution,
 } from "../client-facets.js"
-import { TaskWidget, type TaskPreview } from "../../components/task-widget"
-import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
+import { TodoWidget, type TodoPreview } from "../../components/todo-widget"
+import { TodoDialog } from "../../components/todo-dialog"
 import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
-import {
-  type TaskEntry,
-  TASK_TOOLS_EXTENSION_ID,
-  TaskListRequest,
-} from "@gent/extensions/client.js"
+import { type TodoEntry, TODO_EXTENSION_ID, TodoListRequest } from "@gent/extensions/client.js"
 import { ref } from "@gent/core/extensions/api"
 import { ClientTransport, requestExtension } from "../client-transport"
 import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"
 import { useScopedKeyboard } from "../../keyboard/context"
 
-const EXT_ID = TASK_TOOLS_EXTENSION_ID
+const EXT_ID = TODO_EXTENSION_ID
 
 export const builtinTools = defineClientExtension("@gent/tools", {
   setup: Effect.gen(function* () {
@@ -106,13 +102,13 @@ export const builtinTools = defineClientExtension("@gent/tools", {
         slash: "loop",
         onSelect: () =>
           shell.sendMessage(
-            "Use the loop tool to iterate on the current task until complete or a condition is met.",
+            "Use the loop tool to iterate on the current todo until complete or a condition is met.",
           ),
         onSlash: (args) =>
           shell.sendMessage(
             args.trim().length > 0
               ? `Use the loop tool: ${args.trim()}`
-              : "Use the loop tool to iterate on the current task until complete or a condition is met.",
+              : "Use the loop tool to iterate on the current todo until complete or a condition is met.",
           ),
       }),
     ]
@@ -127,7 +123,7 @@ export const builtinInteractions = defineClientExtension("@gent/interaction-tool
   ]),
 })
 
-export const builtinTasks = defineClientExtension("@gent/task-tools", {
+export const builtinTodos = defineClientExtension("@gent/todo", {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
@@ -144,28 +140,28 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
     type Keyed = {
       readonly sessionId: string
       readonly branchId: string
-      readonly tasks: readonly TaskEntry[]
+      readonly todos: readonly TodoEntry[]
     }
     let getState: () => Keyed | undefined = () => undefined
     let setState: (next: Keyed | undefined) => void = () => {}
 
-    const liveTasks = (): readonly TaskEntry[] => {
+    const liveTodos = (): readonly TodoEntry[] => {
       const s = getState()
       const cur = transport.currentSession()
       if (s === undefined || cur === undefined) return []
       if (s.sessionId !== cur.sessionId || s.branchId !== cur.branchId) return []
-      return s.tasks
+      return s.todos
     }
 
     // Refetch keyed by the captured session. Two-stage stale check:
     // (a) drop the response if the active session changed during the
     //     request — otherwise late responses overwrite the new session;
-    // (b) `liveTasks()` re-checks at render — covers the gap between
+    // (b) `liveTodos()` re-checks at render — covers the gap between
     //     state set and the next session change.
     const runRefetch = (captured: ActiveSession): void => {
       transport.runtime.cast(
         Effect.gen(function* () {
-          const out = yield* requestExtension(ref(TaskListRequest), {}, transport, captured)
+          const out = yield* requestExtension(ref(TodoListRequest), {}, transport, captured)
           yield* Effect.sync(() => {
             const current = transport.currentSession()
             if (
@@ -178,12 +174,12 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
             setState({
               sessionId: captured.sessionId,
               branchId: captured.branchId,
-              tasks: out,
+              todos: out,
             })
           })
         }).pipe(
           Effect.catchEager((err) =>
-            Effect.logWarning(`${EXT_ID} task list refresh failed`).pipe(
+            Effect.logWarning(`${EXT_ID} todo list refresh failed`).pipe(
               Effect.annotateLogs({ error: String(err) }),
             ),
           ),
@@ -191,7 +187,7 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
       )
     }
 
-    const isTaskMutation = (event: { readonly _tag: string; readonly extensionId?: string }) =>
+    const isTodoMutation = (event: { readonly _tag: string; readonly extensionId?: string }) =>
       event._tag === "ExtensionStateChanged" && event.extensionId === EXT_ID
 
     // Solid root + event subscription — both disposers registered with
@@ -204,10 +200,10 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
         setState = set
         // Refetch on session/branch transition AND clear stale state on
         // every transition so a no-data window between sessions never
-        // shows the prior session's tasks.
+        // shows the prior session's todos.
         createEffect(() => {
           const session = transport.currentSession()
-          // Clear immediately on key change (or undefined) — `liveTasks`
+          // Clear immediately on key change (or undefined) — `liveTodos`
           // also gates by key, but explicit clear avoids transient
           // mismatched-key state lingering until the next refetch.
           setState(undefined)
@@ -219,7 +215,7 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
     })
 
     const unsubscribeEvents = transport.onSessionEvent((envelope) => {
-      if (!isTaskMutation(envelope.event)) return
+      if (!isTodoMutation(envelope.event)) return
       const session = transport.currentSession()
       if (session === undefined) return
       runRefetch(session)
@@ -227,33 +223,29 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
     lifecycle.addCleanup(unsubscribeEvents)
 
     const runningCount = (): number =>
-      liveTasks().filter((t) => t.status === "in_progress" || t.status === "pending").length
+      liveTodos().filter((t) => t.status === "in_progress" || t.status === "pending").length
 
-    const TasksDialogOverlay = (overlayProps: { open: boolean; onClose: () => void }) => (
-      <BackgroundTasksDialog
-        open={overlayProps.open}
-        onClose={overlayProps.onClose}
-        tasks={liveTasks()}
-      />
+    const TodoDialogOverlay = (overlayProps: { open: boolean; onClose: () => void }) => (
+      <TodoDialog open={overlayProps.open} onClose={overlayProps.onClose} todos={liveTodos()} />
     )
 
-    const TrackedTaskWidget = () => {
-      const previews = createMemo((): TaskPreview[] =>
-        liveTasks().map((t) => ({ subject: t.subject, status: t.status })),
+    const TrackedTodoWidget = () => {
+      const previews = createMemo((): TodoPreview[] =>
+        liveTodos().map((t) => ({ subject: t.subject, status: t.status })),
       )
-      return <TaskWidget previewTasks={previews()} />
+      return <TodoWidget previewTodos={previews()} />
     }
 
-    // Down-arrow opens tasks dialog when draft is empty and tasks are running.
+    // Down-arrow opens todos dialog when draft is empty and todos are running.
     // Registers per render via `useScopedKeyboard` so unmount cleans up.
-    const TaskTracker = () => {
+    const TodoTracker = () => {
       useScopedKeyboard(
         (event) => {
           if (event.name !== "down") return false
           const cs = composer.state()
           if (cs.draft !== "" || !cs.inputFocused) return false
           if (runningCount() === 0) return false
-          shell.openOverlay("tasks-dialog")
+          shell.openOverlay("todos-dialog")
           return true
         },
         { when: () => runningCount() > 0 },
@@ -263,29 +255,29 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
 
     return [
       widgetContribution({
-        id: "tasks",
+        id: "todos",
         slot: "below-messages",
         priority: 20,
-        component: TrackedTaskWidget,
+        component: TrackedTodoWidget,
       }),
       widgetContribution({
-        id: "task-tracker",
+        id: "todo-tracker",
         slot: "below-input",
         priority: 999,
-        component: TaskTracker,
+        component: TodoTracker,
       }),
       overlayContribution({
-        id: "tasks-dialog",
-        component: TasksDialogOverlay,
+        id: "todos-dialog",
+        component: TodoDialogOverlay,
       }),
       clientCommandContribution({
-        id: "tasks-dialog",
-        title: "Background Tasks",
-        description: "View and manage background tasks",
-        category: "Tasks",
+        id: "todos-dialog",
+        title: "Todos",
+        description: "View and manage todos",
+        category: "Todos",
         keybind: "ctrl+shift+t",
-        slash: "tasks",
-        onSelect: () => shell.openOverlay("tasks-dialog"),
+        slash: "todos",
+        onSelect: () => shell.openOverlay("todos-dialog"),
       }),
       borderLabelContribution({
         position: "bottom-left",
@@ -293,11 +285,11 @@ export const builtinTasks = defineClientExtension("@gent/task-tools", {
         produce: () => {
           const count = runningCount()
           if (count === 0) return []
-          return [{ text: `${count} task${count > 1 ? "s" : ""} ↓`, color: "info" }]
+          return [{ text: `${count} todo${count > 1 ? "s" : ""} ↓`, color: "info" }]
         },
       }),
     ]
   }),
 })
 
-export default builtinTasks
+export default builtinTodos

@@ -108,7 +108,7 @@ describe("Auto extension E2E", () => {
         textStep("Starting auto mode."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
-          summary: "Task done",
+          summary: "Todo done",
           learnings: "Everything worked",
         }),
         textStep("Auto mode complete."), // continuation after tool call

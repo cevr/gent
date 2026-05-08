@@ -199,13 +199,13 @@ describe("ConfigService", () => {
   describe("disabledExtensions", () => {
     it.live("seeded disabledExtensions read back unchanged", () => {
       const initial = new UserConfig({
-        disabledExtensions: ["@gent/task-tools", "@gent/auto"],
+        disabledExtensions: ["@gent/todo", "@gent/auto"],
       })
       return ConfigService.use((cfg) => cfg.get()).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             expect(result.disabledExtensions?.length).toBe(2)
-            expect(result.disabledExtensions).toContain("@gent/task-tools")
+            expect(result.disabledExtensions).toContain("@gent/todo")
             expect(result.disabledExtensions).toContain("@gent/auto")
           }),
         ),
@@ -226,13 +226,13 @@ describe("ConfigService", () => {
     it.live("permission updates preserve previously stored disabledExtensions", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.set({ disabledExtensions: ["@gent/task-tools"] })
+        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
         yield* cfg.set({
           permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
         })
         const result = yield* cfg.get()
         expect(result.disabledExtensions?.length).toBe(1)
-        expect(result.disabledExtensions?.[0]).toBe("@gent/task-tools")
+        expect(result.disabledExtensions?.[0]).toBe("@gent/todo")
         expect(result.permissions?.length).toBe(1)
       }).pipe(Effect.provide(ConfigService.Test())),
     )

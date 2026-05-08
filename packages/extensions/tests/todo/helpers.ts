@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { AllBuiltinAgents } from "../../src/all-agents.js"
-import { TaskExtension } from "../../src/task-tools/index.js"
+import { TodoExtension } from "../../src/todo/index.js"
 import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
@@ -16,7 +16,7 @@ import { toolPreset } from "../helpers/test-preset.js"
 export const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 
-export const withTaskWrite = provideCapabilityAccessNeeds([{ tag: "task", access: "write" }])
+export const withTodoWrite = provideCapabilityAccessNeeds([{ tag: "todo", access: "write" }])
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -61,7 +61,7 @@ export const makeCtx = Effect.succeed(
 
 export const layer = createToolTestLayer({
   ...toolPreset,
-  extensions: [TaskExtension],
+  extensions: [TodoExtension],
   subagentRunner: mockRunnerSuccess,
 })
 

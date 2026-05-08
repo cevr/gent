@@ -170,7 +170,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Read-only helper agents (`explore`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
-- Callers that need durable history must opt in explicitly, e.g. task execution forces `persistence: "durable"`.
+- Callers that need durable history must opt in explicitly, e.g. todo execution forces `persistence: "durable"`.
 
 ### Interactions (Cold Pattern)
 
@@ -345,13 +345,13 @@ Everything else is builtin/internal:
 - raw runtime host context and hook plumbing (`ExtensionHostContext`,
   `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
   internals);
-- storage, event publisher, event store, task/session mutation services, and
+- storage, event publisher, event store, todo/session mutation services, and
   interaction pending readers;
 - runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
   `ExtensionEventSink`, `runProcess`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
-- raw event/task/message domain internals that are not part of the serialized
+- raw event/todo/message domain internals that are not part of the serialized
   authoring contract;
 - driver registry internals and provider auth persistence machinery;
 - test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
@@ -376,7 +376,7 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
-- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
+- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TodoStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
@@ -390,24 +390,24 @@ Other notes:
 
 `EventPublisherRouterLive` (`server/event-publisher.ts`) dispatches through per-cwd profiles. For a single-cwd run the profile is resolved once at boot; for multi-cwd server topologies the router resolves lazily per cwd and fans out to the correct extension runtime. Transport-level broadcast (session stream, WebSocket push) is cwd-agnostic; only the extension runtime dispatch is per-cwd.
 
-### Task Service Ownership
+### Todo Service Ownership
 
-`TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
+`TodoService.Live` is owned by the `@gent/todo` extension, not core:
 
-- Provided by `@gent/task-tools` as a process resource layer
-  (`TaskStorage.Live + TaskService.Live`).
-- Task mutation flows through typed extension request capabilities
-  (`intent: "write"`) and extension tools yield `TaskService` from their own
+- Provided by `@gent/todo` as a process resource layer
+  (`TodoStorage.Live + TodoService.Live`).
+- Todo mutation flows through typed extension request capabilities
+  (`intent: "write"`) and extension tools yield `TodoService` from their own
   extension runtime.
-- Task UI reads through typed extension RPC and refetches when
-  `@gent/task-tools` emits an `ExtensionStateChanged` pulse on the normal
+- Todo UI reads through typed extension RPC and refetches when
+  `@gent/todo` emits an `ExtensionStateChanged` pulse on the normal
   session stream.
-- Core has no product task domain. Core `MachineTaskSucceeded` /
+- Core has no product todo domain. Core `MachineTaskSucceeded` /
   `MachineTaskFailed` events are runtime/tool telemetry and stay filtered from
   public transport.
 - Event-publisher persists and broadcasts session events only. Client widgets
   read state via typed RPC plus transport events; they do not consume a core
-  task service or privileged builtin API.
+  todo service or privileged builtin API.
 
 ### TUI Extensions
 
@@ -415,7 +415,7 @@ Other notes:
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
 - One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
-- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,tasks}.client.{ts,tsx}` for the canonical pattern.
+- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,todos}.client.{ts,tsx}` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
@@ -432,7 +432,7 @@ or ask/reply infrastructure inside extension authoring.
 **Event-backed client invalidation**:
 
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
-- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/task-tools` is the canonical event-backed widget.
+- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/todo` is the canonical event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
 **Ephemeral runtime builder**:
@@ -483,7 +483,7 @@ tests/
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage, search-storage, task storage
+├── storage/       # sqlite-storage, search-storage, todo storage
 ├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```
@@ -547,11 +547,12 @@ Cross-session replay via `onInit`: child sessions verify ancestry includes `acti
 - Handoff extension owns presentation, cooldown, and user interaction
 - Handoff extension skips when auto is active (guard on `AutoRpc.IsActive`)
 
-### Task Service
+### Todo Service
 
-`TaskService` is owned by the `@gent/task-tools` extension (not core). It correlates child sessions via synthetic `toolCallId` (`task:<taskId>`). The `SubagentSpawned` event filter matches on `toolCallId`, preventing concurrent tasks from stealing each other's child session.
-
-`task.output` RPC returns `MessageSummary[]` (role + 200-char excerpt) alongside `messageCount`.
+`TodoService` is owned by the `@gent/todo` extension (not core). Todos are
+durable work items with optional nesting (`parentId`) plus dependency edges
+(`blockedBy`). Storage rejects parent/dependency cycles so the dependency graph
+stays a DAG.
 
 ### Test Utilities
 

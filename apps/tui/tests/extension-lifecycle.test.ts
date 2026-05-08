@@ -2,10 +2,10 @@ import { describe, it, expect, test } from "effect-bun-test"
 import { Deferred, Effect } from "effect"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
-import tasksBuiltin from "../src/extensions/builtins/tool-renderers.client"
+import todosBuiltin from "../src/extensions/builtins/tool-renderers.client"
 import { AgentEvent, EventId, type EventEnvelope } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/client.js"
+import { TODO_EXTENSION_ID } from "@gent/extensions/client.js"
 import {
   findBorderLabel,
   makeActiveSessionRef,
@@ -182,7 +182,7 @@ describe("transport-only extension widgets", () => {
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
   )
-  it.live("tasks widget renders decoded task list responses", () =>
+  it.live("todos widget renders decoded todo list responses", () =>
     Effect.gen(function* () {
       const activeSession = makeActiveSessionRef({
         sessionId: SessionId.make("session-A"),
@@ -191,12 +191,12 @@ describe("transport-only extension widgets", () => {
       const requestDeferred = yield* Deferred.make<unknown, never>()
       const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
         const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [
           {
-            id: "task-1",
+            id: "todo-1",
             sessionId: SessionId.make("session-A"),
             branchId: BranchId.make("branch-A"),
             subject: "Audit",
@@ -206,11 +206,11 @@ describe("transport-only extension widgets", () => {
           },
         ])
         yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([{ text: "1 task ↓", color: "info" }])
+        expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
   )
-  it.live("tasks widget refetches from task-tools state change event", () =>
+  it.live("todos widget refetches from todo state change event", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-A")
       const branchId = BranchId.make("branch-A")
@@ -218,27 +218,27 @@ describe("transport-only extension widgets", () => {
         const event = AgentEvent.ExtensionStateChanged.make({
           sessionId,
           branchId,
-          extensionId: TASK_TOOLS_EXTENSION_ID,
+          extensionId: TODO_EXTENSION_ID,
         })
         return { id: EventId.make(1), event, createdAt: 0 }
       }
       const activeSession = makeActiveSessionRef({ sessionId, branchId })
-      let tasks: readonly unknown[] = []
+      let todos: readonly unknown[] = []
       const sessionEventSubscribers = new Set<(envelope: EventEnvelope) => void>()
       const runtime = makeClientExtensionRuntime({
         activeSession,
         sessionEventSubscribers,
-        requestEffect: () => Effect.succeed(tasks),
+        requestEffect: () => Effect.succeed(todos),
       })
       yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
         const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
-        tasks = [
+        todos = [
           {
-            id: "task-1",
+            id: "todo-1",
             sessionId,
             branchId,
             subject: "Audit",
@@ -250,11 +250,11 @@ describe("transport-only extension widgets", () => {
         for (const cb of sessionEventSubscribers) cb(makeEnvelope())
         yield* Effect.sleep("0 millis")
         yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([{ text: "1 task ↓", color: "info" }])
+        expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
   )
-  it.live("tasks widget rejects undecodable task lists at the client seam", () =>
+  it.live("todos widget rejects undecodable todo lists at the client seam", () =>
     Effect.gen(function* () {
       const activeSession = makeActiveSessionRef({
         sessionId: SessionId.make("session-A"),
@@ -263,7 +263,7 @@ describe("transport-only extension widgets", () => {
       const requestDeferred = yield* Deferred.make<unknown, never>()
       const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
       yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, tasksBuiltin)
+        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
         const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }])

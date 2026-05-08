@@ -145,32 +145,32 @@ describe("toolArgSummary", () => {
   })
 
   test("delegate: single/parallel/chain modes", () => {
-    expect(toolArgSummary("delegate", { agent: "explore", task: "find the bug" })).toBe(
+    expect(toolArgSummary("delegate", { agent: "explore", todo: "find the bug" })).toBe(
       "explore:find the bug",
     )
     expect(
       toolArgSummary("delegate", {
-        tasks: [
-          { agent: "a", task: "x" },
-          { agent: "b", task: "y" },
+        todos: [
+          { agent: "a", todo: "x" },
+          { agent: "b", todo: "y" },
         ],
       }),
     ).toBe("2 parallel")
     expect(
       toolArgSummary("delegate", {
         chain: [
-          { agent: "a", task: "x" },
-          { agent: "b", task: "y" },
-          { agent: "c", task: "z" },
+          { agent: "a", todo: "x" },
+          { agent: "b", todo: "y" },
+          { agent: "c", todo: "z" },
         ],
       }),
     ).toBe("3 chain")
     expect(toolArgSummary("delegate", { agent: "explore" })).toBe("explore")
   })
 
-  test("delegate: truncates long task text", () => {
-    const longTask = "a".repeat(60)
-    const result = toolArgSummary("delegate", { agent: "explore", task: longTask })
+  test("delegate: truncates long todo text", () => {
+    const longTodo = "a".repeat(60)
+    const result = toolArgSummary("delegate", { agent: "explore", todo: longTodo })
     expect(result).toBe(`explore:${"a".repeat(40)}…`)
   })
 

@@ -38,7 +38,7 @@ describe("branded ids — roundtrip", () => {
   test("ToolId, CommandId, RpcId all roundtrip", () => {
     expect(String(Schema.decodeUnknownSync(ToolId)("read_file"))).toBe("read_file")
     expect(String(Schema.decodeUnknownSync(CommandId)("executor-start"))).toBe("executor-start")
-    expect(String(Schema.decodeUnknownSync(RpcId)("task.list"))).toBe("task.list")
+    expect(String(Schema.decodeUnknownSync(RpcId)("todo.list"))).toBe("todo.list")
   })
 
   test("BranchId, MessageId, ActorCommandId, ArtifactId all roundtrip", () => {
@@ -86,13 +86,13 @@ describe("branded ids — cross-brand assignability is a type error", () => {
   test("ToolId, CommandId, RpcId are mutually non-assignable", () => {
     const tool = Schema.decodeUnknownSync(ToolId)("read_file")
     const command = Schema.decodeUnknownSync(CommandId)("executor-start")
-    const rpc = Schema.decodeUnknownSync(RpcId)("task.list")
+    const rpc = Schema.decodeUnknownSync(RpcId)("todo.list")
     // @ts-expect-error
     const a: CommandId = tool
     // @ts-expect-error
     const b: RpcId = command
     // @ts-expect-error
     const c: ToolId = rpc
-    expect([String(a), String(b), String(c)]).toEqual(["read_file", "executor-start", "task.list"])
+    expect([String(a), String(b), String(c)]).toEqual(["read_file", "executor-start", "todo.list"])
   })
 })
