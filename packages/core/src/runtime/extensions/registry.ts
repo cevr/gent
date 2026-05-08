@@ -609,26 +609,7 @@ export const listSlashCommands = (
   extensions: ReadonlyArray<LoadedExtension>,
   options?: { readonly publicOnly?: boolean },
 ): ReadonlyArray<SlashCommand> => {
-  const winners = new Map<string, RegisteredCapabilityEntry>()
-  for (const ext of sortExtensionsByScope(extensions)) {
-    for (const cap of ext.contributions.tools ?? []) {
-      winners.set(String(getToolId(cap)), {
-        kind: "tool",
-        extensionId: ext.manifest.id,
-        capability: cap,
-      })
-    }
-    for (const cap of ext.contributions.actions ?? []) {
-      winners.set(String(cap.id), {
-        kind: "command",
-        extensionId: ext.manifest.id,
-        capability: cap,
-      })
-    }
-    for (const cap of ext.contributions.requests ?? []) {
-      winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
-    }
-  }
+  const winners = compileCapabilityWinners(sortExtensionsByScope(extensions))
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
     if (entry.kind !== "command" && entry.kind !== "rpc") continue
