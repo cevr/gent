@@ -14,6 +14,7 @@ import {
   DateTime,
   Deferred,
   Effect,
+  Queue,
   Ref,
   Schema,
   Semaphore,
@@ -334,6 +335,7 @@ export const makeAgentLoopBehavior = (
     )
 
     const loopScope = yield* Scope.make()
+    const turnWorkerQueue = yield* Queue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
     const interruptedRef = yield* Ref.make(false)
@@ -1086,76 +1088,95 @@ export const makeAgentLoopBehavior = (
         Effect.withSpan("AgentLoop.durability.save"),
       )
 
-    const runTurnFiber = (startState: RunningState): Effect.Effect<void, never> =>
-      sideMutationSemaphore
-        .withPermits(1)(
-          Effect.gen(function* () {
-            const outcome = yield* runTurn(startState).pipe(
-              Effect.annotateLogs({ sessionId, branchId }),
-              Effect.withSpan("AgentLoop.turn"),
-              Effect.tapCause((cause) =>
-                recordTurnFailure(cause).pipe(
-                  Effect.andThen(publishPhaseFailure({ publishEvent, sessionId, branchId, cause })),
-                ),
-              ),
-            )
+    const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
+      Queue.offer(turnWorkerQueue, state).pipe(Effect.asVoid)
 
-            if (outcome._tag === "InteractionRequested") {
-              const next = toWaitingForInteractionState({
-                state: startState,
-                currentTurnAgent: outcome.currentTurnAgent,
-                pendingRequestId: outcome.pendingRequestId,
-                pendingToolCallId: outcome.pendingToolCallId,
-              })
-              yield* saveCheckpoint(next)
-              return
-            }
+    const finishTurnWorker = (
+      startState: RunningState,
+      outcome: TurnOutcome,
+    ): Effect.Effect<void, AgentLoopError> =>
+      Effect.gen(function* () {
+        if (outcome._tag === "InteractionRequested") {
+          const next = toWaitingForInteractionState({
+            state: startState,
+            currentTurnAgent: outcome.currentTurnAgent,
+            pendingRequestId: outcome.pendingRequestId,
+            pendingToolCallId: outcome.pendingToolCallId,
+          })
+          yield* saveCheckpoint(next)
+          return
+        }
 
-            const nextItem = yield* takeNextQueuedTurnCommitted
-            yield* Ref.set(interruptedRef, false)
-            if (nextItem !== undefined) {
-              const startedAtMs = yield* Clock.currentTimeMillis
-              const nextRunning = buildRunningState(
-                { currentAgent: startState.currentAgent },
-                nextItem,
-                { startedAtMs },
-              )
-              yield* saveCheckpoint(nextRunning)
-              yield* forkTurn(nextRunning)
-              return
-            }
-            yield* saveCheckpoint(buildIdleState({ currentAgent: startState.currentAgent }))
-          }),
+        const nextItem = yield* takeNextQueuedTurnCommitted
+        yield* Ref.set(interruptedRef, false)
+        if (nextItem !== undefined) {
+          const startedAtMs = yield* Clock.currentTimeMillis
+          const nextRunning = buildRunningState(
+            { currentAgent: startState.currentAgent },
+            nextItem,
+            { startedAtMs },
+          )
+          yield* saveCheckpoint(nextRunning)
+          yield* enqueueTurnWorker(nextRunning)
+          return
+        }
+        yield* saveCheckpoint(buildIdleState({ currentAgent: startState.currentAgent }))
+      })
+
+    const failTurnWorker = (
+      startState: RunningState,
+      cause: Cause.Cause<unknown>,
+    ): Effect.Effect<void, AgentLoopError> =>
+      Effect.gen(function* () {
+        yield* recordTurnFailure(cause)
+        yield* publishPhaseFailure({ publishEvent, sessionId, branchId, cause })
+        const nextItem = yield* takeNextQueuedTurnCommitted
+        const current = yield* currentLoopState
+        yield* Ref.set(interruptedRef, false)
+        if (nextItem !== undefined) {
+          const startedAtMs = yield* Clock.currentTimeMillis
+          const nextRunning = buildRunningState(
+            { currentAgent: current.currentAgent ?? startState.currentAgent },
+            nextItem,
+            { startedAtMs },
+          )
+          yield* saveCheckpoint(nextRunning)
+          yield* enqueueTurnWorker(nextRunning)
+          return
+        }
+        yield* saveCheckpoint(
+          buildIdleState({ currentAgent: current.currentAgent ?? startState.currentAgent }),
         )
-        .pipe(
-          Effect.catchCause(() =>
-            sideMutationSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                const nextItem = yield* takeNextQueuedTurnCommitted
-                const current = yield* currentLoopState
-                yield* Ref.set(interruptedRef, false)
-                if (nextItem !== undefined) {
-                  const startedAtMs = yield* Clock.currentTimeMillis
-                  const nextRunning = buildRunningState(
-                    { currentAgent: current.currentAgent },
-                    nextItem,
-                    { startedAtMs },
-                  )
-                  yield* saveCheckpoint(nextRunning)
-                  yield* forkTurn(nextRunning)
-                  return
-                }
-                yield* saveCheckpoint(buildIdleState({ currentAgent: current.currentAgent }))
-              }),
+      })
+
+    const runTurnWorker = (startState: RunningState): Effect.Effect<void, never> =>
+      sideMutationSemaphore.withPermits(1)(
+        runTurn(startState).pipe(
+          Effect.annotateLogs({ sessionId, branchId }),
+          Effect.withSpan("AgentLoop.turn"),
+          Effect.matchCauseEffect({
+            onFailure: (cause) => failTurnWorker(startState, cause),
+            onSuccess: (outcome) => finishTurnWorker(startState, outcome),
+          }),
+          Effect.catchCause((cause) =>
+            recordTurnFailure(cause).pipe(
+              Effect.andThen(publishPhaseFailure({ publishEvent, sessionId, branchId, cause })),
+              Effect.ignore,
             ),
           ),
           Effect.ignore,
-        )
-
-    const forkTurn = (startState: RunningState): Effect.Effect<void> =>
-      Effect.forkIn(runTurnFiber(startState), loopScope, { startImmediately: true }).pipe(
-        Effect.asVoid,
+        ),
       )
+
+    const turnWorkerLoop = Queue.take(turnWorkerQueue).pipe(
+      Effect.flatMap(runTurnWorker),
+      Effect.forever,
+      Effect.ignore,
+    )
+
+    const startTurnWorker = Effect.forkIn(turnWorkerLoop, loopScope, {
+      startImmediately: true,
+    }).pipe(Effect.asVoid)
 
     const interrupt: Effect.Effect<void, AgentLoopError> = Effect.gen(function* () {
       const snap = yield* currentLoopState
@@ -1181,7 +1202,7 @@ export const makeAgentLoopBehavior = (
             { startedAtMs: state.startedAtMs },
           )
           yield* saveCheckpoint(resumed)
-          yield* forkTurn(resumed)
+          yield* enqueueTurnWorker(resumed)
         }),
       )
     })
@@ -1195,7 +1216,7 @@ export const makeAgentLoopBehavior = (
           const startedAtMs = yield* Clock.currentTimeMillis
           const next = buildRunningState(state, item, { startedAtMs })
           yield* saveCheckpoint(next)
-          yield* forkTurn(next)
+          yield* enqueueTurnWorker(next)
         }),
       )
 
@@ -1241,13 +1262,14 @@ export const makeAgentLoopBehavior = (
             { startedAtMs: state.startedAtMs },
           )
           yield* saveCheckpoint(resumed)
-          yield* forkTurn(resumed)
+          yield* enqueueTurnWorker(resumed)
         }),
       )
 
-    const start = Effect.sync(() => {
+    const start = Effect.gen(function* () {
       if (started) return
       started = true
+      yield* startTurnWorker
     })
 
     return {

@@ -184,7 +184,7 @@ tool calls ctx.approve({ text, metadata? })
     → if found: returns { approved, notes? }
     → if not: persists to InteractionStorage, publishes InteractionPresented
       → InteractionPendingError thrown
-        → machine parks in WaitingForInteraction (cold, no task fiber)
+        → machine parks in WaitingForInteraction (cold, no turn fiber)
 
 client responds via respondInteraction RPC
   → storeResolution(requestId, { approved, notes? })
@@ -198,7 +198,7 @@ client responds via respondInteraction RPC
 
 Key properties:
 
-- **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no `.task()`, no background work. The machine is checkpointed and survives restarts.
+- **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
 - **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
 - **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.

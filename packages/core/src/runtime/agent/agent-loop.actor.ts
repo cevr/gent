@@ -2,9 +2,7 @@
  * `AgentLoop` as `Actor.fromEntity`.
  *
  * Replaces the per-(sessionId, branchId) hand-rolled fiber map +
- * `LoopState` `TaggedEnumClass` + actor mailbox persistence
- * (C5.4 moves the loop body, C5.5 replaces `runTurnFiber` with
- * `LanguageModel.streamText`).
+ * `LoopState` `TaggedEnumClass` + actor mailbox persistence.
  *
  * **Op surface (C5.1-followup counsel):** request/reply only.
  * `Subscribe` and `Snapshot` are NOT actor ops:
@@ -16,7 +14,8 @@
  *
  * **Entity ID** keys per `(sessionId, branchId)` so all ops for one branch
  * share an actor instance. Handler concurrency is intentionally unbounded;
- * behavior-owned semaphores serialize durable queue and side-effect lanes.
+ * behavior-owned queue and semaphores serialize turn execution, durable queue,
+ * and side-effect lanes.
  *
  * **Single source of truth for routing** (C5.2 counsel): for ops that
  * carry a domain payload owning its own `(sessionId, branchId)`,
@@ -1032,10 +1031,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 })
 
 export const AgentLoopLiveActor = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
-  // Long-lived ops (Submit/RunTurn) park inside the loop body via
-  // behavior-owned queue/side mutation gates. `concurrency: "unbounded"` keeps
-  // short ops (RecordToolResult, RespondInteraction, Steer) from blocking behind
-  // a slow Submit.
+  // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
+  // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
+  // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
   concurrency: "unbounded",
 })
 

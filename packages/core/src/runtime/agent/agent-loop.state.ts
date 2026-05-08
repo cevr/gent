@@ -233,7 +233,7 @@ export const LoopState = TaggedEnumClass("LoopState", {
   Idle: LoopStateBaseFields,
   /** Agentic loop running: resolve → stream → tools → repeat. */
   Running: RunningTurnFields,
-  /** Cold state: a tool requested human approval. No task fiber. */
+  /** Cold state: a tool requested human approval. No turn fiber. */
   WaitingForInteraction: {
     ...RunningTurnFields,
     currentTurnAgent: AgentName,
