@@ -3,7 +3,7 @@ import {
   type GentExtension,
   defineExtension,
   defineResource,
-  ExtensionSession,
+  ExtensionContext,
   ExtensionId,
   tool,
 } from "@gent/core/extensions/api"
@@ -66,8 +66,8 @@ const RenameSessionTool = tool({
   execute: Effect.fn("RenameSessionTool.execute")(function* (
     params: typeof RenameSessionParams.Type,
   ) {
-    const session = yield* ExtensionSession
-    return yield* session.renameCurrent(params.name)
+    const ctx = yield* ExtensionContext
+    return yield* ctx.Session.renameCurrent(params.name)
   }),
 })
 

@@ -3,22 +3,20 @@
  */
 
 import { Effect } from "effect"
-import { AgentRunError, type AgentRunResult } from "@gent/core/extensions/api"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
+import { AgentRunError, ExtensionContext, type AgentRunResult } from "@gent/core/extensions/api"
 
 // ── Shell Command Runner ──
 
 /** Run a shell command in a given cwd, returning stdout. Returns empty string on failure. */
-export const runCommand = (
-  host: ExtensionHostPlatform,
-  cmd: string[],
-  cwd: string,
-): Effect.Effect<string> => {
+export const runCommand = (cmd: string[]) => {
   const [head, ...rest] = cmd
   if (head === undefined) return Effect.succeed("")
-  return host.runProcess(head, rest, { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
+  return Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    return yield* ctx.Process.run(head, rest, { cwd: ctx.cwd, stdout: "pipe", stderr: "pipe" })
+  }).pipe(
     Effect.flatMap((r) => Effect.succeed(r.exitCode === 0 ? r.stdout : "")),
-    Effect.catchTag("ExtensionHostProcessError", () => Effect.succeed("")),
+    Effect.catchEager(() => Effect.succeed("")),
   )
 }
 

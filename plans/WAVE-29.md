@@ -9,13 +9,13 @@ authority metadata to access host capabilities.
 
 The collapsed model is Effect-native:
 
-- Extension code imports constrained services such as `ExtensionSession`,
-  `ExtensionAgent`, and `ExtensionInteraction`.
+- Extension code imports one constrained service, `ExtensionContext`.
+- Tool bodies receive decoded params only. They do not receive or thread `ctx`.
 - Runtime provides those services at extension execution boundaries.
 - Public extension setup receives only public facts; host-owned bundled
   extensions use internal APIs for process/platform authority.
-- `needs` remains only as a temporary runtime scheduling/tool-context detail
-  until migrated call sites are gone.
+- Capability metadata remains only where it models a real product surface
+  (`tool`, `action`, `request`), not as a private authority channel.
 
 ## Audit Receipts
 
@@ -37,6 +37,8 @@ The current design was informed by:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/index.ts`
+- `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/Context.ts`
+- `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/http/HttpClient.ts`
 
 ## Batch 1: refactor(extensions): introduce extension services
 
@@ -91,10 +93,11 @@ Remaining host/process-heavy targets moved to Batch 4:
 
 ## Batch 3: refactor(extensions): delete public needs authority
 
-**Status**: In progress.
+**Status**: Completed in current batch.
 
-First collapse removes `ToolNeeds` from extension-owned local service tools
-where the actual authority is already carried by Effect services/storage:
+Removed `ToolNeeds`, public `needs`, privileged authoring overloads, and local
+capability-access grants. Extension-owned local service tools now rely on Effect
+services/storage for real authority:
 
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/artifacts/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/checkpoint.ts`
@@ -103,9 +106,9 @@ where the actual authority is already carried by Effect services/storage:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/skills-tool.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/tools.ts`
 
-Second collapse removes `ToolNeeds` from platform/repo tools where safety is
-already owned by constrained services such as `FsRead`, `FileLockService`,
-`HttpClient`, and `GitReader`:
+Platform/repo tools no longer spell authority metadata where safety is already
+owned by constrained services such as `FsRead`, `FileLockService`, `HttpClient`,
+and `GitReader`:
 
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/read.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/write.ts`
@@ -116,17 +119,30 @@ already owned by constrained services such as `FsRead`, `FileLockService`,
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/network-tools/websearch.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/repo-explorer.ts`
 
-The next collapse should replace process/session/interaction authority in
-host-heavy tools with constrained imported services. Do not reintroduce public
-`read`/`write` metadata.
+Host-heavy tools now use `yield* ExtensionContext`. Public `tool({...}).execute`
+receives decoded params only; tool authors no longer receive or thread `ctx`.
+Individual authority facades (`ExtensionSession`, `ExtensionAgent`,
+`ExtensionInteraction`, `ExtensionProcess`) and internal runtime context types
+are no longer public exports. Scheduling/serialization concerns stay internal.
 
-After all public extension call sites yield services instead of requesting
-authority metadata:
+## Audit Lane: Extension Authoring Simplicity
 
-- Remove `ToolNeeds` from the public authoring API.
-- Remove privileged action/request/reaction overloads.
-- Remove `ModelCapabilityContext` from public exports.
-- Keep scheduling/serialization concerns internal if still needed by runtime.
+**Status**: Added.
+
+Audit and simplify against this north star:
+
+- A tool body should look like ordinary Effect code: `execute: (params) =>
+Effect.gen(function* () { const ctx = yield* ExtensionContext; ... })`.
+- `ctx` must not be threaded through helper calls or function parameters.
+- `capability`, `needs`, and `read`/`write` authority metadata must not be used
+  as private access control. If code needs a host primitive, expose the narrow
+  accessor on `ExtensionContext` and let the host provide it.
+- The remaining capability terms should name product surfaces only: tools,
+  actions, requests, reactions, resources.
+- Effect-smol evidence: `Context.Service` gives lazy `.asEffect()` / `.use(...)`
+  access in `Context.ts`; upstream modules such as `HttpClient.ts` hand-write
+  module-level method accessors when that improves DX. Gent should avoid
+  bespoke ceremony unless it clearly simplifies authoring.
 
 ## Batch 4: refactor(extensions): physically prune setup context
 
@@ -147,8 +163,9 @@ Run this exact lane independently:
 > extension API should have no private or privileged API. Builtins are only the
 > starting set of extensions, not a privileged extension class. Extension code
 > should import constrained services instead of spelling `read`/`write`
-> authority metadata. Verify setup context is physically pruned, runtime
-> execution seams provide only intentional services, and no public `needs`
-> carveout remains.
+> authority metadata. Tool bodies should receive params only and yield
+> `ExtensionContext` for host access. Verify setup context is physically pruned,
+> runtime execution seams provide only intentional services, and no public
+> `needs` carveout remains.
 
 Close this wave only when the independent audit reports no P0/P1.

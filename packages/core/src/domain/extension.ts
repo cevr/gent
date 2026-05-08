@@ -2,7 +2,7 @@ import type { Context, Duration, Effect } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
-import type { ToolCapability, ToolNeed } from "./capability/tool.js"
+import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
@@ -212,19 +212,10 @@ export interface MessageInputInput {
 export type ExtensionReactionFailureMode = "continue" | "isolate" | "halt"
 
 /** Single reaction handler with explicit failure policy. */
-export type ExtensionReaction<Input, E = never, R = never> =
-  | {
-      readonly failureMode: ExtensionReactionFailureMode
-      readonly handler: (
-        input: Input,
-        ctx: ReadOnlyExtensionHostContext,
-      ) => Effect.Effect<void, E, R>
-    }
-  | {
-      readonly failureMode: ExtensionReactionFailureMode
-      readonly needs: readonly [ToolNeed, ...ReadonlyArray<ToolNeed>]
-      readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
-    }
+export type ExtensionReaction<Input, E = never, R = never> = {
+  readonly failureMode: ExtensionReactionFailureMode
+  readonly handler: (input: Input, ctx: ReadOnlyExtensionHostContext) => Effect.Effect<void, E, R>
+}
 
 /**
  * The full reactions bag accepted by `defineExtension({ reactions })`. Every

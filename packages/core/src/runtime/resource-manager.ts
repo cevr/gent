@@ -19,12 +19,16 @@
  * @module
  */
 import { Context, Effect, Layer, Ref, TxReentrantLock } from "effect"
-import type { ToolNeed } from "../domain/capability/tool.js"
+
+type ResourceNeed = {
+  readonly tag: string
+  readonly access: "read" | "write"
+}
 
 /** Service interface — opaque to tools, only `withNeeds` is used. */
 export interface ResourceManagerService {
   readonly withNeeds: <A, E, R>(
-    needs: ReadonlyArray<ToolNeed>,
+    needs: ReadonlyArray<ResourceNeed>,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
 }
@@ -53,8 +57,8 @@ export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect
       return installed
     })
 
-  const normalizeNeeds = (needs: ReadonlyArray<ToolNeed>): ReadonlyArray<ToolNeed> => {
-    const byTag = new Map<string, ToolNeed>()
+  const normalizeNeeds = (needs: ReadonlyArray<ResourceNeed>): ReadonlyArray<ResourceNeed> => {
+    const byTag = new Map<string, ResourceNeed>()
     for (const need of needs) {
       const existing = byTag.get(need.tag)
       if (existing?.access === "write") continue
@@ -64,13 +68,13 @@ export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect
   }
 
   const withNeeds = <A, E, R>(
-    needs: ReadonlyArray<ToolNeed>,
+    needs: ReadonlyArray<ResourceNeed>,
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> => {
     if (needs.length === 0) return effect
     const sorted = normalizeNeeds(needs)
     return Effect.gen(function* () {
-      const locks: Array<readonly [TxReentrantLock.TxReentrantLock, ToolNeed]> = []
+      const locks: Array<readonly [TxReentrantLock.TxReentrantLock, ResourceNeed]> = []
       for (const need of sorted) locks.push([yield* acquire(need.tag), need])
       // Nest acquisitions so all locks are held for the duration.
       let wrapped: Effect.Effect<A, E, R> = effect

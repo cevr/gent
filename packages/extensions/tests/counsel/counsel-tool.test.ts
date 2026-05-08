@@ -5,20 +5,19 @@ import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   AgentRunResult,
-  ExtensionAgent,
   ModelId,
   SessionId,
-  type ToolCapabilityContext,
+  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const makeCtx = (overrides: {
   agentRun: (
-    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
+    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
 }) =>
   testToolContext({
-    agent: {
+    Agent: {
       get: () => Effect.void.pipe(Effect.as(undefined)),
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
@@ -29,18 +28,6 @@ const makeCtx = (overrides: {
         ] as const),
     },
   })
-
-const provideAgent =
-  (ctx: ToolCapabilityContext) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(ExtensionAgent, {
-        get: ctx.agent.get,
-        require: (name) => ctx.agent.require(name).pipe(Effect.orDie),
-        run: ctx.agent.run,
-        resolveDualModelPair: () => ctx.agent.resolveDualModelPair().pipe(Effect.orDie),
-      }),
-    )
 
 describe("CounselTool", () => {
   it.live("standard mode uses medium reasoning and model B", () => {
@@ -77,7 +64,6 @@ describe("CounselTool", () => {
           expect(result.mode).toBe("standard")
           expect(result.response).toBe("Looks good, minor concern about error handling.")
         }),
-        provideAgent(ctx),
       ),
     )
   })
@@ -115,7 +101,6 @@ describe("CounselTool", () => {
           expect(result.mode).toBe("deep")
           expect(result.response).toBe("After thorough analysis...")
         }),
-        provideAgent(ctx),
       ),
     )
   })
@@ -146,7 +131,6 @@ describe("CounselTool", () => {
           expect(capturedPrompt).toContain("We removed the auth middleware")
           expect(capturedPrompt).toContain("## Context")
         }),
-        provideAgent(ctx),
       ),
     )
   })
@@ -166,7 +150,6 @@ describe("CounselTool", () => {
         Effect.map((result) => {
           expect(result.error).toBe("Model unavailable")
         }),
-        provideAgent(ctx),
       ),
     )
   })
@@ -195,7 +178,6 @@ describe("CounselTool", () => {
           expect(capturedAgent?.name).toBe("counsel-worker")
           expect(capturedRunPersistence).toBe("ephemeral")
         }),
-        provideAgent(ctx),
       ),
     )
   })

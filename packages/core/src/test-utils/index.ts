@@ -22,10 +22,6 @@ import type { EventStoreService } from "../domain/event.js"
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
 export { testExtensionHostContext } from "./extension-host-context.js"
-export {
-  capabilityAccessNeedsLayer,
-  provideCapabilityAccessNeeds,
-} from "../domain/capability-access.js"
 
 // Call Record
 

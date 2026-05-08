@@ -6,9 +6,8 @@
  * controlling where the action appears in the TUI. Actions always lower to
  * `intent: "write"` (UI affordances always express user intent).
  *
- * The handler context is `CapabilityCoreContext` by default. Actions that need
- * the wide `ModelCapabilityContext` host/session surface must declare non-empty
- * `needs`.
+ * The handler context is `CapabilityCoreContext`. Host capabilities are
+ * imported as constrained Effect services.
  *
  * @module
  */
@@ -20,13 +19,11 @@ import type {
   CapabilityError,
   CapabilityCoreContext,
   ErasedCapabilityEffect,
-  ModelCapabilityContext,
 } from "../capability.js"
 import { Capability } from "../capability.js"
 import { CommandId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-import type { ToolNeed } from "./tool.js"
 
 export type ActionSurface = "slash" | "palette" | "both"
 
@@ -50,7 +47,6 @@ export type ActionCapability<Input = unknown, Output = unknown> = ActionCapabili
   readonly displayName: string
   readonly category?: string
   readonly keybind?: string
-  readonly needs?: ReadonlyArray<ToolNeed>
   readonly slash?: {
     /** Slash trigger without the leading `/`. Defaults to `id`. */
     readonly trigger?: string
@@ -83,11 +79,6 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   readonly category?: string
   /** Optional keybind hint (display-only — TUI may ignore). */
   readonly keybind?: string
-  /**
-   * Explicit host/session authority this action needs. Without this field the
-   * action handler receives only `CapabilityCoreContext`.
-   */
-  readonly needs?: ReadonlyArray<ToolNeed>
   /** Permission allow/deny rules gating execution. */
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Optional slash presentation metadata. */
@@ -103,29 +94,12 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   readonly input: Schema.Schema<Input>
   /** Schema for output. */
   readonly output: Schema.Schema<Output>
-  /** Action handler. Receives the narrow core context by default. Actions
-   *  that need session, agent, interaction, or process authority must declare
-   *  non-empty `needs` and annotate `ctx: ModelCapabilityContext`. */
+  /** Action handler. Receives the narrow core context. */
   readonly execute: (
     input: Input,
     ctx: CapabilityCoreContext,
   ) => Effect.Effect<Output, CapabilityError, R>
 }
-
-type PrivilegedActionInput<Input, Output, R> = Omit<
-  ActionInput<Input, Output, R>,
-  "needs" | "execute"
-> & {
-  readonly needs: readonly [ToolNeed, ...ReadonlyArray<ToolNeed>]
-  readonly execute: (
-    input: Input,
-    ctx: ModelCapabilityContext,
-  ) => Effect.Effect<Output, CapabilityError, R>
-}
-
-type CheckedActionInput<Input, Output, R> =
-  | ActionInput<Input, Output, R>
-  | PrivilegedActionInput<Input, Output, R>
 
 const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "palette"> => {
   switch (surface) {
@@ -145,12 +119,6 @@ const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "pal
  */
 export function action<Input, Output, R>(
   input: ActionInput<Input, Output, R>,
-): ActionCapability<Input, Output>
-export function action<Input, Output, R>(
-  input: PrivilegedActionInput<Input, Output, R>,
-): ActionCapability<Input, Output>
-export function action<Input, Output, R>(
-  input: CheckedActionInput<Input, Output, R>,
 ): ActionCapability<Input, Output> {
   const surface = surfaceToSurfaces(input.surface)
   const capability = Capability.Action.make({
@@ -162,7 +130,6 @@ export function action<Input, Output, R>(
     input: input.input,
     output: input.output,
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
-    ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
     ...(input.category !== undefined ? { category: input.category } : {}),
     ...(input.keybind !== undefined ? { keybind: input.keybind } : {}),

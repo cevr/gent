@@ -8,9 +8,11 @@ import {
 } from "../../src/exec-tools/bash-storage.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import {
+  testToolContext,
+  type TestToolContext,
+} from "@gent/core-internal/test-utils/extension-harness"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
@@ -60,20 +62,19 @@ const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const stubCtx: ToolCapabilityContext = {
+const stubCtx = testToolContext({
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
-  host: testExtensionHostContext().host,
-  agent: {
+  Agent: {
     get: dieStub("get"),
     require: dieStub("require"),
     run: dieStub("run"),
     resolveDualModelPair: dieStub("resolveDualModelPair"),
   },
-  session: {
+  Session: {
     listMessages: dieStub("listMessages"),
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
@@ -92,13 +93,20 @@ const stubCtx: ToolCapabilityContext = {
     deleteMessages: dieStub("deleteMessages"),
     queueFollowUp: dieStub("queueFollowUp"),
   },
-  interaction: {
+  Interaction: {
     approve: () => Effect.succeed({ approved: true }),
     present: dieStub("present"),
     confirm: dieStub("confirm"),
     review: dieStub("review"),
   },
-}
+})
+const withSession = (
+  ctx: TestToolContext,
+  session: TestToolContext["Session"],
+): TestToolContext => ({
+  ...ctx,
+  Session: session,
+})
 const now = dateFromMillis(0)
 
 describe("BashTool execution", () => {
@@ -169,30 +177,27 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            session: {
-              ...stubCtx.session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: () =>
-                Effect.succeed([
-                  new Branch({
-                    id: stubCtx.branchId,
-                    sessionId: stubCtx.sessionId,
-                    createdAt: now,
-                  }),
-                ]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          }
+          const ctx = withSession(stubCtx, {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: () =>
+              Effect.succeed([
+                new Branch({
+                  id: stubCtx.branchId,
+                  sessionId: stubCtx.sessionId,
+                  createdAt: now,
+                }),
+              ]),
+            queueFollowUp: (params) => Deferred.succeed(sent, params),
+          })
           const result = yield* getToolEffect(BashTool)(
             { command: "printf background-finished", run_in_background: true },
             ctx,
@@ -216,30 +221,27 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            session: {
-              ...stubCtx.session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: () =>
-                Effect.succeed([
-                  new Branch({
-                    id: stubCtx.branchId,
-                    sessionId: stubCtx.sessionId,
-                    createdAt: now,
-                  }),
-                ]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          }
+          const ctx = withSession(stubCtx, {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: () =>
+              Effect.succeed([
+                new Branch({
+                  id: stubCtx.branchId,
+                  sessionId: stubCtx.sessionId,
+                  createdAt: now,
+                }),
+              ]),
+            queueFollowUp: (params) => Deferred.succeed(sent, params),
+          })
           const scope = yield* Scope.make()
           const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
           const result = yield* getToolEffect(BashTool)(
@@ -265,15 +267,12 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            session: {
-              ...stubCtx.session,
-              getSession: () => Effect.sync((): Session | undefined => undefined),
-              listBranches: () => Effect.succeed([]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          }
+          const ctx = withSession(stubCtx, {
+            ...stubCtx.Session,
+            getSession: () => Effect.sync((): Session | undefined => undefined),
+            listBranches: () => Effect.succeed([]),
+            queueFollowUp: (params) => Deferred.succeed(sent, params),
+          })
 
           const result = yield* getToolEffect(BashTool)(
             { command: "printf stale-session", run_in_background: true },
@@ -297,11 +296,10 @@ describe("BashTool execution", () => {
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
           const toolCallId = ToolCallId.make("tc-terminal-retry")
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            toolCallId,
-            session: {
-              ...stubCtx.session,
+          const ctx = withSession(
+            { ...stubCtx, toolCallId },
+            {
+              ...stubCtx.Session,
               getSession: () =>
                 Effect.succeed(
                   new Session({
@@ -321,7 +319,7 @@ describe("BashTool execution", () => {
                 ]),
               queueFollowUp: (params) => Deferred.succeed(sent, params),
             },
-          }
+          )
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(
             `/tmp/gent-background-bash-terminal-${millis}.db`,
@@ -374,11 +372,10 @@ describe("BashTool execution", () => {
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
           const toolCallId = ToolCallId.make("tc-failed-terminal-durability")
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            toolCallId,
-            session: {
-              ...stubCtx.session,
+          const ctx = withSession(
+            { ...stubCtx, toolCallId },
+            {
+              ...stubCtx.Session,
               getSession: () =>
                 Effect.succeed(
                   new Session({
@@ -398,7 +395,7 @@ describe("BashTool execution", () => {
                 ]),
               queueFollowUp: (params) => Deferred.succeed(sent, params),
             },
-          }
+          )
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(
             `/tmp/gent-background-bash-failure-${millis}.db`,
@@ -429,11 +426,10 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx: ToolCapabilityContext = {
-            ...stubCtx,
-            toolCallId: ToolCallId.make("tc-restart"),
-            session: {
-              ...stubCtx.session,
+          const ctx = withSession(
+            { ...stubCtx, toolCallId: ToolCallId.make("tc-restart") },
+            {
+              ...stubCtx.Session,
               getSession: () =>
                 Effect.succeed(
                   new Session({
@@ -453,7 +449,7 @@ describe("BashTool execution", () => {
                 ]),
               queueFollowUp: (params) => Deferred.succeed(sent, params),
             },
-          }
+          )
           const scope = yield* Scope.make()
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(

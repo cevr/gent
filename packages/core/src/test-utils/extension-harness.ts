@@ -13,7 +13,12 @@ import { EventStore } from "../domain/event.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { ToolCapabilityContext, ToolCapability } from "../domain/capability/tool.js"
+import type { ToolCapability } from "../domain/capability/tool.js"
+import {
+  ExtensionServiceError,
+  type ExtensionContextService,
+} from "../domain/extension-services.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -168,23 +173,19 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
+export type TestToolContext = ExtensionHostContext &
+  ExtensionContextService & { readonly toolCallId: ToolCallId }
+
 /** Default ToolCapabilityContext for tests — overridable via spread */
-export const testToolContext = (
-  overrides?: Partial<ToolCapabilityContext>,
-): ToolCapabilityContext => ({
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  toolCallId: ToolCallId.make("test-call"),
-  cwd: "/tmp",
-  home: "/tmp",
-  host: testExtensionHostContext().host,
-  agent: {
+export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolContext => {
+  const host = testExtensionHostContext().host
+  const agent = {
     get: dieStub("agent.get"),
     require: dieStub("agent.require"),
     run: dieStub("agent.run"),
     resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
-  },
-  session: {
+  }
+  const session = {
     listMessages: dieStub("session.listMessages"),
     getSession: dieStub("session.getSession"),
     getDetail: dieStub("session.getDetail"),
@@ -202,12 +203,62 @@ export const testToolContext = (
     deleteSession: dieStub("session.deleteSession"),
     deleteBranch: dieStub("session.deleteBranch"),
     deleteMessages: dieStub("session.deleteMessages"),
-  },
-  interaction: {
+  }
+  const interaction = {
     approve: dieStub("interaction.approve"),
     present: dieStub("interaction.present"),
     confirm: dieStub("interaction.confirm"),
     review: dieStub("interaction.review"),
-  },
-  ...overrides,
-})
+  }
+  const process: ExtensionContextService["Process"] = {
+    run: (command, args, options) =>
+      host.runProcess(command, args, options).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ExtensionServiceError({
+              service: "ExtensionProcess",
+              operation: "run",
+              message: cause.message,
+              cause,
+            }),
+        ),
+      ),
+    signalPid: (pid, signal) =>
+      host.signalPid(pid, signal).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ExtensionServiceError({
+              service: "ExtensionProcess",
+              operation: "signalPid",
+              message: String(cause),
+              cause,
+            }),
+        ),
+      ),
+    isPortFree: host.isPortFree,
+    isPidAlive: host.isPidAlive,
+    commandCandidates: host.commandCandidates,
+    parentEnv: host.parentEnv,
+  }
+  const resolvedAgent = overrides?.Agent ?? agent
+  const resolvedSession = overrides?.Session ?? session
+  const resolvedInteraction = overrides?.Interaction ?? interaction
+  const resolvedProcess = overrides?.Process ?? process
+
+  return {
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
+    toolCallId: ToolCallId.make("test-call"),
+    cwd: "/tmp",
+    home: "/tmp",
+    host,
+    agent,
+    session,
+    interaction,
+    Agent: resolvedAgent,
+    Session: resolvedSession,
+    Interaction: resolvedInteraction,
+    Process: resolvedProcess,
+    ...overrides,
+  }
+}

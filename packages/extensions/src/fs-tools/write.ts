@@ -38,7 +38,7 @@ export const WriteTool = tool({
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],
   params: WriteParams,
   output: WriteResult,
-  execute: Effect.fn("WriteTool.execute")(function* (params, _ctx) {
+  execute: Effect.fn("WriteTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
     const fileLock = yield* FileLockService

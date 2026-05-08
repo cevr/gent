@@ -2,10 +2,9 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   defineAgent,
-  ExtensionAgent,
+  ExtensionContext,
   makeRunSpec,
   tool,
-  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
@@ -99,10 +98,8 @@ export const ResearchTool = tool({
   ],
   params: ResearchParams,
   output: ResearchResult,
-  execute: Effect.fn("ResearchTool.execute")(function* (
-    params: typeof ResearchParams.Type,
-    ctx: ToolCoreContext,
-  ) {
+  execute: Effect.fn("ResearchTool.execute")(function* (params: typeof ResearchParams.Type) {
+    const ctx = yield* ExtensionContext
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }
     }
@@ -122,7 +119,7 @@ export const ResearchTool = tool({
     )
 
     // Dispatch research agent per repo
-    const agent = yield* ExtensionAgent
+    const agent = ctx.Agent
     const results = yield* Effect.forEach(
       repoPaths,
       ({ spec, path }) =>

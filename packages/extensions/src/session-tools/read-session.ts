@@ -1,15 +1,13 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
-  ExtensionAgent,
-  ExtensionSession,
+  ExtensionContext,
   makeRunSpec,
   messagePartsDisplayText,
   SessionId,
   tool,
   type Branch,
   type Message,
-  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 import { headTailChars } from "@gent/core-internal/domain/output-buffer"
 
@@ -102,11 +100,9 @@ export const ReadSessionTool = tool({
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
   output: ReadSessionResult,
-  execute: Effect.fn("ReadSessionTool.execute")(function* (
-    params: typeof ReadSessionParams.Type,
-    ctx: ToolCoreContext,
-  ) {
-    const session = yield* ExtensionSession
+  execute: Effect.fn("ReadSessionTool.execute")(function* (params: typeof ReadSessionParams.Type) {
+    const ctx = yield* ExtensionContext
+    const session = ctx.Session
     const tree = yield* session.getDetail(SessionId.make(params.sessionId)).pipe(
       Effect.mapError(
         (e) =>
@@ -133,7 +129,7 @@ export const ReadSessionTool = tool({
     // If goal provided, use AI extraction
     if (params.goal !== undefined) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
-      const agent = yield* ExtensionAgent
+      const agent = ctx.Agent
       const summarizer = yield* agent.require(AgentName.make("summarizer"))
       const result = yield* agent.run({
         agent: summarizer,

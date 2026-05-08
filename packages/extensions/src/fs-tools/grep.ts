@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
 import { FsRead } from "./read-service.js"
 
@@ -75,7 +75,8 @@ export const GrepTool = tool({
   promptGuidelines: ["Use instead of bash grep/rg"],
   params: GrepParams,
   output: GrepResult,
-  execute: Effect.fn("GrepTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("GrepTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const fs = yield* FsRead
 
     const basePath = params.path !== undefined ? fs.resolve(params.path) : ctx.cwd

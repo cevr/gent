@@ -12,7 +12,6 @@ import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
-import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import type {
   ExtensionStatusInfo,
@@ -319,11 +318,8 @@ const coreCapabilityContext = (ctx: CapabilityCoreContext): CapabilityCoreContex
   },
 })
 
-const capabilityRuntimeContext = (
-  capability: ActionCapability | RequestCapability,
-  ctx: CapabilityCoreContext,
-): CapabilityCoreContext =>
-  capability.needs !== undefined && capability.needs.length > 0 ? ctx : coreCapabilityContext(ctx)
+const capabilityRuntimeContext = (ctx: CapabilityCoreContext): CapabilityCoreContext =>
+  coreCapabilityContext(ctx)
 
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
@@ -344,21 +340,14 @@ const compileRpcRegistry = (
           reason: `intent mismatch: expected ${options.intent}, got ${entry.capability.intent}`,
         })
       }
-      const needs =
-        entry.capability.needs ??
-        (entry.capability.intent === "write"
-          ? [{ tag: "*", access: "write" } as const]
-          : [{ tag: "*", access: "read" } as const])
-      return yield* provideCapabilityAccessNeeds(needs)(
-        provideExtensionServicesIfAvailable(
-          ctx,
-          runExtensionCapability(
-            extensionId,
-            capabilityId,
-            entry.capability,
-            input,
-            capabilityRuntimeContext(entry.capability, ctx),
-          ),
+      return yield* provideExtensionServicesIfAvailable(
+        ctx,
+        runExtensionCapability(
+          extensionId,
+          capabilityId,
+          entry.capability,
+          input,
+          capabilityRuntimeContext(ctx),
         ),
       )
     }),

@@ -3,8 +3,6 @@ import { Effect } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 
 import { AskUserTool } from "../../src/interaction-tools/ask-user.js"
-import { ExtensionInteraction } from "@gent/core/extensions/api"
-import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
@@ -25,18 +23,18 @@ const makeCtx = (
       toolCallId: ToolCallId.make("test-call"),
       cwd: "/tmp",
       home: "/tmp",
-      interaction,
+      Interaction: interaction,
     }),
     interaction,
   } satisfies {
-    readonly ctx: ToolCapabilityContext
+    readonly ctx: ReturnType<typeof testToolContext>
     readonly interaction: typeof interaction
   }
 }
 
 describe("AskUser Tool", () => {
   it.live("asks questions and returns answers", () => {
-    const { ctx, interaction } = makeCtx(Effect.succeed({ approved: true, notes: "Option A" }))
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "Option A" }))
 
     return getToolEffect(AskUserTool)(
       {
@@ -58,13 +56,12 @@ describe("AskUser Tool", () => {
         expect(result.answers[0]).toEqual(["Option A"])
         expect(result.cancelled).toBeUndefined()
       }),
-      Effect.provideService(ExtensionInteraction, interaction),
       narrowR,
     )
   })
 
   it.live("cancel returns cancelled flag with empty answers", () => {
-    const { ctx, interaction } = makeCtx(Effect.succeed({ approved: false }))
+    const { ctx } = makeCtx(Effect.succeed({ approved: false }))
 
     return getToolEffect(AskUserTool)(
       {
@@ -81,7 +78,6 @@ describe("AskUser Tool", () => {
         expect(result.cancelled).toBe(true)
         expect(result.answers).toEqual([])
       }),
-      Effect.provideService(ExtensionInteraction, interaction),
       narrowR,
     )
   })

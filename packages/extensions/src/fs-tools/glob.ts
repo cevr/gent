@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
 import { FsRead } from "./read-service.js"
 
@@ -46,7 +46,8 @@ export const GlobTool = tool({
   promptGuidelines: ["Use instead of bash find/ls"],
   params: GlobParams,
   output: GlobResult,
-  execute: Effect.fn("GlobTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("GlobTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const fs = yield* FsRead
 
     const basePath = params.path !== undefined ? fs.resolve(params.path) : ctx.cwd

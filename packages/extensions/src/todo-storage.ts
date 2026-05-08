@@ -10,7 +10,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import {
   AgentName,
-  CapabilityError,
   ReadOnlyBrand,
   SessionId,
   dateFromMillis,
@@ -18,7 +17,6 @@ import {
   type BranchId,
   type ReadOnly,
 } from "@gent/core/extensions/api"
-import { requireCapabilityWrite } from "@gent/core-internal/domain/capability-access"
 import { SqlClient } from "effect/unstable/sql"
 import {
   Todo,
@@ -27,7 +25,6 @@ import {
   isValidTodoTransition,
   type TodoId,
 } from "./todo/domain.js"
-import { TODO_EXTENSION_ID } from "./todo/identity.js"
 
 export class TodoStorageError extends Schema.TaggedErrorClass<TodoStorageError>()(
   "TodoStorageError",
@@ -67,19 +64,8 @@ const encodeTodoMetadata = (metadata: unknown) =>
     catch: () => new TodoStorageError({ message: "Todo metadata is not JSON-serializable" }),
   })
 
-const requireTodoWrite = (operation: string) =>
-  requireCapabilityWrite({
-    tag: "todo",
-    extensionId: TODO_EXTENSION_ID,
-    capabilityId: operation,
-    operation,
-  })
-
-const mapWriteError = (message: string) => (e: unknown) =>
-  Schema.is(CapabilityError)(e) ? e : mapError(message)(e)
-
 const mapUpdateError = (message: string) => (e: unknown) =>
-  Schema.is(CapabilityError)(e) || Schema.is(TodoTransitionError)(e) ? e : mapError(message)(e)
+  Schema.is(TodoTransitionError)(e) ? e : mapError(message)(e)
 
 const decodeTodoMetadata = (metadata: string | null) =>
   metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
@@ -226,7 +212,7 @@ export interface TodoStorageReadOnlyService {
 }
 
 export interface TodoStorageService extends TodoStorageReadOnlyService {
-  readonly createTodo: (todo: Todo) => Effect.Effect<Todo, TodoStorageError | CapabilityError>
+  readonly createTodo: (todo: Todo) => Effect.Effect<Todo, TodoStorageError>
   readonly updateTodo: (
     id: TodoId,
     fields: Partial<{
@@ -236,16 +222,16 @@ export interface TodoStorageService extends TodoStorageReadOnlyService {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Todo | undefined, TodoStorageError | CapabilityError | TodoTransitionError>
-  readonly deleteTodo: (id: TodoId) => Effect.Effect<void, TodoStorageError | CapabilityError>
+  ) => Effect.Effect<Todo | undefined, TodoStorageError | TodoTransitionError>
+  readonly deleteTodo: (id: TodoId) => Effect.Effect<void, TodoStorageError>
   readonly addTodoDep: (
     todoId: TodoId,
     blockedById: TodoId,
-  ) => Effect.Effect<void, TodoStorageError | CapabilityError>
+  ) => Effect.Effect<void, TodoStorageError>
   readonly removeTodoDep: (
     todoId: TodoId,
     blockedById: TodoId,
-  ) => Effect.Effect<void, TodoStorageError | CapabilityError>
+  ) => Effect.Effect<void, TodoStorageError>
 }
 
 /**
@@ -423,7 +409,6 @@ const makeTodoStorageService: Effect.Effect<
   return {
     createTodo: Effect.fn("TodoStorage.createTodo")(
       function* (todo) {
-        yield* requireTodoWrite("TodoStorage.createTodo")
         if (todo.parentId !== undefined) {
           yield* ensureParentForNewTodo(todo.parentId, todo.sessionId, todo.branchId)
         }
@@ -431,7 +416,7 @@ const makeTodoStorageService: Effect.Effect<
         yield* sql`INSERT INTO todos (id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${todo.id}, ${todo.sessionId}, ${todo.branchId}, ${todo.parentId ?? null}, ${todo.subject}, ${todo.description ?? null}, ${todo.status}, ${todo.owner ?? null}, ${todo.agentType ?? null}, ${todo.prompt ?? null}, ${todo.cwd ?? null}, ${meta}, ${todo.createdAt.getTime()}, ${todo.updatedAt.getTime()})`
         return todo
       },
-      Effect.mapError(mapWriteError("Failed to create todo")),
+      Effect.mapError(mapError("Failed to create todo")),
     ),
 
     getTodo: Effect.fn("TodoStorage.getTodo")(
@@ -454,7 +439,6 @@ const makeTodoStorageService: Effect.Effect<
 
     updateTodo: Effect.fn("TodoStorage.updateTodo")(
       function* (id, fields) {
-        yield* requireTodoWrite("TodoStorage.updateTodo")
         const now = yield* Clock.currentTimeMillis
 
         const updates: Record<string, string | number | null> = {
@@ -507,7 +491,6 @@ const makeTodoStorageService: Effect.Effect<
 
     deleteTodo: Effect.fn("TodoStorage.deleteTodo")(
       function* (id) {
-        yield* requireTodoWrite("TodoStorage.deleteTodo")
         yield* sql.withTransaction(
           Effect.gen(function* () {
             yield* sql`DELETE FROM todo_edges WHERE todo_id = ${id} OR blocked_by_id = ${id}`
@@ -515,27 +498,23 @@ const makeTodoStorageService: Effect.Effect<
           }),
         )
       },
-      Effect.mapError(mapWriteError("Failed to delete todo")),
+      Effect.mapError(mapError("Failed to delete todo")),
     ),
 
     addTodoDep: (todoId, blockedById) =>
-      requireTodoWrite("TodoStorage.addTodoDep").pipe(
-        Effect.andThen(ensureNoDependencyCycle(todoId, blockedById)),
+      ensureNoDependencyCycle(todoId, blockedById).pipe(
         Effect.andThen(
           sql`INSERT OR IGNORE INTO todo_edges (todo_id, blocked_by_id) VALUES (${todoId}, ${blockedById})`,
         ),
         Effect.asVoid,
-        Effect.mapError(mapWriteError("Failed to add todo dep")),
+        Effect.mapError(mapError("Failed to add todo dep")),
         Effect.withSpan("TodoStorage.addTodoDep"),
       ),
 
     removeTodoDep: (todoId, blockedById) =>
-      requireTodoWrite("TodoStorage.removeTodoDep").pipe(
-        Effect.andThen(
-          sql`DELETE FROM todo_edges WHERE todo_id = ${todoId} AND blocked_by_id = ${blockedById}`,
-        ),
+      sql`DELETE FROM todo_edges WHERE todo_id = ${todoId} AND blocked_by_id = ${blockedById}`.pipe(
         Effect.asVoid,
-        Effect.mapError(mapWriteError("Failed to remove todo dep")),
+        Effect.mapError(mapError("Failed to remove todo dep")),
         Effect.withSpan("TodoStorage.removeTodoDep"),
       ),
 

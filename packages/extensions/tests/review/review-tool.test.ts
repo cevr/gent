@@ -7,7 +7,7 @@ import {
   AgentRunResult,
   ModelId,
   SessionId,
-  type ToolCapabilityContext,
+  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../../src/all-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
@@ -22,11 +22,11 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const makeCtx = (overrides: {
   agentRun: (
-    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
+    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
 }) =>
   testToolContext({
-    agent: {
+    Agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
         const agent = AllBuiltinAgents.find((a) => a.name === name)
@@ -39,7 +39,7 @@ const makeCtx = (overrides: {
           ModelId.make("openai/gpt-5.4"),
         ] as const),
     },
-    interaction: {
+    Interaction: {
       approve: dieStub("interaction.approve"),
       present: dieStub("interaction.present"),
       confirm: dieStub("interaction.confirm"),

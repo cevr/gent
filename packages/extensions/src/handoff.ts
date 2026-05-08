@@ -4,8 +4,7 @@ import {
   defineExtension,
   defineResource,
   action,
-  ExtensionInteraction,
-  ExtensionSession,
+  ExtensionContext,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -26,8 +25,8 @@ const HandoffAction = action({
   output: Schema.Void,
   execute: (_input: string) =>
     Effect.gen(function* () {
-      const session = yield* ExtensionSession
-      yield* session.queueFollowUp({
+      const ctx = yield* ExtensionContext
+      yield* ctx.Session.queueFollowUp({
         sourceId: "handoff-command",
         content:
           "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
@@ -109,7 +108,8 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     const cooldownCount = yield* cooldown.get().pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldownCount > 0) return
 
-    const session = yield* ExtensionSession
+    const ctx = yield* ExtensionContext
+    const session = ctx.Session
     const contextPercent = yield* session.estimateContextPercent()
     const handoffThreshold = 85
     if (contextPercent < handoffThreshold) return
@@ -122,16 +122,13 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     )
 
     const allMessages = yield* session.listMessages()
-    const interaction = yield* ExtensionInteraction
-    const decision = yield* interaction
-      .approve({
-        text: summarizeRecentMessages(allMessages),
-        metadata: {
-          type: "handoff",
-          reason: `Context at ${contextPercent}% (threshold: ${handoffThreshold}%)`,
-        },
-      })
-      .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
+    const decision = yield* ctx.Interaction.approve({
+      text: summarizeRecentMessages(allMessages),
+      metadata: {
+        type: "handoff",
+        reason: `Context at ${contextPercent}% (threshold: ${handoffThreshold}%)`,
+      },
+    }).pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
 
     if (!decision.approved) {
       yield* cooldown.suppress(5).pipe(Effect.catchEager(() => Effect.void))

@@ -7,10 +7,13 @@ import {
   AgentRunResult,
   ModelId,
   SessionId,
-  type ToolCapabilityContext,
+  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../../src/all-agents.js"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import {
+  testToolContext,
+  type TestToolContext,
+} from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
@@ -32,13 +35,13 @@ const makeSuccess = (
 
 const makeCtx = (overrides: {
   agentRun: (
-    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
+    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
-  present?: ToolCapabilityContext["interaction"]["present"]
-}): ToolCapabilityContext =>
+  present?: ExtensionContextService["Interaction"]["present"]
+}): TestToolContext =>
   testToolContext({
     agentName: AgentName.make("cowork"),
-    agent: {
+    Agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
         const agent = AllBuiltinAgents.find((a) => a.name === name)
@@ -51,7 +54,7 @@ const makeCtx = (overrides: {
           ModelId.make("openai/gpt-5.4"),
         ] as const),
     },
-    interaction: {
+    Interaction: {
       approve: dieStub("interaction.approve"),
       present: overrides.present ?? (() => Effect.void),
       confirm: dieStub("interaction.confirm"),

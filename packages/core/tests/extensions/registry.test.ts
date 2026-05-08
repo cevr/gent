@@ -10,7 +10,6 @@ import {
   getToolId,
   request,
   tool,
-  ToolNeeds,
   type ActionCapability,
   type ActionInput,
   type RequestCapability,
@@ -705,7 +704,6 @@ describe("resolveExtensions — slash command discovery", () => {
       description: "rich tool",
       params: Schema.Unknown,
       output: Schema.Void,
-      needs: [ToolNeeds.write("fs"), ToolNeeds.read("network")],
       promptSnippet: "Snippet here.",
       promptGuidelines: ["use carefully", "log result"],
       interactive: true,
@@ -716,7 +714,6 @@ describe("resolveExtensions — slash command discovery", () => {
     expect(resolvedTool).toBeDefined()
     expect(resolvedTool?.description).toBe("rich tool")
     const metadata = resolvedTool !== undefined ? getToolMetadata(resolvedTool) : undefined
-    expect(metadata?.needs).toEqual([ToolNeeds.write("fs"), ToolNeeds.read("network")])
     expect(metadata?.promptSnippet).toBe("Snippet here.")
     expect(metadata?.promptGuidelines).toEqual(["use carefully", "log result"])
     expect(metadata?.interactive).toBe(true)

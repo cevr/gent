@@ -1,5 +1,5 @@
 import { Clock, Effect, Schema } from "effect"
-import { dateFromMillis, ExtensionSession, tool } from "@gent/core/extensions/api"
+import { dateFromMillis, ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
@@ -106,8 +106,8 @@ export const SearchSessionsTool = tool({
       }
     }
 
-    const session = yield* ExtensionSession
-    const results = yield* session.search(searchQuery, {
+    const ctx = yield* ExtensionContext
+    const results = yield* ctx.Session.search(searchQuery, {
       dateAfter,
       limit: params.limit ?? 20,
     })

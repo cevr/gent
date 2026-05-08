@@ -11,8 +11,7 @@ import {
   type LanguageModelStreamPart,
 } from "@gent/core-internal/test-utils/language-model"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
-import { getToolId, tool, ToolNeeds, type ToolCapability } from "@gent/core/extensions/api"
+import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core-internal/domain/permission"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
@@ -61,19 +60,14 @@ describe("interaction", () => {
     tool({
       id: "interaction-tool",
       description: "Tool that triggers an interaction",
-      needs: [ToolNeeds.write("interaction")],
       params: Schema.Struct({ value: Schema.String }),
       output: Schema.Struct({
         resolved: Schema.Boolean,
         value: Schema.String,
       }),
-      execute: (
-        params: {
-          value: string
-        },
-        ctx: ToolCapabilityContext,
-      ) =>
+      execute: (params: { value: string }) =>
         Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
           const count = yield* Ref.getAndUpdate(callCount, (n) => n + 1)
           if (count === 0) {
             return yield* new InteractionPendingError({

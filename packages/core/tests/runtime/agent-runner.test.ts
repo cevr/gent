@@ -10,7 +10,6 @@ import {
   toolCallPart,
   type LanguageModelStreamPart,
 } from "@gent/core-internal/test-utils/language-model"
-import type { ToolCapabilityContext } from "@gent/core/extensions/api"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
@@ -48,7 +47,7 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { defineResource, tool, ToolNeeds } from "@gent/core/extensions/api"
+import { defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import {
   SequenceRecorder,
@@ -1215,12 +1214,12 @@ describe("ephemeral service propagation", () => {
     Effect.gen(function* () {
       const approveTool = tool({
         id: "approve_test",
-        needs: [ToolNeeds.write("interaction")],
         description: "Tests approval",
         params: Schema.Struct({ text: Schema.String }),
         output: Schema.Struct({ approved: Schema.Boolean }),
-        execute: Effect.fn("approve_test")(function* (_params, ctx: ToolCapabilityContext) {
-          const decision = yield* ctx.interaction.approve({
+        execute: Effect.fn("approve_test")(function* () {
+          const ctx = yield* ExtensionContext
+          const decision = yield* ctx.Interaction.approve({
             text: "approve this?",
             metadata: { type: "prompt", mode: "confirm" },
           })

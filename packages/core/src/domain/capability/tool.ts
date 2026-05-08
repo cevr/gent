@@ -16,48 +16,22 @@
  * @module
  */
 
-import { Context, type Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import {
   Capability,
   type CapabilityCoreContext,
-  type ModelCapabilityContext,
   type ToolCapability as ToolCapabilityVariant,
 } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-
-export type ToolNeedAccess = "read" | "write"
-
-export type ToolNeedTag = string
-
-export interface ToolNeed {
-  readonly tag: ToolNeedTag
-  readonly access: ToolNeedAccess
-}
-
-type ReadToolNeeds<Needs extends ReadonlyArray<ToolNeed> | undefined> = Needs extends readonly [
-  infer Head,
-  ...infer Tail,
-]
-  ? Head extends { readonly access: "write" }
-    ? never
-    : Tail extends ReadonlyArray<ToolNeed>
-      ? ReadToolNeeds<Tail>
-      : Needs
-  : Needs
-
-export const ToolNeeds = {
-  read: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "read" }),
-  write: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "write" }),
-} as const
+import { ExtensionContext, type ExtensionContextService } from "../extension-services.js"
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
 declare const ToolCapabilityType: unique symbol
 
-/** Minimal context passed to `tool({...}).execute` unless the author opts into
- *  the wider `ToolCapabilityContext`. Tools are always invoked from the agent
+/** Minimal context passed to `tool({...}).execute`. Tools are always invoked from the agent
  *  loop with a real call id; the optional shape on `CapabilityCoreContext`
  *  only exists for the audience-neutral case where no tool call is in flight. */
 export interface ToolCoreContext extends CapabilityCoreContext {
@@ -70,7 +44,6 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly intent: "read" | "write"
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Encoder<unknown, never>
-  readonly needs?: ReadonlyArray<ToolNeed>
   readonly promptSnippet?: string
   readonly promptGuidelines?: ReadonlyArray<string>
   readonly interactive?: boolean
@@ -78,6 +51,11 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly prompt?: PromptSection
   readonly effect: (input: unknown, ctx: ToolCoreContext) => Effect.Effect<Output, Error, never>
 }
+
+const isExtensionContextService = (
+  ctx: ToolCoreContext,
+): ctx is ToolCoreContext & ExtensionContextService =>
+  "Agent" in ctx && "Session" in ctx && "Interaction" in ctx && "Process" in ctx
 
 export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefined>(
   "@gent/core/src/domain/capability/tool/GentToolMetadata",
@@ -149,14 +127,6 @@ export const getToolEffect = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
 
-/** Wide context for tools that explicitly need model host authority
- *  (agent runner, session mutation, interaction). Authors opt in by declaring
- *  matching `ToolNeeds` and annotating the second execute parameter as
- *  `ToolCapabilityContext`. */
-export interface ToolCapabilityContext extends ModelCapabilityContext {
-  readonly toolCallId: ToolCallId
-}
-
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
  *  standalone leaf with no shared capability parent.
  *
@@ -170,7 +140,6 @@ export interface ToolInput<
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
-  Ctx extends ToolCoreContext = ToolCoreContext,
 > {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
@@ -191,12 +160,6 @@ export interface ToolInput<
    *  through this schema, and Gent stores the same schema in metadata for
    *  lifecycle reactions and direct tool-runner invocation. */
   readonly output: Output
-  /**
-   * Service/resource needs this tool touches while running. Read needs can
-   * share; write needs exclude both reads and writes for the same tag.
-   * Empty/undefined = fully parallel.
-   */
-  readonly needs?: ReadonlyArray<ToolNeed>
   /** One-liner for the system prompt tool list (distinct from `description`,
    *  which is sent to the LLM as part of the tool schema). */
   readonly promptSnippet?: string
@@ -210,54 +173,12 @@ export interface ToolInput<
   /** Static system-prompt section bundled with this tool. For dynamic
    *  prompt fragments resolved per-turn from services, use a turn projection reaction. */
   readonly prompt?: PromptSection
-  /** The tool body. Receives decoded `params` and the minimal
-   *  `ToolCoreContext` by default. Tools that need subagents, interaction, or
-   *  session mutation must both declare matching `ToolNeeds` and annotate
-   *  `ctx: ToolCapabilityContext` explicitly. */
+  /** The tool body. Receives decoded `params`; host capabilities are imported
+   *  as constrained Effect services such as `ExtensionContext`. */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
-    ctx: Ctx,
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
 }
-
-type ReadIntentToolInput<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Output extends Schema.Encoder<any, never>,
-  Error,
-  Deps,
-  Ctx extends ToolCoreContext,
-  Needs extends ReadonlyArray<ToolNeed> | undefined,
-> = Omit<ToolInput<Params, Output, Error, Deps, Ctx>, "intent" | "needs"> & {
-  readonly intent: "read"
-  readonly needs?: ReadToolNeeds<Needs>
-}
-
-type WriteIntentToolInput<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Output extends Schema.Encoder<any, never>,
-  Error,
-  Deps,
-  Ctx extends ToolCoreContext,
-> = ToolInput<Params, Output, Error, Deps, Ctx> & {
-  readonly intent?: "write"
-}
-
-type CheckedToolInput<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Output extends Schema.Encoder<any, never>,
-  Error,
-  Deps,
-  Ctx extends ToolCoreContext,
-  Needs extends ReadonlyArray<ToolNeed> | undefined,
-> =
-  | ReadIntentToolInput<Params, Output, Error, Deps, Ctx, Needs>
-  | WriteIntentToolInput<Params, Output, Error, Deps, Ctx>
 
 /**
  * Lower a `ToolInput` to a `ToolCapability` with `intent: "write"` by default.
@@ -269,17 +190,12 @@ export const tool = <
   Output extends Schema.Encoder<any, never>,
   Error,
   Deps,
-  Ctx extends ToolCoreContext = ToolCoreContext,
-  Needs extends ReadonlyArray<ToolNeed> | undefined = undefined,
 >(
-  input: CheckedToolInput<Params, Output, Error, Deps, Ctx, Needs>,
+  input: ToolInput<Params, Output, Error, Deps>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
   const id = ToolId.make(input.id)
-  if (input.intent === "read" && input.needs?.some((need) => need.access === "write") === true) {
-    throw new Error(`Read-only tool "${input.id}" cannot declare write needs`)
-  }
   const metadata: GentToolMetadata<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
@@ -289,21 +205,20 @@ export const tool = <
     intent: input.intent ?? "write",
     input: input.params,
     output: input.output,
-    ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
     ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
     ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
     ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-    // ToolCapabilityContext extends ModelCapabilityContext and narrows
-    // `toolCallId` to required — `tool` execute signatures satisfy the
-    // capability `effect` signature contravariantly.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as unknown as GentToolMetadata<
-      Schema.Schema.Type<Params>,
-      Schema.Schema.Type<Output>,
-      Error
-    >["effect"],
+    effect: (params, ctx) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
+      const effect = input.execute(params as Schema.Schema.Type<Params>)
+      const provided = isExtensionContextService(ctx)
+        ? effect.pipe(Effect.provideService(ExtensionContext, ctx))
+        : effect
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- factory erases author service requirements; runtime provides them at execution boundaries.
+      return provided as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
+    },
   }
 
   const native = AiTool.dynamic(input.id, {
@@ -317,7 +232,6 @@ export const tool = <
   const capability = Capability.Tool.make({
     id,
     intent: metadata.intent,
-    ...(metadata.needs !== undefined ? { needs: metadata.needs } : {}),
     input: metadata.input,
     output: metadata.output,
     native,

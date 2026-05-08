@@ -6,7 +6,7 @@
  */
 
 import { DateTime, Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { MemoryVault, projectKey as projectKeyOf } from "./vault.js"
 import { memoryPath, newFrontmatter } from "./state.js"
 
@@ -55,7 +55,8 @@ export const MemoryRememberTool = tool({
   ],
   params: RememberParams,
   output: RememberResult,
-  execute: Effect.fn("MemoryRememberTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("MemoryRememberTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const scope = params["scope"]
     const title = params["title"]
     const content = params["content"]
@@ -129,7 +130,7 @@ export const MemoryRecallTool = tool({
     "Search or list stored memories. Without a query, returns the memory index (titles + summaries). With a query, searches memory content.",
   params: RecallParams,
   output: RecallResult,
-  execute: Effect.fn("MemoryRecallTool.execute")(function* (params, _ctx) {
+  execute: Effect.fn("MemoryRecallTool.execute")(function* (params) {
     const vault = yield* MemoryVault
     const query = params["query"]
     const scope = params["scope"]
@@ -197,7 +198,8 @@ export const MemoryForgetTool = tool({
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,
   output: ForgetResult,
-  execute: Effect.fn("MemoryForgetTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("MemoryForgetTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const scope = params["scope"]
     const title = params["title"]
     const projectKey =

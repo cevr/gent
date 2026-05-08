@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { ExtensionInteraction, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import type { Question } from "@gent/core-internal/domain/event"
 
 const parseAnswers = (notes: string): string[][] => {
@@ -55,7 +55,7 @@ export const AskUserResult = Schema.Struct({
   }),
 })
 
-// AskUser Tool — uses ExtensionInteraction.approve() with structured question metadata
+// AskUser Tool — uses ExtensionContext.Interaction.approve() with structured question metadata
 
 const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
   questions
@@ -76,8 +76,8 @@ export const AskUserTool = tool({
   params: AskUserParams,
   output: AskUserResult,
   execute: Effect.fn("AskUserTool.execute")(function* (params: typeof AskUserParams.Type) {
-    const interaction = yield* ExtensionInteraction
-    const decision = yield* interaction.approve({
+    const ctx = yield* ExtensionContext
+    const decision = yield* ctx.Interaction.approve({
       text: formatQuestionsText(params.questions),
       metadata: { type: "ask-user", questions: params.questions },
     })

@@ -5,10 +5,9 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import {
   ReadOnlyBrand,
   tool,
-  ToolNeeds,
   type ReadOnly,
-  type ToolCoreContext,
   withReadOnly,
+  ExtensionContext,
 } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
@@ -54,9 +53,6 @@ class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()
   { message: Schema.String },
 ) {}
 
-const hasProperty = (value: unknown, key: PropertyKey): boolean =>
-  typeof value === "object" && value !== null && key in value
-
 describe("ToolRunner", () => {
   it.live("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
@@ -100,96 +96,34 @@ describe("ToolRunner", () => {
       expect(result.result).toEqual({ echoed: "hello" })
     }),
   )
-  it.live("derives tool host facets from declared needs", () =>
+  it.live("provides host authority through ExtensionContext service", () =>
     Effect.gen(function* () {
       const Output = Schema.Struct({
-        hasAgent: Schema.Boolean,
+        sessionId: Schema.String,
+        branchId: Schema.String,
+        toolCallId: Schema.String,
         hasAgentRun: Schema.Boolean,
-        hasSession: Schema.Boolean,
-        hasSessionListMessages: Schema.Boolean,
         hasSessionDelete: Schema.Boolean,
         hasInteraction: Schema.Boolean,
-        hasHostParentEnv: Schema.Boolean,
-        hasHostSignalPid: Schema.Boolean,
-        hasHostRunProcess: Schema.Boolean,
+        hasProcessRun: Schema.Boolean,
       })
       const ProbeTool = tool({
         id: "probe",
-        description: "Probe default tool context facets",
+        description: "Probe extension context service facets",
         params: Schema.Struct({}),
         output: Output,
-        execute: (_input, ctx: ToolCoreContext) =>
-          Effect.succeed({
-            hasAgent: "agent" in ctx,
-            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
-            hasSession: "session" in ctx,
-            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
-            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
-            hasInteraction: "interaction" in ctx,
-            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
-            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
-            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
-          }),
-      })
-      const ReadProbeTool = tool({
-        id: "read_probe",
-        needs: [ToolNeeds.read("agent"), ToolNeeds.read("session"), ToolNeeds.read("interaction")],
-        description: "Probe read needs",
-        params: Schema.Struct({}),
-        output: Output,
-        execute: (_input, ctx: ToolCoreContext) =>
-          Effect.succeed({
-            hasAgent: "agent" in ctx,
-            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
-            hasSession: "session" in ctx,
-            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
-            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
-            hasInteraction: "interaction" in ctx,
-            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
-            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
-            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
-          }),
-      })
-      const PrivilegedProbeTool = tool({
-        id: "privileged_probe",
-        needs: [
-          ToolNeeds.write("agent"),
-          ToolNeeds.write("session"),
-          ToolNeeds.write("interaction"),
-        ],
-        description: "Probe requested tool context facets",
-        params: Schema.Struct({}),
-        output: Output,
-        execute: (_input, ctx: ToolCoreContext) =>
-          Effect.succeed({
-            hasAgent: "agent" in ctx,
-            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
-            hasSession: "session" in ctx,
-            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
-            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
-            hasInteraction: "interaction" in ctx,
-            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
-            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
-            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
-          }),
-      })
-      const ProcessProbeTool = tool({
-        id: "process_probe",
-        needs: [ToolNeeds.write("process")],
-        description: "Probe process host authority",
-        params: Schema.Struct({}),
-        output: Output,
-        execute: (_input, ctx: ToolCoreContext) =>
-          Effect.succeed({
-            hasAgent: "agent" in ctx,
-            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
-            hasSession: "session" in ctx,
-            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
-            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
-            hasInteraction: "interaction" in ctx,
-            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
-            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
-            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
+        execute: () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            return {
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+              toolCallId: ctx.toolCallId ?? "",
+              hasAgentRun: typeof ctx.Agent.run === "function",
+              hasSessionDelete: typeof ctx.Session.deleteSession === "function",
+              hasInteraction: typeof ctx.Interaction.approve === "function",
+              hasProcessRun: typeof ctx.Process.run === "function",
+            }
           }),
       })
       const deps = Layer.mergeAll(
@@ -200,7 +134,7 @@ describe("ToolRunner", () => {
               scope: "builtin",
               sourcePath: "test",
               contributions: {
-                tools: [ProbeTool, ReadProbeTool, PrivilegedProbeTool, ProcessProbeTool],
+                tools: [ProbeTool],
               },
             },
           ]),
@@ -219,80 +153,21 @@ describe("ToolRunner", () => {
           toolCallId: ToolCallId.make("tc-probe"),
           agentName: AgentName.make("cowork"),
         })
-        const narrow = yield* runner.run(
+        return yield* runner.run(
           { toolCallId: ToolCallId.make("tc-probe"), toolName: "probe", input: {} },
           ctx,
         )
-        const privileged = yield* runner.run(
-          {
-            toolCallId: ToolCallId.make("tc-privileged-probe"),
-            toolName: "privileged_probe",
-            input: {},
-          },
-          { ...ctx, toolCallId: ToolCallId.make("tc-privileged-probe") },
-        )
-        const read = yield* runner.run(
-          { toolCallId: ToolCallId.make("tc-read-probe"), toolName: "read_probe", input: {} },
-          { ...ctx, toolCallId: ToolCallId.make("tc-read-probe") },
-        )
-        const process = yield* runner.run(
-          {
-            toolCallId: ToolCallId.make("tc-process-probe"),
-            toolName: "process_probe",
-            input: {},
-          },
-          { ...ctx, toolCallId: ToolCallId.make("tc-process-probe") },
-        )
-        return { narrow, read, privileged, process }
       }).pipe(Effect.provide(layer))
 
-      expect(result.narrow.isFailure).toBe(false)
-      expect(result.narrow.result).toEqual({
-        hasAgent: false,
-        hasAgentRun: false,
-        hasSession: false,
-        hasSessionListMessages: false,
-        hasSessionDelete: false,
-        hasInteraction: false,
-        hasHostParentEnv: false,
-        hasHostSignalPid: false,
-        hasHostRunProcess: false,
-      })
-      expect(result.read.isFailure).toBe(false)
-      expect(result.read.result).toEqual({
-        hasAgent: true,
-        hasAgentRun: false,
-        hasSession: true,
-        hasSessionListMessages: true,
-        hasSessionDelete: false,
-        hasInteraction: false,
-        hasHostParentEnv: false,
-        hasHostSignalPid: false,
-        hasHostRunProcess: false,
-      })
-      expect(result.privileged.isFailure).toBe(false)
-      expect(result.privileged.result).toEqual({
-        hasAgent: true,
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({
+        sessionId: "s",
+        branchId: "b",
+        toolCallId: "tc-probe",
         hasAgentRun: true,
-        hasSession: true,
-        hasSessionListMessages: true,
         hasSessionDelete: true,
         hasInteraction: true,
-        hasHostParentEnv: false,
-        hasHostSignalPid: false,
-        hasHostRunProcess: false,
-      })
-      expect(result.process.isFailure).toBe(false)
-      expect(result.process.result).toEqual({
-        hasAgent: false,
-        hasAgentRun: false,
-        hasSession: false,
-        hasSessionListMessages: false,
-        hasSessionDelete: false,
-        hasInteraction: false,
-        hasHostParentEnv: true,
-        hasHostSignalPid: true,
-        hasHostRunProcess: true,
+        hasProcessRun: true,
       })
     }),
   )
@@ -517,13 +392,16 @@ describe("ToolRunner", () => {
           branchId: Schema.String,
           agentName: Schema.NullOr(Schema.String),
         }),
-        execute: (_, ctx) =>
-          Effect.succeed({
-            cwd: ctx.cwd,
-            home: ctx.home,
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            agentName: ctx.agentName ?? null,
+        execute: () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            return {
+              cwd: ctx.cwd,
+              home: ctx.home,
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+              agentName: ctx.agentName ?? null,
+            }
           }),
       })
       const deps = Layer.mergeAll(
@@ -690,14 +568,15 @@ describe("ToolRunner", () => {
         description: "Requests interaction",
         params: Schema.Struct({}),
         output: Schema.Never,
-        execute: (_, ctx) =>
-          Effect.fail(
-            new InteractionPendingError({
+        execute: () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            return yield* new InteractionPendingError({
               requestId: InteractionRequestId.make("req-pending"),
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
-            }),
-          ),
+            })
+          }),
       })
       const deps = Layer.mergeAll(
         ExtensionRegistry.fromResolved(

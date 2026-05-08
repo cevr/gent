@@ -15,7 +15,7 @@ import {
   EventStoreError,
   type AgentEvent,
 } from "@gent/core-internal/domain/event"
-import { tool, ToolNeeds, type ToolCapability } from "@gent/core/extensions/api"
+import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
@@ -289,14 +289,14 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
   tool({
     id: "interaction-tool",
     description: "Tool that triggers an interaction",
-    needs: [ToolNeeds.write("interaction")],
     params: Schema.Struct({ value: Schema.String }),
     output: Schema.Struct({
       resolved: Schema.Boolean,
       value: Schema.String,
     }),
-    execute: (params, ctx) =>
+    execute: (params) =>
       Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
         const count = yield* Ref.getAndUpdate(callCount, (current) => current + 1)
         if (count === 0) {
           return yield* new InteractionPendingError({

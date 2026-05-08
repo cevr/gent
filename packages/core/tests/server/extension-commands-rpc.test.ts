@@ -25,16 +25,7 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core-internal/domain/resource"
-import {
-  action,
-  CapabilityError,
-  ExtensionSession,
-  ToolNeeds,
-  request,
-  tool,
-  type ModelCapabilityContext,
-  type ToolCapabilityContext,
-} from "@gent/core/extensions/api"
+import { action, CapabilityError, ExtensionContext, request, tool } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -194,7 +185,7 @@ describe("extension command RPCs", () => {
       ])
     }),
   )
-  it.live("RPC request can queue follow-up through ExtensionSession service", () =>
+  it.live("RPC request can queue follow-up through ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-request")
       const ext: LoadedExtension = {
@@ -211,8 +202,8 @@ describe("extension command RPCs", () => {
               output: Schema.Void,
               execute: (input) =>
                 Effect.gen(function* () {
-                  const session = yield* ExtensionSession
-                  yield* session.queueFollowUp({ sourceId: "test-rpc-request", content: input })
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Session.queueFollowUp({ sourceId: "test-rpc-request", content: input })
                 }).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -258,7 +249,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request runs slash action with ExtensionSession service", () =>
+  it.live("RPC request runs slash action with ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-action")
       const ext: LoadedExtension = {
@@ -277,8 +268,8 @@ describe("extension command RPCs", () => {
               output: Schema.Void,
               execute: (input: string) =>
                 Effect.gen(function* () {
-                  const session = yield* ExtensionSession
-                  yield* session.queueFollowUp({ sourceId: "test-action", content: input })
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Session.queueFollowUp({ sourceId: "test-action", content: input })
                 }).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -612,14 +603,16 @@ describe("extension command RPCs", () => {
           tools: [
             tool({
               id: "create-branch",
-              needs: [ToolNeeds.write("session")],
               description: "Create a branch through the extension host session API.",
               params: Schema.Struct({}),
               output: Schema.String,
-              execute: (_input, ctx: ToolCapabilityContext) =>
-                ctx.session
-                  .createBranch({ name: "from extension rpc" })
-                  .pipe(Effect.map(({ branchId }) => branchId)),
+              execute: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  return yield* ctx.Session.createBranch({ name: "from extension rpc" }).pipe(
+                    Effect.map(({ branchId }) => branchId),
+                  )
+                }),
             }),
           ],
         },
@@ -688,56 +681,64 @@ describe("extension command RPCs", () => {
               id: "fork-current-branch",
               extensionId,
               intent: "write",
-              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.String,
-              execute: (messageId, ctx: ModelCapabilityContext) =>
-                ctx.session
-                  .forkBranch({
+              execute: (messageId) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  return yield* ctx.Session.forkBranch({
                     atMessageId: MessageId.make(messageId),
                     name: "forked through extension rpc",
-                  })
-                  .pipe(
+                  }).pipe(
                     Effect.map(({ branchId }) => String(branchId)),
                     Effect.mapError(mapHostError("fork-current-branch")),
-                  ),
+                  )
+                }),
             }),
             request({
               id: "create-temporary-branch",
               extensionId,
               intent: "write",
-              needs: [ToolNeeds.write("session")],
               input: Schema.Void,
               output: Schema.String,
-              execute: (_input, ctx: ModelCapabilityContext) =>
-                ctx.session.createBranch({ name: "temporary through extension rpc" }).pipe(
-                  Effect.map(({ branchId }) => String(branchId)),
-                  Effect.mapError(mapHostError("create-temporary-branch")),
-                ),
+              execute: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  return yield* ctx.Session.createBranch({
+                    name: "temporary through extension rpc",
+                  }).pipe(
+                    Effect.map(({ branchId }) => String(branchId)),
+                    Effect.mapError(mapHostError("create-temporary-branch")),
+                  )
+                }),
             }),
             request({
               id: "delete-branch",
               extensionId,
               intent: "write",
-              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (branchId, ctx: ModelCapabilityContext) =>
-                ctx.session
-                  .deleteBranch(BranchId.make(branchId))
-                  .pipe(Effect.mapError(mapHostError("delete-branch"))),
+              execute: (branchId) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Session.deleteBranch(BranchId.make(branchId)).pipe(
+                    Effect.mapError(mapHostError("delete-branch")),
+                  )
+                }),
             }),
             request({
               id: "delete-messages-after",
               extensionId,
               intent: "write",
-              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (messageId, ctx: ModelCapabilityContext) =>
-                ctx.session
-                  .deleteMessages({ afterMessageId: MessageId.make(messageId) })
-                  .pipe(Effect.mapError(mapHostError("delete-messages-after"))),
+              execute: (messageId) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Session.deleteMessages({
+                    afterMessageId: MessageId.make(messageId),
+                  }).pipe(Effect.mapError(mapHostError("delete-messages-after")))
+                }),
             }),
           ],
         },

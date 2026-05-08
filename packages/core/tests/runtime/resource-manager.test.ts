@@ -1,7 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Ref, type Scope } from "effect"
-import { ToolNeeds } from "../../src/domain/capability/tool.js"
 import { ResourceManager, ResourceManagerLive } from "../../src/runtime/resource-manager.js"
+const ResourceNeeds = {
+  read: (tag: string) => ({ tag, access: "read" as const }),
+  write: (tag: string) => ({ tag, access: "write" as const }),
+}
 const runWithResourceManager = <A, E>(effect: Effect.Effect<A, E, ResourceManager | Scope.Scope>) =>
   Effect.scoped(effect).pipe(Effect.provide(ResourceManagerLive))
 describe("ResourceManager", () => {
@@ -15,7 +18,7 @@ describe("ResourceManager", () => {
           const bothRunning = yield* Deferred.make<void>()
           const release = yield* Deferred.make<void>()
           const read = manager.withNeeds(
-            [ToolNeeds.read("fs")],
+            [ResourceNeeds.read("fs")],
             Effect.gen(function* () {
               const now = yield* Ref.updateAndGet(running, (n) => n + 1)
               yield* Ref.update(max, (n) => Math.max(n, now))
@@ -44,7 +47,7 @@ describe("ResourceManager", () => {
           const writeStarted = yield* Deferred.make<void>()
           const readFiber = yield* Effect.forkChild(
             manager.withNeeds(
-              [ToolNeeds.read("fs")],
+              [ResourceNeeds.read("fs")],
               Effect.gen(function* () {
                 yield* Deferred.succeed(readStarted, undefined)
                 yield* Deferred.await(releaseRead)
@@ -53,7 +56,10 @@ describe("ResourceManager", () => {
           )
           yield* Deferred.await(readStarted)
           const writeFiber = yield* Effect.forkChild(
-            manager.withNeeds([ToolNeeds.write("fs")], Deferred.succeed(writeStarted, undefined)),
+            manager.withNeeds(
+              [ResourceNeeds.write("fs")],
+              Deferred.succeed(writeStarted, undefined),
+            ),
           )
           const started = yield* Deferred.await(writeStarted).pipe(
             Effect.as(true),
@@ -77,7 +83,7 @@ describe("ResourceManager", () => {
           const running = yield* Ref.make(0)
           const max = yield* Ref.make(0)
           const run = manager.withNeeds(
-            [ToolNeeds.read("fs"), ToolNeeds.write("fs")],
+            [ResourceNeeds.read("fs"), ResourceNeeds.write("fs")],
             Effect.gen(function* () {
               const now = yield* Ref.updateAndGet(running, (n) => n + 1)
               yield* Ref.update(max, (n) => Math.max(n, now))
@@ -100,7 +106,7 @@ describe("ResourceManager", () => {
           const running = yield* Ref.make(0)
           const max = yield* Ref.make(0)
           const run = manager.withNeeds(
-            [ToolNeeds.write("fs"), ToolNeeds.read("fs")],
+            [ResourceNeeds.write("fs"), ResourceNeeds.read("fs")],
             Effect.gen(function* () {
               const now = yield* Ref.updateAndGet(running, (n) => n + 1)
               yield* Ref.update(max, (n) => Math.max(n, now))

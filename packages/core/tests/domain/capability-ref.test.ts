@@ -65,7 +65,6 @@ describe("ref(capability)", () => {
       destructive: true,
       params,
       output: Schema.String,
-      needs: [{ tag: "fs", access: "read" }],
       promptSnippet: "short",
       promptGuidelines: ["be precise"],
       interactive: true,
@@ -82,7 +81,6 @@ describe("ref(capability)", () => {
     expect(metadata.id).toBe(getToolId(capability))
     expect(metadata.intent).toBe("read")
     expect(metadata.input).toBe(params)
-    expect(metadata.needs).toEqual([{ tag: "fs", access: "read" }])
     expect(metadata.promptSnippet).toBe("short")
     expect(metadata.promptGuidelines).toEqual(["be precise"])
     expect(metadata.interactive).toBe(true)

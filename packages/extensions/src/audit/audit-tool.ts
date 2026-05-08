@@ -2,11 +2,10 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
+  ExtensionContext,
   makeRunSpec,
   tool,
-  ToolNeeds,
   type AgentDefinition,
-  type ToolCapabilityContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand } from "../workflow-helpers.js"
@@ -53,15 +52,12 @@ export const AuditResult = Schema.Struct({
   paths: Schema.Array(Schema.String),
 })
 
-const resolveAuditPaths = (
-  paths: ReadonlyArray<string> | undefined,
-  ctx: ToolCapabilityContext,
-) => {
+const resolveAuditPaths = (paths: ReadonlyArray<string> | undefined) => {
   if (paths !== undefined && paths.length > 0) {
     return Effect.succeed([...paths])
   }
 
-  return runCommand(ctx.host, ["git", "diff", "--name-only"], ctx.cwd).pipe(
+  return runCommand(["git", "diff", "--name-only"]).pipe(
     Effect.map((stdout) =>
       stdout
         .split("\n")
@@ -216,7 +212,6 @@ Summarize what changed, which findings are resolved, and what remains.`
 }
 
 const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
-  ctx: ToolCapabilityContext
   architect: AgentDefinition
   auditor: AgentDefinition
   toolCallId?: ToolCallId
@@ -225,15 +220,15 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   maxConcerns: number
   evaluatorFeedback?: string
 }) {
-  const { ctx } = params
-  const [primaryModel, reviewerModel] = yield* ctx.agent.resolveDualModelPair()
+  const ctx = yield* ExtensionContext
+  const [primaryModel, reviewerModel] = yield* ctx.Agent.resolveDualModelPair()
   const auditOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,
   }
 
   const runAgent = (agent: AgentDefinition, prompt: string, modelId: typeof primaryModel) =>
-    ctx.agent.run({
+    ctx.Agent.run({
       agent,
       prompt,
       runSpec: makeRunSpec({
@@ -289,12 +284,6 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
 
 export const AuditTool = tool({
   id: "audit",
-  needs: [
-    ToolNeeds.write("agent"),
-    ToolNeeds.write("artifact"),
-    ToolNeeds.write("interaction"),
-    ToolNeeds.write("process"),
-  ],
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode runs one detect-audit-synthesize-execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Audit code with dual-model concern analysis",
@@ -305,19 +294,19 @@ export const AuditTool = tool({
   ],
   params: AuditParams,
   output: AuditResult,
-  execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("AuditTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5
-    const paths = yield* resolveAuditPaths(params.paths, ctx)
+    const paths = yield* resolveAuditPaths(params.paths)
 
-    const architect = yield* ctx.agent.require(AgentName.make("architect"))
-    const auditor = yield* ctx.agent.require(AgentName.make("auditor"))
+    const architect = yield* ctx.Agent.require(AgentName.make("architect"))
+    const auditor = yield* ctx.Agent.require(AgentName.make("auditor"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.agent.require(callerAgentName)
+    const executor = yield* ctx.Agent.require(callerAgentName)
 
     // Detect → adversarial audit → synthesize (always runs)
     const report = yield* runAuditCycle({
-      ctx,
       architect,
       auditor,
       toolCallId: ctx.toolCallId,
@@ -335,7 +324,7 @@ export const AuditTool = tool({
     })
 
     if (mode === "report") {
-      yield* ctx.interaction.present({
+      yield* ctx.Interaction.present({
         content: report.raw,
         title: "Audit Findings",
       })
@@ -348,7 +337,7 @@ export const AuditTool = tool({
     }
 
     // Executor applies fixes — durable so the user can navigate to the child session.
-    const execResult = yield* ctx.agent.run({
+    const execResult = yield* ctx.Agent.run({
       agent: executor,
       prompt: buildExecutionPrompt(report.findings, params.prompt),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),

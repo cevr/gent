@@ -18,20 +18,17 @@ import {
   CapabilityError,
   defineExtension,
   defineResource,
-  ExtensionSession,
+  ExtensionContext,
   ExtensionId,
   type ReadOnly,
   ReadOnlyBrand,
   type ReadOnlyTag,
   type ReadRequestInput,
   makeRunSpec,
-  type ModelCapabilityContext,
   request,
   resource,
   tool,
   ToolCallId,
-  ToolNeeds,
-  type ToolCapabilityContext,
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
@@ -103,22 +100,22 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("tool({...}) defaults to minimal ctx unless wide ctx is explicit", () => {
+  test("tool({...}) execute receives params only; host facts come from ExtensionContext", () => {
     tool({
       id: "minimal-tool-context",
       description: "ok",
       params: NoInput,
       output: StringOutput,
-      execute: (_params, ctx) => {
-        void ctx.sessionId
-        void ctx.branchId
-        void ctx.toolCallId
-        // @ts-expect-error — agent runner is wide host authority, not default tool ctx
-        void ctx.agent
-        // @ts-expect-error — session mutation is wide host authority, not default tool ctx
-        void ctx.session
-        return Effect.succeed("ok")
-      },
+      execute: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          void ctx.sessionId
+          void ctx.branchId
+          void ctx.toolCallId
+          void ctx.Agent
+          void ctx.Session
+          return "ok"
+        }),
     })
 
     expect(true).toBe(true)
@@ -186,16 +183,19 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("write request host authority requires explicit needs", () => {
+  test("write request host authority is imported as ExtensionContext service", () => {
     request({
       id: "write-privileged-context",
       extensionId: ExtensionId.make("surface-locks"),
       intent: "write",
-      needs: [ToolNeeds.write("session")],
       input: NoInput,
       output: StringOutput,
-      execute: (_input, ctx: ModelCapabilityContext) =>
-        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }).pipe(
+      execute: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
+          return "ok"
+        }).pipe(
           Effect.mapError(
             (cause) =>
               new CapabilityError({
@@ -204,7 +204,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
                 reason: cause.message,
               }),
           ),
-          Effect.as("ok"),
         ),
     })
     expect(true).toBe(true)
@@ -328,19 +327,18 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("read-intent tool cannot declare write needs", () => {
-    expect(() =>
-      // @ts-expect-error — read tools cannot request write authority
-      tool({
-        id: "bad-read-tool",
-        description: "bad",
-        intent: "read",
-        needs: [ToolNeeds.write("todo")] as const,
-        params: Schema.Struct({}),
-        output: Schema.String,
-        execute: () => Effect.succeed("x"),
-      }),
-    ).toThrow("Read-only tool")
+  test("tool needs are not part of the public authoring surface", () => {
+    tool({
+      id: "bad-read-tool",
+      description: "bad",
+      intent: "read",
+      // @ts-expect-error — tools import services instead of declaring read/write needs
+      needs: [{ tag: "todo", access: "write" }] as const,
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.succeed("x"),
+    })
+    expect(true).toBe(true)
   })
 
   test("default action context is not privileged", () => {
@@ -363,7 +361,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("session follow-up authority is imported as an ExtensionSession service", () => {
+  test("session follow-up authority is imported through ExtensionContext", () => {
     defineExtension({
       id: "queue-follow-up-compile-lock",
       actions: [
@@ -376,8 +374,8 @@ describe("Effect-purity locks (compile-time)", () => {
           output: Schema.Void,
           execute: () =>
             Effect.gen(function* () {
-              const session = yield* ExtensionSession
-              yield* session.queueFollowUp({ sourceId: "lock", content: "x" })
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
             }).pipe(
               Effect.mapError(
                 (cause) =>
@@ -393,9 +391,11 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         turnAfter: {
           failureMode: "continue",
-          needs: [ToolNeeds.write("session")],
-          handler: (_input: PublicExtensionApi.TurnAfterInput, ctx: ModelCapabilityContext) =>
-            ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }),
+          handler: (_input: PublicExtensionApi.TurnAfterInput) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
+            }),
         },
       },
     })
@@ -426,6 +426,16 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadModelAudienceFields = PublicExtensionApi.ModelAudienceFields
     // @ts-expect-error — raw tool metadata is internal lowering detail
     type _BadToolMetadataTag = typeof PublicExtensionApi.GentToolMetadataTag
+    // @ts-expect-error — tool execution ctx is runtime plumbing; authors yield ExtensionContext
+    type _BadToolCoreContext = PublicExtensionApi.ToolCoreContext
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionSession = typeof PublicExtensionApi.ExtensionSession
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionAgent = typeof PublicExtensionApi.ExtensionAgent
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionInteraction = typeof PublicExtensionApi.ExtensionInteraction
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionProcess = typeof PublicExtensionApi.ExtensionProcess
     // @ts-expect-error — raw tool metadata is internal lowering detail
     type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
     // @ts-expect-error — raw tool metadata is internal lowering detail
@@ -538,35 +548,33 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("default tool context exposes host facts but not process authority", () => {
+  test("tool authoring uses ExtensionContext instead of a ctx parameter", () => {
     tool({
       id: "facts-only-tool",
       description: "facts",
       params: Schema.Struct({}),
       output: Schema.String,
-      execute: (_params, ctx) => {
-        const platform = ctx.host.osInfo.platform
-        // @ts-expect-error — default tool context does not expose parent process env
-        void ctx.host.parentEnv
-        // @ts-expect-error — default tool context cannot signal host processes
-        ctx.host.signalPid(1, "SIGTERM")
-        // @ts-expect-error — default tool context cannot spawn host processes
-        ctx.host.runProcess("git", ["status"])
-        return Effect.succeed(platform)
-      },
+      execute: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          return ctx.cwd
+        }),
     })
     expect(true).toBe(true)
   })
 
-  test("process write tools can opt into host process authority", () => {
+  test("process authority is imported as ExtensionContext.Process", () => {
     tool({
       id: "process-authority-tool",
       description: "process",
       params: Schema.Struct({}),
       output: Schema.String,
-      needs: [ToolNeeds.write("process")],
-      execute: (_params, ctx: ToolCapabilityContext) =>
-        ctx.host.runProcess("git", ["status"]).pipe(Effect.as("ok")),
+      execute: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          yield* ctx.Process.run("git", ["status"])
+          return "ok"
+        }),
     })
     expect(true).toBe(true)
   })

@@ -15,7 +15,7 @@ import {
   AgentRunResult,
   ModelId,
   type AgentName,
-  type ToolCapabilityContext,
+  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../../src/all-agents.js"
 import {
@@ -77,7 +77,7 @@ const createArtifactSpy = () => {
 
 const stubAgentRun =
   (textFn?: (prompt: string) => string) =>
-  (params: Parameters<ToolCapabilityContext["agent"]["run"]>[0]) =>
+  (params: Parameters<ExtensionContextService["Agent"]["run"]>[0]) =>
     Effect.succeed(
       AgentRunResult.Success.make({
         text: textFn?.(params.prompt) ?? "output",
@@ -111,11 +111,11 @@ describe("PlanTool artifact persistence", () => {
   it.live("saves artifact on approved plan (decision=yes)", () => {
     const spy = createArtifactSpy()
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun(),
       },
-      interaction: {
+      Interaction: {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.die("present not wired"),
         confirm: () => Effect.die("confirm not wired"),
@@ -140,11 +140,11 @@ describe("PlanTool artifact persistence", () => {
   it.live("saves artifact on edited plan (decision=edit)", () => {
     const spy = createArtifactSpy()
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun(),
       },
-      interaction: {
+      Interaction: {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.die("present not wired"),
         confirm: () => Effect.die("confirm not wired"),
@@ -172,11 +172,11 @@ describe("PlanTool artifact persistence", () => {
   it.live("does NOT save artifact on rejected plan (decision=no)", () => {
     const spy = createArtifactSpy()
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun(),
       },
-      interaction: {
+      Interaction: {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.die("present not wired"),
         confirm: () => Effect.die("confirm not wired"),
@@ -198,7 +198,7 @@ describe("PlanTool artifact persistence", () => {
   it.live("fix mode saves artifact after execution", () => {
     const spy = createArtifactSpy()
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun(),
       },
@@ -221,7 +221,7 @@ describe("AuditTool artifact persistence", () => {
   it.live("saves audit findings as artifact after synthesis", () => {
     const spy = createArtifactSpy()
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun((prompt) => {
           if (prompt.includes("Synthesize"))
@@ -229,7 +229,7 @@ describe("AuditTool artifact persistence", () => {
           return "1. error handling: check error paths"
         }),
       },
-      interaction: {
+      Interaction: {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.succeed(undefined as never),
         confirm: () => Effect.die("confirm not wired"),
@@ -266,7 +266,7 @@ describe("ReviewTool artifact persistence", () => {
     ])
 
     const ctx = testToolContext({
-      agent: {
+      Agent: {
         ...agentLookup,
         run: stubAgentRun(() => reviewJson),
       },

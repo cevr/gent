@@ -1,11 +1,5 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
-import {
-  type CapabilityError,
-  type AgentName,
-  type SessionId,
-  type BranchId,
-} from "@gent/core/extensions/api"
-import { requireCapabilityWrite } from "@gent/core-internal/domain/capability-access"
+import { type AgentName, type SessionId, type BranchId } from "@gent/core/extensions/api"
 import { ExtensionStatePublisher } from "@gent/core-internal/domain/event-publisher"
 import { Todo, TodoId, type TodoStatus, type TodoTransitionError } from "./todo/domain.js"
 import { TodoStorage, type TodoStorageError } from "./todo-storage.js"
@@ -13,14 +7,6 @@ import { TODO_EXTENSION_ID } from "./todo/identity.js"
 
 // Extension-owned todo service. Present only when @gent/todo is loaded.
 // Pure state management — no execution, no fibers, no agent spawning.
-
-const requireTodoWrite = (operation: string) =>
-  requireCapabilityWrite({
-    tag: "todo",
-    extensionId: TODO_EXTENSION_ID,
-    capabilityId: operation,
-    operation,
-  })
 
 export class TodoServiceUnavailableError extends Schema.TaggedErrorClass<TodoServiceUnavailableError>()(
   "TodoServiceUnavailableError",
@@ -70,11 +56,7 @@ export interface TodoServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<
-    Todo,
-    CapabilityError | TodoStorageError | TodoServiceUnavailableError,
-    ExtensionStatePublisher
-  >
+  }) => Effect.Effect<Todo, TodoStorageError | TodoServiceUnavailableError, ExtensionStatePublisher>
 
   readonly get: (id: TodoId) => Effect.Effect<Todo | undefined, TodoStorageError>
 
@@ -94,22 +76,14 @@ export interface TodoServiceApi {
     }>,
   ) => Effect.Effect<
     Todo | undefined,
-    CapabilityError | TodoStorageError | TodoTransitionError,
+    TodoStorageError | TodoTransitionError,
     ExtensionStatePublisher
   >
 
-  readonly remove: (
-    id: TodoId,
-  ) => Effect.Effect<void, CapabilityError | TodoStorageError, ExtensionStatePublisher>
+  readonly remove: (id: TodoId) => Effect.Effect<void, TodoStorageError, ExtensionStatePublisher>
 
-  readonly addDep: (
-    todoId: TodoId,
-    blockedById: TodoId,
-  ) => Effect.Effect<void, CapabilityError | TodoStorageError>
-  readonly removeDep: (
-    todoId: TodoId,
-    blockedById: TodoId,
-  ) => Effect.Effect<void, CapabilityError | TodoStorageError>
+  readonly addDep: (todoId: TodoId, blockedById: TodoId) => Effect.Effect<void, TodoStorageError>
+  readonly removeDep: (todoId: TodoId, blockedById: TodoId) => Effect.Effect<void, TodoStorageError>
   readonly getDeps: (todoId: TodoId) => Effect.Effect<ReadonlyArray<TodoId>, TodoStorageError>
 }
 
@@ -136,7 +110,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
   static Live: Layer.Layer<TodoService> = Layer.succeed(TodoService, {
     create: (params) =>
       Effect.gen(function* () {
-        yield* requireTodoWrite("TodoService.create")
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.create(params)
         const storage = storageOption.value
@@ -185,7 +158,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
 
     update: (id, fields) =>
       Effect.gen(function* () {
-        yield* requireTodoWrite("TodoService.update")
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.update(id, fields)
         const storage = storageOption.value
@@ -205,7 +177,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
 
     remove: (id) =>
       Effect.gen(function* () {
-        yield* requireTodoWrite("TodoService.remove")
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.remove(id)
         const storage = storageOption.value
@@ -227,14 +198,12 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
 
     addDep: (todoId, blockedById) =>
       Effect.gen(function* () {
-        yield* requireTodoWrite("TodoService.addDep")
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.addDep(todoId, blockedById)
         yield* storageOption.value.addTodoDep(todoId, blockedById)
       }),
     removeDep: (todoId, blockedById) =>
       Effect.gen(function* () {
-        yield* requireTodoWrite("TodoService.removeDep")
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) {
           return yield* TodoService.Noop.removeDep(todoId, blockedById)

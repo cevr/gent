@@ -1,6 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { tool, type ToolCoreContext } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { $ } from "bun"
 import * as esGit from "es-git"
 
@@ -397,8 +397,8 @@ export const RepoTool = tool({
   output: RepoExplorerResult,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (
     params: typeof RepoExplorerParams.Type,
-    ctx: ToolCoreContext,
   ) {
+    const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const gitReader = yield* GitReader

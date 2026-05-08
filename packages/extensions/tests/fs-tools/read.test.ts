@@ -3,13 +3,12 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "../../src/fs-tools/read.js"
 import { FsRead } from "../../src/fs-tools/read-service"
-import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
-const ctx: ToolCapabilityContext = testToolContext({
+const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("test-call"),

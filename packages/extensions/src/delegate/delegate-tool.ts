@@ -1,17 +1,15 @@
 import { Effect, Schema } from "effect"
 import {
   tool,
-  ToolNeeds,
   AgentName,
+  ExtensionContext,
   AgentRunResultSchema,
   AgentRunToolCallSchema,
   defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
-  type AgentRunError,
   type AgentRunResult,
   type SessionId,
-  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { TodoService } from "../todo-service.js"
 import type { Todo, TodoId } from "../todo/domain.js"
@@ -66,7 +64,6 @@ export const DelegateResult = Schema.Struct({
 
 export const DelegateTool = tool({
   id: "delegate",
-  needs: [ToolNeeds.write("agent"), ToolNeeds.write("todo")],
   description:
     "Delegate work to specialized agents. Modes: single (agent+todo), parallel (todos[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
   promptSnippet: "Delegate work to specialized subagents",
@@ -79,10 +76,8 @@ export const DelegateTool = tool({
   ],
   params: DelegateParams,
   output: DelegateResult,
-  execute: Effect.fn("DelegateTool.execute")(function* (
-    params: typeof DelegateParams.Type,
-    ctx: ToolCapabilityContext,
-  ) {
+  execute: Effect.fn("DelegateTool.execute")(function* (params: typeof DelegateParams.Type) {
+    const ctx = yield* ExtensionContext
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTodos = (params.todos?.length ?? 0) > 0
     const hasSingle = params.agent !== undefined && params.todo !== undefined
@@ -93,7 +88,7 @@ export const DelegateTool = tool({
     }
 
     const resolveAgent = (agentName: string) =>
-      ctx.agent.get(AgentName.make(agentName)).pipe(
+      ctx.Agent.get(AgentName.make(agentName)).pipe(
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
@@ -128,7 +123,7 @@ export const DelegateTool = tool({
           .update(todo.id, { status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
-        const resolvedAgent = yield* ctx.agent.get(agent.name)
+        const resolvedAgent = yield* ctx.Agent.get(agent.name)
         if (resolvedAgent === undefined) {
           yield* todoService
             .update(todo.id, {
@@ -141,7 +136,7 @@ export const DelegateTool = tool({
 
         // Background todos need durable sessions so users can navigate to them
         // via the stored childSessionId after the run completes.
-        const result = yield* ctx.agent.run({
+        const result = yield* ctx.Agent.run({
           agent: resolvedAgent,
           prompt: todo.prompt ?? todo.subject,
           runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
@@ -246,7 +241,7 @@ export const DelegateTool = tool({
         if (!resolved.ok) return { error: resolved.error }
 
         const todoWithContext = step.todo.replace(/\{previous\}/g, previousOutput)
-        const result = yield* ctx.agent.run({
+        const result = yield* ctx.Agent.run({
           agent: resolved.agent,
           prompt: todoWithContext,
           runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
@@ -284,9 +279,7 @@ export const DelegateTool = tool({
         return { error: `Too many parallel todos (max ${MAX_PARALLEL_TODOS})` }
       }
 
-      const runTodo = (
-        todo: DelegateItemType,
-      ): Effect.Effect<AgentRunResult, AgentRunError, never> =>
+      const runTodo = (todo: DelegateItemType) =>
         resolveAgent(todo.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {
@@ -295,7 +288,7 @@ export const DelegateTool = tool({
                 error: resolved.error,
               })
             }
-            return ctx.agent.run({
+            return ctx.Agent.run({
               agent: resolved.agent,
               prompt: todo.todo,
               runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
@@ -326,7 +319,7 @@ export const DelegateTool = tool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const result = yield* ctx.agent.run({
+      const result = yield* ctx.Agent.run({
         agent: resolved.agent,
         prompt: params.todo ?? "",
         runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),

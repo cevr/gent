@@ -8,7 +8,6 @@
 import { type Effect, Schema } from "effect"
 import type { AgentName } from "./agent.js"
 import type { ExtensionHostFacts } from "./extension.js"
-import type { ExtensionHostContext } from "./extension-host-context.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import {
   ExtensionId,
@@ -40,24 +39,8 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
 ) {}
 
 /**
- * A single fat `CapabilityContext extends ExtensionHostContext` would expose
- * session mutation, interaction, and follow-up surfaces to every read capability — making
- * the `intent: "read"` fence dishonest at the context level even when lint
- * stops write-shaped service calls.
- *
- * Split: `CapabilityCoreContext` (the always-on minimum) plus the wider
- * `ModelCapabilityContext` for handlers that explicitly declare authority
- * needs before reaching host/session/agent mutation surfaces.
- *
- * Capability authors pick the surface they need by typing their `effect`'s
- * second parameter:
- *   - `(input, ctx: CapabilityCoreContext) => …` — the default, audience-neutral
- *   - `(input, ctx: ModelCapabilityContext) => …` — tools/actions that declare
- *     explicit needs and need subagent / interaction / follow-up surfaces
- *
- * Request/action hosts pass the context required by the leaf type. Tool
- * execution derives host facets from declared `ToolNeeds`, so handlers asking
- * for less get less both at the type surface and at runtime.
+ * Minimal facts passed to capabilities. Host authority is not threaded through
+ * this object; extension code imports constrained Effect services instead.
  */
 export interface CapabilityCoreContext {
   readonly sessionId: SessionId
@@ -69,10 +52,6 @@ export interface CapabilityCoreContext {
   readonly home: string
   readonly host: ExtensionHostFacts
 }
-
-/** The wide tool-execution context. Read+write surfaces, agent runner,
- *  session mutations, interaction, and follow-up controls are all reachable. */
-export interface ModelCapabilityContext extends ExtensionHostContext {}
 
 /**
  * Default ctx parameter type for request/action host signatures.
@@ -91,14 +70,8 @@ export type ErasedCapabilityEffect<E = any> = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
 ) => Effect.Effect<any, E, any>
 
-const CapabilityNeed = Schema.Struct({
-  tag: Schema.String,
-  access: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
-})
-
 const CapabilityMetadataFields = {
   intent: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
-  needs: Schema.optional(Schema.Array(CapabilityNeed)),
   promptSnippet: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.Unknown),
   permissionRules: Schema.optional(Schema.Array(Schema.Unknown)),

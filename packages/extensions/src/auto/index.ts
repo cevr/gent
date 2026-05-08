@@ -10,7 +10,7 @@ import { Effect, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
-  ExtensionSession,
+  ExtensionContext,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -84,14 +84,12 @@ const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* 
   const followUp = yield* auto.value.drainFollowUp()
   if (followUp === undefined || followUp.content === "") return
 
-  const session = yield* ExtensionSession
-  yield* session
-    .queueFollowUp({
-      sourceId: followUp.sourceId,
-      content: followUp.content,
-      metadata: { extensionId: "auto", hidden: true },
-    })
-    .pipe(Effect.catchEager(() => Effect.void))
+  const ctx = yield* ExtensionContext
+  yield* ctx.Session.queueFollowUp({
+    sourceId: followUp.sourceId,
+    content: followUp.content,
+    metadata: { extensionId: "auto", hidden: true },
+  }).pipe(Effect.catchEager(() => Effect.void))
 })
 
 const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolResultInput) {
@@ -200,7 +198,8 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     const snapshot = yield* auto.value.snapshot()
     if (!snapshot.active) return
 
-    const session = yield* ExtensionSession
+    const ctx = yield* ExtensionContext
+    const session = ctx.Session
     const contextPercent = yield* session.estimateContextPercent()
     if (contextPercent < 85) return
 

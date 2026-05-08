@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { AgentName, SessionId, tool } from "@gent/core/extensions/api"
+import { AgentName, ExtensionContext, SessionId, tool } from "@gent/core/extensions/api"
 import { TodoId, TodoStatus, TodoTransitionError } from "./domain.js"
 import { TodoStorageReadOnly } from "../todo-storage.js"
 import { TodoService } from "../todo-service.js"
@@ -44,7 +44,8 @@ export const TodoCreateTool = tool({
     "Create a durable todo with optional dependencies. Todos persist across turns and can be run in the background. Set agent + prompt for executable todos.",
   params: TodoCreateParams,
   output: TodoCreateResult,
-  execute: Effect.fn("TodoCreateTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("TodoCreateTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const todoService = yield* TodoService
     const todo = yield* todoService.create({
       sessionId: ctx.sessionId,
@@ -107,7 +108,8 @@ export const TodoListTool = tool({
   description: "List all todos for the current session and branch, sorted by creation time.",
   params: TodoListParams,
   output: TodoListResult,
-  execute: Effect.fn("TodoListTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("TodoListTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const todoService = yield* TodoStorageReadOnly
     const allTodos = yield* todoService.listTodos(ctx.sessionId, ctx.branchId)
     const todos =

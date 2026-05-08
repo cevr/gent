@@ -10,7 +10,7 @@ import {
   action,
   CapabilityError,
   defineExtension,
-  ExtensionSession,
+  ExtensionContext,
   ExtensionId,
 } from "@gent/core/extensions/api"
 import { PlanTool } from "./plan-tool.js"
@@ -41,8 +41,8 @@ const PlanAction = action({
   output: Schema.Void,
   execute: (input: string) =>
     Effect.gen(function* () {
-      const session = yield* ExtensionSession
-      yield* session.queueFollowUp({ sourceId: "plan-command", content: planPrompt(input) })
+      const ctx = yield* ExtensionContext
+      yield* ctx.Session.queueFollowUp({ sourceId: "plan-command", content: planPrompt(input) })
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -66,8 +66,8 @@ const AuditAction = action({
   output: Schema.Void,
   execute: (input: string) =>
     Effect.gen(function* () {
-      const session = yield* ExtensionSession
-      yield* session.queueFollowUp({ sourceId: "audit-command", content: auditPrompt(input) })
+      const ctx = yield* ExtensionContext
+      yield* ctx.Session.queueFollowUp({ sourceId: "audit-command", content: auditPrompt(input) })
     }).pipe(
       Effect.mapError(
         (cause) =>

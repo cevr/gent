@@ -2,15 +2,13 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   CapabilityError,
-  ExtensionAgent,
+  ExtensionContext,
   ExtensionId,
-  ExtensionSession,
   action,
   defineAgent,
   defineExtension,
   makeRunSpec,
   tool,
-  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 
 const COUNSEL_EXTENSION_ID = ExtensionId.make("@gent/counsel")
@@ -74,9 +72,10 @@ export const CounselTool = tool({
   ],
   params: CounselParams,
   output: CounselResult,
-  execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolCoreContext) {
+  execute: Effect.fn("CounselTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const mode = params.mode ?? "standard"
-    const agent = yield* ExtensionAgent
+    const agent = ctx.Agent
     const [, modelB] = yield* agent.resolveDualModelPair()
 
     const isDeep = mode === "deep"
@@ -130,8 +129,8 @@ export const CounselExtension = defineExtension({
       output: Schema.Void,
       execute: (input: string) =>
         Effect.gen(function* () {
-          const session = yield* ExtensionSession
-          yield* session.queueFollowUp({
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.queueFollowUp({
             sourceId: "counsel-command",
             content:
               input.trim().length > 0

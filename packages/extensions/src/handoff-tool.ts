@@ -1,12 +1,5 @@
 import { Effect, Schema } from "effect"
-import {
-  AgentName,
-  ExtensionAgent,
-  ExtensionInteraction,
-  makeRunSpec,
-  tool,
-  type ToolCoreContext,
-} from "@gent/core/extensions/api"
+import { AgentName, ExtensionContext, makeRunSpec, tool } from "@gent/core/extensions/api"
 
 // Handoff Tool Error
 
@@ -51,14 +44,12 @@ export const HandoffTool = tool({
   ],
   params: HandoffParams,
   output: HandoffResult,
-  execute: Effect.fn("HandoffTool.execute")(function* (
-    params: typeof HandoffParams.Type,
-    ctx: ToolCoreContext,
-  ) {
+  execute: Effect.fn("HandoffTool.execute")(function* (params: typeof HandoffParams.Type) {
+    const ctx = yield* ExtensionContext
     // Use summarizer agent to refine context if it's large
     let summary = params.context
     if (params.context.length > 2000) {
-      const agent = yield* ExtensionAgent
+      const agent = ctx.Agent
       const summarizer = yield* agent.require(AgentName.make("summarizer"))
       const summarizeResult = yield* agent.run({
         agent: summarizer,
@@ -70,7 +61,7 @@ export const HandoffTool = tool({
       }
     }
 
-    const interaction = yield* ExtensionInteraction
+    const interaction = ctx.Interaction
     const decision = yield* interaction.approve({
       text: summary,
       metadata: { type: "handoff", reason: params.reason },

@@ -3,13 +3,7 @@ import { Effect } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff-tool.js"
 import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
-import {
-  AgentRunResult,
-  ExtensionAgent,
-  ExtensionInteraction,
-  SessionId,
-  type ToolCapabilityContext,
-} from "@gent/core/extensions/api"
+import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../src/all-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
@@ -19,12 +13,12 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 const makeCtx = (overrides: {
   agentRun?: (
-    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
+    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
-  approve?: ToolCapabilityContext["interaction"]["approve"]
+  approve?: ExtensionContextService["Interaction"]["approve"]
 }) =>
   testToolContext({
-    agent: {
+    Agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
         const agent = AllBuiltinAgents.find((a) => a.name === name)
@@ -42,31 +36,13 @@ const makeCtx = (overrides: {
           )),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
-    interaction: {
+    Interaction: {
       approve: overrides.approve ?? dieStub("interaction.approve"),
       present: dieStub("interaction.present"),
       confirm: dieStub("interaction.confirm"),
       review: dieStub("interaction.review"),
     },
   })
-
-const provideServices =
-  (ctx: ToolCapabilityContext) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(ExtensionAgent, {
-        get: ctx.agent.get,
-        require: (name) => ctx.agent.require(name).pipe(Effect.orDie),
-        run: ctx.agent.run,
-        resolveDualModelPair: () => ctx.agent.resolveDualModelPair().pipe(Effect.orDie),
-      }),
-      Effect.provideService(ExtensionInteraction, {
-        approve: (params) => ctx.interaction.approve(params).pipe(Effect.orDie),
-        present: (params) => ctx.interaction.present(params).pipe(Effect.orDie),
-        confirm: (params) => ctx.interaction.confirm(params).pipe(Effect.orDie),
-        review: (params) => ctx.interaction.review(params).pipe(Effect.orDie),
-      }),
-    )
 
 describe("HandoffTool", () => {
   it.live("returns handoff confirmed when user accepts", () => {
@@ -87,7 +63,6 @@ describe("HandoffTool", () => {
           expect(result.summary).toContain("implement auth")
           expect(result.parentSessionId).toBe(SessionId.make("test-session"))
         }),
-        provideServices(ctx),
       ),
     )
   })
@@ -108,7 +83,6 @@ describe("HandoffTool", () => {
           expect(result.handoff).toBe(false)
           expect(result.reason).toBe("User rejected handoff")
         }),
-        provideServices(ctx),
       ),
     )
   })

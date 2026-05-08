@@ -6,7 +6,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
 import { ArtifactId } from "@gent/core-internal/domain/ids"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
@@ -41,7 +41,8 @@ const ArtifactSaveTool = tool({
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
   params: ArtifactSaveParams,
   output: ArtifactSaveResult,
-  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const artifacts = yield* ArtifactsWrite
     const artifact = yield* artifacts.save(ctx.sessionId, ctx.branchId, params)
     return { id: artifact.id, label: artifact.label, sourceTool: artifact.sourceTool }
@@ -74,7 +75,8 @@ const ArtifactReadTool = tool({
   description: "Read the full content of an artifact by label/source or ID.",
   params: ArtifactReadParams,
   output: ArtifactReadResult,
-  execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("ArtifactReadTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const query =
       params.id !== undefined
         ? ReadQuery.ById.make({ id: ArtifactId.make(params.id) })
@@ -113,7 +115,8 @@ const ArtifactUpdateTool = tool({
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
   params: ArtifactUpdateParams,
   output: ArtifactUpdateResult,
-  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const patch =
       params.find !== undefined && params.replace !== undefined
         ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
@@ -144,7 +147,8 @@ const ArtifactClearTool = tool({
   description: "Remove an artifact by ID.",
   params: ArtifactClearParams,
   output: ArtifactClearResult,
-  execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("ArtifactClearTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const artifacts = yield* ArtifactsWrite
     yield* artifacts.clear(ctx.sessionId, ctx.branchId, ArtifactId.make(params.id))
     return { cleared: true }

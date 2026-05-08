@@ -3,14 +3,14 @@ import { Effect, Schema } from "effect"
 import { finishPart, toolCallPart } from "@gent/core-internal/test-utils/language-model"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import { AgentName } from "@gent/core-internal/domain/agent"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { makeAgentLoopService, makeLiveToolLayer, scriptedProvider } from "./agent-loop/helpers"
 
 describe("concurrency", () => {
-  it.live("serial tool calls do not overlap", () =>
+  it.live("independent tool calls may overlap", () =>
     Effect.gen(function* () {
       const events: string[] = []
       let running = 0
@@ -18,8 +18,6 @@ describe("concurrency", () => {
       const makeSerialTool = (name: string) =>
         tool({
           id: name,
-          // All instances share one write need and therefore cannot overlap.
-          needs: [ToolNeeds.write("test-serial")],
           description: `Serial tool ${name}`,
           params: Schema.Struct({}),
           output: Schema.Struct({ ok: Schema.Boolean }),
@@ -76,14 +74,13 @@ describe("concurrency", () => {
           prompt: "run serial tools",
         })
       }).pipe(Effect.provide(layer))
-      expect(maxRunning).toBe(1)
+      expect(maxRunning).toBeGreaterThan(1)
       expect(events.length).toBe(4)
       expect(events[0]?.startsWith("start:")).toBe(true)
-      expect(events[1]?.startsWith("end:")).toBe(true)
-      expect(events[2]?.startsWith("start:")).toBe(true)
+      expect(events[1]?.startsWith("start:")).toBe(true)
+      expect(events[2]?.startsWith("end:")).toBe(true)
       expect(events[3]?.startsWith("end:")).toBe(true)
-      expect(events[0]?.slice("start:".length)).toBe(events[1]?.slice("end:".length))
-      expect(events[2]?.slice("start:".length)).toBe(events[3]?.slice("end:".length))
+      expect(new Set(events.map((event) => event.split(":")[1])).size).toBe(2)
     }),
   )
 })

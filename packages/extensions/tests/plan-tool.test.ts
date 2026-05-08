@@ -8,11 +8,14 @@ import {
   ModelId,
   SessionId,
   ToolCallId,
-  type ToolCapabilityContext,
+  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../src/all-agents.js"
 import { PlanTool } from "../src/plan-tool.js"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import {
+  testToolContext,
+  type TestToolContext,
+} from "@gent/core-internal/test-utils/extension-harness"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
@@ -22,10 +25,10 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 const makeCtx = (overrides: {
   agentRun?: (
-    params: Parameters<ToolCapabilityContext["agent"]["run"]>[0],
+    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
   ) => Effect.Effect<AgentRunResult>
   reviewDecision?: "yes" | "no" | "edit"
-}): ToolCapabilityContext => {
+}): TestToolContext => {
   const base = testToolContext({
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
@@ -45,7 +48,7 @@ const makeCtx = (overrides: {
       ))
   return {
     ...base,
-    agent: {
+    Agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       require: (name) => {
         const agent = AllBuiltinAgents.find((a) => a.name === name)
@@ -58,8 +61,8 @@ const makeCtx = (overrides: {
           ModelId.make("openai/gpt-5.4"),
         ] as const),
     },
-    session: {
-      ...base.session,
+    Session: {
+      ...base.Session,
       listMessages: dieStub("session.listMessages"),
       getSession: dieStub("session.getSession"),
       getDetail: dieStub("session.getDetail"),
@@ -67,7 +70,7 @@ const makeCtx = (overrides: {
       estimateContextPercent: dieStub("session.estimateContextPercent"),
       search: dieStub("session.search"),
     },
-    interaction: {
+    Interaction: {
       approve: dieStub("interaction.approve"),
       present: dieStub("interaction.present"),
       confirm: dieStub("interaction.confirm"),

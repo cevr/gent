@@ -6,14 +6,12 @@ import {
   defineAgent,
   defineExtension,
   ExtensionId,
-  ExtensionSession,
+  ExtensionContext,
   getDurableAgentRunSessionId,
   makeRunSpec,
   action,
   tool,
-  ToolNeeds,
   type AgentDefinition,
-  type ToolCapabilityContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
@@ -135,22 +133,19 @@ const summarizeComments = (comments: ReadonlyArray<ReviewComment>) => {
   return summary
 }
 
-const runShellCommand = (ctx: ToolCapabilityContext, cmd: string[]) =>
-  runCommandBase(ctx.host, cmd, ctx.cwd).pipe(
+const runShellCommand = (cmd: string[]) =>
+  runCommandBase(cmd).pipe(
     Effect.filterOrFail(
       (out) => out !== "",
       () => new ReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
     ),
   )
 
-const resolveReviewInput = (
-  params: {
-    content?: string
-    files?: ReadonlyArray<string>
-    diffSpec?: string
-  },
-  ctx: ToolCapabilityContext,
-) => {
+const resolveReviewInput = (params: {
+  content?: string
+  files?: ReadonlyArray<string>
+  diffSpec?: string
+}) => {
   if (params.content !== undefined && params.content.trim() !== "") {
     return Effect.succeed(params.content)
   }
@@ -164,7 +159,7 @@ const resolveReviewInput = (
     args.push("--", ...params.files)
   }
 
-  return runShellCommand(ctx, args)
+  return runShellCommand(args)
 }
 
 const buildReviewPrompt = (reviewInput: string, description?: string) =>
@@ -246,14 +241,13 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
   ].join("\n")
 
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
-  ctx: ToolCapabilityContext
   worker: AgentDefinition
   toolCallId?: ToolCallId
   reviewInput: string
   description?: string
 }) {
-  const { ctx } = params
-  const [modelA, modelB] = yield* ctx.agent.resolveDualModelPair()
+  const ctx = yield* ExtensionContext
+  const [modelA, modelB] = yield* ctx.Agent.resolveDualModelPair()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,
@@ -261,7 +255,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   }
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
-    ctx.agent.run({
+    ctx.Agent.run({
       agent: params.worker,
       prompt,
       runSpec: makeRunSpec({
@@ -312,7 +306,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
 export const ReviewTool = tool({
   id: "review",
-  needs: [ToolNeeds.write("agent"), ToolNeeds.write("artifact"), ToolNeeds.write("process")],
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Adversarial dual-model code review",
@@ -324,24 +317,21 @@ export const ReviewTool = tool({
   ],
   params: ReviewParams,
   output: ReviewResult,
-  execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ReviewTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const mode = params.mode ?? "report"
 
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.agent.require(callerAgentName)
+    const executor = yield* ctx.Agent.require(callerAgentName)
 
-    const reviewInput = yield* resolveReviewInput(
-      {
-        content: params.content,
-        files: params.files,
-        diffSpec: params.diff_spec,
-      },
-      ctx,
-    )
+    const reviewInput = yield* resolveReviewInput({
+      content: params.content,
+      files: params.files,
+      diffSpec: params.diff_spec,
+    })
 
     // Adversarial review cycle (always runs)
     const report = yield* runReviewCycle({
-      ctx,
       worker: reviewAgent,
       toolCallId: ctx.toolCallId,
       reviewInput,
@@ -373,7 +363,7 @@ export const ReviewTool = tool({
     }
 
     // Executor applies fixes — durable so the user can navigate to the child session.
-    const execResult = yield* ctx.agent.run({
+    const execResult = yield* ctx.Agent.run({
       agent: executor,
       prompt: buildExecutePrompt(report.comments, params.description),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
@@ -398,8 +388,8 @@ export const ReviewExtension = defineExtension({
       output: Schema.Void,
       execute: (input: string) =>
         Effect.gen(function* () {
-          const session = yield* ExtensionSession
-          yield* session.queueFollowUp({
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.queueFollowUp({
             sourceId: "review-command",
             content:
               input.trim().length > 0

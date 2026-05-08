@@ -2,11 +2,10 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
+  ExtensionContext,
   makeRunSpec,
   tool,
-  ToolNeeds,
   type AgentDefinition,
-  type ToolCapabilityContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText } from "./workflow-helpers.js"
@@ -124,7 +123,6 @@ const buildExecutePrompt = (plan: string) =>
   ].join("\n")
 
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
-  ctx: ToolCapabilityContext
   architect: AgentDefinition
   toolCallId?: ToolCallId
   mode: "plan-only" | "fix"
@@ -133,11 +131,11 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   files?: ReadonlyArray<string>
   evaluatorFeedback?: string
 }) {
-  const { ctx } = params
-  const [modelA, modelB] = yield* ctx.agent.resolveDualModelPair()
+  const ctx = yield* ExtensionContext
+  const [modelA, modelB] = yield* ctx.Agent.resolveDualModelPair()
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
-    ctx.agent.run({
+    ctx.Agent.run({
       agent: params.architect,
       prompt,
       runSpec: makeRunSpec({
@@ -191,21 +189,20 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
 
 export const PlanTool = tool({
   id: "plan",
-  needs: [ToolNeeds.write("agent"), ToolNeeds.write("artifact"), ToolNeeds.write("interaction")],
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
   output: PlanResult,
-  execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("PlanTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
     const mode = params.mode ?? "plan-only"
 
-    const architect = yield* ctx.agent.require(AgentName.make("architect"))
+    const architect = yield* ctx.Agent.require(AgentName.make("architect"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.agent.require(callerAgentName)
+    const executor = yield* ctx.Agent.require(callerAgentName)
 
     // Adversarial planning cycle (always runs)
     const synthesizedPlan = yield* runPlanningCycle({
-      ctx,
       architect,
       toolCallId: ctx.toolCallId,
       mode,
@@ -215,10 +212,10 @@ export const PlanTool = tool({
     })
 
     if (mode === "plan-only") {
-      const reviewResult = yield* ctx.interaction.review({
+      const reviewResult = yield* ctx.Interaction.review({
         content: synthesizedPlan,
         title: "Implementation Plan",
-        fileNameSeed: ctx.toolCallId,
+        fileNameSeed: ctx.toolCallId ?? "plan",
       })
 
       const finalPlan =
@@ -247,7 +244,7 @@ export const PlanTool = tool({
     // Fix mode: single cycle — plan + execute. Agent uses @gent/auto for iteration.
     // Executor runs the actual implementation — durable so the user can
     // navigate to the child session via session:// link.
-    const execResult = yield* ctx.agent.run({
+    const execResult = yield* ctx.Agent.run({
       agent: executor,
       prompt: buildExecutePrompt(synthesizedPlan),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),

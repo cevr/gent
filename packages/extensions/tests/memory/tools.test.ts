@@ -15,7 +15,6 @@ import {
   Test as MemoryVaultTest,
   projectKey as projectKeyOf,
 } from "../../src/memory/vault.js"
-import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
@@ -32,20 +31,20 @@ const runMemoryTool = <A, E>(
   effect.pipe(Effect.provide(MemoryVaultTest(tmpDir)))
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-const makeCtx = (cwd: string, home: string): ToolCapabilityContext =>
+const makeCtx = (cwd: string, home: string): ReturnType<typeof testToolContext> =>
   testToolContext({
     sessionId: SessionId.make("019d97c0-0000-7000-0000-000000000000"),
     branchId: BranchId.make("019d97c0-0000-7001-0000-000000000000"),
     toolCallId: ToolCallId.make("tc1"),
     cwd,
     home,
-    agent: {
+    Agent: {
       get: dieStub("get"),
       require: dieStub("require"),
       run: dieStub("run"),
       resolveDualModelPair: dieStub("resolveDualModelPair"),
     },
-    session: {
+    Session: {
       listMessages: dieStub("listMessages"),
       getSession: dieStub("getSession"),
       getDetail: dieStub("getDetail"),
@@ -64,7 +63,7 @@ const makeCtx = (cwd: string, home: string): ToolCapabilityContext =>
       deleteMessages: dieStub("deleteMessages"),
       queueFollowUp: dieStub("queueFollowUp"),
     },
-    interaction: {
+    Interaction: {
       approve: dieStub("approve"),
       present: dieStub("present"),
       confirm: dieStub("confirm"),

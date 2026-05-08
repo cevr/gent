@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   CapabilityError,
-  ExtensionSession,
+  ExtensionContext,
   ExtensionId,
   ModelId,
   action,
@@ -47,8 +47,8 @@ export const ResearchExtension = defineExtension({
       output: Schema.Void,
       execute: (input: string) =>
         Effect.gen(function* () {
-          const session = yield* ExtensionSession
-          yield* session.queueFollowUp({
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.queueFollowUp({
             sourceId: "research-command",
             content:
               input.trim().length > 0

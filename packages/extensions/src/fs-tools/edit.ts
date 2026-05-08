@@ -145,7 +145,7 @@ export const EditTool = tool({
   promptGuidelines: ["Use for partial changes, not full rewrites", "old_string must match exactly"],
   params: EditParams,
   output: EditResult,
-  execute: Effect.fn("EditTool.execute")(function* (params, _ctx) {
+  execute: Effect.fn("EditTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
     const fileLock = yield* FileLockService

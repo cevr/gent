@@ -17,11 +17,12 @@ import {
 } from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import {
+  ExtensionContext,
+  type ExtensionContextService,
   tool,
-  ToolNeeds,
   PermissionRule,
   type SessionId,
-  type ToolCapabilityContext,
+  ToolCallId,
 } from "@gent/core/extensions/api"
 import { OutputBuffer, saveFullOutput } from "@gent/core-internal/domain/output-buffer"
 import { classify } from "./bash-guardrails.js"
@@ -87,7 +88,7 @@ interface BackgroundBashState {
 interface BackgroundBashJob {
   readonly command: string
   readonly cwd: string | undefined
-  readonly ctx: ToolCapabilityContext
+  readonly ctx: ExtensionContextService
 }
 
 /**
@@ -150,13 +151,16 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
     }
   })
 
-const backgroundJobKey = (ctx: ToolCapabilityContext): BackgroundBashJobKey =>
-  `${ctx.sessionId}:${ctx.branchId}:${ctx.toolCallId}`
+const backgroundJobKey = (ctx: ExtensionContextService): BackgroundBashJobKey =>
+  `${ctx.sessionId}:${ctx.branchId}:${ctx.toolCallId ?? "unknown"}`
 
-const backgroundJobKeyFields = (ctx: ToolCapabilityContext): BackgroundBashJobKeyFields => ({
+const backgroundToolCallId = (ctx: ExtensionContextService) =>
+  ctx.toolCallId ?? ToolCallId.make("unknown")
+
+const backgroundJobKeyFields = (ctx: ExtensionContextService): BackgroundBashJobKeyFields => ({
   sessionId: ctx.sessionId,
   branchId: ctx.branchId,
-  toolCallId: ctx.toolCallId,
+  toolCallId: backgroundToolCallId(ctx),
 })
 
 const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey) => {
@@ -167,42 +171,41 @@ const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey)
   return { active, completed } satisfies BackgroundBashState
 }
 
-const targetStillExists = (ctx: ToolCapabilityContext) =>
+const targetStillExists = (job: BackgroundBashJob) =>
   Effect.gen(function* () {
-    const session = yield* ctx.session.getSession().pipe(Effect.orElseSucceed(() => undefined))
+    const session = yield* job.ctx.Session.getSession().pipe(Effect.orElseSucceed(() => undefined))
     if (session === undefined) return false
-    const branches = yield* ctx.session.listBranches().pipe(Effect.orElseSucceed(() => []))
-    return branches.some((branch) => branch.id === ctx.branchId)
+    const branches = yield* job.ctx.Session.listBranches().pipe(Effect.orElseSucceed(() => []))
+    return branches.some((branch) => branch.id === job.ctx.branchId)
   })
 
 const queueBackgroundFollowUp = (params: {
-  readonly ctx: ToolCapabilityContext
+  readonly job: BackgroundBashJob
   readonly sourceId: string
   readonly content: string
 }) =>
   Effect.gen(function* () {
-    if (!(yield* targetStillExists(params.ctx))) return
-    yield* params.ctx.session
-      .queueFollowUp({
-        sourceId: params.sourceId,
-        content: params.content,
-      })
-      .pipe(Effect.catchEager(() => Effect.void))
+    if (!(yield* targetStillExists(params.job))) return
+    yield* params.job.ctx.Session.queueFollowUp({
+      sourceId: params.sourceId,
+      content: params.content,
+    }).pipe(Effect.catchEager(() => Effect.void))
   })
 
-const queueTerminalFollowUp = (ctx: ToolCapabilityContext, state: BackgroundBashTerminalState) => {
+const queueTerminalFollowUp = (job: BackgroundBashJob, state: BackgroundBashTerminalState) => {
+  const ctx = job.ctx
   const command = state.command
   const message = state.message ?? ""
   if (state.status === "completed") {
     const exitCode = state.exitCode ?? 0
     return queueBackgroundFollowUp({
-      ctx,
+      job,
       sourceId: `bash:${ctx.toolCallId}:complete`,
       content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
     })
   }
   return queueBackgroundFollowUp({
-    ctx,
+    job,
     sourceId: `bash:${ctx.toolCallId}:failure`,
     content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
   })
@@ -274,7 +277,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         exitCode: bgResult.exitCode,
         message: outputText,
       })
-      yield* queueTerminalFollowUp(job.ctx, {
+      yield* queueTerminalFollowUp(job, {
         status: "completed",
         command: job.command,
         exitCode: bgResult.exitCode,
@@ -285,7 +288,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const queueFailure = (job: BackgroundBashJob, message: string) =>
       storage.markFailed(backgroundJobKeyFields(job.ctx), message).pipe(
         Effect.andThen(
-          queueTerminalFollowUp(job.ctx, { status: "failed", command: job.command, message }),
+          queueTerminalFollowUp(job, { status: "failed", command: job.command, message }),
         ),
         Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
       )
@@ -303,7 +306,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           })
           if (claim._tag === "AlreadyRunning") return
           if (claim._tag === "Terminal") {
-            yield* queueTerminalFollowUp(job.ctx, claim.state)
+            yield* queueTerminalFollowUp(job, claim.state)
             yield* Ref.update(state, (s) => markJobCompleted(s, key))
             return
           }
@@ -342,7 +345,6 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 
 export const BashTool = tool({
   id: "bash",
-  needs: [ToolNeeds.write("process"), ToolNeeds.write("interaction"), ToolNeeds.write("session")],
   destructive: true,
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
@@ -361,10 +363,8 @@ export const BashTool = tool({
   ],
   params: BashParams,
   output: BashResult,
-  execute: Effect.fn("BashTool.execute")(function* (
-    params: typeof BashParams.Type,
-    ctx: ToolCapabilityContext,
-  ) {
+  execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
+    const ctx = yield* ExtensionContext
     const timeout = Math.min(params.timeout ?? 120000, 600000)
 
     // Strip background operator
@@ -384,7 +384,7 @@ export const BashTool = tool({
     // Guardrail check — ephemeral, not persisted through Permission service
     const risk = classify(command)
     if (risk.level !== "safe") {
-      const decision = yield* ctx.interaction.approve({
+      const decision = yield* ctx.Interaction.approve({
         text: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
         metadata: { type: "bash-guardrail", level: risk.level },
       })

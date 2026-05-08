@@ -3,11 +3,8 @@ import {
   getToolId,
   getToolMetadata,
   type ToolCoreContext,
-  type ToolNeed,
-  type ToolCapabilityContext,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
-import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -47,28 +44,12 @@ interface ToolExecutionProfile {
   readonly publishEvent?: PublishToolEvent
 }
 
+type ToolCapabilityContext = ExtensionHostContext & {
+  readonly toolCallId: ToolCallId
+}
+
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
-type ToolRuntimeContext = ToolCoreContext &
-  Partial<{
-    readonly host: ToolCoreContext["host"] | ExtensionHostContext["host"]
-    readonly agent:
-      | Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair">
-      | ExtensionHostContext.Agent
-    readonly session:
-      | Pick<
-          ExtensionHostContext.SessionFacet,
-          | "listMessages"
-          | "getSession"
-          | "getDetail"
-          | "estimateContextPercent"
-          | "search"
-          | "listBranches"
-          | "getChildSessions"
-          | "getSessionAncestors"
-        >
-      | ExtensionHostContext.SessionFacet
-    readonly interaction: ExtensionHostContext.Interaction
-  }>
+type ToolRuntimeContext = ToolCoreContext
 
 const provideCapabilityContext = <A, E, R>(
   ctx: ToolCoreContext,
@@ -133,79 +114,26 @@ const runPermissionCheck = (params: {
     params.ctx,
   )
 
-const needsTag = (needs: ReadonlyArray<ToolNeed> | undefined, tag: ToolNeed["tag"]): boolean =>
-  needs?.some((need) => need.tag === tag) === true
-
-const needsAccess = (
-  needs: ReadonlyArray<ToolNeed> | undefined,
-  tag: ToolNeed["tag"],
-  access: ToolNeed["access"],
-): boolean => needs?.some((need) => need.tag === tag && need.access === access) === true
-
-const readAgentFacet = (
-  agent: ExtensionHostContext.Agent,
-): Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair"> => ({
-  get: agent.get,
-  require: agent.require,
-  resolveDualModelPair: agent.resolveDualModelPair,
-})
-
-const readSessionFacet = (
-  session: ExtensionHostContext.SessionFacet,
-): Pick<
-  ExtensionHostContext.SessionFacet,
-  | "listMessages"
-  | "getSession"
-  | "getDetail"
-  | "estimateContextPercent"
-  | "search"
-  | "listBranches"
-  | "getChildSessions"
-  | "getSessionAncestors"
-> => ({
-  listMessages: session.listMessages,
-  getSession: session.getSession,
-  getDetail: session.getDetail,
-  estimateContextPercent: session.estimateContextPercent,
-  search: session.search,
-  listBranches: session.listBranches,
-  getChildSessions: session.getChildSessions,
-  getSessionAncestors: session.getSessionAncestors,
-})
-
 const deriveToolContext = (
   ctx: ToolCapabilityContext,
   intent: "read" | "write",
-  needs: ReadonlyArray<ToolNeed> | undefined,
-): ToolRuntimeContext => {
-  const writeAgent = needsAccess(needs, "agent", "write")
-  const writeSession = needsAccess(needs, "session", "write")
-  const writeProcess = needsAccess(needs, "process", "write")
-  return {
-    sessionId: ctx.sessionId,
-    branchId: ctx.branchId,
-    ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-    toolCallId: ctx.toolCallId,
-    cwd: ctx.cwd,
-    home: ctx.home,
-    host: writeProcess ? ctx.host : extensionHostFacts(ctx.host),
-    ...(ctx.capabilityContext !== undefined
-      ? {
-          capabilityContext:
-            intent === "read"
-              ? readOnlyCapabilityContext(ctx.capabilityContext)
-              : ctx.capabilityContext,
-        }
-      : {}),
-    ...(needsTag(needs, "agent")
-      ? { agent: writeAgent ? ctx.agent : readAgentFacet(ctx.agent) }
-      : {}),
-    ...(needsTag(needs, "session")
-      ? { session: writeSession ? ctx.session : readSessionFacet(ctx.session) }
-      : {}),
-    ...(needsAccess(needs, "interaction", "write") ? { interaction: ctx.interaction } : {}),
-  }
-}
+): ToolRuntimeContext => ({
+  sessionId: ctx.sessionId,
+  branchId: ctx.branchId,
+  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+  toolCallId: ctx.toolCallId,
+  cwd: ctx.cwd,
+  home: ctx.home,
+  host: extensionHostFacts(ctx.host),
+  ...(ctx.capabilityContext !== undefined
+    ? {
+        capabilityContext:
+          intent === "read"
+            ? readOnlyCapabilityContext(ctx.capabilityContext)
+            : ctx.capabilityContext,
+      }
+    : {}),
+})
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   Prompt.toolResultPart({
@@ -260,7 +188,7 @@ const makeExecutionToolkit = (params: {
   const metadata = getToolMetadata(params.tool)
   const toolkit = convertTools([params.tool])
   const toolName = String(getToolId(params.tool))
-  const toolCtx = deriveToolContext(params.ctx, metadata.intent, metadata.needs)
+  const toolCtx = deriveToolContext(params.ctx, metadata.intent)
 
   const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
@@ -279,12 +207,10 @@ const makeExecutionToolkit = (params: {
               provideCapabilityContext(
                 toolCtx,
                 metadata.intent,
-                provideCapabilityAccessNeeds(metadata.needs)(
-                  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                  metadata
-                    .effect(decodedInput, toolCtx)
-                    .pipe(Effect.mapError(normalizeToolExecutionError)),
-                ),
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                metadata
+                  .effect(decodedInput, toolCtx)
+                  .pipe(Effect.mapError(normalizeToolExecutionError)),
               ),
             ),
           params.ctx,
@@ -418,8 +344,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               )
               return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
             }
-            const metadata = getToolMetadata(tool)
-
             const executeKnownTool = Effect.gen(function* () {
               const permCheckResult = yield* runPermissionCheck({
                 toolCall,
@@ -465,11 +389,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return yield* terminalToolResult(executionToolkit, toolCall)
             })
 
-            const scopedExecute =
-              profileOverride?.resourceManager?.withNeeds(metadata.needs ?? [], executeKnownTool) ??
-              executeKnownTool
-
-            const executeResult = yield* scopedExecute.pipe(Effect.result)
+            const executeResult = yield* executeKnownTool.pipe(Effect.result)
 
             if (executeResult._tag === "Failure") {
               const failure: unknown = executeResult.failure

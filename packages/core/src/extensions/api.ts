@@ -63,15 +63,8 @@ import type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 
 // ── Re-exports for extension authors ──
 
-// `ToolCapabilityContext` (re-exported via the second `domain/capability/tool`
-// block below) is the execution context passed to a tool's `execute(...)` body
-// — the wide host context with `toolCallId` narrowed to required.
-export {
-  ToolNeeds,
-  type ToolNeed,
-  type ToolNeedAccess,
-  type ToolNeedTag,
-} from "../domain/capability/tool.js"
+// Tool execution receives params only; host authority is imported through the
+// constrained `ExtensionContext` service.
 export {
   defineAgent,
   AgentDefinition,
@@ -181,8 +174,6 @@ export {
 export {
   getToolId,
   tool,
-  type ToolCoreContext,
-  type ToolCapabilityContext,
   type GentToolMetadata,
   type ToolInput,
   type ToolCapability,
@@ -203,7 +194,6 @@ export {
 export type {
   CapabilityContext,
   CapabilityCoreContext,
-  ModelCapabilityContext,
   CapabilityRef,
 } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
@@ -217,13 +207,9 @@ export type {
 export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/projection-error.js"
 export {
-  ExtensionAgent,
-  ExtensionInteraction,
+  ExtensionContext,
   ExtensionServiceError,
-  ExtensionSession,
-  type ExtensionAgentService,
-  type ExtensionInteractionService,
-  type ExtensionSessionService,
+  type ExtensionContextService,
 } from "../domain/extension-services.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only

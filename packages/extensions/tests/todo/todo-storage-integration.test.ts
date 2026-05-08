@@ -8,7 +8,6 @@ import { TodoStorage, TodoStorageError, TodoStorageReadOnly } from "../../src/to
 import { dateFromMillis, Session, Branch } from "@gent/core-internal/domain/message"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Todo, TodoId, TodoTransitionError } from "../../src/todo/domain.js"
-import { capabilityAccessNeedsLayer } from "@gent/core-internal/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
@@ -16,11 +15,7 @@ const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 // TodoStorage.Live consumes SqlClient, so we provide TestWithSql to it.
 const baseLayer = SqliteStorage.TestWithSql()
 const todoStorageLayer = Layer.provide(TodoStorage.Live, baseLayer)
-const testLayer = Layer.mergeAll(
-  baseLayer,
-  todoStorageLayer,
-  capabilityAccessNeedsLayer([{ tag: "todo", access: "write" }]),
-)
+const testLayer = Layer.mergeAll(baseLayer, todoStorageLayer)
 
 const test = it.live.layer(testLayer)
 
