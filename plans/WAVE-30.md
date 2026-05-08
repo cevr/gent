@@ -529,6 +529,8 @@ boundary.
 
 ## Commit 9: build(effect-wide-event): make effect peer-only
 
+**Status**: Completed in current batch.
+
 **Justification**: Owned Effect libraries should not risk duplicate Effect
 identity. `effect-wide-event` should match `effect-machine` and
 `effect-encore`.
@@ -541,15 +543,18 @@ identity. `effect-wide-event` should match `effect-machine` and
 
 **Changes**
 
-| File                                                           | Change                                                      |
-| -------------------------------------------------------------- | ----------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/effect-wide-event/package.json` | Move `effect` out of runtime dependencies if still present. |
-| `/Users/cvr/Developer/personal/gent/bun.lock`                  | Refresh lock after upstream package change.                 |
+| File                                                                           | Change                                                                                                 |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/Developer/personal/effect-wide-event/package.json`                 | Moved `effect` from runtime dependencies to dev dependencies while keeping it peer-only for consumers. |
+| `/Users/cvr/Developer/personal/effect-wide-event/README.md`                    | Documented peer-only Effect installation and development contract.                                     |
+| `/Users/cvr/Developer/personal/effect-wide-event/.changeset/soft-boxes-tap.md` | Added patch changeset for the peer-only runtime identity fix.                                          |
+| `/Users/cvr/Developer/personal/gent/bun.lock`                                  | Refreshed local file dependency metadata after upstream package change.                                |
 
 **Verification**
 
-- Upstream `effect-wide-event` gate.
-- Gent install/lock refresh.
+- Upstream `bun run gate`.
+- Gent `bun install`.
+- Gent `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/wide-event-boundary.test.ts packages/core/tests/runtime/session-runtime-context.test.ts`
 - Gent `bun run gate`.
 
 ## Commit 10: feat(effect-encore): absorb actor activation ceremony
