@@ -715,8 +715,12 @@ generic tool names is duplicated registry work.
 
 ## Commit 20: refactor(extensions): share compatible provider driver setup
 
-**Justification**: OpenAI-compatible providers repeat the same env/hint/auth
-and client-layer setup. One helper should own the common driver shape.
+**Status**: Current code already satisfies this lane. Google and Mistral are
+constructed through the shared OpenAI-compatible helper, and there are no
+separate `src/google` or `src/mistral` provider files left to migrate.
+
+**Justification**: OpenAI-compatible providers should share env/hint/auth and
+client-layer setup. One helper owns the common driver shape.
 
 **Principles**
 
@@ -727,12 +731,11 @@ and client-layer setup. One helper should own the common driver shape.
 
 **Changes**
 
-| File                                                                          | Change                                         | Lines    |
-| ----------------------------------------------------------------------------- | ---------------------------------------------- | -------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/index.ts`  | Extract/share compat driver setup.             | `47-88`  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/google/index.ts`  | Use shared compat setup.                       | `1-67`   |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/mistral/index.ts` | Use shared compat setup.                       | `1-67`   |
-| Provider tests                                                                | Preserve OpenAI/Google/Mistral setup behavior. | multiple |
+| File                                                                                     | Evidence                                                                                      | Lines              |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai-compatible-driver.ts` | `makeApiKeyCompatDriver` and `makeApiKeyCompatExtension` own Google/Mistral compatible setup. | `52-123`           |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/index.ts`             | OpenAI API-key path reuses `makeOpenAiCompatResolution` while OAuth remains OpenAI-specific.  | `58-66`, `148-154` |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                    | Builtins import `GoogleExtension` / `MistralExtension` from the shared helper module.         | `12`, `69-70`      |
 
 **Verification**
 
@@ -742,6 +745,10 @@ and client-layer setup. One helper should own the common driver shape.
 - `bun run gate`
 
 ## Commit 21: refactor(extensions): drop unsupported bedrock builtin
+
+**Status**: Current code already satisfies the deletion lane. The git-tracked
+Bedrock source and dependency are gone; only an empty local directory remained
+and was removed during this pass.
 
 **Justification**: A builtin that exists only to throw unsupported is not a
 starting extension set; it is a fake API promise.
@@ -755,11 +762,11 @@ starting extension set; it is a fake API promise.
 
 **Changes**
 
-| File                                                                          | Change                                                       | Lines         |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/bedrock/index.ts` | Delete unsupported provider.                                 | `8-27`        |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`         | Remove Bedrock registration/export.                          | `13`, `80-84` |
-| `/Users/cvr/Developer/personal/gent/package.json`                             | Remove unused Bedrock dependency if no other import remains. | `47-56`       |
+| Evidence                                                                                | Result                                                                             |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `git ls-files packages/extensions/src/bedrock`                                          | No tracked Bedrock provider remains.                                               |
+| `rg -n "bedrock\|Bedrock\|@aws-sdk\|@ai-sdk/amazon-bedrock" packages apps package.json` | No provider/dependency references remain; only principle prose mentions "bedrock". |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                   | Builtins list excludes Bedrock.                                                    |
 
 **Verification**
 
