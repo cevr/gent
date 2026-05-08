@@ -1,9 +1,9 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { ToolCallId } from "@gent/core-internal/domain/ids.js"
+import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
 import { extractText } from "@gent/sdk"
 import { toTestFailure, transportCases, waitFor } from "./transport-harness-boundary"
-import { createTempDirFixture } from "./seam-fixture"
 
 const makeSecondaryA = createTempDirFixture("gent-secondary-A-")
 const makeSecondaryB = createTempDirFixture("gent-secondary-B-")

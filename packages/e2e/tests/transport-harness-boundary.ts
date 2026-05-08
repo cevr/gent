@@ -13,7 +13,7 @@ import type { StorageError } from "@gent/core-internal/storage/sqlite-storage.js
 import { AllBuiltinAgents } from "../../extensions/src/all-agents.js"
 import { GitReader } from "../../extensions/src/librarian/index.js"
 import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
-export { waitFor } from "./seam-fixture"
+export { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 export class TestFailure extends Schema.TaggedErrorClass<TestFailure>()(
   "@gent/e2e/tests/TestFailure",
