@@ -88,26 +88,6 @@ const renderBash: HeadlessToolRenderer = (toolCall) => {
 
 export const BUILTIN_HEADLESS_TOOL_RENDERERS: ReadonlyArray<HeadlessToolRendererEntry> = [
   { toolNames: ["bash"], render: renderBash },
-  {
-    toolNames: [
-      "read",
-      "edit",
-      "write",
-      "grep",
-      "glob",
-      "webfetch",
-      "delegate",
-      "review",
-      "counsel",
-      "research",
-      "search_sessions",
-      "read_session",
-      "skills",
-      "repo",
-      "handoff",
-    ],
-    render: renderGeneric,
-  },
 ]
 
 export const resolveHeadlessToolRenderers = (
