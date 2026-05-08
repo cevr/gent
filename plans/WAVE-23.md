@@ -568,28 +568,32 @@ Validation:
 
 ### W23.10 — Recursive Verification
 
-Status: planned.
+Status: blocked; Wave 24 required.
 
 Work:
 
-- Launch independent verification agents against the original six lanes:
+- Launched independent verification agents against the original six lanes:
   Effect/AI/STM, actor/durability, architecture/platform, extension authority,
   tests/guardrails, upstream owned library DX.
-- Use `~/.brain/principles`,
+- Used `~/.brain/principles`,
   `/Users/cvr/.cache/repo/effect-ts/effect-smol`,
   `/Users/cvr/.cache/repo/badlogic/pi-mono`,
   `/Users/cvr/.cache/repo/anomalyco/opencode`,
   `/Users/cvr/Developer/personal/effect-machine`,
   `/Users/cvr/Developer/personal/effect-encore`, and
   `/Users/cvr/Developer/personal/effect-wide-event`.
-- If any P0/P1 remains, synthesize Wave 24 and continue.
+- Effect/AI/STM, extension authority, and upstream owned library lanes found no
+  P0/P1.
+- Architecture/platform/composition, tests/guardrails, and actor/durability
+  found P1 blockers. See `plans/WAVE-24.md`.
 
 Validation:
 
-- No P0/P1 findings.
-- `bun run gate`
-- `bun run test:e2e`
-- `bun run smoke`
+- W23 cannot close; no P0s, but P1s remain.
+- `bun run test` attempted during W23.9 validation and still hit the known Bun
+  1.3.13 signal-5 crash in the concurrent core xargs shard.
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests`
+  passed `893 pass, 0 fail`.
 
 ## P2 Upstream DX Queue
 
