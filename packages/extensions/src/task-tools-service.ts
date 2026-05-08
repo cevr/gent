@@ -7,13 +7,7 @@ import {
   type BranchId,
   requireCapabilityWrite,
 } from "@gent/core/extensions/api"
-import {
-  Task,
-  TaskId,
-  TaskTransitionError,
-  isValidTaskTransition,
-  type TaskStatus,
-} from "./task-tools/domain.js"
+import { Task, TaskId, type TaskStatus, type TaskTransitionError } from "./task-tools/domain.js"
 import { TaskStorage, type TaskStorageError } from "./task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
@@ -126,11 +120,9 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
           message: "TaskStorage not available — @gent/task-tools is disabled",
         }),
       ),
-    // @effect-diagnostics-next-line effectSucceedWithVoid:off
-    get: () => Effect.succeed<Task | undefined>(undefined),
+    get: () => Effect.sync((): Task | undefined => undefined),
     list: () => Effect.succeed<ReadonlyArray<Task>>([]),
-    // @effect-diagnostics-next-line effectSucceedWithVoid:off
-    update: () => Effect.succeed<Task | undefined>(undefined),
+    update: () => Effect.sync((): Task | undefined => undefined),
     remove: () => Effect.void,
     addDep: () => Effect.void,
     removeDep: () => Effect.void,
@@ -193,16 +185,6 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
         if (Option.isNone(storageOption)) return yield* TaskService.Noop.update(id, fields)
         const storage = storageOption.value
         const extensionState = yield* ExtensionStatePublisher
-        if (fields.status !== undefined) {
-          const existing = yield* storage.getTask(id)
-          if (existing !== undefined && !isValidTaskTransition(existing.status, fields.status)) {
-            return yield* new TaskTransitionError({
-              message: `Invalid task transition: ${existing.status} → ${fields.status}`,
-              from: existing.status,
-              to: fields.status,
-            })
-          }
-        }
         const updated = yield* storage.updateTask(id, fields)
         if (updated !== undefined && fields.status !== undefined) {
           yield* extensionState

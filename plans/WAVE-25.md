@@ -181,7 +181,7 @@ claims.
 
 ### W25.4 — Recursive Verification
 
-Status: in progress.
+Status: found Wave 26 blockers.
 
 **Justification**: The wave is not done until fresh verification finds no P0/P1.
 
@@ -205,3 +205,7 @@ Status: in progress.
 - `bun run smoke` — pass, headless TUI returned `Hey, what's up?`.
 - `bun run test:e2e` — `@gent/tui` 24 pass, `@gent/e2e` 36 pass.
 - `bun run test` — pass.
+- Fresh verification found extension-owned P1 blockers in task terminal
+  transition atomicity, bash failure terminal durability, and helper fixture
+  strictness.
+- Synthesized `/Users/cvr/Developer/personal/gent/plans/WAVE-26.md`.

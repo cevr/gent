@@ -394,12 +394,20 @@ Other notes:
 
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
-- Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
-- Task UI reads through typed task RPC and refetches from direct session events (`TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskFailed`, `TaskStopped`, `TaskDeleted`).
-- task mutation flows through the extension boundary as typed Capability contributions (`intent: "write"`)
-- `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
-- Core `dependencies.ts` receives `TaskService` through the extension layer graph.
-- Event-publisher persists and broadcasts session events only. Client widgets read state via typed RPC + typed events on the normal transport stream.
+- Provided by `@gent/task-tools` as a process resource layer
+  (`TaskStorage.Live + TaskService.Live`).
+- Task mutation flows through typed extension request capabilities
+  (`intent: "write"`) and extension tools yield `TaskService` from their own
+  extension runtime.
+- Task UI reads through typed extension RPC and refetches when
+  `@gent/task-tools` emits an `ExtensionStateChanged` pulse on the normal
+  session stream.
+- Core has no product task domain. Core `MachineTaskSucceeded` /
+  `MachineTaskFailed` events are runtime/tool telemetry and stay filtered from
+  public transport.
+- Event-publisher persists and broadcasts session events only. Client widgets
+  read state via typed RPC plus transport events; they do not consume a core
+  task service or privileged builtin API.
 
 ### TUI Extensions
 

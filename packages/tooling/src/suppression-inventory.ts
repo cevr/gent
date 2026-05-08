@@ -375,18 +375,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line preferSchemaOverJson:off",
   },
-  {
-    file: "packages/extensions/src/task-tools-service.ts",
-    line: 129,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line effectSucceedWithVoid:off",
-  },
-  {
-    file: "packages/extensions/src/task-tools-service.ts",
-    line: 132,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line effectSucceedWithVoid:off",
-  },
 ]
 
 const approvedSuppression = (

@@ -2,7 +2,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { Clock, Deferred, Effect, Exit, Layer, Path, Scope } from "effect"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BackgroundBashSupervisorLive, BashTool } from "../../src/exec-tools/bash.js"
-import { BackgroundBashStorage } from "../../src/exec-tools/bash-storage.js"
+import {
+  BackgroundBashStorage,
+  BackgroundBashStorageError,
+} from "../../src/exec-tools/bash-storage.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
@@ -19,6 +22,30 @@ const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   )
   return BackgroundBashSupervisorLive.pipe(
     Layer.provideMerge(BackgroundBashStorage.Live),
+    Layer.provideMerge(base),
+  )
+}
+
+const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A, E>) => {
+  const base = Layer.mergeAll(
+    storageLayer,
+    BunFileSystem.layer,
+    Path.layer,
+    BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+  const failingStorage = Layer.effect(
+    BackgroundBashStorage,
+    Effect.gen(function* () {
+      const storage = yield* BackgroundBashStorage
+      return {
+        ...storage,
+        markFailed: () =>
+          Effect.fail(new BackgroundBashStorageError({ message: "failure state did not commit" })),
+      }
+    }),
+  ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
+  return BackgroundBashSupervisorLive.pipe(
+    Layer.provideMerge(failingStorage),
     Layer.provideMerge(base),
   )
 }
@@ -314,7 +341,14 @@ describe("BashTool execution", () => {
               { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
               { exitCode: 0, message: "stored output" },
             )
-          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                storageLayer,
+                BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+              ),
+            ),
+          )
 
           const retried = yield* getToolEffect(BashTool)(
             { command: "printf should-not-run", run_in_background: true },
@@ -328,6 +362,62 @@ describe("BashTool execution", () => {
           expect(message.content).toContain("$ printf stored-terminal")
           expect(message.content).toContain("stored output")
           expect(message.content).not.toContain("should-not-run")
+        }),
+      ),
+    processTestTimeout,
+  )
+
+  it.live(
+    "failed background job does not notify before failure state is durable",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+          const toolCallId = ToolCallId.make("tc-failed-terminal-durability")
+          const ctx: ToolCapabilityContext = {
+            ...stubCtx,
+            toolCallId,
+            session: {
+              ...stubCtx.session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: () =>
+                Effect.succeed([
+                  new Branch({
+                    id: stubCtx.branchId,
+                    sessionId: stubCtx.sessionId,
+                    createdAt: now,
+                  }),
+                ]),
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+          const millis = yield* Clock.currentTimeMillis
+          const storageLayer = SqliteStorage.LiveWithSql(
+            `/tmp/gent-background-bash-failure-${millis}.db`,
+          ).pipe(Layer.provide(BunServices.layer))
+
+          const result = yield* getToolEffect(BashTool)(
+            {
+              command: "printf should-not-run",
+              cwd: "/tmp/gent-missing-cwd",
+              run_in_background: true,
+            },
+            ctx,
+          ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+          expect(result.exitCode).toBe(0)
+
+          const followUp = yield* Effect.exit(
+            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
+          )
+          expect(followUp._tag).toBe("Failure")
         }),
       ),
     processTestTimeout,

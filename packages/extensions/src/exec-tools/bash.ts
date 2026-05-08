@@ -285,10 +285,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 
     const queueFailure = (job: BackgroundBashJob, message: string) =>
       storage.markFailed(backgroundJobKeyFields(job.ctx), message).pipe(
-        Effect.catchEager(() => Effect.void),
         Effect.andThen(
           queueTerminalFollowUp(job.ctx, { status: "failed", command: job.command, message }),
         ),
+        Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
       )
 
     const start = (job: BackgroundBashJob) =>

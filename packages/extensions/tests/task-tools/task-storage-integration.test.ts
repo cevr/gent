@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
@@ -7,7 +7,7 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "../../src/task-tools-storage.js"
 import { dateFromMillis, Session, Branch } from "@gent/core-internal/domain/message"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { Task, TaskId } from "../../src/task-tools/domain.js"
+import { Task, TaskId, TaskTransitionError } from "../../src/task-tools/domain.js"
 import { capabilityAccessNeedsLayer } from "@gent/core-internal/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
@@ -107,6 +107,20 @@ describe("Task Storage", () => {
       const updated = yield* storage.updateTask(TaskId.make("t1"), { status: "in_progress" })
       expect(updated).toBeDefined()
       expect(updated!.status).toBe("in_progress")
+    }))
+
+  test("updateTask rejects terminal status transitions at the write boundary", () =>
+    Effect.gen(function* () {
+      const { storage } = yield* setup
+      yield* storage.createTask(makeTask("t1", { status: "stopped" }))
+
+      const error = yield* storage
+        .updateTask(TaskId.make("t1"), { status: "completed" })
+        .pipe(Effect.flip)
+      const stored = yield* storage.getTask(TaskId.make("t1"))
+
+      expect(Schema.is(TaskTransitionError)(error)).toBe(true)
+      expect(stored?.status).toBe("stopped")
     }))
 
   test("updateTask returns undefined for missing", () =>

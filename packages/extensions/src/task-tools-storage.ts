@@ -20,7 +20,13 @@ import {
   type ReadOnly,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
-import { Task, TaskStatus, type TaskId } from "./task-tools/domain.js"
+import {
+  Task,
+  TaskStatus,
+  TaskTransitionError,
+  isValidTaskTransition,
+  type TaskId,
+} from "./task-tools/domain.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
 export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
@@ -70,6 +76,9 @@ const requireTaskWrite = (operation: string) =>
 
 const mapWriteError = (message: string) => (e: unknown) =>
   Schema.is(CapabilityError)(e) ? e : mapError(message)(e)
+
+const mapUpdateError = (message: string) => (e: unknown) =>
+  Schema.is(CapabilityError)(e) || Schema.is(TaskTransitionError)(e) ? e : mapError(message)(e)
 
 const decodeTaskMetadata = (metadata: string | null) =>
   metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
@@ -218,12 +227,12 @@ export interface TaskStorageService extends TaskStorageReadOnlyService {
   readonly updateTask: (
     id: TaskId,
     fields: Partial<{
-      status: string
+      status: TaskStatus
       description: string | null
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskStorageError | CapabilityError>
+  ) => Effect.Effect<Task | undefined, TaskStorageError | CapabilityError | TaskTransitionError>
   readonly deleteTask: (id: TaskId) => Effect.Effect<void, TaskStorageError | CapabilityError>
   readonly addTaskDep: (
     taskId: TaskId,
@@ -339,11 +348,6 @@ const makeTaskStorageService: Effect.Effect<
       function* (id, fields) {
         yield* requireTaskWrite("TaskStorage.updateTask")
         const now = yield* Clock.currentTimeMillis
-        if (fields.status !== undefined && !isTaskStatus(fields.status)) {
-          return yield* new TaskStorageError({
-            message: `Invalid task status: ${fields.status}`,
-          })
-        }
 
         const updates: Record<string, string | number | null> = {
           updated_at: now,
@@ -367,12 +371,24 @@ const makeTaskStorageService: Effect.Effect<
 
         return yield* sql.withTransaction(
           Effect.gen(function* () {
+            const existing = yield* selectTaskById(sql, id)
+            if (existing === undefined) return undefined
+            if (
+              fields.status !== undefined &&
+              !isValidTaskTransition(existing.status, fields.status)
+            ) {
+              return yield* new TaskTransitionError({
+                message: `Invalid task transition: ${existing.status} → ${fields.status}`,
+                from: existing.status,
+                to: fields.status,
+              })
+            }
             yield* sql`UPDATE tasks SET ${sql.update(updates)} WHERE id = ${id}`
             return yield* selectTaskById(sql, id)
           }),
         )
       },
-      Effect.mapError(mapWriteError("Failed to update task")),
+      Effect.mapError(mapUpdateError("Failed to update task")),
     ),
 
     deleteTask: Effect.fn("TaskStorage.deleteTask")(
