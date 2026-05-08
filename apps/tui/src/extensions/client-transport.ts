@@ -150,7 +150,6 @@ const requestExtensionAt = <Input, Output>(
             sessionId: session.sessionId,
             extensionId: ref.extensionId,
             capabilityId: ref.capabilityId,
-            intent: ref.intent,
             input,
             branchId: session.branchId,
           }),

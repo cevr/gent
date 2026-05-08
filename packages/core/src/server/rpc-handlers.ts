@@ -505,7 +505,6 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     sessionId,
     extensionId,
     capabilityId,
-    intent,
     input,
     branchId,
   }: ExtensionRpcRequestInput) =>
@@ -548,22 +547,15 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         hostDeps,
       )
       const rpcRegistry = registry.getResolved().rpcRegistry
-      const request = rpcRegistry
-        .run(extensionId, RpcId.make(capabilityId), input, hostCtx, { intent })
-        .pipe(
-          Effect.mapError((error) =>
-            extensionRequestError({
-              extensionId,
-              capabilityId,
-              message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
-            }),
-          ),
-        )
-      if (intent === "read") {
-        return yield* request.pipe(
-          Effect.updateContext((current: Context.Context<never>) => capabilityContext ?? current),
-        )
-      }
+      const request = rpcRegistry.run(extensionId, RpcId.make(capabilityId), input, hostCtx).pipe(
+        Effect.mapError((error) =>
+          extensionRequestError({
+            extensionId,
+            capabilityId,
+            message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
+          }),
+        ),
+      )
       return yield* capabilityContext !== undefined
         ? request.pipe(Effect.provideContext(capabilityContext))
         : request
@@ -582,7 +574,6 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
             keybind: command.keybind,
             extensionId: command.extensionId,
             capabilityId: command.capabilityId,
-            intent: command.intent,
           }),
       )
     }),

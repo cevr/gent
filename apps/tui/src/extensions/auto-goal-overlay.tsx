@@ -35,7 +35,6 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
         sessionId: sid,
         extensionId: startRef.extensionId,
         capabilityId: startRef.capabilityId,
-        intent: startRef.intent,
         input: { goal: text },
         branchId: bid,
       }),

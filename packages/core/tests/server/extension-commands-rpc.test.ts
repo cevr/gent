@@ -57,7 +57,6 @@ describe("extension command RPCs", () => {
           request({
             id: "greet",
             extensionId: ExtensionId.make("@test/commands"),
-            intent: "write",
             slash: { name: "greet", description: "Say hello" },
             description: "Say hello",
             input: Schema.String,
@@ -122,7 +121,6 @@ describe("extension command RPCs", () => {
         request({
           id: commandId,
           extensionId: ExtensionId.make(extensionId),
-          intent: "write",
           slash: { name: commandId, description: commandId },
           input: Schema.String,
           output: Schema.Void,
@@ -165,12 +163,10 @@ describe("extension command RPCs", () => {
             expect(greet?.description).toBe("Say hello")
             expect(greet?.extensionId).toBe(ExtensionId.make("@test/commands"))
             expect(greet?.capabilityId).toBe("greet")
-            expect(greet?.intent).toBe("write")
             yield* client.extension.request({
               sessionId,
               extensionId: greet!.extensionId,
               capabilityId: greet!.capabilityId,
-              intent: greet!.intent,
               input: "rpc-world",
               branchId,
             })
@@ -198,7 +194,6 @@ describe("extension command RPCs", () => {
             request({
               id: "queue-follow-up",
               extensionId,
-              intent: "write",
               input: Schema.String,
               output: Schema.Void,
               execute: (input) =>
@@ -234,7 +229,6 @@ describe("extension command RPCs", () => {
               branchId,
               extensionId,
               capabilityId: "queue-follow-up",
-              intent: "write",
               input: "queued through public rpc",
             })
             const queue = yield* client.queue.get({ sessionId, branchId })
@@ -302,7 +296,6 @@ describe("extension command RPCs", () => {
               branchId,
               extensionId,
               capabilityId: "queue-follow-up-action",
-              intent: "write",
               input: "queued through slash action",
             })
             const queue = yield* client.queue.get({ sessionId, branchId })
@@ -334,7 +327,6 @@ describe("extension command RPCs", () => {
                 sessionId: SessionId.make("missing-extension-request-session"),
                 extensionId: ExtensionId.make("@test/commands"),
                 capabilityId: "greet",
-                intent: "write",
                 input: "should-not-run",
                 branchId: BranchId.make("missing-extension-request-branch"),
               }),
@@ -370,7 +362,6 @@ describe("extension command RPCs", () => {
                 sessionId,
                 extensionId: ExtensionId.make("@test/commands"),
                 capabilityId: "greet",
-                intent: "write",
                 input: "should-not-run",
                 branchId: BranchId.make("missing-extension-request-branch"),
               }),
@@ -409,7 +400,6 @@ describe("extension command RPCs", () => {
               sessionId: first.sessionId,
               extensionId: ExtensionId.make("@test/commands"),
               capabilityId: "greet",
-              intent: "write",
               input: "wrong-branch",
               branchId: second.branchId,
             }),
@@ -447,7 +437,6 @@ describe("extension command RPCs", () => {
             request({
               id: "read-profile-token",
               extensionId: ExtensionId.make("@test/profile-service-request") as ExtensionId,
-              intent: "write",
               input: Schema.String,
               output: Schema.String,
               execute: () =>
@@ -478,7 +467,6 @@ describe("extension command RPCs", () => {
               sessionId,
               extensionId: ExtensionId.make("@test/profile-service-request"),
               capabilityId: "read-profile-token",
-              intent: "write",
               input: "token",
               branchId,
             })
@@ -510,7 +498,6 @@ describe("extension command RPCs", () => {
               request({
                 id: "read-live-profile-token",
                 extensionId: ExtensionId.make("@test/live-profile-service-request") as ExtensionId,
-                intent: "write",
                 input: Schema.String,
                 output: Schema.String,
                 execute: () =>
@@ -545,7 +532,6 @@ describe("extension command RPCs", () => {
             sessionId,
             extensionId: ExtensionId.make("@test/live-profile-service-request"),
             capabilityId: "read-live-profile-token",
-            intent: "write",
             input: "token",
             branchId,
           })
@@ -681,7 +667,6 @@ describe("extension command RPCs", () => {
             request({
               id: "fork-current-branch",
               extensionId,
-              intent: "write",
               input: Schema.String,
               output: Schema.String,
               execute: (messageId) =>
@@ -699,7 +684,6 @@ describe("extension command RPCs", () => {
             request({
               id: "create-temporary-branch",
               extensionId,
-              intent: "write",
               input: Schema.Void,
               output: Schema.String,
               execute: () =>
@@ -716,7 +700,6 @@ describe("extension command RPCs", () => {
             request({
               id: "delete-branch",
               extensionId,
-              intent: "write",
               input: Schema.String,
               output: Schema.Void,
               execute: (branchId) =>
@@ -730,7 +713,6 @@ describe("extension command RPCs", () => {
             request({
               id: "delete-messages-after",
               extensionId,
-              intent: "write",
               input: Schema.String,
               output: Schema.Void,
               execute: (messageId) =>
@@ -788,7 +770,6 @@ describe("extension command RPCs", () => {
               branchId,
               extensionId,
               capabilityId: "fork-current-branch",
-              intent: "write",
               input: userMessage.id,
             }),
           )
@@ -809,7 +790,6 @@ describe("extension command RPCs", () => {
               branchId,
               extensionId,
               capabilityId: "create-temporary-branch",
-              intent: "write",
               input: undefined,
             }),
           )
@@ -821,7 +801,6 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "delete-branch",
-            intent: "write",
             input: temporaryBranchId,
           })
           expect(
@@ -833,7 +812,6 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "delete-messages-after",
-            intent: "write",
             input: userMessage.id,
           })
           const truncatedSnapshot = yield* client.session.getSnapshot({ sessionId, branchId })
@@ -854,7 +832,6 @@ describe("extension command RPCs", () => {
             request({
               id: "visible",
               extensionId,
-              intent: "write",
               slash: { name: "visible", description: "visible" },
               input: Schema.String,
               output: Schema.Void,
@@ -898,7 +875,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("read RPC handlers receive read-intent ExtensionContext authority", () =>
+  it.live("RPC handlers receive ExtensionContext authority without intent ceremony", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/read-context")
       const ext: GentExtension = {
@@ -909,15 +886,14 @@ describe("extension command RPCs", () => {
               request({
                 id: "inspect",
                 extensionId,
-                intent: "read",
                 input: Schema.Void,
                 output: Schema.Struct({
                   hasSessionMutations: Schema.Boolean,
                   hasAgentRun: Schema.Boolean,
                   profileStorageAvailable: Schema.Boolean,
-                  extensionContextProcessDenied: Schema.Boolean,
-                  extensionContextFollowUpDenied: Schema.Boolean,
-                  extensionContextParentEnvEmpty: Schema.Boolean,
+                  extensionContextProcessAvailable: Schema.Boolean,
+                  extensionContextFollowUpQueued: Schema.Boolean,
+                  extensionContextParentEnvIsObject: Schema.Boolean,
                 }),
                 execute: () =>
                   narrowR(
@@ -929,18 +905,18 @@ describe("extension command RPCs", () => {
                       )
                       const followUpExit = yield* Effect.exit(
                         extensionCtx.Session.queueFollowUp({
-                          sourceId: "read-rpc",
-                          content: "nope",
+                          sourceId: "rpc",
+                          content: "queued",
                         }),
                       )
                       return {
                         hasSessionMutations: false,
                         hasAgentRun: false,
                         profileStorageAvailable: Option.isSome(todoStorage),
-                        extensionContextProcessDenied: Exit.isFailure(processExit),
-                        extensionContextFollowUpDenied: Exit.isFailure(followUpExit),
-                        extensionContextParentEnvEmpty:
-                          Object.keys(extensionCtx.Process.parentEnv).length === 0,
+                        extensionContextProcessAvailable: Exit.isSuccess(processExit),
+                        extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
+                        extensionContextParentEnvIsObject:
+                          typeof extensionCtx.Process.parentEnv === "object",
                       }
                     }),
                   ),
@@ -962,16 +938,15 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "inspect",
-            intent: "read",
             input: undefined,
           })
           expect(result).toEqual({
             hasSessionMutations: false,
             hasAgentRun: false,
             profileStorageAvailable: true,
-            extensionContextProcessDenied: true,
-            extensionContextFollowUpDenied: true,
-            extensionContextParentEnvEmpty: true,
+            extensionContextProcessAvailable: true,
+            extensionContextFollowUpQueued: true,
+            extensionContextParentEnvIsObject: true,
           })
         }).pipe(Effect.timeout("4 seconds")),
       )
@@ -1014,7 +989,6 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "shadowed",
-            intent: "write",
             input: { value: "hi" },
           })
           expect(result).toEqual({ value: "hi" })
@@ -1034,7 +1008,6 @@ describe("extension command RPCs", () => {
             request({
               id: "shadowed",
               extensionId,
-              intent: "write",
               slash: { name: "shadowed", description: "shadowed" },
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),
@@ -1052,7 +1025,6 @@ describe("extension command RPCs", () => {
             request({
               id: "shadowed",
               extensionId,
-              intent: "write",
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),
               execute: (input) => Effect.succeed({ value: input.value }),
@@ -1087,7 +1059,6 @@ describe("extension command RPCs", () => {
             request({
               id: "shadowed",
               extensionId,
-              intent: "write",
               slash: { name: "shadowed", description: "shadowed" },
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),

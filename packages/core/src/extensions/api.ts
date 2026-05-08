@@ -189,9 +189,8 @@ export {
 export {
   ref,
   request,
-  type ReadRequestInput,
+  type RequestInput,
   type RequestCapability,
-  type WriteRequestInput,
 } from "../domain/capability/request.js"
 export {
   action,

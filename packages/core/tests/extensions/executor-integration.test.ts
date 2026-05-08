@@ -433,7 +433,6 @@ describe("Executor runtime lifecycle", () => {
               branchId: createdBranchId,
               extensionId: EXECUTOR_EXTENSION_ID,
               capabilityId: "executor-start",
-              intent: "write",
               input: "",
             })
             const ready = (yield* waitFor(
@@ -442,7 +441,6 @@ describe("Executor runtime lifecycle", () => {
                 branchId: createdBranchId,
                 extensionId: EXECUTOR_EXTENSION_ID,
                 capabilityId: "executor.snapshot",
-                intent: "read",
                 input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "ready",
@@ -455,7 +453,6 @@ describe("Executor runtime lifecycle", () => {
               branchId: createdBranchId,
               extensionId: EXECUTOR_EXTENSION_ID,
               capabilityId: "executor-stop",
-              intent: "write",
               input: "",
             })
             const idle = (yield* waitFor(
@@ -464,7 +461,6 @@ describe("Executor runtime lifecycle", () => {
                 branchId: createdBranchId,
                 extensionId: EXECUTOR_EXTENSION_ID,
                 capabilityId: "executor.snapshot",
-                intent: "read",
                 input: {},
               }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
               (snapshot) => snapshot.status === "idle",

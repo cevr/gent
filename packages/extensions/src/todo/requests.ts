@@ -1,6 +1,6 @@
 /**
  * Todo requests — typed request Capabilities authored through the
- * unified `request({ intent, ... })` factory.
+ * unified `request({...})` factory.
  *
  * Requests yield the smallest extension-owned service they need. Host
  * authority comes from `ExtensionContext`.
@@ -29,7 +29,6 @@ export const TodoGetOutput = Schema.NullOr(Todo)
 export const TodoGetRequest = request({
   id: "todo.get",
   extensionId: TODO_EXTENSION_ID,
-  intent: "read",
   input: TodoGetInput,
   output: TodoGetOutput,
   execute: (input) =>
@@ -52,7 +51,6 @@ export const TodoListOutput = Schema.Array(Todo)
 export const TodoListRequest = request({
   id: "todo.list",
   extensionId: TODO_EXTENSION_ID,
-  intent: "read",
   input: TodoListInput,
   output: TodoListOutput,
   execute: () =>
@@ -75,7 +73,6 @@ export const TodoGetDepsOutput = Schema.Array(TodoId)
 export const TodoGetDepsRequest = request({
   id: "todo.getDeps",
   extensionId: TODO_EXTENSION_ID,
-  intent: "read",
   input: TodoGetDepsInput,
   output: TodoGetDepsOutput,
   execute: (input) =>
@@ -107,7 +104,6 @@ export const TodoCreateOutput = Todo
 export const TodoCreateRequest = request({
   id: "todo.create",
   extensionId: TODO_EXTENSION_ID,
-  intent: "write",
   input: TodoCreateInput,
   output: TodoCreateOutput,
   execute: (input) =>
@@ -149,7 +145,6 @@ export const TodoUpdateOutput = Schema.NullOr(Todo)
 export const TodoUpdateRequest = request({
   id: "todo.update",
   extensionId: TODO_EXTENSION_ID,
-  intent: "write",
   input: TodoUpdateInput,
   output: TodoUpdateOutput,
   execute: (input) =>
@@ -173,7 +168,6 @@ export const TodoDeleteOutput = Schema.Null
 export const TodoDeleteRequest = request({
   id: "todo.delete",
   extensionId: TODO_EXTENSION_ID,
-  intent: "write",
   input: TodoDeleteInput,
   output: TodoDeleteOutput,
   execute: (input) =>
@@ -196,7 +190,6 @@ export const TodoAddDepOutput = Schema.Null
 export const TodoAddDepRequest = request({
   id: "todo.addDep",
   extensionId: TODO_EXTENSION_ID,
-  intent: "write",
   input: TodoAddDepInput,
   output: TodoAddDepOutput,
   execute: (input) =>
@@ -219,7 +212,6 @@ export const TodoRemoveDepOutput = Schema.Null
 export const TodoRemoveDepRequest = request({
   id: "todo.removeDep",
   extensionId: TODO_EXTENSION_ID,
-  intent: "write",
   input: TodoRemoveDepInput,
   output: TodoRemoveDepOutput,
   execute: (input) =>

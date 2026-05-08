@@ -74,7 +74,6 @@ const withArtifactsClient = <A>(
             branchId: transportBranchId,
             extensionId: capability.extensionId,
             capabilityId: capability.capabilityId,
-            intent: capability.intent,
             input,
           }) as Effect.Effect<unknown, ArtifactClientError>,
         requestAtBranch: (branchId, capability, input) =>
@@ -83,7 +82,6 @@ const withArtifactsClient = <A>(
             branchId,
             extensionId: capability.extensionId,
             capabilityId: capability.capabilityId,
-            intent: capability.intent,
             input,
           }) as Effect.Effect<unknown, ArtifactClientError>,
         requestInSession: (sessionId, branchId, capability, input) =>
@@ -92,7 +90,6 @@ const withArtifactsClient = <A>(
             branchId,
             extensionId: capability.extensionId,
             capabilityId: capability.capabilityId,
-            intent: capability.intent,
             input,
           }) as Effect.Effect<unknown, ArtifactClientError>,
         createBranch: (name) =>

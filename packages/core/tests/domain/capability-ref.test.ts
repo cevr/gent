@@ -3,8 +3,8 @@
  *
  * 1. `request(...)` attaches a `CapabilityRef` under a private request-local
  *    symbol (private — only `ref(capability)` reads it).
- * 2. `ref(requestCapability)` returns the typed ref with the same id/intent
- *    metadata the author provided.
+ * 2. `ref(requestCapability)` returns the typed ref with the same id and
+ *    schemas the author provided.
  * 3. `ref(toolCapability)` and `ref(actionCapability)` fail at compile time — only
  *    request capabilities carry a ref.
  */
@@ -38,7 +38,6 @@ describe("ref(capability)", () => {
     const requestCapability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
-      intent: "read",
       input: Schema.Struct({ q: Schema.String }),
       output: Schema.Struct({ n: Schema.Number }),
       execute: () => Effect.succeed({ n: 1 }),
@@ -61,8 +60,8 @@ describe("ref(capability)", () => {
     const capability = tool({
       id: "test.tool",
       description: "ephemeral",
-      intent: "read",
       destructive: true,
+      intent: "read",
       params,
       output: Schema.String,
       promptSnippet: "short",
@@ -101,13 +100,12 @@ describe("ref(capability)", () => {
     expect(Context.get(capability.annotations, AiTool.Destructive)).toBe(false)
   })
 
-  test("returns the typed ref for a request capability, preserving id + intent + schema identity", () => {
+  test("returns the typed ref for a request capability, preserving id + schema identity", () => {
     const inputSchema = Schema.Struct({ q: Schema.String })
     const outputSchema = Schema.Struct({ n: Schema.Number })
     const capability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
-      intent: "read",
       input: inputSchema,
       output: outputSchema,
       execute: () => Effect.succeed({ n: 1 }),
@@ -117,7 +115,6 @@ describe("ref(capability)", () => {
     const capabilityId: RpcId = r.capabilityId
     expect(String(capabilityId)).toBe("test.read")
     expect(r.extensionId as string).toBe("ext-test")
-    expect(r.intent).toBe("read")
     // Schema identity: refValue forwards author schemas by reference. A
     // future refactor that clones/wraps would silently change decode
     // behavior at the dispatcher boundary.

@@ -36,7 +36,6 @@ export const AutoRpc = {
   StartAuto: request({
     id: "auto.start",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({
       goal: Schema.String,
       maxIterations: Schema.optional(Schema.Number),
@@ -51,7 +50,6 @@ export const AutoRpc = {
   RequestHandoff: request({
     id: "auto.request-handoff",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({ content: Schema.String }),
     output: Schema.Void,
     execute: (input) =>
@@ -63,7 +61,6 @@ export const AutoRpc = {
   CancelAuto: request({
     id: "auto.cancel",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({}),
     output: Schema.Void,
     execute: () =>
@@ -75,7 +72,6 @@ export const AutoRpc = {
   ToggleAuto: request({
     id: "auto.toggle",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({
       goal: Schema.optional(Schema.String),
       maxIterations: Schema.optional(Schema.Number),
@@ -90,7 +86,6 @@ export const AutoRpc = {
   IsActive: request({
     id: "auto.is-active",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "read",
     input: Schema.Struct({}),
     output: Schema.Boolean,
     execute: () =>
@@ -105,7 +100,6 @@ export const AutoRpc = {
   GetSnapshot: request({
     id: "auto.snapshot",
     extensionId: AUTO_EXTENSION_ID,
-    intent: "read",
     input: Schema.Struct({}),
     output: AutoSnapshotReply,
     execute: () =>

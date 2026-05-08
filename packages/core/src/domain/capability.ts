@@ -65,7 +65,6 @@ export type ErasedCapabilityEffect<E = any> = (
 ) => Effect.Effect<any, E, any>
 
 const CapabilityMetadataFields = {
-  intent: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
   promptSnippet: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.Unknown),
   permissionRules: Schema.optional(Schema.Array(Schema.Unknown)),
@@ -79,6 +78,7 @@ const CapabilityMetadataFields = {
 export const Capability = TaggedEnumClass("Capability", {
   Tool: TaggedEnumClass.variant("tool", {
     id: ToolId,
+    intent: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
     ...CapabilityMetadataFields,
     input: Schema.Unknown,
     output: Schema.Unknown,
@@ -91,6 +91,7 @@ export const Capability = TaggedEnumClass("Capability", {
   }),
   Action: TaggedEnumClass.variant("action", {
     id: CommandId,
+    intent: Schema.Literal("write"),
     ...CapabilityMetadataFields,
     input: Schema.Unknown,
     output: Schema.Unknown,
@@ -127,7 +128,6 @@ export type RequestCapability = Extract<Capability, { readonly _tag: "request" }
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: ExtensionId
   readonly capabilityId: RpcId
-  readonly intent: "read" | "write"
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Decoder<Output, never>
 }

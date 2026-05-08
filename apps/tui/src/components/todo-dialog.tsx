@@ -66,7 +66,6 @@ export function TodoDialog(props: {
           branchId: session.branchId,
           extensionId: updateRef.extensionId,
           capabilityId: updateRef.capabilityId,
-          intent: updateRef.intent,
           input: { todoId, status: "stopped" },
         })
         .pipe(Effect.catchEager(() => Effect.void)),

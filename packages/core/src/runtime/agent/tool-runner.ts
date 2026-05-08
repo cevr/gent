@@ -186,7 +186,6 @@ const makeExecutionToolkit = (params: {
                   .effect(decodedInput, toolCtx)
                   .pipe(Effect.mapError(normalizeToolExecutionError)),
               ),
-              { intent: metadata.intent },
             ),
           params.ctx,
         )

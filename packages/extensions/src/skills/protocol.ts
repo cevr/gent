@@ -17,7 +17,6 @@ export const SkillsRpc = {
   ListSkills: request({
     id: "skills-list",
     extensionId: SKILLS_EXTENSION_ID,
-    intent: "read",
     description: "List loaded skills",
     input: Schema.Struct({}),
     output: Schema.Array(SkillEntry),
@@ -29,7 +28,6 @@ export const SkillsRpc = {
   GetSkillContent: request({
     id: "skills-get-content",
     extensionId: SKILLS_EXTENSION_ID,
-    intent: "read",
     description: "Read one loaded skill by name",
     input: Schema.Struct({ name: Schema.String }),
     output: Schema.NullOr(SkillEntry),

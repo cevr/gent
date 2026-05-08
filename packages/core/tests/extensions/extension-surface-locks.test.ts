@@ -21,14 +21,13 @@ import {
   ExtensionContext,
   ExtensionId,
   type ActionInput,
-  type ReadRequestInput,
   makeRunSpec,
   request,
   resource,
   tool,
   ToolCallId,
+  type RequestInput,
   type ToolInput,
-  type WriteRequestInput,
 } from "@gent/core/extensions/api"
 
 class WriteCapableService extends Context.Service<
@@ -107,11 +106,10 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({ intent: 'read' }) — happy path compiles with ordinary Effect services", () => {
+  test("request({...}) — happy path compiles with ordinary Effect services", () => {
     const ok = request({
       id: "ok-read",
       extensionId: ExtensionId.make("test-ext"),
-      intent: "read",
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -125,11 +123,10 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({ intent: 'read' }) may yield ExtensionContext", () => {
+  test("request({...}) may yield ExtensionContext", () => {
     const ok = request({
       id: "read-context",
       extensionId: ExtensionId.make("test-ext"),
-      intent: "read",
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -143,11 +140,10 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({ intent: 'write' }) — write-capable Tag in R is allowed", () => {
+  test("request({...}) — write-capable Tag in R is allowed", () => {
     const ok = request({
       id: "ok-write",
       extensionId: ExtensionId.make("test-ext"),
-      intent: "write",
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -163,10 +159,9 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("request handlers receive params only", () => {
-    const bad: WriteRequestInput<{}, string> = {
+    const bad: RequestInput<{}, string> = {
       id: "write-core-context",
       extensionId: ExtensionId.make("surface-locks"),
-      intent: "write",
       input: NoInput,
       output: StringOutput,
       // @ts-expect-error — request handlers receive decoded params only; host access comes from ExtensionContext
@@ -180,7 +175,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
     request({
       id: "write-privileged-context",
       extensionId: ExtensionId.make("surface-locks"),
-      intent: "write",
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -206,7 +200,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
     const ok = request({
       id: "ok-slash-request",
       extensionId: ExtensionId.make("test-ext"),
-      intent: "write",
       slash: {
         name: "Ok Slash",
         description: "Visible over transport command listing",
@@ -226,13 +219,12 @@ describe("Capability factory-shape locks (compile-time)", () => {
     const badInput = {
       id: "bad-request",
       extensionId: ExtensionId.make("test-ext"),
-      intent: "write" as const,
       // @ts-expect-error — `params` belongs to tool(), not request()
       params: NoInput,
       input: NoInput,
       output: StringOutput,
       execute: () => Effect.succeed("x"),
-    } satisfies WriteRequestInput<unknown, string, never>
+    } satisfies RequestInput<unknown, string, never>
 
     void badInput
     expect(true).toBe(true)
@@ -286,7 +278,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       name: "x",
       description: "x",
       surface: "slash",
-      // @ts-expect-error — `intent` belongs to request(), not action()
+      // @ts-expect-error — action inputs do not carry request/tool authority markers
       intent: "write",
       input: NoInput,
       output: StringOutput,
@@ -324,7 +316,6 @@ describe("Effect-purity locks (compile-time)", () => {
     tool({
       id: "bad-read-tool",
       description: "bad",
-      intent: "read",
       // @ts-expect-error — tools import services instead of declaring read/write needs
       needs: [{ tag: "todo", access: "write" }] as const,
       params: Schema.Struct({}),
@@ -409,7 +400,7 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadAnyCapabilityContribution = PublicExtensionApi.AnyCapabilityContribution
     // @ts-expect-error — audience flags are internal lowering details, not public authoring API
     type _BadAudience = PublicExtensionApi.Audience
-    // @ts-expect-error — request/tool factory inputs own their intent shape
+    // @ts-expect-error — read/write intent is not public request authoring API
     type _BadIntent = PublicExtensionApi.Intent
     // @ts-expect-error — model tool metadata is internal lowering detail
     type _BadModelAudienceFields = PublicExtensionApi.ModelAudienceFields
@@ -503,10 +494,9 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("read request handlers do not receive host facts by parameter", () => {
-    const bad: ReadRequestInput<{}, string> = {
+    const bad: RequestInput<{}, string> = {
       id: "facts-only-read",
       extensionId: ExtensionId.make("surface-locks"),
-      intent: "read",
       input: Schema.Struct({}),
       output: Schema.String,
       // @ts-expect-error — request handlers receive decoded params only; facts come from ExtensionContext/setup context

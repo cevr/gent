@@ -92,7 +92,6 @@ describe("SkillsExtension via RPC", () => {
             sessionId,
             extensionId: ref(SkillsRpc.ListSkills).extensionId,
             capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
-            intent: ref(SkillsRpc.ListSkills).intent,
             input: {},
             branchId,
           })) as ReadonlyArray<{ name: string; description: string; level: string }>
@@ -122,7 +121,6 @@ describe("SkillsExtension via RPC", () => {
             sessionId,
             extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
             capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
-            intent: ref(SkillsRpc.GetSkillContent).intent,
             input: { name: "effect-v4" },
             branchId,
           })) as { name: string; content: string } | null
@@ -152,7 +150,6 @@ describe("SkillsExtension via RPC", () => {
             sessionId,
             extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
             capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
-            intent: ref(SkillsRpc.GetSkillContent).intent,
             input: { name: "nonexistent" },
             branchId,
           })

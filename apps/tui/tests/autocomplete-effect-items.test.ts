@@ -34,7 +34,6 @@ class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestErro
 const ListThingsRpc = request({
   id: "list-things",
   extensionId: ExtensionId.make("@test/autocomplete"),
-  intent: "read",
   input: Schema.Struct({}),
   output: Schema.Array(Schema.String),
   execute: () => Effect.succeed([]),

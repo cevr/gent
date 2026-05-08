@@ -73,7 +73,6 @@ export const ArtifactRpc = {
   Save: request({
     id: "artifact.save",
     extensionId: ARTIFACTS_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({
       label: Schema.String,
       sourceTool: Schema.String,
@@ -92,7 +91,6 @@ export const ArtifactRpc = {
   Read: request({
     id: "artifact.read",
     extensionId: ARTIFACTS_EXTENSION_ID,
-    intent: "read",
     input: Schema.Struct({ query: ReadQuery }),
     output: Schema.NullOr(Artifact),
     execute: Effect.fn("ArtifactRpc.Read")(function* ({ query }) {
@@ -104,7 +102,6 @@ export const ArtifactRpc = {
   Update: request({
     id: "artifact.update",
     extensionId: ARTIFACTS_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({
       id: ArtifactId,
       patch: Schema.optional(ContentPatch),
@@ -122,7 +119,6 @@ export const ArtifactRpc = {
   Clear: request({
     id: "artifact.clear",
     extensionId: ARTIFACTS_EXTENSION_ID,
-    intent: "write",
     input: Schema.Struct({ id: ArtifactId }),
     output: Schema.Void,
     execute: Effect.fn("ArtifactRpc.Clear")(function* ({ id }) {
@@ -134,7 +130,6 @@ export const ArtifactRpc = {
   List: request({
     id: "artifact.list",
     extensionId: ARTIFACTS_EXTENSION_ID,
-    intent: "read",
     input: Schema.Struct({ branchId: Schema.optional(BranchId) }),
     output: Schema.Array(Artifact),
     execute: Effect.fn("ArtifactRpc.List")(function* () {

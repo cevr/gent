@@ -58,7 +58,6 @@ describe("ExecutorExtension via RPC", () => {
           branchId,
           extensionId: StartRef.extensionId,
           capabilityId: StartRef.capabilityId,
-          intent: StartRef.intent,
           input: "start",
         })
 
@@ -67,7 +66,6 @@ describe("ExecutorExtension via RPC", () => {
           branchId,
           extensionId: SnapshotRef.extensionId,
           capabilityId: SnapshotRef.capabilityId,
-          intent: SnapshotRef.intent,
           input: {},
         })) as {
           readonly status: string
@@ -85,7 +83,6 @@ describe("ExecutorExtension via RPC", () => {
           branchId,
           extensionId: StopRef.extensionId,
           capabilityId: StopRef.capabilityId,
-          intent: StopRef.intent,
           input: "stop",
         })
 

@@ -49,7 +49,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoCreateRef.extensionId,
             capabilityId: TodoCreateRef.capabilityId,
-            intent: TodoCreateRef.intent,
             input: { subject: "Inspect repo" },
           })) as { id: string; subject: string; status: string }
           expect(created.id).toBeDefined()
@@ -62,7 +61,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoListRef.extensionId,
             capabilityId: TodoListRef.capabilityId,
-            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; subject: string; status: string }>
           expect(listed).toHaveLength(1)
@@ -74,7 +72,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoUpdateRef.extensionId,
             capabilityId: TodoUpdateRef.capabilityId,
-            intent: TodoUpdateRef.intent,
             input: { todoId: created.id, status: "in_progress" },
           })
 
@@ -83,7 +80,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoListRef.extensionId,
             capabilityId: TodoListRef.capabilityId,
-            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
@@ -94,7 +90,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoDeleteRef.extensionId,
             capabilityId: TodoDeleteRef.capabilityId,
-            intent: TodoDeleteRef.intent,
             input: { todoId: created.id },
           })
           const afterDelete = (yield* client.extension.request({
@@ -102,7 +97,6 @@ describe("TodoExtension via RPC", () => {
             branchId,
             extensionId: TodoListRef.extensionId,
             capabilityId: TodoListRef.capabilityId,
-            intent: TodoListRef.intent,
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
@@ -129,7 +123,6 @@ describe("TodoExtension via RPC", () => {
               branchId,
               extensionId: TodoCreateRef.extensionId,
               capabilityId: TodoCreateRef.capabilityId,
-              intent: TodoCreateRef.intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
             }),
@@ -161,7 +154,6 @@ describe("TodoExtension via RPC", () => {
               branchId,
               extensionId: TodoCreateRef.extensionId,
               capabilityId: "not-a-real-capability",
-              intent: "write",
               input: {},
             }),
           )
@@ -174,7 +166,7 @@ describe("TodoExtension via RPC", () => {
   )
 
   it.live(
-    "request with mismatched intent fails as ExtensionProtocolError",
+    "request dispatch does not require intent metadata",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -185,20 +177,15 @@ describe("TodoExtension via RPC", () => {
             extensionInputs: [TodoExtension],
           })
 
-          const result = yield* Effect.exit(
-            client.extension.request({
-              sessionId,
-              branchId,
-              extensionId: TodoCreateRef.extensionId,
-              capabilityId: TodoCreateRef.capabilityId,
-              intent: "read",
-              input: { subject: "Inspect repo" },
-            }),
-          )
+          const result = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: TodoCreateRef.extensionId,
+            capabilityId: TodoCreateRef.capabilityId,
+            input: { subject: "Inspect repo" },
+          })
 
-          expect(result._tag).toBe("Failure")
-          if (result._tag === "Failure")
-            expect(String(result.cause)).toContain("ExtensionProtocolError")
+          expect((result as { subject: string }).subject).toBe("Inspect repo")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

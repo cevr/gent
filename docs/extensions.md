@@ -119,8 +119,9 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 
 ## Capabilities
 
-Three typed factories own dispatch routing. RPCs declare
-`intent: "read" | "write"` for host `ExtensionContext` facade selection.
+Three typed factories own dispatch routing. RPC access is ordinary Effect code:
+authors yield `ExtensionContext` or extension-owned service Tags for the
+authority they need.
 
 ### tool — LLM-callable
 
@@ -165,7 +166,6 @@ const StatusExtensionId = ExtensionId.make("status-ext")
 const GetStatus = request({
   id: "get-status",
   extensionId: StatusExtensionId,
-  intent: "read",
   input: Schema.Struct({ key: Schema.String }),
   output: Schema.String,
   execute: (input) => Effect.succeed(`status for ${input.key}`),
@@ -174,7 +174,6 @@ const GetStatus = request({
 const SetStatus = request({
   id: "set-status",
   extensionId: StatusExtensionId,
-  intent: "write",
   input: Schema.Struct({ key: Schema.String, value: Schema.String }),
   output: Schema.Void,
   execute: (input) => Effect.succeed(void 0),
@@ -186,10 +185,10 @@ export default defineExtension({
 })
 ```
 
-`intent: "read"` RPCs receive the read facade through `yield* ExtensionContext`.
-Host writes such as `ctx.Session.queueFollowUp` fail through that facade.
-Extension-owned services are ordinary Effect services; authors import the
-smallest service Tag they need rather than declaring capability labels.
+Request handlers receive params only. Host authority comes from
+`yield* ExtensionContext`, and extension-owned services are ordinary Effect
+services; authors import the smallest service Tag they need rather than
+declaring capability labels.
 
 ### action — human-triggered UI affordance
 

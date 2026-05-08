@@ -623,7 +623,6 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
       ref: {
         readonly extensionId: string
         readonly capabilityId: string
-        readonly intent: "read" | "write"
       },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
@@ -632,9 +631,6 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
         RpcId.make(ref.capabilityId),
         input,
         ctx,
-        {
-          intent: ref.intent,
-        },
       )
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>

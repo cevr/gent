@@ -19,7 +19,6 @@ export const ExecutorRpc = {
   Start: request({
     id: "executor-start",
     extensionId: EXECUTOR_EXTENSION_ID,
-    intent: "write",
     slash: {
       name: "Executor: Start",
       description: "Connect to the configured Executor endpoint.",
@@ -36,7 +35,6 @@ export const ExecutorRpc = {
   Stop: request({
     id: "executor-stop",
     extensionId: EXECUTOR_EXTENSION_ID,
-    intent: "write",
     slash: { name: "Executor: Stop", description: "Disconnect from the Executor sidecar." },
     description: "Disconnect from the Executor sidecar.",
     input: Schema.String,
@@ -49,7 +47,6 @@ export const ExecutorRpc = {
   GetSnapshot: request({
     id: "executor.snapshot",
     extensionId: EXECUTOR_EXTENSION_ID,
-    intent: "read",
     input: Schema.Struct({}),
     output: ExecutorSnapshotReply,
     execute: Effect.fn("ExecutorRpc.GetSnapshot")(function* () {

@@ -347,7 +347,6 @@ describe("defineExtension", () => {
       const readSnapshot = request({
         id: "read-snapshot",
         extensionId: ExtensionId.make("helper-state"),
-        intent: "read",
         input: Schema.Struct({}),
         output: Schema.Number,
         execute: () => Effect.succeed(1),

@@ -1,18 +1,14 @@
 /**
  * `request(...)` — typed factory for extension-to-extension Capabilities.
  *
- * Authors call:
- *   - `request({ id, extensionId, input, output, intent: "read", execute })` for read RPCs
- *   - `request({ id, extensionId, input, output, intent: "write", execute })` for write RPCs
+ * Authors call `request({ id, extensionId, input, output, execute })`.
  *
- * Replaces the previous `query(...)` + `mutation(...)` pair. The lowering
- * collapses into one public request leaf plus the chosen `intent`. Extension
- * registries dispatch by factory-origin metadata; authors never write an
- * audience array.
+ * Extension registries dispatch by factory-origin metadata; authors never
+ * write an audience array or read/write intent marker.
  *
  * Host/session authority is imported through `ExtensionContext`; runtime
- * dispatch provides a facade matching the declared intent. Request handlers
- * receive decoded params only.
+ * dispatch provides the `ExtensionContext` facade. Request handlers receive
+ * decoded params only.
  *
  * @module
  */
@@ -22,6 +18,7 @@ import { RpcId, type ExtensionId } from "../ids.js"
 import {
   type RequestCapability as RequestCapabilityVariant,
   type ErasedCapabilityEffect,
+  type CapabilityEffect,
   type CapabilityRef,
   type CapabilityError,
 } from "../capability.js"
@@ -44,9 +41,8 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
     readonly output: Output
   }
   readonly id: RpcId
-  readonly intent: "read" | "write"
   readonly public: true
-  readonly slash?: RequestInputBase<Input, Output>["slash"]
+  readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
   readonly promptSnippet?: string
   readonly permissionRules?: ReadonlyArray<PermissionRule>
@@ -57,8 +53,8 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly [REQUEST_REF]: CapabilityRef<Input, Output>
 }
 
-/** Fields shared by both read- and write-intent request inputs. */
-interface RequestInputBase<Input, Output> {
+/** Author-facing input to `request({...})`. */
+export interface RequestInput<Input = unknown, Output = unknown, R = never> {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
   /** Owning extension id. Embedded into the typed `CapabilityRef` attached
@@ -81,58 +77,27 @@ interface RequestInputBase<Input, Output> {
     readonly category?: string
     readonly keybind?: string
   }
-}
-
-/** Author-facing input to `request({ intent: "read", ... })`. */
-export interface ReadRequestInput<
-  Input = unknown,
-  Output = unknown,
-  R = never,
-> extends RequestInputBase<Input, Output> {
-  /** `intent: "read"` → runtime provides a read-intent `ExtensionContext` facade. */
-  readonly intent: "read"
   /** The request handler. */
-  readonly execute: (input: Input) => Effect.Effect<Output, CapabilityError, R>
-}
-
-/** Author-facing input to `request({ intent: "write", ... })`. R is
- *  unconstrained — write capabilities may yield any service. */
-export interface WriteRequestInput<
-  Input = unknown,
-  Output = unknown,
-  R = never,
-> extends RequestInputBase<Input, Output> {
-  /** `intent: "write"` → R is unconstrained. */
-  readonly intent: "write"
-  /** The request handler. */
-  readonly execute: (input: Input) => Effect.Effect<Output, CapabilityError, R>
+  readonly execute: CapabilityEffect<Input, Output, R>
 }
 
 /**
- * Lower a `ReadRequestInput | WriteRequestInput` to a typed
- * `RequestCapability<Input, Output>` with the chosen `intent`. The returned capability
- * also carries a typed `CapabilityRef<Input, Output>` under a local symbol,
+ * Lower a `RequestInput` to a typed `RequestCapability<Input, Output>`.
+ * The returned capability also carries a typed `CapabilityRef<Input, Output>` under a local symbol,
  * read via the `ref(capability)` accessor — so callers no longer hand-roll a
  * parallel `*Ref` const next to every request.
- *
- * Two overloads — one per intent. Runtime dispatch provides an
- * `ExtensionContext` facade matching the chosen intent.
  */
 export function request<Input, Output, R = never>(
-  input: ReadRequestInput<Input, Output, R>,
-): RequestCapability<Input, Output>
-export function request<Input, Output, R = never>(
-  input: WriteRequestInput<Input, Output, R>,
+  input: RequestInput<Input, Output, R>,
 ): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
   readonly extensionId: ExtensionId
-  readonly intent: "read" | "write"
   readonly input: Schema.Schema<unknown>
   readonly output: Schema.Schema<unknown>
   readonly prompt?: PromptSection
   readonly description?: string
-  readonly slash?: RequestInputBase<unknown, unknown>["slash"]
+  readonly slash?: RequestInput<unknown, unknown>["slash"]
   readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
@@ -145,13 +110,11 @@ export function request(input: {
   const refValue = {
     extensionId: input.extensionId,
     capabilityId: rpcId,
-    intent: input.intent,
     input: input.input,
     output: input.output,
   } as unknown as CapabilityRef
   const capability = Capability.Request.make({
     id: rpcId,
-    intent: input.intent,
     public: true,
     ...(input.slash !== undefined ? { slash: input.slash } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),

@@ -205,7 +205,6 @@ export { QueueSnapshot }
 
 /** Input shape for public extension RPC dispatch.
  *  `extensionId` + `capabilityId` route to the registered request;
- *  `intent` is forwarded to the registry, which enforces the read/write fence.
  *
  *  `branchId` is required because extension RPCs execute against the
  *  live session runtime, not a transport-local stub. Callers must pass the
@@ -215,7 +214,6 @@ export const ExtensionRpcRequestInput = Schema.Struct({
   sessionId: SessionId,
   extensionId: ExtensionId,
   capabilityId: Schema.String,
-  intent: Schema.Literals(["read", "write"]),
   input: Schema.Unknown,
   branchId: BranchId,
 })
@@ -234,7 +232,6 @@ export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashComma
   keybind: Schema.optional(Schema.String),
   extensionId: ExtensionId,
   capabilityId: Schema.String,
-  intent: Schema.Literals(["read", "write"]),
 }) {}
 
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])

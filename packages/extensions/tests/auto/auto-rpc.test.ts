@@ -33,7 +33,6 @@ describe("AutoExtension via RPC", () => {
           branchId,
           extensionId: StartAutoRef.extensionId,
           capabilityId: StartAutoRef.capabilityId,
-          intent: StartAutoRef.intent,
           input: { goal: "Audit extension API", maxIterations: 3 },
         })
 
@@ -42,7 +41,6 @@ describe("AutoExtension via RPC", () => {
           branchId,
           extensionId: IsActiveRef.extensionId,
           capabilityId: IsActiveRef.capabilityId,
-          intent: IsActiveRef.intent,
           input: {},
         })
         expect(active).toBe(true)
@@ -52,7 +50,6 @@ describe("AutoExtension via RPC", () => {
           branchId,
           extensionId: SnapshotRef.extensionId,
           capabilityId: SnapshotRef.capabilityId,
-          intent: SnapshotRef.intent,
           input: {},
         })) as { readonly active: boolean; readonly phase?: string; readonly goal?: string }
         expect(snapshot).toMatchObject({
@@ -66,7 +63,6 @@ describe("AutoExtension via RPC", () => {
           branchId,
           extensionId: CancelAutoRef.extensionId,
           capabilityId: CancelAutoRef.capabilityId,
-          intent: CancelAutoRef.intent,
           input: {},
         })
 
@@ -75,7 +71,6 @@ describe("AutoExtension via RPC", () => {
           branchId,
           extensionId: IsActiveRef.extensionId,
           capabilityId: IsActiveRef.capabilityId,
-          intent: IsActiveRef.intent,
           input: {},
         })
         expect(afterCancel).toBe(false)

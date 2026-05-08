@@ -266,7 +266,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                         sessionId: sid,
                         extensionId: c.extensionId,
                         capabilityId: c.capabilityId,
-                        intent: c.intent,
                         input: args,
                         branchId: bid,
                       })

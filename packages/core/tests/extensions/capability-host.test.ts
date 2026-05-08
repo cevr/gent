@@ -47,7 +47,6 @@ const echoRequest = (params?: { readonly id?: string; readonly value?: string })
   request({
     id: params?.id ?? "echo",
     extensionId,
-    intent: "read",
     input: Schema.Struct({ value: Schema.String }),
     output: Schema.Struct({ value: Schema.String }),
     execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
@@ -90,41 +89,38 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
-        intent: "read",
-      })
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
     }),
   )
 
-  it.live("read request handlers receive read-intent ExtensionContext authority", () =>
+  it.live("request handlers receive ExtensionContext authority without intent ceremony", () =>
     Effect.gen(function* () {
       const cap = request({
-        id: "read-context-facade",
+        id: "context-facade",
         extensionId,
-        intent: "read",
         input: Schema.Struct({}),
         output: Schema.Struct({
-          parentEnvEmpty: Schema.Boolean,
-          processDenied: Schema.Boolean,
-          followUpDenied: Schema.Boolean,
-          interactionDenied: Schema.Boolean,
+          parentEnvValue: Schema.String,
+          processFailed: Schema.Boolean,
+          followUpQueued: Schema.Boolean,
+          interactionPresented: Schema.Boolean,
         }),
         execute: () =>
           Effect.gen(function* () {
             const extensionCtx = yield* ExtensionContext
             const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
             const followUpExit = yield* Effect.exit(
-              extensionCtx.Session.queueFollowUp({ sourceId: "read-request", content: "nope" }),
+              extensionCtx.Session.queueFollowUp({ sourceId: "request", content: "ok" }),
             )
             const interactionExit = yield* Effect.exit(
-              extensionCtx.Interaction.present({ content: "nope", title: "read request" }),
+              extensionCtx.Interaction.present({ content: "ok", title: "request" }),
             )
             return {
-              parentEnvEmpty: Object.keys(extensionCtx.Process.parentEnv).length === 0,
-              processDenied: Exit.isFailure(processExit),
-              followUpDenied: Exit.isFailure(followUpExit),
-              interactionDenied: Exit.isFailure(interactionExit),
+              parentEnvValue: extensionCtx.Process.parentEnv["TEST_VALUE"] ?? "",
+              processFailed: Exit.isFailure(processExit),
+              followUpQueued: Exit.isSuccess(followUpExit),
+              interactionPresented: Exit.isSuccess(interactionExit),
             }
           }),
       })
@@ -134,18 +130,18 @@ describe("extension capability registries", () => {
         cap.id,
         {},
         testExtensionHostContext({
-          sessionId: SessionId.make("read-request-session"),
-          branchId: BranchId.make("read-request-branch"),
+          sessionId: SessionId.make("request-session"),
+          branchId: BranchId.make("request-branch"),
+          host: { ...testExtensionHostContext().host, parentEnv: { TEST_VALUE: "visible" } },
+          session: { queueFollowUp: () => Effect.void },
+          interaction: { present: () => Effect.void },
         }),
-        {
-          intent: "read",
-        },
       )
       expect(result).toEqual({
-        parentEnvEmpty: true,
-        processDenied: true,
-        followUpDenied: true,
-        interactionDenied: true,
+        parentEnvValue: "visible",
+        processFailed: true,
+        followUpQueued: true,
+        interactionPresented: true,
       })
     }),
   )
@@ -155,7 +151,6 @@ describe("extension capability registries", () => {
       const cap = request({
         id: "ping",
         extensionId,
-        intent: "write",
         slash: { name: "Ping", description: "Ping request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
@@ -168,9 +163,7 @@ describe("extension capability registries", () => {
         contributions: { requests: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
-        intent: "write",
-      })
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
     }),
   )
@@ -193,9 +186,7 @@ describe("extension capability registries", () => {
         contributions: { actions: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
-        intent: "write",
-      })
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
     }),
   )
@@ -230,7 +221,6 @@ describe("extension capability registries", () => {
           sessionId: SessionId.make("action-context-session"),
           branchId: BranchId.make("action-context-branch"),
         }),
-        { intent: "write" },
       )
       expect(result).toEqual({ hasRunProcess: true })
     }),
@@ -255,9 +245,7 @@ describe("extension capability registries", () => {
       }
       const resolved = resolveExtensions([ext])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
-          intent: "write",
-        }),
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
@@ -268,7 +256,6 @@ describe("extension capability registries", () => {
       const builtin = request({
         id: "shadowed",
         extensionId,
-        intent: "write",
         slash: { name: "Shadowed", description: "Shadowed request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
@@ -297,20 +284,12 @@ describe("extension capability registries", () => {
           contributions: { actions: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry.run(
-        extensionId,
-        project.id,
-        { value: "hi" },
-        ctx,
-        {
-          intent: "write",
-        },
-      )
+      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
     }),
   )
 
-  it.live("request dispatch rejects higher-scope action shadowing lower request", () =>
+  it.live("request dispatch follows higher-scope slash action shadowing lower request", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
       const project = pingAction({ id: "same", value: "project-action" })
@@ -328,14 +307,8 @@ describe("extension capability registries", () => {
           contributions: { actions: [project] },
         },
       ])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
-          intent: "read",
-        }),
-      )
-      expect(Schema.is(CapabilityError)(result)).toBe(true)
-      if (!Schema.is(CapabilityError)(result)) return
-      expect(result.reason).toContain("intent mismatch")
+      const result = yield* resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx)
+      expect(result).toEqual({ value: "project-action" })
     }),
   )
 
@@ -358,9 +331,7 @@ describe("extension capability registries", () => {
         },
       ])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
-          intent: "read",
-        }),
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
@@ -385,9 +356,7 @@ describe("extension capability registries", () => {
         },
       ])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
-          intent: "read",
-        }),
+        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }),
@@ -401,47 +370,34 @@ describe("extension capability registries", () => {
         extWith("builtin", [builtin]),
         extWith("project", [project]),
       ])
-      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "x" }, ctx, {
-        intent: "read",
-      })
+      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "x" }, ctx)
       expect(result).toEqual({ value: "project" })
     }),
   )
 
-  it.live("intent mismatch on the winning request is a typed capability error", () =>
+  it.live("scope precedence picks the winning request without intent matching", () =>
     Effect.gen(function* () {
-      const writeCap = request({
+      const lowerCap = request({
         id: "thing",
         extensionId,
-        intent: "write",
         input: Schema.Unknown,
         output: Schema.Unknown,
         execute: () => Effect.succeed("builtin-write"),
       })
-      const readCap = request({
+      const higherCap = request({
         id: "thing",
         extensionId,
-        intent: "read",
         input: Schema.Unknown,
         output: Schema.Unknown,
         execute: () => Effect.succeed("project-read"),
       })
       const resolved = resolveExtensions([
-        extWith("builtin", [writeCap]),
-        extWith("project", [readCap]),
+        extWith("builtin", [lowerCap]),
+        extWith("project", [higherCap]),
       ])
 
-      const readResult = yield* resolved.rpcRegistry.run(extensionId, readCap.id, null, ctx, {
-        intent: "read",
-      })
+      const readResult = yield* resolved.rpcRegistry.run(extensionId, higherCap.id, null, ctx)
       expect(readResult).toBe("project-read")
-
-      const writeResult = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, readCap.id, null, ctx, { intent: "write" }),
-      )
-      expect(Schema.is(CapabilityError)(writeResult)).toBe(true)
-      if (!Schema.is(CapabilityError)(writeResult)) return
-      expect(writeResult.reason).toContain("intent mismatch")
     }),
   )
 
@@ -450,7 +406,7 @@ describe("extension capability registries", () => {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: 42 }, ctx, { intent: "read" }),
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: 42 }, ctx),
       )
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
@@ -463,14 +419,13 @@ describe("extension capability registries", () => {
       const cap = request({
         id: "bad",
         extensionId,
-        intent: "read",
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" }),
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx),
       )
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
@@ -483,14 +438,13 @@ describe("extension capability registries", () => {
       const cap = request({
         id: "boom",
         extensionId,
-        intent: "read",
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
         execute: () => Effect.die("boom"),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx, { intent: "read" }),
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx),
       )
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return

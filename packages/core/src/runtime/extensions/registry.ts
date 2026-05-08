@@ -39,9 +39,8 @@ import {
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
 
-// SlashCommand — public-facing slash entry. Built from `actions:` / `requests:` bucket
-// winners. Read- and write-intent both surface as commands; the bucket is the
-// load-bearing filter.
+// SlashCommand — public-facing slash entry. Built from `actions:` / `requests:`
+// bucket winners. The bucket is the load-bearing filter.
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
@@ -55,7 +54,6 @@ export interface SlashCommand {
   readonly keybind?: string
   readonly extensionId: ExtensionId
   readonly capabilityId: string
-  readonly intent: "read" | "write"
 }
 
 // Resolved snapshot — the immutable compiled state
@@ -98,17 +96,12 @@ type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | 
 const isRequestCapability = (cap: ActionCapability | RequestCapability): cap is RequestCapability =>
   "public" in cap
 
-export interface CapabilityRunOptions {
-  readonly intent?: "read" | "write"
-}
-
 export interface CompiledRpcRegistry {
   readonly run: (
     extensionId: ExtensionId,
     capabilityId: RpcId | CommandId | string,
     input: unknown,
     ctx: CapabilityCoreContext,
-    options?: CapabilityRunOptions,
   ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
 }
 
@@ -291,14 +284,13 @@ const hasExtensionServices = (ctx: CapabilityCoreContext): ctx is ExtensionHostC
 const provideExtensionServicesIfAvailable = <A, E, R>(
   ctx: CapabilityCoreContext,
   effect: Effect.Effect<A, E, R>,
-  intent: "read" | "write",
 ): Effect.Effect<A, E, R> =>
-  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect, { intent }) : effect
+  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect) : effect
 
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
-  run: (extensionId, capabilityId, input, ctx, options) =>
+  run: (extensionId, capabilityId, input, ctx) =>
     Effect.gen(function* () {
       const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
       if (entry === undefined || (entry.kind !== "rpc" && entry.kind !== "command")) {
@@ -307,17 +299,9 @@ const compileRpcRegistry = (
       if (entry.kind === "command" && !entry.capability.surface.includes("slash")) {
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
-      if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
-        return yield* new CapabilityErrorClass({
-          extensionId,
-          capabilityId,
-          reason: `intent mismatch: expected ${options.intent}, got ${entry.capability.intent}`,
-        })
-      }
       return yield* provideExtensionServicesIfAvailable(
         ctx,
         runExtensionCapability(extensionId, capabilityId, entry.capability, input),
-        entry.capability.intent,
       )
     }),
 })
@@ -352,7 +336,6 @@ const capabilityToCommand = (
     ...(keybind !== undefined ? { keybind } : {}),
     extensionId,
     capabilityId: String(cap.id),
-    intent: cap.intent,
   }
 }
 

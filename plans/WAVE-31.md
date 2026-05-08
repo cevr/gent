@@ -179,6 +179,8 @@ facade.
 
 ## Commit 3: refactor(extensions): remove read-write intent ceremony
 
+**Status**: Completed in current batch.
+
 **Justification**: Request/tool authority should be expressed by available
 facades and Effect services, not by a parallel `intent` metadata channel and
 runtime denial traps.
@@ -191,20 +193,24 @@ runtime denial traps.
 
 **Changes**
 
-| File                                                                                  | Change                                                                                | Lines |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts`   | Collapse read/write request inputs into one request shape.                            | ~40   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts`      | Remove Gent-local `intent` ceremony while preserving Effect AI annotations as needed. | ~148  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`           | Remove request intent from refs/variants.                                             | ~67   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`   | Remove read-intent denial facade.                                                     | ~16   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts` | Stop selecting service facades by capability intent.                                  | ~298  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`   | Remove intent from public request transport projections.                              | ~206  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/requests.ts`         | Migrate worked example.                                                               | ~29   |
+| File                                                                                  | Change                                                                                     | Lines |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts`   | Collapsed read/write request inputs into one request shape.                                | ~40   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`           | Removed request intent from refs/variants while preserving tool/action Effect AI metadata. | ~67   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`   | Removed read-intent denial facade; `ExtensionContext` authority is expressed by services.  | ~16   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts` | Stopped selecting service facades or matching dispatch by request intent.                  | ~298  |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`   | Removed intent from public request transport and slash-command projections.                | ~206  |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-transport.ts`      | Removed request intent from TUI extension client calls.                                    | ~150  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/requests.ts`         | Migrated representative request definitions.                                               | ~29   |
+| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                               | Updated request docs around `yield* ExtensionContext`, not intent metadata.                | ~120  |
 
 **Verification**
 
-- Focused extension registry/request tests.
-- Focused todo extension tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/capability-host.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/todo/todo-rpc.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run gate`
 
 ## Commit 4: refactor(extensions): make reactions context-provided

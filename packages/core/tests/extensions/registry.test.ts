@@ -115,7 +115,6 @@ const makeRequest = (
     return request({
       id,
       extensionId,
-      intent: "read",
       input: Schema.Unknown,
       output: Schema.Unknown,
       execute: () => Effect.void,
@@ -124,7 +123,6 @@ const makeRequest = (
   return request({
     id,
     extensionId,
-    intent: "write",
     input: Schema.Unknown,
     output: Schema.Unknown,
     execute: () => Effect.void,
@@ -622,7 +620,6 @@ describe("resolveExtensions — slash command discovery", () => {
     const cap = request({
       id: "inspect",
       extensionId: ExtensionId.make("@test/request"),
-      intent: "write",
       description: "Registry description.",
       slash: {
         name: "Inspect",
@@ -672,7 +669,7 @@ describe("resolveExtensions — slash command discovery", () => {
   })
   test("project rpc shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("act")] })
-    const projectCap = makeRequest("act", { intent: "write" })
+    const projectCap = makeRequest("act")
     const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("act")).toBe(false)
