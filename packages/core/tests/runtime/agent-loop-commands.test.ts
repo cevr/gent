@@ -61,7 +61,10 @@ describe("agent loop commands", () => {
     const commandId = ActorCommandId.make("test-command-id")
     const inputs = [
       { _tag: "RunTurn", message: messageInput },
-      { _tag: "ApplySteer", command: { _tag: "Cancel", sessionId, branchId } },
+      {
+        _tag: "ApplySteer",
+        command: { _tag: "Cancel", sessionId, branchId, requestId: "req-cancel" },
+      },
       {
         _tag: "RespondInteraction",
         sessionId,

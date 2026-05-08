@@ -459,6 +459,72 @@ describe("requestId idempotency", () => {
     ),
   )
 
+  it.live("duplicate public steer Interject requestId queues at most once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const created = yield* client.session.create({ cwd: "/tmp/rpc-steer-idem" })
+
+        const command = {
+          _tag: "Interject" as const,
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          requestId: "req-rpc-steer-interject",
+          message: "steer once",
+        }
+        yield* client.steer.command({ command })
+        yield* client.steer.command({ command })
+
+        const queued = yield* client.queue.get({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        expect(queued.steering.map((entry) => entry.content)).toEqual(["steer once"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("duplicate public queue.drain requestId replays the original snapshot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const created = yield* client.session.create({ cwd: "/tmp/rpc-drain-idem" })
+        yield* client.steer.command({
+          command: {
+            _tag: "Interject",
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            requestId: "req-rpc-drain-steer",
+            message: "drain me",
+          },
+        })
+
+        const first = yield* client.queue.drain({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          requestId: "req-rpc-drain-queue",
+        })
+        const second = yield* client.queue.drain({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          requestId: "req-rpc-drain-queue",
+        })
+        const current = yield* client.queue.get({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+
+        expect(first.steering.map((entry) => entry.content)).toEqual(["drain me"])
+        expect(second).toEqual(first)
+        expect(current.steering).toEqual([])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   // Dedup-cache TTL eviction. The cache schedules a delayed
   // eviction via `Effect.forkDetach(Effect.sleep(60s))`, but createSession
   // now has a durable operation result underneath the process cache. Beyond

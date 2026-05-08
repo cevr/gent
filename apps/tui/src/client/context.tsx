@@ -790,7 +790,14 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) {
         return Effect.succeed({ steering: [] as const, followUp: [] as const })
       }
-      return client.queue.drain({ sessionId: s.sessionId, branchId: s.branchId })
+      return Effect.gen(function* () {
+        const requestId = yield* Random.nextUUIDv4
+        return yield* client.queue.drain({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          requestId,
+        })
+      })
     },
 
     getQueuedMessages: () => {
@@ -887,16 +894,22 @@ export function ClientProvider(props: ClientProviderProps) {
         }
         return
       }
-      const fullCommand: SteerCommand = {
-        ...command,
-        sessionId: s.sessionId,
-        branchId: s.branchId,
-      }
       // Update local agent immediately for responsive UI
-      if (fullCommand._tag === "SwitchAgent") {
-        setAgentStore({ agent: fullCommand.agent })
+      if (command._tag === "SwitchAgent") {
+        setAgentStore({ agent: command.agent })
       }
-      cast(client.steer.command({ command: fullCommand }))
+      cast(
+        Effect.gen(function* () {
+          const requestId = yield* Random.nextUUIDv4
+          const fullCommand: SteerCommand = {
+            ...command,
+            sessionId: s.sessionId,
+            branchId: s.branchId,
+            requestId,
+          }
+          return yield* client.steer.command({ command: fullCommand })
+        }),
+      )
     },
   }
 

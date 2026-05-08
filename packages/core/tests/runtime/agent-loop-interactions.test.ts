@@ -248,6 +248,7 @@ describe("interaction", () => {
             _tag: "Interrupt",
             sessionId: intSessionId,
             branchId: intBranchId,
+            requestId: "req-interrupt-waiting-interaction",
           })
           yield* Fiber.join(fiber)
           const stateAfter = yield* agentLoop.getState({

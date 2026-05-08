@@ -119,6 +119,7 @@ describe("continuation", () => {
           _tag: "Interrupt",
           sessionId: contSessionId,
           branchId: contBranchId,
+          requestId: "req-continuation-interrupt-first",
         })
         yield* controls.emitAll(1)
         yield* Fiber.join(fiber)
@@ -210,6 +211,7 @@ describe("continuation", () => {
           _tag: "Interrupt",
           sessionId: contSessionId,
           branchId: contBranchId,
+          requestId: "req-continuation-interrupt-second",
         })
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)

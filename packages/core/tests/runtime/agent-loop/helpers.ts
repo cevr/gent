@@ -214,7 +214,6 @@ export const submitAgentLoop = (
   )
 export const steerAgentLoop = (command: SteerCommand) =>
   Effect.gen(function* () {
-    const platform = yield* GentPlatform
     const actorClientFactory = yield* AgentLoopActor.Context
     const ref = yield* actorClientFactory(
       entityIdOf(DefaultWorkspaceId, command.sessionId, command.branchId),
@@ -222,7 +221,7 @@ export const steerAgentLoop = (command: SteerCommand) =>
     yield* ref.execute(
       AgentLoopActor.Steer.make({
         workspaceId: DefaultWorkspaceId,
-        commandId: ActorCommandId.make(yield* platform.randomId),
+        commandId: ActorCommandId.make(command.requestId),
         command,
       }),
     )

@@ -12,6 +12,7 @@ import {
   GetSessionSnapshotInput,
   QueueSnapshot,
   QueueTarget,
+  QueueDrainInput,
   RespondInteractionInput,
   SendMessageInput,
   SessionSnapshot,
@@ -117,7 +118,7 @@ export class SessionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("queue.drain", {
-    payload: QueueTarget.fields,
+    payload: QueueDrainInput.fields,
     success: QueueSnapshot,
     error: GentRpcError,
   }),

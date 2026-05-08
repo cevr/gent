@@ -9,7 +9,14 @@ import {
   ListAuthProvidersPayload,
 } from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
-import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
+import {
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  MessageId,
+  RequestId,
+  SessionId,
+} from "../domain/ids.js"
 import {
   Branch,
   BranchTreeNode,
@@ -31,7 +38,7 @@ export type { SessionRuntimeState } from "../runtime/session-runtime.js"
  * per-server dedup cache with arbitrary-length keys. Callers in this repo
  * use `crypto.randomUUID()` which fits comfortably.
  */
-export const RequestIdSchema = Schema.String.check(Schema.isMaxLength(128))
+export const RequestIdSchema = RequestId
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -119,6 +126,12 @@ export const QueueTarget = Schema.Struct({
   branchId: BranchId,
 })
 export type QueueTarget = typeof QueueTarget.Type
+
+export const QueueDrainInput = Schema.Struct({
+  ...QueueTarget.fields,
+  requestId: RequestId,
+})
+export type QueueDrainInput = typeof QueueDrainInput.Type
 
 export const SubscribeEventsInput = Schema.Struct({
   sessionId: SessionId,

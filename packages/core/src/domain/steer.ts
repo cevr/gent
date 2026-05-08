@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { AgentName } from "./agent"
-import { BranchId, SessionId } from "./ids"
+import { BranchId, RequestId, SessionId } from "./ids"
 
 // Steer Command — RPC payload that targets a session/branch loop.
 // Lives in domain so transport-contract and runtime can both import without
@@ -9,6 +9,7 @@ import { BranchId, SessionId } from "./ids"
 const SteerTargetFields = {
   sessionId: SessionId,
   branchId: BranchId,
+  requestId: RequestId,
 }
 
 export const SteerCommand = Schema.Union([

@@ -59,6 +59,7 @@ import {
   type ForkBranchInput,
   type GetSessionSnapshotInput,
   type ListAuthProvidersInput,
+  type QueueDrainInput,
   type QueueTarget,
   type RespondInteractionInput,
   type SendMessageInput,
@@ -263,8 +264,8 @@ const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
     deps.commands.steer(command),
 
-  "queue.drain": ({ sessionId, branchId }: QueueTarget) =>
-    deps.commands.drainQueuedMessages({ sessionId, branchId }),
+  "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
+    deps.commands.drainQueuedMessages({ sessionId, branchId, requestId }),
 
   "queue.get": ({ sessionId, branchId }: QueueTarget) =>
     deps.queries.getQueuedMessages({ sessionId, branchId }),

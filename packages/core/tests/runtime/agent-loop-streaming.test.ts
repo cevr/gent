@@ -214,6 +214,7 @@ describe("streaming", () => {
             _tag: "Interrupt",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
+            requestId: "req-interrupt-s1",
           })
           const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
           expect(finishedA._tag).toBe("Some")
@@ -440,6 +441,7 @@ describe("streaming", () => {
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
+            requestId: "req-interject-priority",
             message: "steer now",
             agent: AgentName.make("deepwork"),
           })
@@ -488,6 +490,7 @@ describe("streaming", () => {
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
+            requestId: "req-interject-visible-queue",
             message: "steer now",
           })
           const snapshot = yield* agentLoop.getQueue({

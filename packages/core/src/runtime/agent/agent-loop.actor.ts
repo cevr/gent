@@ -327,6 +327,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: DrainQueueFields,
     success: QueueSnapshot,
     error: AgentLoopError,
+    persisted: true,
     id: (p: DrainQueueInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
@@ -934,6 +935,7 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
               _tag: "Cancel",
               sessionId: operation.sessionId,
               branchId: operation.branchId,
+              requestId: operation.commandId,
             }),
           ),
         ),

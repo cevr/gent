@@ -369,6 +369,12 @@ which facade implementation is provided at each runtime boundary.
 
 ## Commit 5: fix(runtime): make steer and queue drain retry-safe
 
+**Status**: Completed in current batch. `steer.command` and `queue.drain`
+now require public request ids; `SessionRuntime` derives actor command ids from
+those ids instead of random runtime ids. `DrainQueue` is persisted so retried
+drains replay the original snapshot, and steering interjections use deterministic
+message ids plus queue de-duplication for at-most-once display.
+
 **Justification**: Mutating public operations need durable operation identity at
 the public boundary. Actor primary keys cannot be random inside
 `SessionRuntime`.

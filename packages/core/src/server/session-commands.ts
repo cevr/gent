@@ -208,6 +208,7 @@ export interface SessionCommandsService {
   readonly drainQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
+    requestId: string
   }) => Effect.Effect<QueueSnapshot, AppServiceError>
   readonly updateSessionReasoningLevel: (
     input: UpdateSessionReasoningLevelInput,
@@ -1019,9 +1020,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         forkBranch,
         sendMessage,
         steer: (command) => sessionRuntime.steer(command),
-        drainQueuedMessages: ({ sessionId, branchId }) =>
+        drainQueuedMessages: ({ sessionId, branchId, requestId }) =>
           sessionRuntime
-            .drainQueuedMessages({ sessionId, branchId })
+            .drainQueuedMessages({ sessionId, branchId, requestId })
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
         updateSessionReasoningLevel: mutations.updateReasoningLevel,
       } satisfies SessionCommandsService

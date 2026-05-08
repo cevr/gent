@@ -39,5 +39,8 @@ export type ActorId = typeof ActorId.Type
 export const InteractionRequestId = Schema.String.pipe(branded("InteractionRequestId"))
 export type InteractionRequestId = typeof InteractionRequestId.Type
 
+export const RequestId = Schema.String.check(Schema.isMaxLength(128))
+export type RequestId = typeof RequestId.Type
+
 export const ExtensionId = Schema.String.pipe(branded("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type

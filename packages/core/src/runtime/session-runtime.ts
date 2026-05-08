@@ -13,6 +13,7 @@ import {
   ActorCommandId,
   BranchId,
   MessageId,
+  RequestId,
   SessionId,
   ToolCallId,
   type InteractionRequestId,
@@ -71,7 +72,6 @@ export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
  * dedup. Bounded so a malicious/buggy client cannot bloat per-server
  * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
  */
-const RequestIdSchema = Schema.String.check(Schema.isMaxLength(128))
 const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
 
 export const SendUserMessagePayload = Schema.Struct({
@@ -83,7 +83,7 @@ export const SendUserMessagePayload = Schema.Struct({
   interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
   /** Client-generated correlation id for end-to-end observability. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -102,6 +102,7 @@ export const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
+  requestId: RequestId,
 })
 export type CancelInterruptPayload = typeof CancelInterruptPayload.Type
 
@@ -109,6 +110,7 @@ export const InterruptTurnPayload = Schema.TaggedStruct("Interrupt", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
+  requestId: RequestId,
 })
 export type InterruptTurnPayload = typeof InterruptTurnPayload.Type
 
@@ -116,6 +118,7 @@ export const InterjectPayload = Schema.TaggedStruct("Interject", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
+  requestId: RequestId,
   message: Schema.String,
 })
 export type InterjectPayload = typeof InterjectPayload.Type
@@ -154,6 +157,13 @@ export const QueueFollowUpPayload = Schema.Struct({
   metadata: Schema.optional(MessageMetadata),
 })
 export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
+
+export const DrainQueuedMessagesPayload = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: RequestId,
+})
+export type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
 
 export const SessionRuntimeSessionTarget = Schema.Struct({
   sessionId: SessionId,
@@ -218,7 +228,7 @@ export interface SessionRuntimeService {
   readonly runPrompt: (input: RunPromptPayload) => Effect.Effect<void, AgentRunError>
   readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
   readonly drainQueuedMessages: (
-    input: SessionRuntimeTarget,
+    input: DrainQueuedMessagesPayload,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
   readonly getQueuedMessages: (
     input: SessionRuntimeTarget,
@@ -272,6 +282,7 @@ export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCo
         _tag: "Interject",
         sessionId: input.sessionId,
         branchId: input.branchId,
+        requestId: input.requestId,
         message: input.message,
       }
     case "Cancel":
@@ -279,12 +290,14 @@ export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCo
         _tag: "Cancel",
         sessionId: input.sessionId,
         branchId: input.branchId,
+        requestId: input.requestId,
       }
     case "Interrupt":
       return {
         _tag: "Interrupt",
         sessionId: input.sessionId,
         branchId: input.branchId,
+        requestId: input.requestId,
       }
   }
 }
@@ -716,7 +729,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(command).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
-            const commandId = ActorCommandId.make(yield* platform.randomId)
+            const commandId = ActorCommandId.make(command.requestId)
             const payload = {
               workspaceId: yield* CurrentWorkspaceId,
               commandId,
@@ -777,7 +790,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(input).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
-            const commandId = ActorCommandId.make(yield* platform.randomId)
+            const commandId = ActorCommandId.make(input.requestId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             return yield* ref.execute(
               AgentLoopActor.DrainQueue.make({

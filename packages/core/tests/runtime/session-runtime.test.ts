@@ -441,6 +441,7 @@ describe("SessionRuntime", () => {
               _tag: "Cancel",
               sessionId,
               branchId,
+              requestId: "req-cancel-profile-free",
             }),
           )
           yield* sessionRuntime.respondInteraction({
@@ -879,6 +880,7 @@ describe("SessionRuntime", () => {
               _tag: "Interject",
               sessionId,
               branchId,
+              requestId: "req-interject-queued",
               message: "steer now",
             }),
           )
@@ -965,10 +967,20 @@ describe("SessionRuntime", () => {
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
           yield* controls.waitForCall(0)
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "drain me" })
-          const drained = yield* sessionRuntime.drainQueuedMessages({ sessionId, branchId })
+          const drained = yield* sessionRuntime.drainQueuedMessages({
+            sessionId,
+            branchId,
+            requestId: "req-drain-follow-up",
+          })
+          const retried = yield* sessionRuntime.drainQueuedMessages({
+            sessionId,
+            branchId,
+            requestId: "req-drain-follow-up",
+          })
           expect(drained.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
           ])
+          expect(retried).toEqual(drained)
           expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
             steering: [],
             followUp: [],

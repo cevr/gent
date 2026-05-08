@@ -130,13 +130,14 @@ export const drainVisibleQueueItems = (queue: LoopQueueState): LoopQueueState =>
   ...(queue.inFlight !== undefined ? { inFlight: queue.inFlight } : {}),
 })
 
-export const appendSteeringItem = (
-  queue: LoopQueueState,
-  item: QueuedTurnItem,
-): LoopQueueState => ({
-  ...queue,
-  steering: [...queue.steering, item],
-})
+export const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState =>
+  queue.inFlight?.message.id === item.message.id ||
+  queue.steering.some((existing) => existing.message.id === item.message.id)
+    ? queue
+    : {
+        ...queue,
+        steering: [...queue.steering, item],
+      }
 
 export const appendFollowUpQueueState = (
   queue: LoopQueueState,

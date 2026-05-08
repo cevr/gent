@@ -102,6 +102,7 @@ describe("queue seam contract", () => {
               .drain({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
+                requestId: "req-e2e-queue-drain",
               })
               .pipe(Effect.mapError(toTestFailure))
 
@@ -192,6 +193,7 @@ describe("queue seam contract", () => {
                   _tag: "Interject",
                   sessionId: created.sessionId,
                   branchId: created.branchId,
+                  requestId: "req-e2e-urgent-steer",
                   message: "urgent steer",
                 },
               })
