@@ -126,6 +126,34 @@ export const dedupRequest = <A, E>(input: {
     )
   })
 
+/**
+ * Atomic-claim dedup helper. Concurrent callers with the same `requestId`
+ * collapse onto the first caller's outcome.
+ *
+ * Eviction:
+ * - On failure: evict immediately so retries can re-attempt the same
+ *   `requestId` under fresh state.
+ * - On success: schedule a delayed eviction after `DEDUP_SUCCESS_TTL_MS`.
+ *   The window matches the transport retry window — long enough to collapse a
+ *   retried RPC, short enough that a long-running server does not accumulate
+ *   one entry per user prompt indefinitely.
+ * - Hard cap: when the cache exceeds `DEDUP_MAX_ENTRIES`, the oldest-inserted
+ *   entry is evicted before insert. JS `Map` preserves insertion order, so the
+ *   first key returned by the iterator is the oldest.
+ */
+const makeRequestDeduper = <A, E>(): Effect.Effect<
+  (input: {
+    readonly requestId: string | undefined
+    readonly body: Effect.Effect<A, E>
+    readonly maxEntries?: number
+    readonly successTtl?: Duration.Input
+  }) => Effect.Effect<A, E>
+> =>
+  Effect.gen(function* () {
+    const cache = yield* Ref.make(new Map<string, Deferred.Deferred<A, E>>())
+    return (input) => dedupRequest({ cache, ...input })
+  })
+
 const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
   function* (input: {
     readonly sessionId: SessionId
@@ -601,38 +629,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       // results) + atomic Ref.modify claim ensures the second fiber waits on
       // the first's outcome instead of racing it.
       //
-      const createRequestCache = yield* Ref.make(
-        new Map<string, Deferred.Deferred<CreateSessionResult, AppServiceError>>(),
-      )
-      const sendRequestCache = yield* Ref.make(
-        new Map<string, Deferred.Deferred<void, AppServiceError>>(),
-      )
-      const createBranchRequestCache = yield* Ref.make(
-        new Map<string, Deferred.Deferred<CreateBranchResult, AppServiceError>>(),
-      )
-      const forkBranchRequestCache = yield* Ref.make(
-        new Map<string, Deferred.Deferred<CreateBranchResult, AppServiceError>>(),
-      )
-      const switchBranchRequestCache = yield* Ref.make(
-        new Map<string, Deferred.Deferred<void, AppServiceError>>(),
-      )
+      const dedupCreateSession = yield* makeRequestDeduper<CreateSessionResult, AppServiceError>()
+      const dedupSendMessage = yield* makeRequestDeduper<void, AppServiceError>()
+      const dedupCreateBranch = yield* makeRequestDeduper<CreateBranchResult, AppServiceError>()
+      const dedupForkBranch = yield* makeRequestDeduper<CreateBranchResult, AppServiceError>()
+      const dedupSwitchBranch = yield* makeRequestDeduper<void, AppServiceError>()
 
-      /**
-       * Atomic-claim dedup helper. Concurrent callers with the same
-       * `requestId` collapse onto the first caller's outcome.
-       *
-       * Eviction:
-       * - On failure: evict immediately so retries can re-attempt the same
-       *   `requestId` under fresh state.
-       * - On success: schedule a delayed eviction after `DEDUP_SUCCESS_TTL_MS`.
-       *   The window matches the transport retry window — long enough to
-       *   collapse a retried RPC, short enough that a long-running server
-       *   does not accumulate one entry per user prompt indefinitely.
-       * - Hard cap: when the cache exceeds `DEDUP_MAX_ENTRIES`, the
-       *   oldest-inserted entry is evicted before insert. JS `Map` preserves
-       *   insertion order, so the first key returned by the iterator is the
-       *   oldest. This guarantees bounded memory regardless of TTL.
-       */
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
       ) {
@@ -697,8 +699,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
         "SessionCommands.createSession",
       )(function* (input: CreateSessionInput) {
-        return yield* dedupRequest({
-          cache: createRequestCache,
+        return yield* dedupCreateSession({
           requestId: input.requestId,
           body: doCreateSession(input),
         })
@@ -828,8 +829,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
         input: CreateBranchInput,
       ) {
-        return yield* dedupRequest({
-          cache: createBranchRequestCache,
+        return yield* dedupCreateBranch({
           requestId: input.requestId,
           body: doCreateBranch(input),
         })
@@ -878,8 +878,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
-          yield* dedupRequest({
-            cache: switchBranchRequestCache,
+          yield* dedupSwitchBranch({
             requestId: input.requestId,
             body: doSwitchBranch(input),
           })
@@ -975,8 +974,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateBranchResult, AppServiceError> = Effect.fn(
         "SessionCommands.forkBranch",
       )(function* (input: ForkBranchInput) {
-        return yield* dedupRequest({
-          cache: forkBranchRequestCache,
+        return yield* dedupForkBranch({
           requestId: input.requestId,
           body: doForkBranch(input),
         })
@@ -1051,8 +1049,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
-          yield* dedupRequest({
-            cache: sendRequestCache,
+          yield* dedupSendMessage({
             requestId: input.requestId,
             body: doSendMessage(input),
           })

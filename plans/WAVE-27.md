@@ -454,18 +454,21 @@ semantics are real; the surface can be smaller.
 
 **Changes**
 
-| File                                                                                    | Change                                                                         | Lines                |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                  | Add event-log owned serialized delivery and route memory `publish` through it. | `343-395`, `502-535` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`      | Use the shared serialized delivery primitive in the live event log.            | `45-75`              |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event-publisher.ts`        | Reduce publisher to a compatibility adapter over `EventStore.append/deliver`.  | `13-95`              |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/event-publisher.test.ts` | Preserve publish/deliver behavior through EventStore-owned delivery semantics. | `62-207`             |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/index.ts`              | Add `deliver` to recording event-store fixture.                                | `71-95`              |
+| File                                                                                    | Change                                                                                                | Lines                |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                  | Add event-log owned serialized delivery and route memory `publish` through it.                        | `343-395`, `502-535` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`      | Use the shared serialized delivery primitive in the live event log.                                   | `45-75`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event-publisher.ts`        | Reduce publisher to a compatibility adapter over `EventStore.append/deliver`.                         | `13-95`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/event-publisher.test.ts` | Preserve publish/deliver behavior through EventStore-owned delivery semantics.                        | `62-207`             |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/index.ts`              | Add `deliver` to recording event-store fixture.                                                       | `71-95`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/ephemeral-root.ts`  | Review fix: route the ephemeral publisher adapter through `EventStore.deliver`, not direct broadcast. | `183-186`            |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`   | Regression: duplicate committed delivery from the ephemeral root does not rebroadcast.                | `1132-1185`          |
 
 **Verification**
 
 - `bun run --cwd packages/core typecheck`
 - `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/domain/event-publisher.test.ts tests/runtime/agent-loop-streaming.test.ts tests/runtime/session-runtime.test.ts tests/runtime/external-turn.test.ts`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-runner.test.ts tests/domain/event-publisher.test.ts tests/server/session-idempotency.test.ts tests/runtime/session-runtime.test.ts`
 - `bun run gate`
 
 ## Commit 12: refactor(server): use one request dedup primitive
@@ -484,15 +487,15 @@ primitive.
 
 **Changes**
 
-| File                                                                                        | Change                                                      | Lines                                       |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`           | Replace five request caches with one keyed dedup primitive. | `72-128`, `566-633`, `693-742`, `1050-1077` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts` | Preserve in-flight request dedup behavior.                  | multiple                                    |
+| File                                                                                        | Change                                                                                | Lines                                                                        |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`           | Replace five explicit request cache refs with one typed `makeRequestDeduper` factory. | `72-157`, `617-636`, `697-705`, `829-835`, `879-884`, `974-980`, `1050-1055` |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts` | Preserve in-flight request dedup behavior.                                            | multiple                                                                     |
 
 **Verification**
 
-- Focused session idempotency tests.
-- `bun run test`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-runner.test.ts tests/domain/event-publisher.test.ts tests/server/session-idempotency.test.ts tests/runtime/session-runtime.test.ts`
 - `bun run gate`
 
 ## Commit 13: refactor(storage): delete shallow storage services
