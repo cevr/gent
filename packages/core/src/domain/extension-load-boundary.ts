@@ -15,12 +15,12 @@ const toExtensionLoadError = (opts: {
         cause: opts.cause,
       })
 
-export const sealRuntimeLoadedEffect = <A>(opts: {
+export const sealRuntimeLoadedEffect = <A, R = never>(opts: {
   readonly extensionId: ExtensionId
-  readonly effect: () => Effect.Effect<A, unknown, unknown>
+  readonly effect: () => Effect.Effect<A, unknown, R>
   readonly failureMessage: (cause: unknown) => string
   readonly defectMessage: (cause: unknown) => string
-}): Effect.Effect<A, ExtensionLoadError> => {
+}): Effect.Effect<A, ExtensionLoadError, R> => {
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   const sealed = Effect.suspend(opts.effect).pipe(
     Effect.catchEager((cause) =>
@@ -42,6 +42,5 @@ export const sealRuntimeLoadedEffect = <A>(opts: {
       ),
     ),
   )
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  return sealed as Effect.Effect<A, ExtensionLoadError> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  return sealed as Effect.Effect<A, ExtensionLoadError, R> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }

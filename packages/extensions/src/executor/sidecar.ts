@@ -25,7 +25,7 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord, TaggedEnumClass } from "@gent/core/extensions/api"
+import { isRecord, TaggedEnumClass, type ExtensionHostPlatform } from "@gent/core/extensions/api"
 import { fileURLToPath } from "node:url"
 import { runProcess } from "../run-process.js"
 import { ExecutorPlatform } from "./platform-adapter.js"
@@ -131,7 +131,7 @@ export interface ExecutorSidecarService {
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
   "@gent/extensions/src/executor/sidecar/ExecutorSidecar",
 ) {
-  static Live = (home: string) =>
+  static Live = (home: string, host: ExtensionHostPlatform) =>
     Layer.effect(
       ExecutorSidecar,
       Effect.gen(function* () {
@@ -647,7 +647,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           resolveSettings: (cwd) => loadSettings(cwd),
         })
       }),
-    ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, ExecutorPlatform.Live)))
+    ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, ExecutorPlatform.Live(host))))
 
   static Test = (mock: Partial<ExecutorSidecarService> = {}): Layer.Layer<ExecutorSidecar> =>
     Layer.succeed(

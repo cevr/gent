@@ -7,8 +7,8 @@
  * stays thin.
  *
  * Two wirings:
- *   - `ClaudeSdk.live`     — real SDK, pinned `liveImpl` value injected
- *                            by the extension at setup time.
+ *   - `ClaudeSdk.live(...)` — real SDK, with host platform values captured
+ *                             by the extension at setup time.
  *   - `ClaudeSdk.test(...)` — canned per-prompt messages, no subprocess,
  *                            for executor mapping tests.
  *
@@ -42,7 +42,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
-import { AcpAgentsPlatform } from "./platform-adapter.js"
+import type { AcpAgentsPlatformShape } from "./platform-adapter.js"
 
 // ── Public service shape ──
 
@@ -89,7 +89,8 @@ export interface ClaudeSdkServiceShape {
 // ── Implementations ──
 
 /** Live implementation — talks to the real SDK subprocess. */
-export const live: ClaudeSdkServiceShape = makeLiveService()
+export const live = (platform: AcpAgentsPlatformShape): ClaudeSdkServiceShape =>
+  makeLiveService(platform)
 
 /**
  * Test implementation — canned messages per prompt, no subprocess. Each
@@ -170,11 +171,10 @@ const makeUserMessage = (text: string): SDKUserMessage => ({
   parent_tool_use_id: null,
 })
 
-function makeLiveService(): ClaudeSdkServiceShape {
+function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShape {
   return {
     createSession: ({ cwd, oauthToken, systemPrompt, mcpServers }) =>
       Effect.gen(function* () {
-        const platform = yield* AcpAgentsPlatform
         const input = new Pushable<SDKUserMessage>()
 
         // Session-lifetime teardown controller — distinct from any
@@ -281,7 +281,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
           prompt,
           close,
         } satisfies ClaudeSdkSession
-      }).pipe(Effect.provideService(AcpAgentsPlatform, AcpAgentsPlatform.Current)),
+      }),
   }
 }
 

@@ -12,7 +12,7 @@ import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
 import { withSectionMarkers } from "@gent/core/domain/prompt"
-import { testExtensionHostContext } from "@gent/core/test-utils"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
@@ -28,11 +28,13 @@ const spawnerLayer = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
 )
 const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* AcpAgentsExtension.setup({
-    cwd: "/tmp",
-    source: "builtin",
-    home: "/home/x",
-  }).pipe(Effect.provide(spawnerLayer))
+  const contributions = yield* AcpAgentsExtension.setup(
+    testSetupCtx({
+      cwd: "/tmp",
+      source: "builtin",
+      home: "/home/x",
+    }),
+  ).pipe(Effect.provide(spawnerLayer))
   const systemPrompt = contributions.reactions?.systemPrompt
   if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt reaction")
   return systemPrompt as (

@@ -28,7 +28,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Ref, Schema, SynchronizedRef } from "effect"
-import { buildAnthropicModelDriver } from "@gent/extensions/anthropic"
+import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "@gent/extensions/anthropic"
 import {
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCell,
@@ -36,12 +36,28 @@ import {
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "@gent/extensions/anthropic/beta-cache"
 import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "@gent/extensions/anthropic/oauth"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
+import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import {
   makeFakeFetchState,
   oneGenerate,
   type FakeFetchState,
 } from "@gent/core/test-utils/fake-fetch"
 const FUTURE_MS = 1_800_000_000_000
+const testPlatform = AnthropicPlatform.of({
+  platform: "darwin",
+  home: "/tmp/gent-test-home",
+  parentEnv: {},
+})
+const buildAnthropicModelDriver = (
+  ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [
+    infer CredentialCell,
+    infer BetaCell,
+    infer EnvApiKey,
+    ...ReadonlyArray<unknown>,
+  ]
+    ? [CredentialCell, BetaCell, EnvApiKey]
+    : never
+) => buildAnthropicModelDriverLive(...args, testPlatform)
 const makeOAuthInfo = (): ProviderAuthInfo => ({
   type: "oauth",
   access: "test-access",

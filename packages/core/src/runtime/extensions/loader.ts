@@ -1,7 +1,13 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
+import { GentPlatform } from "../gent-platform.js"
+import type {
+  ExtensionHostSignal,
+  ExtensionScope,
+  GentExtension,
+  LoadedExtension,
+} from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
@@ -20,8 +26,33 @@ const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<Pro
     ...(cs.requests ?? []).map((rpc) => rpc.prompt),
   ].filter((p): p is PromptSection => p !== undefined)
 
-type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 type RuntimeLoadedExtension = GentExtension<ExtensionSetupServices>
+
+const makeExtensionHostPlatform = Effect.gen(function* () {
+  const platform = yield* GentPlatform
+  const osInfo = yield* platform.osInfo
+  const execPath = yield* platform.execPath
+  const homeDirectory = yield* platform.homeDirectory
+  const parentEnv = yield* platform.env
+  const pathListSeparator = yield* platform.pathListSeparator
+  return {
+    osInfo,
+    execPath,
+    homeDirectory,
+    parentEnv,
+    pathListSeparator,
+    commandCandidates: platform.commandCandidates,
+    isPortFree: platform.isPortFree,
+    isPidAlive: (pid: number) =>
+      platform.signal(pid, 0).pipe(
+        Effect.as(true),
+        Effect.catchEager(() => Effect.succeed(false)),
+      ),
+    signalPid: (pid: number, signal: ExtensionHostSignal) =>
+      platform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
+  }
+})
 
 // Discovery — scan directories for extension files
 
@@ -240,13 +271,10 @@ export const setupExtension = (
   discovered: DiscoveredExtension,
   cwd: string,
   home: string,
-): Effect.Effect<
-  LoadedExtension,
-  ExtensionLoadError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
-> =>
+): Effect.Effect<LoadedExtension, ExtensionLoadError, ExtensionSetupServices> =>
   Effect.gen(function* () {
     const { extension, scope, sourcePath } = discovered
+    const host = yield* makeExtensionHostPlatform
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
       extensionId: extension.manifest.id,
       effect: () =>
@@ -254,6 +282,7 @@ export const setupExtension = (
           cwd,
           source: sourcePath,
           home,
+          host,
         }),
       failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
       defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,

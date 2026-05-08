@@ -2,12 +2,14 @@ import { Effect, Layer, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import type { LanguageModel } from "effect/unstable/ai"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
+import type { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
@@ -81,7 +83,7 @@ export interface DependenciesConfig {
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
-  extensions: ReadonlyArray<GentExtension>
+  extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
 }
 
 const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, string>> => ({

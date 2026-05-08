@@ -14,6 +14,7 @@
  */
 
 import * as os from "node:os"
+import { createServer } from "node:net"
 import { Effect, Layer, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
@@ -87,7 +88,28 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     execPath: Effect.sync(() => process.execPath),
 
+    homeDirectory: Effect.sync(() => os.homedir()),
+
     env: Effect.sync(() => Bun.env),
+
+    pathListSeparator: Effect.sync(() => (os.platform() === "win32" ? ";" : ":")),
+
+    commandCandidates: (command) =>
+      os.platform() === "win32"
+        ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
+        : [command],
+
+    isPortFree: (port) =>
+      Effect.callback<boolean>((resume) => {
+        const server = createServer()
+        server.once("error", () => {
+          server.close()
+          resume(Effect.succeed(false))
+        })
+        server.listen(port, "127.0.0.1", () => {
+          server.close(() => resume(Effect.succeed(true)))
+        })
+      }),
 
     signal: (pid, signal) =>
       Effect.try({

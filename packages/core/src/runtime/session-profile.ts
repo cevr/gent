@@ -66,7 +66,7 @@ export interface SessionProfileCacheConfig {
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>
-  readonly extensions: ReadonlyArray<GentExtension>
+  readonly extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
   readonly initialProfiles?: ReadonlyArray<SessionProfile>
 }
 

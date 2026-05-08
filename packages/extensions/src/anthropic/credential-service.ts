@@ -142,11 +142,8 @@ export class AnthropicCredentialService extends Context.Service<
   ): Layer.Layer<
     AnthropicCredentialService,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-  > =>
-    AnthropicCredentialService.layerFromIO(realIO, authInfo).pipe(
-      Layer.provide(AnthropicPlatform.Live),
-    )
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  > => AnthropicCredentialService.layerFromIO(realIO, authInfo)
 
   /**
    * Cache cell Ref provided externally so its lifetime is hoisted above the
@@ -159,11 +156,8 @@ export class AnthropicCredentialService extends Context.Service<
   ): Layer.Layer<
     AnthropicCredentialService,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-  > =>
-    AnthropicCredentialService.layerFromRefAndIO(cellRef, realIO, authInfo).pipe(
-      Layer.provide(AnthropicPlatform.Live),
-    )
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  > => AnthropicCredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
 
   /**
    * Test-friendly variant — accepts the IO seam as a parameter so tests

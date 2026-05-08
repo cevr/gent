@@ -28,7 +28,7 @@ import {
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
-import { AnthropicPlatform } from "./platform-adapter.js"
+import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -109,8 +109,16 @@ const makeOauthAnthropicLayer = (
   authInfo: ProviderAuthInfo | undefined,
   credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
+  platform: AnthropicPlatformShape,
 ) => {
-  const credentialLayer = AnthropicCredentialService.layerFromRef(credentialCellRef, authInfo)
+  const credentialLayer = AnthropicCredentialService.layerFromRefAndIO(
+    credentialCellRef,
+    {
+      read: readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
+      refresh: refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
+    },
+    authInfo,
+  ).pipe(Layer.provide(Layer.succeed(AnthropicPlatform, platform)))
   const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
 
   const clientLayer = Layer.unwrap(
@@ -141,6 +149,7 @@ export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
   envApiKey: string | undefined,
+  platform: AnthropicPlatformShape,
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
@@ -182,7 +191,14 @@ export const buildAnthropicModelDriver = (
     return AiModel.make(
       "anthropic",
       modelName,
-      makeOauthAnthropicLayer(modelName, config, authInfo, credentialCellRef, betaCellRef),
+      makeOauthAnthropicLayer(
+        modelName,
+        config,
+        authInfo,
+        credentialCellRef,
+        betaCellRef,
+        platform,
+      ),
     )
   },
   auth: {
@@ -228,14 +244,14 @@ export const buildAnthropicModelDriver = (
           ),
         ),
         // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
+        Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
       ),
   },
 })
 
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
-  modelDrivers: () =>
+  modelDrivers: ({ ctx }) =>
     Effect.gen(function* () {
       const env: AnthropicKeychainEnv = {
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
@@ -246,6 +262,7 @@ export const AnthropicExtension = defineExtension({
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
+      const platform = AnthropicPlatform.fromHost(ctx.host)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension
@@ -255,6 +272,6 @@ export const AnthropicExtension = defineExtension({
       const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey)]
+      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform)]
     }),
 })

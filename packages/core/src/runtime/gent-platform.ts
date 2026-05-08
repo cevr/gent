@@ -10,8 +10,14 @@
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
+ *   - `homeDirectory`    — current user home directory
  *   - `env`              — snapshot of parent process environment for child
  *                          process launches that must inherit shell config
+ *   - `pathListSeparator`— PATH-like list separator (`;` on Windows, `:`
+ *                          elsewhere)
+ *   - `commandCandidates(command)` — platform-specific executable name
+ *                          candidates for PATH lookup
+ *   - `isPortFree(port)` — host TCP port probe on loopback
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `exit(code)`       — request the host to exit with `code`. NOT
  *                          finalizer-safe: `process.exit` is synchronous and
@@ -46,7 +52,7 @@ export interface GentPlatformOsInfo {
  * without delivering a signal. Named signals are accepted via the
  * `NodeJS.Signals` string union.
  */
-export type GentPlatformSignal = NodeJS.Signals | 0
+export type GentPlatformSignal = string | 0
 
 /**
  * `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. The
@@ -66,7 +72,11 @@ export interface GentPlatformShape {
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
+  readonly homeDirectory: Effect.Effect<string>
   readonly env: Effect.Effect<Record<string, string | undefined>>
+  readonly pathListSeparator: Effect.Effect<string>
+  readonly commandCandidates: (command: string) => ReadonlyArray<string>
+  readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly exit: (code: number) => Effect.Effect<never>
   readonly now: Effect.Effect<number>
@@ -99,7 +109,11 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
+          homeDirectory: Effect.succeed("/tmp"),
           env: Effect.succeed({}),
+          pathListSeparator: Effect.succeed(":"),
+          commandCandidates: (command) => [command],
+          isPortFree: () => Effect.succeed(true),
           signal: () => Effect.void,
           // The default Test stub dies loudly: silent `Effect.never` would
           // make accidental `platform.exit(...)` calls in a test hang

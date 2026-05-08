@@ -1,5 +1,5 @@
-import { Context, Layer } from "effect"
-import * as os from "node:os"
+import { Context, Effect, Layer } from "effect"
+import type { ExtensionHostPlatform } from "@gent/core/extensions/api"
 
 export interface AnthropicPlatformShape {
   readonly platform: string
@@ -10,12 +10,13 @@ export interface AnthropicPlatformShape {
 export class AnthropicPlatform extends Context.Service<AnthropicPlatform, AnthropicPlatformShape>()(
   "@gent/extensions/src/anthropic/platform-adapter/AnthropicPlatform",
 ) {
-  static Live: Layer.Layer<AnthropicPlatform> = Layer.succeed(
-    AnthropicPlatform,
+  static readonly fromHost = (host: ExtensionHostPlatform): AnthropicPlatformShape =>
     AnthropicPlatform.of({
-      platform: process.platform,
-      home: os.homedir(),
-      parentEnv: Bun.env,
-    }),
-  )
+      platform: host.osInfo.platform,
+      home: host.homeDirectory,
+      parentEnv: host.parentEnv,
+    })
+
+  static Live = (host: ExtensionHostPlatform): Layer.Layer<AnthropicPlatform> =>
+    Layer.effect(AnthropicPlatform, Effect.succeed(AnthropicPlatform.fromHost(host)))
 }

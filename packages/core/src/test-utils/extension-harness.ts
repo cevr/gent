@@ -1,6 +1,7 @@
 /** Test helpers for extension tool execution. */
 
 import { Effect, Layer } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentName,
   AgentRunnerService,
@@ -10,6 +11,7 @@ import {
 } from "../domain/agent.js"
 import { EventStore } from "../domain/event.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { GentPlatform } from "../runtime/gent-platform.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { ToolCapabilityContext, ToolCapability } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
@@ -39,7 +41,7 @@ export interface ToolTestLayerConfig {
   /** Agents to register */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
-  readonly extensions?: ReadonlyArray<GentExtension>
+  readonly extensions?: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
   /** Extra tools to register (authored via `tool({...})`). */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** AgentRunner mock — default returns success with empty text */

@@ -38,7 +38,10 @@ import {
   createClaudeCodeSessionManager,
   makeClaudeCodeTurnExecutor,
 } from "./claude-code-executor.js"
+import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 import { live as claudeSdkLive } from "./claude-sdk.js"
+import { AcpAgentsPlatform } from "./platform-adapter.js"
+import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
 import { generateToolDescription } from "./mcp-codemode.js"
 
 const claudeCodeAgent = defineAgent({
@@ -166,10 +169,18 @@ interface AcpAgentsManagerDeps {
 const buildAcpContributions = (
   spawner: ChildProcessSpawner["Service"],
   deps: AcpAgentsManagerDeps,
+  platform: {
+    readonly acp: AcpAgentsPlatform["Service"]
+    readonly anthropic: AnthropicPlatform["Service"]
+  },
 ): ExtensionContributions => {
   const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
   const claudeCodeManager = (
-    deps.makeClaudeCodeSessionManager ?? (() => createClaudeCodeSessionManager(claudeSdkLive))
+    deps.makeClaudeCodeSessionManager ??
+    (() =>
+      createClaudeCodeSessionManager(claudeSdkLive(platform.acp), () =>
+        readClaudeCodeOAuthToken(platform.anthropic),
+      ))
   )()
   const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
   const claudeCode = {
@@ -213,10 +224,15 @@ export const makeAcpAgentsExtension = (
   deps: AcpAgentsManagerDeps = {},
 ): GentExtension<ChildProcessSpawner> => ({
   manifest: { id: ExtensionId.make("@gent/acp-agents") },
-  setup: () =>
+  setup: (ctx) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner
-      return buildAcpContributions(spawner, deps)
+      const acpPlatform = AcpAgentsPlatform.fromHost(ctx.host)
+      const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host)
+      return buildAcpContributions(spawner, deps, {
+        acp: acpPlatform,
+        anthropic: anthropicPlatform,
+      })
     }),
 })
 

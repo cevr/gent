@@ -14,6 +14,7 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
+import { testSetupCtx } from "@gent/core/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { buildKeychainTransformClient } from "@gent/extensions/anthropic/keychain-transform"
@@ -99,7 +100,7 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // instance directly (closure-based, not yielded from R).
 const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
   const layer = AnthropicCredentialService.layerFromIO(io).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
+    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live(testSetupCtx().host))),
   )
   return Effect.runPromise(
     Layer.build(layer).pipe(

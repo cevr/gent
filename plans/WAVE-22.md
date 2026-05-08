@@ -101,12 +101,24 @@ Fix direction:
 
 ### W22.1 — Platform Inventory And Host Boundary
 
+Status: implemented, awaiting full wave gate.
+
 Work:
 
 - Inventory active ambient host API usage in `packages/core`, `packages/extensions`,
   `apps/tui`, and `apps/server`.
 - Define the small host boundary by reading existing callers first.
 - Move shared host facts/actions into the owning platform layer.
+
+Implementation notes:
+
+- `GentPlatform` remains core-internal. Extension-visible host access now flows
+  through `ExtensionSetupContext.host`, built from `GentPlatform` by the core
+  loader.
+- `packages/extensions/src/anthropic`, `packages/extensions/src/acp-agents`,
+  and `packages/extensions/src/executor` no longer import
+  `@gent/core/runtime/gent-platform` or ambient Bun/Node platform modules.
+- The platform duplication lint guard passes against active extension source.
 
 Validation:
 
@@ -115,6 +127,10 @@ Validation:
 - `bun run lint`
 
 ### W22.2 — Delete Extension Platform Adapters
+
+Status: partially implemented. The ambient host reads are deleted from adapter
+implementations; tiny extension-specific projection adapters remain as local
+shape translators over `ExtensionSetupContext.host`.
 
 Work:
 

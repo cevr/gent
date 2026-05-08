@@ -164,6 +164,23 @@ export const testSetupCtx = (
   cwd: overrides?.cwd ?? "/tmp",
   source: overrides?.source ?? "test",
   home: overrides?.home ?? "/tmp",
+  host: {
+    osInfo: {
+      platform: "darwin",
+      arch: "arm64",
+      release: "test",
+      hostname: "test-host",
+      type: "Darwin",
+    },
+    execPath: "/usr/bin/node",
+    homeDirectory: overrides?.home ?? "/tmp",
+    parentEnv: {},
+    pathListSeparator: ":",
+    commandCandidates: (command) => [command],
+    isPortFree: () => Effect.succeed(true),
+    isPidAlive: () => Effect.succeed(true),
+    signalPid: () => Effect.void,
+  },
 })
 
 // Mock Helpers

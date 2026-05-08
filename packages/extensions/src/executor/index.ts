@@ -19,7 +19,10 @@ export const ExecutorExtension = defineExtension({
   tools: [ExecuteTool, ResumeTool],
   requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
   resources: ({ ctx }) => {
-    const executorDependencies = Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)
+    const executorDependencies = Layer.merge(
+      ExecutorSidecar.Live(ctx.home, ctx.host),
+      ExecutorMcpBridge.Live,
+    )
     const executorLayer = Layer.provideMerge(ExecutorControllerLive(ctx.cwd), executorDependencies)
     return [
       defineResource({

@@ -11,6 +11,7 @@
 import { Effect, Layer, Ref } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import type { LanguageModel } from "effect/unstable/ai"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import {
@@ -62,7 +63,7 @@ export interface E2ELayerConfig {
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extension inputs for setup */
-  readonly extensionInputs: ReadonlyArray<GentExtension>
+  readonly extensionInputs: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** AgentRunner mock. Default: returns success with empty text */

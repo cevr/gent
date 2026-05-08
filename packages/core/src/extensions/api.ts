@@ -257,7 +257,7 @@ export {
 // ── Public API ──
 
 // ExtensionSetupContext re-exported from domain — single source of truth
-export type { ExtensionSetupContext } from "../domain/extension.js"
+export type { ExtensionHostPlatform, ExtensionSetupContext } from "../domain/extension.js"
 
 /**
  * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
@@ -275,7 +275,7 @@ export type FieldSpec<A, R = never> =
       readonly ctx: ExtensionSetupContext
     }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
-export interface DefineExtensionInput<Client = unknown> {
+export interface DefineExtensionInput<Client = unknown, R = never> {
   readonly id: string
   /**
    * Optional client-side facet owned by the same extension artifact.
@@ -286,35 +286,35 @@ export interface DefineExtensionInput<Client = unknown> {
    * one server/client pairing without making core depend on a TUI package.
    */
   readonly client?: Client
-  readonly resources?: FieldSpec<AnyResourceContribution>
+  readonly resources?: FieldSpec<AnyResourceContribution, R>
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
    * dispatch surface: every entry must be a `ToolCapability` — `request({...})`
    * and `action({...})` outputs cannot be slotted here.
    */
-  readonly tools?: FieldSpec<ToolCapability>
+  readonly tools?: FieldSpec<ToolCapability, R>
   /**
    * Human-driven UI commands authored via `action({...})`. The bucket name is
    * the dispatch surface: every entry must be an `ActionCapability` — `tool({...})`
    * and `request({...})` outputs cannot be slotted here.
    */
-  readonly actions?: FieldSpec<ActionCapability>
+  readonly actions?: FieldSpec<ActionCapability, R>
   /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * The bucket name is the dispatch surface: every entry must be a
    * `RequestCapability` — `tool({...})` and `action({...})` outputs cannot be
    * slotted here.
    */
-  readonly requests?: FieldSpec<RequestCapability>
-  readonly agents?: FieldSpec<AgentDefinition>
+  readonly requests?: FieldSpec<RequestCapability, R>
+  readonly agents?: FieldSpec<AgentDefinition, R>
   /**
    * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
    * Compiled by `compileExtensionReactions`.
    */
   readonly reactions?: ExtensionReactions
-  readonly modelDrivers?: FieldSpec<ModelDriverContribution>
-  readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
+  readonly modelDrivers?: FieldSpec<ModelDriverContribution, R>
+  readonly externalDrivers?: FieldSpec<ExternalDriverContribution, R>
 }
 
 /**
@@ -323,25 +323,25 @@ export interface DefineExtensionInput<Client = unknown> {
  * the failure message points at the field, not "setup failed" (codex
  *  finding 2).
  */
-const resolveField = <A>(
+const resolveField = <A, R>(
   manifest: ExtensionManifest,
   field: string,
-  spec: FieldSpec<A> | undefined,
+  spec: FieldSpec<A, R> | undefined,
   ctx: ExtensionSetupContext,
-): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError> =>
+): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =>
   Effect.gen(function* () {
     if (spec === undefined) return []
-    if (Array.isArray(spec)) return spec
-    const result = yield* Effect.try({
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-      try: () => (spec as (args: { ctx: ExtensionSetupContext }) => unknown)({ ctx }),
-      catch: (cause) =>
-        new ExtensionLoadError({
-          extensionId: manifest.id,
-          message: `${field} factory threw: ${String(cause)}`,
-          cause,
-        }),
-    })
+    if (typeof spec !== "function") return spec
+    const result: ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =
+      yield* Effect.try({
+        try: () => spec({ ctx }),
+        catch: (cause) =>
+          new ExtensionLoadError({
+            extensionId: manifest.id,
+            message: `${field} factory threw: ${String(cause)}`,
+            cause,
+          }),
+      })
     // Effect-typed factory: yield it AND seal its failure channel into
     // ExtensionLoadError. Without this, an Effect-factory could escape its
     // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
@@ -349,7 +349,6 @@ const resolveField = <A>(
     if (Effect.isEffect(result)) {
       const value = yield* sealRuntimeLoadedEffect({
         extensionId: manifest.id,
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         effect: () => result,
         failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
         defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
@@ -396,18 +395,18 @@ const resolveField = <A>(
  * })
  * ```
  */
-export function defineExtension(
-  params: DefineExtensionInput & { readonly client?: undefined },
-): GentExtension<never>
-export function defineExtension<Client>(
-  params: DefineExtensionInput<Client> & { readonly client: Client },
-): GentExtension<never> & { readonly client: Client }
-export function defineExtension<Client>(
-  params: DefineExtensionInput<Client>,
-): GentExtension<never> & { readonly client?: Client }
-export function defineExtension(
-  params: DefineExtensionInput,
-): GentExtension<never> & { readonly client?: unknown } {
+export function defineExtension<R = never>(
+  params: DefineExtensionInput<unknown, R> & { readonly client?: undefined },
+): GentExtension<R>
+export function defineExtension<Client, R = never>(
+  params: DefineExtensionInput<Client, R> & { readonly client: Client },
+): GentExtension<R> & { readonly client: Client }
+export function defineExtension<Client, R = never>(
+  params: DefineExtensionInput<Client, R>,
+): GentExtension<R> & { readonly client?: Client }
+export function defineExtension<Client, R>(
+  params: DefineExtensionInput<Client, R>,
+): GentExtension<R> & { readonly client?: Client } {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,

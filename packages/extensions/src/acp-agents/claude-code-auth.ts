@@ -16,7 +16,7 @@ import {
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
 } from "../anthropic/oauth.js"
-import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
+import { AnthropicPlatform, type AnthropicPlatformShape } from "../anthropic/platform-adapter.js"
 
 /**
  * Read the Claude Code OAuth access token from macOS Keychain (or
@@ -29,7 +29,9 @@ import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
  * with ProviderAuthError rather than send a token that will expire
  * mid-flight — matches AnthropicCredentialService's policy.
  */
-export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthError> =>
+export const readClaudeCodeOAuthToken = (
+  platform: AnthropicPlatformShape,
+): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {
     // The ACP/SDK path always uses the primary account. Multi-account
     // routing happens at the picker UI level (which doesn't exist
@@ -49,5 +51,5 @@ export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthEr
     return creds.accessToken
   }).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off
-    Effect.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
+    Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
   )

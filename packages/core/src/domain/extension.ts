@@ -350,6 +350,29 @@ export interface ExtensionSetupContext {
   readonly source: string
   /** User home directory (e.g. ~/.gent lives here). Defaults to os.homedir(). */
   readonly home: string
+  readonly host: ExtensionHostPlatform
+}
+
+export interface ExtensionHostOsInfo {
+  readonly platform: string
+  readonly arch: string
+  readonly release: string
+  readonly hostname: string
+  readonly type: string
+}
+
+export type ExtensionHostSignal = string | 0
+
+export interface ExtensionHostPlatform {
+  readonly osInfo: ExtensionHostOsInfo
+  readonly execPath: string
+  readonly homeDirectory: string
+  readonly parentEnv: Record<string, string | undefined>
+  readonly pathListSeparator: string
+  readonly commandCandidates: (command: string) => ReadonlyArray<string>
+  readonly isPortFree: (port: number) => Effect.Effect<boolean>
+  readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
+  readonly signalPid: (pid: number, signal: ExtensionHostSignal) => Effect.Effect<void>
 }
 
 export interface GentExtension<R = ChildProcessSpawner> {

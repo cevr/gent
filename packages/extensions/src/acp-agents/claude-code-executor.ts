@@ -37,7 +37,6 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeSdkError, type ClaudeSdkServiceShape, type ClaudeSdkSession } from "./claude-sdk.js"
 import { startCodemodeServer, type CodemodeConfig, type CodemodeServer } from "./mcp-codemode.js"
 import { makeAcpRunTool } from "./executor-boundary.js"
-import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 import { CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import type { ExternalSessionKey } from "./executor.js"
 import {
@@ -342,7 +341,7 @@ export type ClaudeCodeTokenReader = () => Effect.Effect<string, { readonly messa
 
 export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
-  tokenReader: ClaudeCodeTokenReader = readClaudeCodeOAuthToken,
+  tokenReader: ClaudeCodeTokenReader,
 ): ClaudeCodeSessionManager => {
   const sessions = new Map<string, ClaudeCodeProcess>()
   // Parallel index from driverId → set of cache keys. Lets `invalidateDriver`

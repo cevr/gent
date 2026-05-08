@@ -62,7 +62,7 @@ export interface RuntimeProfileInputs {
   readonly platform: string
   readonly shell?: string
   readonly osVersion?: string
-  readonly extensions: ReadonlyArray<GentExtension>
+  readonly extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>

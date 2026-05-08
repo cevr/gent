@@ -29,7 +29,7 @@ import {
 } from "./resource-host/schedule-engine.js"
 import { buildResourceLayer, collectResourceEntries } from "./resource-host/resource-layer.js"
 
-type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>

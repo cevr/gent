@@ -18,11 +18,12 @@ import {
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+import { testSetupCtx } from "@gent/core/test-utils"
 const credLayer = (
   ...args: Parameters<typeof AnthropicCredentialService.layerFromIO>
 ): Layer.Layer<AnthropicCredentialService> =>
   AnthropicCredentialService.layerFromIO(...args).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
+    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live(testSetupCtx().host))),
   )
 // ── Helpers ──
 const makeCreds = (label: string, expiresAt: number): ClaudeCredentials => ({

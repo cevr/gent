@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import type { GentExtension } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "../src/index.js"
 
-const hasPublicExtensionShape = (extension: GentExtension) =>
+const hasPublicExtensionShape = (extension: (typeof BuiltinExtensions)[number]) =>
   typeof extension.manifest.id === "string" && typeof extension.setup === "function"
 
 describe("starting extensions", () => {
