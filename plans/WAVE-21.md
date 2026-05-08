@@ -108,6 +108,7 @@ Commits landed in this wave so far:
 - `41a95117 refactor(extensions): remove unsupported resource scopes`
 - `2bdfdd60 docs(plan): record resource scope subtraction`
 - `99e6b35d refactor(acp): own managers per extension setup`
+- `53847ae1 test(extensions): lock resource-owned state`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -148,6 +149,9 @@ classes of privilege and races, but the deeper P1s remain:
   them in that setup's external drivers plus Resource finalizer, with a
   regression proving two setup invocations invalidate and dispose independent
   manager instances.
+- Auto and Executor process-resource controllers are now locked as
+  resource-owned state. Commit `53847ae1` proves independent `Layer.build`
+  contexts do not share auto workflow state or executor connection state.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -656,17 +660,19 @@ Validation:
 
 Goal: make extension state ownership explicit and scoped.
 
-Status: resource scope truthfulness is closed by `41a95117`; the public
-Resource API exposes only process lifetime because that is the only host-owned
-lifecycle today. ACP manager ownership is closed by `99e6b35d`. Auto and
-executor controller ownership remain open.
+Status: closed. Resource scope truthfulness is closed by `41a95117`; the
+public Resource API exposes only process lifetime because that is the only
+host-owned lifecycle today. ACP manager ownership is closed by `99e6b35d`.
+Auto and executor controller ownership are locked by `53847ae1`, which proves
+independent layer builds do not share workflow or executor state.
 
 Work:
 
 - [x] Convert ACP process-local manager state into setup/resource-owned state.
       Done in `99e6b35d`.
-- Convert auto and executor process-local state into resource-owned services or
-  actors.
+- [x] Convert auto and executor process-local state into resource-owned services
+      or actors. Existing services are resource-owned; `53847ae1` locks the
+      behavior with independent layer-build regressions.
 - [x] Implement truthful resource scopes used by current extensions, or delete
       unsupported scopes from the public API. Done in `41a95117`.
 - Add startup/shutdown/restart behavior tests.
@@ -679,6 +685,8 @@ Validation:
 - `bun run fmt`
 - `bun run gate`
 - `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/acp-agents/acp-extension-state.test.ts tests/acp-agents/acp-system-prompt-slot.test.ts tests/acp-agents/claude-sdk-lifecycle.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/auto/auto.test.ts`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/executor-integration.test.ts`
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt`
