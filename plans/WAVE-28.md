@@ -200,6 +200,8 @@ to `AgentLoop`.
 
 ## Commit 5: refactor(runtime): move submission idempotency to actor ownership
 
+**Status**: Completed in this wave.
+
 **Justification**: `SessionRuntime` currently owns process-local send-turn maps
 and a sleep-poll completion loop while `AgentLoop` already defines operation
 ids. One owner should coordinate idempotency and completion.
@@ -212,16 +214,16 @@ ids. One owner should coordinate idempotency and completion.
 
 **Changes**
 
-| File                                                                                     | Change                                                                                |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Delete `activeSendTurns` and sleep polling if actor/effect-encore can own completion. |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Adjust persisted/live operation semantics if needed.                                  |
-| `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`                               | Upstream DX fix if current actor API lacks the right safe wait primitive.             |
+| File                                                                                     | Change                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Deleted process-local send-turn maps and sleep polling; durable request-id sends now dispatch through persisted actor operation ids and wait on the event stream. |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Added persisted `SubmitDurable`, kept ordinary `Submit` live, and provided actor state registry to handler materialization.                                       |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/index.ts`               | Made `RecordingEventStore.subscribe` live so tests match the real event store contract.                                                                           |
 
 **Verification**
 
-- Session idempotency tests.
-- Actor restart/redelivery tests if persisted semantics change.
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/session-runtime.test.ts tests/server/session-idempotency.test.ts tests/runtime/agent/agent-loop.actor.test.ts tests/runtime/external-turn.test.ts`
 - `bun run test:e2e`
 - `bun run gate`
 

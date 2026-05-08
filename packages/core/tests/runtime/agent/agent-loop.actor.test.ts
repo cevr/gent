@@ -69,7 +69,7 @@ const interruptPayload = (params: {
 
 describe("AgentLoop actor identity", () => {
   it.effect(
-    "public submission and steering ops are live-only while reply commands remain persisted",
+    "durable submission and reply commands are persisted while live-only ops stay transient",
     () =>
       Effect.sync(() => {
         const hasPersistedFlag = (definition: object) => Object.hasOwn(definition, "persisted")
@@ -77,6 +77,7 @@ describe("AgentLoop actor identity", () => {
           Object.entries(definition).some(([key, value]) => key === "persisted" && value === true)
 
         expect(hasPersistedFlag(AgentLoop._meta.definitions.Submit)).toBe(false)
+        expect(hasPersistedTrueFlag(AgentLoop._meta.definitions.SubmitDurable)).toBe(true)
         expect(hasPersistedFlag(AgentLoop._meta.definitions.Run)).toBe(false)
         expect(hasPersistedFlag(AgentLoop._meta.definitions.QueueFollowUp)).toBe(false)
         expect(hasPersistedFlag(AgentLoop._meta.definitions.Steer)).toBe(false)
@@ -117,6 +118,24 @@ describe("AgentLoop actor identity", () => {
 
       // ExecId format: `entityId\x00tag\x00primaryKey`.
       expect(String(exec1)).toBe(`${entity("session-a", "branch-main")}\x00Submit\x00msg-1`)
+    }),
+  )
+
+  it.effect("SubmitDurable execution id keys by message id and routes by message target", () =>
+    Effect.gen(function* () {
+      const exec1 = yield* AgentLoop.SubmitDurable.executionId(
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
+      )
+      const exec1Again = yield* AgentLoop.SubmitDurable.executionId(
+        submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
+      )
+      const exec2 = yield* AgentLoop.SubmitDurable.executionId(
+        submitPayload({ id: messageTwo, sessionId: sessionA, branchId: branchMain }),
+      )
+
+      expect(exec1).toBe(exec1Again)
+      expect(exec1).not.toBe(exec2)
+      expect(String(exec1)).toBe(`${entity("session-a", "branch-main")}\x00SubmitDurable\x00msg-1`)
     }),
   )
 

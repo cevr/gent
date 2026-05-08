@@ -1,16 +1,4 @@
-import {
-  Cause,
-  Context,
-  DateTime,
-  Deferred,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-  type Scope,
-} from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Stream, type Scope } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -19,7 +7,7 @@ import { ActorAddressResolver, ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
-import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
+import { AgentRestarted, ErrorOccurred, EventStore } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import {
   ActorCommandId,
@@ -34,13 +22,12 @@ import type { PromptSection } from "../domain/prompt.js"
 import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
+import type { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
-import { assistantMessageIdForTurn } from "./agent/agent-loop.utils.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
@@ -198,6 +185,7 @@ type SessionRuntimeLayerRequirements =
   | ClusterMessageStorage.MessageStorage
   | ActorStateRegistry
   | EventStorage
+  | EventStore
   | EventPublisher
   | ExtensionRegistry
   | DriverRegistry
@@ -327,12 +315,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
-  const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
+  const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
-  const activeSendTurns = yield* Ref.make<ReadonlyMap<MessageId, Deferred.Deferred<void>>>(
-    new Map(),
-  )
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
@@ -373,57 +358,31 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           message: "AgentLoop state unavailable",
           cause: error,
         })
-  const completedTurnExists = (messageId: MessageId) =>
-    messageStorage
-      .getMessage(messageId)
-      .pipe(
-        Effect.flatMap((existing) =>
-          existing === undefined
-            ? Effect.succeed(false)
-            : messageStorage
-                .getMessage(assistantMessageIdForTurn(messageId, 1))
-                .pipe(Effect.map((assistant) => assistant !== undefined)),
-        ),
-      )
-  const acquireSendTurn = Effect.fn("SessionRuntime.acquireSendTurn")(function* (
-    messageId: MessageId,
-  ) {
-    let ownerDeferred: Deferred.Deferred<void> | undefined
-    while (ownerDeferred === undefined) {
-      const candidate = yield* Deferred.make<void>()
-      const existing = yield* Ref.modify(activeSendTurns, (current) => {
-        const active = current.get(messageId)
-        if (active !== undefined) return [active, current]
-        const next = new Map(current)
-        next.set(messageId, candidate)
-        return [undefined, next]
-      })
-      if (existing === undefined) {
-        ownerDeferred = candidate
-      } else {
-        yield* Deferred.await(existing)
-        if (yield* completedTurnExists(messageId)) return undefined
-      }
-    }
-    return ownerDeferred
-  })
-  const releaseSendTurn = (messageId: MessageId, deferred: Deferred.Deferred<void>) =>
-    Ref.update(activeSendTurns, (current) => {
-      const next = new Map(current)
-      if (next.get(messageId) === deferred) {
-        next.delete(messageId)
-      }
-      return next
-    }).pipe(Effect.andThen(Deferred.succeed(deferred, void 0)))
-  const waitForCompletedTurnVisible = Effect.fn("SessionRuntime.waitForCompletedTurnVisible")(
-    function* (messageId: MessageId) {
-      for (let attempt = 0; attempt < 50; attempt++) {
-        if (yield* completedTurnExists(messageId)) return
-        yield* Effect.sleep("10 millis")
-      }
-    },
-  )
-
+  const waitForTurnCompleted = (target: SessionRuntimeTarget & { readonly messageId: MessageId }) =>
+    eventStore.subscribe({ sessionId: target.sessionId, branchId: target.branchId }).pipe(
+      Stream.filter(
+        (envelope) =>
+          envelope.event._tag === "TurnCompleted" && envelope.event.messageId === target.messageId,
+      ),
+      Stream.runHead,
+      Effect.flatMap((completed) =>
+        Option.isSome(completed)
+          ? Effect.void
+          : Effect.fail(
+              new SessionRuntimeError({
+                message: `Turn completion stream ended: ${target.sessionId}/${target.branchId}/${target.messageId}`,
+              }),
+            ),
+      ),
+      Effect.mapError((cause) =>
+        Schema.is(SessionRuntimeError)(cause)
+          ? cause
+          : new SessionRuntimeError({
+              message: "Failed to wait for turn completion",
+              cause,
+            }),
+      ),
+    )
   const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
     input: RunPromptInput,
   ) {
@@ -592,9 +551,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         : ActorCommandId.make(yield* platform.randomId))
     const shouldHoldCompletion = input.requestId !== undefined || input.commandId !== undefined
     const messageId = userMessageIdForCommand(commandId)
-    if (yield* completedTurnExists(messageId)) return
-    const sendTurn = yield* acquireSendTurn(messageId)
-    if (sendTurn === undefined) return
     const resolved = yield* resolveSessionEnvironmentOrFail({
       sessionId: input.sessionId,
       branchId: input.branchId,
@@ -644,47 +600,61 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       runSpec: input.runSpec,
     }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    yield* ref.execute(AgentLoopActor.Submit.make(payload)).pipe(
-      Effect.tap(() =>
-        shouldHoldCompletion ? waitForCompletedTurnVisible(messageId) : Effect.void,
-      ),
-      Effect.ensuring(releaseSendTurn(messageId, sendTurn)),
-      Effect.tapCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.void
-        return Effect.gen(function* () {
-          if (Cause.hasDies(cause)) {
-            yield* eventPublisher.publish(
-              AgentRestarted.make({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                attempt: 0,
-                error: Cause.pretty(cause),
-              }),
-            )
-          }
+    const reportSubmissionFailure = (cause: Cause.Cause<unknown>) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.void
+      return Effect.gen(function* () {
+        if (Cause.hasDies(cause)) {
           yield* eventPublisher.publish(
-            ErrorOccurred.make({
+            AgentRestarted.make({
               sessionId: input.sessionId,
               branchId: input.branchId,
+              attempt: 0,
               error: Cause.pretty(cause),
             }),
           )
-          yield* Effect.logWarning("agent loop submission failed").pipe(
-            Effect.annotateLogs({ error: Cause.pretty(cause) }),
-          )
-        }).pipe(
-          Effect.catchCause((diagnosticCause) =>
-            Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
-              Effect.annotateLogs({
-                error: Cause.pretty(diagnosticCause),
-                originalError: Cause.pretty(cause),
-              }),
-              Effect.catchEager(() => Effect.void),
-            ),
-          ),
+        }
+        yield* eventPublisher.publish(
+          ErrorOccurred.make({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            error: Cause.pretty(cause),
+          }),
         )
-      }),
-    )
+        yield* Effect.logWarning("agent loop submission failed").pipe(
+          Effect.annotateLogs({ error: Cause.pretty(cause) }),
+        )
+      }).pipe(
+        Effect.catchCause((diagnosticCause) =>
+          Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
+            Effect.annotateLogs({
+              error: Cause.pretty(diagnosticCause),
+              originalError: Cause.pretty(cause),
+            }),
+            Effect.catchEager(() => Effect.void),
+          ),
+        ),
+      )
+    }
+    if (shouldHoldCompletion) {
+      yield* provideActorStateServices(
+        ref.execute(AgentLoopActor.SubmitDurable.make(payload)).pipe(
+          Effect.andThen(
+            waitForTurnCompleted({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              messageId,
+            }),
+          ),
+          Effect.tapCause(reportSubmissionFailure),
+        ),
+      )
+    } else {
+      yield* provideActorStateServices(
+        ref
+          .execute(AgentLoopActor.Submit.make(payload))
+          .pipe(Effect.tapCause(reportSubmissionFailure)),
+      )
+    }
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({
         sessionId: input.sessionId,

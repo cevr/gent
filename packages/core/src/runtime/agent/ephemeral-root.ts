@@ -204,6 +204,7 @@ export const makeEphemeralAgentRootLayer = (params: {
       Layer.provideMerge(
         Layer.mergeAll(
           clusterRunnerLayer,
+          eventStoreLayer,
           eventPublisherLayer,
           toolRunnerLayer,
           ResourceManagerLive,

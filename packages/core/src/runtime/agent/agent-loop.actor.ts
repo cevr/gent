@@ -24,8 +24,9 @@
  * target fields.
  *
  * **Execution id key** per op:
- * - `Submit` / `Run` / `QueueFollowUp` — `message.id` (live-only;
- *   SessionRuntime owns durable request idempotency for this path)
+ * - `Submit` — `message.id` (live-only)
+ * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
+ * - `Run` / `QueueFollowUp` — `message.id` (live-only)
  * - `Steer` — `commandId` (live-only; SessionRuntime owns durable request
  *   idempotency for this path)
  * - `Interrupt` / `RespondInteraction` — durable persisted command key
@@ -39,8 +40,8 @@
 import { DateTime, Effect, Exit, Ref, Schema, Stream, Layer, Option, Semaphore } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Actor } from "effect-encore"
-import { AgentName, RunSpecSchema } from "../../domain/agent.js"
+import { Actor, ActorStateRegistry } from "effect-encore"
+import { AgentName, RunSpecSchema, type RunSpec } from "../../domain/agent.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
@@ -183,7 +184,12 @@ type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 type WorkspaceInput = {
   readonly workspaceId: string
 }
-type TurnSubmissionInput = WorkspaceInput & { readonly message: MessageType }
+type TurnSubmissionInput = WorkspaceInput & {
+  readonly message: MessageType
+  readonly agentOverride?: AgentName
+  readonly runSpec?: RunSpec
+  readonly interactive?: boolean
+}
 type SteerInput = WorkspaceInput & {
   readonly commandId: ActorCommandId
   readonly command: SteerCommandType
@@ -253,6 +259,16 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: TurnSubmissionFields,
     success: Schema.Void,
     error: AgentLoopError,
+    id: (p: TurnSubmissionInput) => ({
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
+      primaryKey: p.message.id,
+    }),
+  },
+  SubmitDurable: {
+    payload: TurnSubmissionFields,
+    success: Schema.Void,
+    error: AgentLoopError,
+    persisted: true,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
@@ -618,6 +634,9 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
       readonly message?: MessageType
       readonly content?: string
       readonly metadata?: MessageMetadata
+      readonly agentOverride?: AgentName
+      readonly runSpec?: RunSpec
+      readonly interactive?: boolean
     }) {
       const wasAlreadyWarm = yield* markWrite
       const message =
@@ -633,7 +652,12 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
         })
 
       yield* ensureTarget(message)
-      const item = { message }
+      const item = buildQueuedTurnItem({
+        message,
+        agentOverride: input.agentOverride,
+        runSpec: input.runSpec,
+        interactive: input.interactive,
+      })
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
         coldQueueOnly: !wasAlreadyWarm,
       })
@@ -764,7 +788,7 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     })
 
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
-      operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
+      operation: TurnSubmissionInput,
     ) {
       yield* ensureStarted
       yield* ensureTarget(operation.message)
@@ -881,13 +905,24 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     })
 
     return {
-      Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
+      Submit: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+        withWorkspace(submitTurn(operation)),
+      SubmitDurable: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         withWorkspace(submitTurn(operation)),
       Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
         withWorkspace(runTurn(operation)),
       QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         withWorkspace(
-          ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
+          ensureStarted.pipe(
+            Effect.andThen(
+              enqueueMessage({
+                message: operation.message,
+                agentOverride: operation.agentOverride,
+                runSpec: operation.runSpec,
+                interactive: operation.interactive,
+              }),
+            ),
+          ),
         ),
       Steer: ({ operation }: HandlerRequest<SteerInput>) =>
         withWorkspace(applySteer(operation.commandId, operation.command)),
@@ -1047,7 +1082,7 @@ export const AgentLoopLiveActor = (config: {
           // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
           // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
           concurrency: "unbounded",
-        }),
+        }).pipe(Layer.provideMerge(ActorStateRegistry.Live)),
       ),
     ),
   )
@@ -1061,7 +1096,10 @@ export const AgentLoopTestActor = (config: {
         Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers(rawDeps), {
           // Match the production mailbox behavior used by AgentLoopLiveActor.
           concurrency: "unbounded",
-        }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
+        }).pipe(
+          Layer.provideMerge(ActorStateRegistry.Live),
+          Layer.provide(ShardingConfig.layerDefaults),
+        ),
       ),
     ),
   )
