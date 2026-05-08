@@ -1,4 +1,15 @@
-import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  DateTime,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
@@ -394,6 +405,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
+  const activeSendTurns = yield* Ref.make<ReadonlyMap<MessageId, Deferred.Deferred<void>>>(
+    new Map(),
+  )
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
@@ -434,6 +448,56 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           message: "AgentLoop state unavailable",
           cause: error,
         })
+  const completedTurnExists = (messageId: MessageId) =>
+    messageStorage
+      .getMessage(messageId)
+      .pipe(
+        Effect.flatMap((existing) =>
+          existing === undefined
+            ? Effect.succeed(false)
+            : messageStorage
+                .getMessage(assistantMessageIdForTurn(messageId, 1))
+                .pipe(Effect.map((assistant) => assistant !== undefined)),
+        ),
+      )
+  const acquireSendTurn = Effect.fn("SessionRuntime.acquireSendTurn")(function* (
+    messageId: MessageId,
+  ) {
+    let ownerDeferred: Deferred.Deferred<void> | undefined
+    while (ownerDeferred === undefined) {
+      const candidate = yield* Deferred.make<void>()
+      const existing = yield* Ref.modify(activeSendTurns, (current) => {
+        const active = current.get(messageId)
+        if (active !== undefined) return [active, current]
+        const next = new Map(current)
+        next.set(messageId, candidate)
+        return [undefined, next]
+      })
+      if (existing === undefined) {
+        ownerDeferred = candidate
+      } else {
+        yield* Deferred.await(existing)
+        if (yield* completedTurnExists(messageId)) return undefined
+      }
+    }
+    return ownerDeferred
+  })
+  const releaseSendTurn = (messageId: MessageId, deferred: Deferred.Deferred<void>) =>
+    Ref.update(activeSendTurns, (current) => {
+      const next = new Map(current)
+      if (next.get(messageId) === deferred) {
+        next.delete(messageId)
+      }
+      return next
+    }).pipe(Effect.andThen(Deferred.succeed(deferred, void 0)))
+  const waitForCompletedTurnVisible = Effect.fn("SessionRuntime.waitForCompletedTurnVisible")(
+    function* (messageId: MessageId) {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (yield* completedTurnExists(messageId)) return
+        yield* Effect.sleep("10 millis")
+      }
+    },
+  )
 
   const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
     input: RunPromptInput,
@@ -603,19 +667,11 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       (input.requestId !== undefined
         ? commandIdForRequestId(input.requestId)
         : ActorCommandId.make(yield* platform.randomId))
+    const shouldHoldCompletion = input.requestId !== undefined || input.commandId !== undefined
     const messageId = userMessageIdForCommand(commandId)
-    const duplicateCompletedTurn = yield* messageStorage
-      .getMessage(messageId)
-      .pipe(
-        Effect.flatMap((existing) =>
-          existing === undefined
-            ? Effect.succeed(false)
-            : messageStorage
-                .getMessage(assistantMessageIdForTurn(messageId, 1))
-                .pipe(Effect.map((assistant) => assistant !== undefined)),
-        ),
-      )
-    if (duplicateCompletedTurn) return
+    if (yield* completedTurnExists(messageId)) return
+    const sendTurn = yield* acquireSendTurn(messageId)
+    if (sendTurn === undefined) return
     const resolved = yield* resolveSessionEnvironmentOrFail({
       sessionId: input.sessionId,
       branchId: input.branchId,
@@ -669,6 +725,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         }),
       )
       .pipe(
+        Effect.tap(() =>
+          shouldHoldCompletion ? waitForCompletedTurnVisible(messageId) : Effect.void,
+        ),
+        Effect.ensuring(releaseSendTurn(messageId, sendTurn)),
         Effect.tapCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) return Effect.void
           return Effect.gen(function* () {

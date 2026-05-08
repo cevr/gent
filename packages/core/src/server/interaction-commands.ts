@@ -60,22 +60,19 @@ export class InteractionCommands extends Context.Service<
             })
           }
 
-          // 1. Store resolution so re-entering present() finds it
+          // 1. Store resolution durably so re-entering present() finds it
           yield* approvalService.storeResolution(input.requestId, {
             approved: input.approved,
             ...(input.notes !== undefined ? { notes: input.notes } : {}),
           })
-          // 2. Wake the machine (before storage resolve — if we crash after
-          //    resolve but before wake, the request is no longer pending and
-          //    the in-memory resolution is lost, stranding the session)
+          // 2. Wake the machine. present() marks the row resolved only when the
+          //    tool consumes the durable decision.
           yield* sessionRuntime.respondInteraction({
             sessionId: input.sessionId,
             branchId: input.branchId,
             requestId: input.requestId,
           })
-          // 3. Resolve in storage (best-effort cleanup after wake)
-          yield* approvalService.respond(input.requestId)
-          // 4. Publish resolution event
+          // 3. Publish resolution event
           yield* eventPublisher
             .publish(
               InteractionResolved.make({

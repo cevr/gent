@@ -37,7 +37,7 @@ export interface ApprovalServiceShape {
   readonly storeResolution: (
     requestId: InteractionRequestId,
     decision: ApprovalDecision,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, EventStoreError>
   /** Mark a request as resolved in storage */
   readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Re-publish event for a persisted pending request (recovery after restart) */
@@ -45,6 +45,7 @@ export interface ApprovalServiceShape {
     requestId: InteractionRequestId,
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
+    decision?: ApprovalDecision,
   ) => Effect.Effect<void, EventStoreError>
 }
 

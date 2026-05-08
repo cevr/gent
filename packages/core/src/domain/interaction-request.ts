@@ -71,6 +71,7 @@ export const InteractionRequestRecord = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   paramsJson: Schema.String,
+  decisionJson: Schema.optional(Schema.String),
   status: InteractionRequestStatus,
   createdAt: Schema.Number,
 })
@@ -80,6 +81,7 @@ export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
 export const INTERACTION_TYPE = "approval" as const
 
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
+const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
 
 export const encodeInteractionParams = (
   params: ApprovalRequest,
@@ -107,6 +109,32 @@ export const decodeInteractionParams = (
     ),
   )
 
+export const encodeInteractionDecision = (
+  decision: ApprovalDecision,
+): Effect.Effect<string, EventStoreError> =>
+  Schema.encodeEffect(decisionJsonCodec)(decision).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: "Failed to encode interaction decision",
+          cause,
+        }),
+    ),
+  )
+
+export const decodeInteractionDecision = (
+  decisionJson: string,
+): Effect.Effect<ApprovalDecision, EventStoreError> =>
+  Schema.decodeUnknownEffect(decisionJsonCodec)(decisionJson).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: "Failed to decode interaction decision",
+          cause,
+        }),
+    ),
+  )
+
 // ============================================================================
 // Interaction service
 // ============================================================================
@@ -125,12 +153,13 @@ export interface InteractionService {
   readonly storeResolution: (
     requestId: InteractionRequestId,
     decision: ApprovalDecision,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, EventStoreError>
   /** Re-publish event for a persisted pending request (recovery after restart) */
   readonly rehydrate: (
     requestId: InteractionRequestId,
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
+    decision?: ApprovalDecision,
   ) => Effect.Effect<void, EventStoreError>
 }
 
@@ -141,6 +170,10 @@ export interface InteractionService {
  */
 export interface InteractionStorageConfig {
   readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
+  readonly decide: (
+    requestId: InteractionRequestId,
+    decisionJson: string,
+  ) => Effect.Effect<void, EventStoreError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
 }
 
@@ -212,7 +245,14 @@ export const makeInteractionService = (
     const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
 
     return {
-      storeResolution: setResolution,
+      storeResolution: (requestId, decision) =>
+        Effect.gen(function* () {
+          if (config.storage !== undefined) {
+            const decisionJson = yield* encodeInteractionDecision(decision)
+            yield* config.storage.decide(requestId, decisionJson)
+          }
+          yield* setResolution(requestId, decision)
+        }),
 
       present: Effect.fn("InteractionService.present")(function* (
         params: ApprovalRequest,
@@ -280,11 +320,16 @@ export const makeInteractionService = (
         requestId: InteractionRequestId,
         params: ApprovalRequest,
         ctx: { sessionId: SessionId; branchId: BranchId },
+        decision?: ApprovalDecision,
       ) {
         // Rebuild the context reverse lookup so post-restart present() can find
         // the stored resolution by sessionId:branchId → requestId.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
         yield* setPending(ctxKey, requestId)
+        if (decision !== undefined) {
+          yield* setResolution(requestId, decision)
+          return
+        }
         // Re-publish the event so reconnecting clients render the dialog.
         yield* config.onPresent(requestId, params, ctx)
       }),

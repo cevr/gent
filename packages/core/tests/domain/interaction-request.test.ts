@@ -29,6 +29,20 @@ const persistInteraction = (is: InteractionStorageService, record: InteractionRe
         }),
     ),
   )
+const decideInteraction = (
+  is: InteractionStorageService,
+  requestId: InteractionRequestId,
+  decisionJson: string,
+) =>
+  is.decide(requestId, decisionJson).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: "Failed to persist interaction decision",
+          cause,
+        }),
+    ),
+  )
 // ============================================================================
 // Interaction Request — cold interaction mechanics
 // ============================================================================
@@ -41,6 +55,7 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const storageCallbacks: InteractionStorageConfig = {
         persist: (record) => persistInteraction(is, record),
+        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
         resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
       const interaction = yield* makeInteractionService({
@@ -200,6 +215,7 @@ describe("Interaction Request", () => {
       const branchId = BranchId.make("b-service-singleton")
       const storageCallbacks: InteractionStorageConfig = {
         persist: (record) => persistInteraction(is, record),
+        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
         resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
       yield* ensureStorageParents({ sessionId, branchId })
@@ -318,6 +334,7 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const storageCallbacks: InteractionStorageConfig = {
         persist: (record) => persistInteraction(is, record),
+        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
         resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
       const sessionId = SessionId.make("s-cold-resume")
@@ -365,6 +382,7 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const storageCallbacks: InteractionStorageConfig = {
         persist: (record) => persistInteraction(is, record),
+        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
         resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
       const interaction = yield* makeInteractionService({

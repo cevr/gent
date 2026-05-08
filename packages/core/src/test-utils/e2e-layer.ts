@@ -30,7 +30,10 @@ import { EventStoreError } from "../domain/event.js"
 import { ExtensionId, type InteractionRequestId, SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { decodeInteractionParams } from "../domain/interaction-request.js"
+import {
+  decodeInteractionDecision,
+  decodeInteractionParams,
+} from "../domain/interaction-request.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -283,6 +286,16 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
                 ),
               resolve: (requestId) =>
                 store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+              decide: (requestId, decisionJson) =>
+                store.decide(requestId, decisionJson).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new EventStoreError({
+                        message: "Failed to persist interaction decision",
+                        cause,
+                      }),
+                  ),
+                ),
             })
           }),
         ),
@@ -298,27 +311,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             )
           : defaultApprovalLayer
       const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
-      const interactionRecoveryLive = Layer.effectDiscard(
-        Effect.gen(function* () {
-          const interactionStore = yield* InteractionStorage
-          const approvalService = yield* ApprovalService
-
-          const pending = yield* interactionStore.listPending()
-          for (const record of pending) {
-            const params = yield* decodeInteractionParams(record.paramsJson).pipe(
-              Effect.option,
-              Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
-            )
-            if (params === undefined) continue
-            yield* approvalService
-              .rehydrate(record.requestId, params, {
-                sessionId: record.sessionId,
-                branchId: record.branchId,
-              })
-              .pipe(Effect.catchEager(() => Effect.void))
-          }
-        }),
-      ).pipe(Layer.provide(depsWithApproval))
       const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(
         SessionRuntime.LiveWithEntity({
@@ -330,6 +322,50 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         SessionCommands.SessionMutationsLive,
         Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive, sessionRuntimeLive),
       )
+      const depsWithRuntime = Layer.mergeAll(depsWithApproval, sessionRuntimeLive)
+      const interactionRecoveryLive = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const interactionStore = yield* InteractionStorage
+          const approvalService = yield* ApprovalService
+          const sessionRuntime = yield* SessionRuntime
+
+          const pending = yield* interactionStore.listPending()
+          for (const record of pending) {
+            const params = yield* decodeInteractionParams(record.paramsJson).pipe(
+              Effect.option,
+              Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+            )
+            if (params === undefined) continue
+            const decision =
+              record.decisionJson === undefined
+                ? undefined
+                : yield* decodeInteractionDecision(record.decisionJson).pipe(
+                    Effect.option,
+                    Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+                  )
+            yield* approvalService
+              .rehydrate(
+                record.requestId,
+                params,
+                {
+                  sessionId: record.sessionId,
+                  branchId: record.branchId,
+                },
+                decision,
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+            if (decision !== undefined) {
+              yield* sessionRuntime
+                .respondInteraction({
+                  sessionId: record.sessionId,
+                  branchId: record.branchId,
+                  requestId: record.requestId,
+                })
+                .pipe(Effect.catchEager(() => Effect.void))
+            }
+          }
+        }),
+      ).pipe(Layer.provide(depsWithRuntime))
 
       return Layer.provideMerge(
         AppServicesLive,

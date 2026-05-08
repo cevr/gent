@@ -30,7 +30,10 @@ import {
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { decodeInteractionParams } from "../domain/interaction-request.js"
+import {
+  decodeInteractionDecision,
+  decodeInteractionParams,
+} from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
 import { SessionCommands } from "./session-commands.js"
@@ -230,6 +233,16 @@ export const createDependencies = (config: DependenciesConfig) => {
             ),
           resolve: (requestId) =>
             store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+          decide: (requestId, decisionJson) =>
+            store.decide(requestId, decisionJson).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new EventStoreError({
+                    message: "Failed to persist interaction decision",
+                    cause,
+                  }),
+              ),
+            ),
         })
       }),
     ),
@@ -260,6 +273,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     Effect.gen(function* () {
       const interactionStore = yield* InteractionStorage
       const approvalService = yield* ApprovalService
+      const sessionRuntime = yield* SessionRuntime
 
       const pending = yield* interactionStore.listPending()
       if (pending.length === 0) return
@@ -271,12 +285,33 @@ export const createDependencies = (config: DependenciesConfig) => {
           Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
         )
         if (params === undefined) continue
+        const decision =
+          record.decisionJson === undefined
+            ? undefined
+            : yield* decodeInteractionDecision(record.decisionJson).pipe(
+                Effect.option,
+                Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+              )
         yield* approvalService
-          .rehydrate(record.requestId, params, {
-            sessionId: record.sessionId,
-            branchId: record.branchId,
-          })
+          .rehydrate(
+            record.requestId,
+            params,
+            {
+              sessionId: record.sessionId,
+              branchId: record.branchId,
+            },
+            decision,
+          )
           .pipe(Effect.catchEager(() => Effect.void))
+        if (decision !== undefined) {
+          yield* sessionRuntime
+            .respondInteraction({
+              sessionId: record.sessionId,
+              branchId: record.branchId,
+              requestId: record.requestId,
+            })
+            .pipe(Effect.catchEager(() => Effect.void))
+        }
         recovered++
       }
 
@@ -284,7 +319,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         yield* Effect.log(`Recovered ${recovered} pending interaction request(s)`)
       }
     }),
-  ).pipe(Layer.provide(allDeps))
+  )
 
   // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
   const sessionProfileCacheLive = Layer.provide(
@@ -360,5 +395,9 @@ export const createDependencies = (config: DependenciesConfig) => {
     allWithRuntime,
   )
 
-  return Layer.mergeAll(allWithRuntime, agentRuntimeLive, interactionRecoveryLive)
+  return Layer.mergeAll(
+    allWithRuntime,
+    agentRuntimeLive,
+    Layer.provide(interactionRecoveryLive, allWithRuntime),
+  )
 }

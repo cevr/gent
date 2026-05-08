@@ -15,6 +15,7 @@ const InteractionRequestRow = Schema.Struct({
   session_id: SessionId,
   branch_id: BranchId,
   params_json: Schema.String,
+  decision_json: Schema.NullOr(Schema.String),
   // Read raw status string off the wire; the transform coerces
   // unknown values back to "pending".
   status: Schema.String,
@@ -31,6 +32,7 @@ const rowToRecord = (row: InteractionRequestRow): InteractionRequestRecordEncode
   sessionId: row.session_id,
   branchId: row.branch_id,
   paramsJson: row.params_json,
+  ...(row.decision_json !== null ? { decisionJson: row.decision_json } : {}),
   status: isStatus(row.status) ? row.status : ("pending" as const),
   createdAt: row.created_at,
 })
@@ -41,6 +43,7 @@ const recordToRow = (record: InteractionRequestRecordEncoded): InteractionReques
   session_id: SessionId.make(record.sessionId),
   branch_id: BranchId.make(record.branchId),
   params_json: record.paramsJson,
+  decision_json: record.decisionJson ?? null,
   status: record.status,
   created_at: record.createdAt,
 })
@@ -61,6 +64,10 @@ export interface InteractionStorageService {
     record: InteractionRequestRecord,
   ) => Effect.Effect<InteractionRequestRecord, StorageError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
+  readonly decide: (
+    requestId: InteractionRequestId,
+    decisionJson: string,
+  ) => Effect.Effect<void, StorageError>
   /** List pending interactions. Pass `scope` to narrow to a specific session+branch
    *  (used by the projection for per-session UI). Omit `scope` for a global scan
    *  (used by server startup for rehydration). */
@@ -98,10 +105,22 @@ export class InteractionStorage extends Context.Service<
                 message: `Interaction session/branch not found in workspace: ${record.sessionId}/${record.branchId}`,
               })
             }
-            yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${record.requestId}, ${record.type}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${record.status}, ${record.createdAt})`
+            yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, decision_json, status, created_at) VALUES (${record.requestId}, ${record.type}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${record.decisionJson ?? null}, ${record.status}, ${record.createdAt})`
             return record
           },
           Effect.mapError(mapError("Failed to persist interaction request")),
+        ),
+
+        decide: Effect.fn("InteractionStorage.decide")(
+          function* (requestId, decisionJson) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE interaction_requests
+              SET decision_json = ${decisionJson}
+              WHERE request_id = ${requestId}
+                AND status = 'pending'
+                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+          },
+          Effect.mapError(mapError("Failed to store interaction decision")),
         ),
 
         resolve: Effect.fn("InteractionStorage.resolve")(
@@ -120,13 +139,13 @@ export class InteractionStorage extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
               scope === undefined
-                ? yield* sql<InteractionRequestRow>`SELECT ir.request_id, ir.type, ir.session_id, ir.branch_id, ir.params_json, ir.status, ir.created_at
+                ? yield* sql<InteractionRequestRow>`SELECT ir.request_id, ir.type, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.status, ir.created_at
                   FROM interaction_requests ir
                   JOIN sessions s ON s.id = ir.session_id
                   WHERE ir.status = 'pending'
                     AND s.workspace_id = ${workspaceId}
                   ORDER BY ir.created_at ASC`
-                : yield* sql<InteractionRequestRow>`SELECT ir.request_id, ir.type, ir.session_id, ir.branch_id, ir.params_json, ir.status, ir.created_at
+                : yield* sql<InteractionRequestRow>`SELECT ir.request_id, ir.type, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.status, ir.created_at
                   FROM interaction_requests ir
                   JOIN sessions s ON s.id = ir.session_id
                   WHERE ir.status = 'pending'

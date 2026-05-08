@@ -171,7 +171,7 @@ const initialMigration = Effect.gen(function* () {
       branch_id TEXT NOT NULL,
       params_json TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
-      created_at INTEGER NOT NULL,
+	      created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
@@ -242,6 +242,12 @@ const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
   yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
 })
 
+const interactionDecisionMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
+})
+
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
 
@@ -269,6 +275,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "002_agent_loop_queue": agentLoopQueueMigration,
       "003_session_workspace": sessionWorkspaceMigration,
       "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
+      "005_interaction_decision": interactionDecisionMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

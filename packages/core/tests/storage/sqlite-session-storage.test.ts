@@ -189,6 +189,7 @@ describe("Sessions", () => {
           "agent_loop_queue",
           "session_workspace",
           "agent_loop_queue_workspace",
+          "interaction_decision",
         ])
       }).pipe(Effect.provide(layer))
 
@@ -206,6 +207,7 @@ describe("Sessions", () => {
           "agent_loop_queue",
           "session_workspace",
           "agent_loop_queue_workspace",
+          "interaction_decision",
         ])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),

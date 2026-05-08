@@ -14,10 +14,12 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { createTempDirFixture, waitFor } from "@gent/core/test-utils/fixtures"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
+import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc.js"
+import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
 
 const InteractionProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("@test/interaction-probe") },
@@ -171,6 +173,120 @@ describe("interaction.respondInteraction", () => {
                     (part) =>
                       part.type === "tool-result" &&
                       JSON.stringify(part.result).includes("after restart"),
+                  ),
+              ),
+            ).toBe(true)
+          }).pipe(Effect.timeout("8 seconds")),
+        ).pipe(Effect.provide(storageLayer))
+      }),
+    12_000,
+  )
+
+  it.live(
+    "recovers a stored decision after restart before actor wake",
+    () =>
+      Effect.gen(function* () {
+        const dbPath = path.join(tempDir(), "gent-decision.db")
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
+        const finalReply = "approval resumed from stored decision"
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("approval_probe", { text: "approve deploy?" }),
+        ])
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+            yield* client.message.send({
+              sessionId,
+              branchId,
+              content: "run approval probe",
+            })
+
+            const interactions = Array.from(yield* Fiber.join(interactionFiber))
+            const presented = interactions[0]?.event
+            expect(presented?._tag).toBe("InteractionPresented")
+            if (presented?._tag !== "InteractionPresented") {
+              return yield* Effect.die(new Error("interaction was not presented"))
+            }
+
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) => current.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "waiting interaction runtime state before stored decision",
+            )
+            return {
+              sessionId,
+              branchId,
+              requestId: presented.requestId,
+            }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* InteractionStorage
+          const decisionJson = yield* encodeInteractionDecision({
+            approved: true,
+            notes: "stored before wake",
+          })
+          yield* storage.decide(first.requestId, decisionJson)
+        }).pipe(
+          Effect.provide(storageLayer),
+          Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+        )
+
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
+              }),
+            )
+
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot({
+                sessionId: first.sessionId,
+                branchId: first.branchId,
+              }),
+              (current) =>
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some((part) => part.type === "text" && part.text === finalReply),
+                ),
+              5_000,
+              "assistant reply after stored interaction decision recovery",
+            )
+
+            expect(
+              snapshot.messages.some(
+                (message) =>
+                  message.role === "tool" &&
+                  message.parts.some(
+                    (part) =>
+                      part.type === "tool-result" &&
+                      JSON.stringify(part.result).includes("stored before wake"),
                   ),
               ),
             ).toBe(true)

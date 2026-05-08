@@ -229,6 +229,9 @@ Recursive findings to close:
   id from `requestId` when no explicit command id is supplied.
 - P1: interaction approvals are acknowledged in memory before the human
   decision itself is durable.
+  Status: implemented in sub-batch W22.8 by storing `decision_json` on pending
+  interaction rows before actor wake and replaying stored decisions during
+  startup recovery.
 - P1: `ModelResolver` builds Effect AI model layers in a scope, extracts
   `LanguageModel.Service`, and returns the raw service outside the layer
   lifetime.
@@ -254,7 +257,7 @@ Validation:
 
 ### W22.7 — Durable Message Request Idempotency
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `91648ac0`.
 
 Work:
 
@@ -262,8 +265,28 @@ Work:
   callers do not supply an explicit `commandId`.
 - Let the existing durable message id and actor operation primary key collapse
   retried sends across runtime/server cache boundaries.
+- Guard in-flight duplicate sends by durable user message id so concurrent
+  retries wait for the owner turn instead of calling the model twice.
 - Preserve explicit `commandId` as the stronger caller-owned idempotency key.
 
 Validation:
 
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/session-runtime.test.ts`
+
+### W22.8 — Durable Interaction Decisions
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Add a storage-backed `decision_json` field for pending interaction requests.
+- Persist the human decision before waking the actor.
+- Resolve the interaction row only after the tool consumes the durable decision.
+- During startup recovery, re-present unanswered prompts and replay stored
+  decisions into the waiting actor without showing a duplicate prompt.
+
+Validation:
+
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/server/interaction-commands.test.ts tests/domain/interaction-request.test.ts tests/storage/sqlite-session-storage.test.ts`
+- `bun run typecheck`
+- `bun run lint`
