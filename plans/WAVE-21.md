@@ -101,6 +101,9 @@ Commits landed in this wave so far:
 - `f56553eb fix(core): route scheduler cron through platform`
 - `287869c1 docs(plan): record scheduler platform ownership`
 - `1a779f08 fix(runtime): publish queue after durable commit`
+- `a14becc5 docs(plan): record queue durability boundary`
+- `3957d9fe docs(runtime): clarify agent loop concurrency`
+- `6338d9b7 refactor(sdk): use platform for server lock identity`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -681,13 +684,16 @@ portable and testable.
 
 Status: in progress. Commit `f56553eb` closes the scheduler cron failure-open by
 moving cron install/remove behind `CronRuntime` and wiring `BunCronRuntimeLive`
-at the platform boundary. SDK host identity and shipped-extension ambient
-process reads remain open in this lane.
+at the platform boundary. Commit `6338d9b7` moves SDK server-lock hostname,
+PID-liveness, and SIGTERM ownership through `GentPlatform`. Shipped-extension
+ambient process reads remain open in this lane.
 
 Work:
 
 - [x] Move cron runtime into a platform service and make missing cron a
       scheduled job failure, not silent success.
+- [x] Route SDK server-lock host identity, PID liveness, and signaling through
+      `GentPlatform`.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -702,6 +708,11 @@ Validation:
 - `bun run gate` (first run hit a Bun 1.3.13 segmentation fault in a core test
   shard after type/style/build had passed and tests reported no failures; rerun
   passed unchanged)
+- `cd packages/sdk && bun test --reporter=dots tests/server-lock.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate`
 - Guard tests.
 - `bun run lint`
 - `bun run gate`
