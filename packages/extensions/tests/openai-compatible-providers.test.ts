@@ -7,8 +7,7 @@ import {
   oneGenerate,
   type FakeFetchState,
 } from "@gent/core-internal/test-utils/fake-fetch"
-import { GoogleExtension } from "../src/google/index.js"
-import { MistralExtension } from "../src/mistral/index.js"
+import { GoogleExtension, MistralExtension } from "../src/openai-compatible-driver.js"
 
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",

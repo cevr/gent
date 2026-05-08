@@ -5,10 +5,14 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import {
   AuthMethod,
   ProviderAuthError,
+  defineExtension,
   type ModelDriverContribution,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
+
+const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
 
 export const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -80,4 +84,44 @@ export const makeApiKeyCompatDriver = (params: {
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
   },
+})
+
+const makeApiKeyCompatExtension = (params: {
+  readonly extensionId: string
+  readonly driverId: string
+  readonly name: string
+  readonly envVarName: string
+  readonly apiUrl: string
+}) =>
+  defineExtension({
+    id: params.extensionId,
+    modelDrivers: () =>
+      Effect.gen(function* () {
+        const envApiKey = yield* readOptionalEnv(params.envVarName)
+        return [
+          makeApiKeyCompatDriver({
+            id: params.driverId,
+            name: params.name,
+            envApiKey,
+            envVarName: params.envVarName,
+            apiUrl: params.apiUrl,
+          }),
+        ]
+      }),
+  })
+
+export const GoogleExtension = makeApiKeyCompatExtension({
+  extensionId: "@gent/provider-google",
+  driverId: "google",
+  name: "Google",
+  envVarName: "GOOGLE_GENERATIVE_AI_API_KEY",
+  apiUrl: GOOGLE_COMPAT_URL,
+})
+
+export const MistralExtension = makeApiKeyCompatExtension({
+  extensionId: "@gent/provider-mistral",
+  driverId: "mistral",
+  name: "Mistral",
+  envVarName: "MISTRAL_API_KEY",
+  apiUrl: MISTRAL_COMPAT_URL,
 })

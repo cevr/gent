@@ -248,6 +248,7 @@ surface, search noise, and architecture weight.
 | `/Users/cvr/Developer/personal/gent/packages/e2e/src/effect-test-adapters.ts`                              | Covered by platform-primitive cleanup; remove if it only renames Effect functions.                              | all      |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/index.ts`                                    | Merge extension index files that only re-export one local module, unless they are package entrypoints.          | multiple |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/{counsel,delegate,principles,review}/index.ts` | Move one-tool extension definitions into their owning tool modules.                                             | all      |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{google,mistral}/index.ts`                     | Move OpenAI-compatible provider instances into the shared compatible-driver module.                             | all      |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/platform-adapter.ts`                         | Merge tiny platform adapters into the extension host-facing module unless they protect a real portability edge. | multiple |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/platform-adapter.ts`                | Delete the unused Context.Service wrapper; the Claude SDK only needs a host environment shape.                  | all      |
 
@@ -991,6 +992,8 @@ Focus on whether tests are behavioral, whether test file names mirror code file 
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/platform-adapter.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/counsel/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/google/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/mistral/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/principles/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/review/index.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/package.json:5`
