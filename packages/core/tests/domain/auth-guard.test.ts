@@ -31,7 +31,6 @@ const stubModel = AiModel.make(
 const testProviders: ModelDriverContribution[] = [
   { id: "anthropic", name: "Anthropic", resolveModel: () => stubModel },
   { id: "openai", name: "OpenAI", resolveModel: () => stubModel },
-  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => stubModel },
   { id: "google", name: "Google", resolveModel: () => stubModel },
   { id: "mistral", name: "Mistral", resolveModel: () => stubModel },
 ]

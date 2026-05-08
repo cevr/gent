@@ -9,8 +9,8 @@
  *   - `ModelDriverContribution`     — wraps an LLM provider (auth, listModels,
  *                                     resolveModel returning a Layer that
  *                                     produces an `effect/unstable/ai`
- *                                     `LanguageModel`). Five gent providers
- *                                     (anthropic/openai/google/mistral/bedrock)
+ *                                     `LanguageModel`). Four gent providers
+ *                                     (anthropic/openai/google/mistral)
  *                                     register one each.
  *   - `ExternalDriverContribution`  — wraps a `TurnExecutor` that streams
  *                                     Effect AI response parts for fully external loops

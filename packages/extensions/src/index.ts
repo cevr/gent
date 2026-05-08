@@ -10,7 +10,6 @@ import { AgentsExtension } from "./agents.js"
 import { MemoryExtension } from "./memory/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
-import { BedrockExtension } from "./bedrock/index.js"
 import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
 import { PrinciplesExtension } from "./principles/index.js"
@@ -79,7 +78,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   AcpAgentsExtension,
   AnthropicExtension,
   OpenAIExtension,
-  BedrockExtension,
   GoogleExtension,
   MistralExtension,
   ArtifactsExtension,

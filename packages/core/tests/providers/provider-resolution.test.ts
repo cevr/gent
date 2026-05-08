@@ -256,38 +256,6 @@ describe("Provider model resolution", () => {
       }
     }),
   )
-  it.scoped("BedrockExtension resolveModel fails closed as ProviderAuthError", () =>
-    Effect.gen(function* () {
-      // Bedrock has no @effect/ai provider at beta.47. The contribution
-      // throws on resolveModel — that throw must surface as ProviderAuthError
-      // (fail-closed) rather than being wrapped as transient ProviderError and
-      // retried. Use a test contribution that mirrors the BedrockExtension
-      // shape so this test is provider-boundary-only and stays in core.
-      const bedrockShaped: ModelDriverContribution = {
-        id: "bedrock",
-        name: "AWS Bedrock",
-        resolveModel: () => {
-          throw new ProviderAuthError({
-            message: "AWS Bedrock is temporarily unsupported.",
-          })
-        },
-      }
-      const layer = buildProviderLayer([makeExt("bedrock-shaped-ext", [bedrockShaped])])
-      const result = yield* Effect.exit(
-        resolveModel({
-          model: "bedrock/some-model",
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(errOpt._tag).toBe("Some")
-        if (errOpt._tag === "Some") {
-          expect(Schema.is(ProviderAuthError)(errOpt.value)).toBe(true)
-        }
-      }
-    }),
-  )
   it.scoped("auth store read failures fail closed before resolving the model", () =>
     Effect.gen(function* () {
       let resolved = false

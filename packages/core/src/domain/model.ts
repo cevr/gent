@@ -41,13 +41,7 @@ export const calculateCost = (
   return inputCost + outputCost
 }
 
-export const BUILTIN_PROVIDER_IDS = new Set<string>([
-  "anthropic",
-  "bedrock",
-  "openai",
-  "google",
-  "mistral",
-])
+export const BUILTIN_PROVIDER_IDS = new Set<string>(["anthropic", "openai", "google", "mistral"])
 
 export const parseModelProvider = (modelId: string): ProviderId | undefined => {
   const slash = modelId.indexOf("/")
