@@ -7,10 +7,11 @@
  */
 
 import { Effect, Layer } from "effect"
-import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, ExtensionId } from "@gent/core/extensions/api"
 import { BackgroundBashSupervisorLive, BashTool } from "./bash.js"
 import { BackgroundBashStorage } from "./bash-storage.js"
-import { EXEC_TOOLS_EXTENSION_ID } from "./protocol.js"
+
+const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
 const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
   Layer.provideMerge(BackgroundBashStorage.Live),

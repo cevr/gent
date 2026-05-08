@@ -6,12 +6,12 @@ import {
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
+  ExtensionId,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
-import { HANDOFF_EXTENSION_ID } from "./handoff-protocol.js"
 import { AutoRead } from "./auto/controller.js"
 
-const EXTENSION_ID = HANDOFF_EXTENSION_ID
+const EXTENSION_ID = ExtensionId.make("@gent/handoff")
 type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
 
 // ── Cooldown service ──
