@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { AutoExtension, AutoState, viewForState } from "@gent/extensions/auto"
 import { AutoControllerLive, AutoRead, AutoWrite } from "@gent/extensions/auto/controller"
 import { testSetupCtx } from "@gent/core/test-utils"
@@ -77,6 +77,22 @@ describe("Auto runtime", () => {
       const snap4 = yield* getSnapshot()
       expect(snap4.active).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
+  )
+
+  it.live("resource layer instances own independent auto state", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstContext = yield* Layer.build(AutoControllerLive)
+        const secondContext = yield* Layer.build(AutoControllerLive)
+        const first = Context.get(firstContext, AutoWrite)
+        const second = Context.get(secondContext, AutoRead)
+
+        yield* first.start({ goal: "first loop" })
+
+        expect((yield* first.snapshot()).active).toBe(true)
+        expect((yield* second.snapshot()).active).toBe(false)
+      }),
+    ),
   )
 
   it.live("turnCompleted does not advance the loop, only increments watchdog", () =>

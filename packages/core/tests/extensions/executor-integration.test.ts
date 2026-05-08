@@ -514,6 +514,44 @@ describe("Executor runtime lifecycle", () => {
     },
     10000,
   )
+  it.live(
+    "process resource instances own independent executor state",
+    () =>
+      narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { extension: firstExtension } = makeExecutorExtension({
+              settings: { autoStart: false },
+            })
+            const { extension: secondExtension } = makeExecutorExtension({
+              settings: { autoStart: false },
+            })
+            const firstContext = yield* Layer.build(makeRuntimeLayer(firstExtension))
+            const secondContext = yield* Layer.build(makeRuntimeLayer(secondExtension))
+            const first = Context.get(firstContext, ExecutorWrite)
+            const second = Context.get(secondContext, ExecutorRead)
+
+            yield* first.connect("/first")
+            yield* waitFor(
+              first
+                .snapshot()
+                .pipe(
+                  Effect.catchEager(() =>
+                    Effect.succeed(undefined as ExecutorSnapshotReply | undefined),
+                  ),
+                ),
+              (snapshot) => snapshot?.status === "ready",
+              3000,
+              "first executor ready",
+            )
+
+            expect((yield* first.snapshot()).status).toBe("ready")
+            expect((yield* second.snapshot()).status).toBe("idle")
+          }).pipe(Effect.timeout("8 seconds")),
+        ),
+      ),
+    10000,
+  )
   // No persistence test: connection state is volatile per process. A
   // restored `Ready{baseUrl}` would point at a sidecar URL that no
   // longer exists; the runtime re-bootstraps from `Idle` via autoStart.
