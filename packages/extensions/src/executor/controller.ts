@@ -70,7 +70,7 @@ export const ExecutorControllerLive = (
       const sidecar = yield* ExecutorSidecar
       const bridge = yield* ExecutorMcpBridge
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-      const state = yield* SubscriptionRef.make<ExecutorState>(ExecutorState.Idle.make({}))
+      const state = yield* SubscriptionRef.make<ExecutorState>(ExecutorState.cases.Idle.make({}))
       const gate = yield* Semaphore.make(1)
       const connection = yield* ScopedRef.fromAcquire(
         Effect.succeed<Fiber.Fiber<void> | null>(null),
@@ -101,7 +101,7 @@ export const ExecutorControllerLive = (
           )
           yield* setIfCurrent(
             expectedGeneration,
-            transitionConnected(ExecutorState.Connecting.make({ cwd: targetCwd }), {
+            transitionConnected(ExecutorState.cases.Connecting.make({ cwd: targetCwd }), {
               mode: endpoint.mode,
               baseUrl: endpoint.baseUrl,
               scopeId: endpoint.scope.id,
@@ -113,7 +113,7 @@ export const ExecutorControllerLive = (
             setIfCurrent(
               expectedGeneration,
               transitionConnectionFailed(
-                ExecutorState.Connecting.make({ cwd: targetCwd }),
+                ExecutorState.cases.Connecting.make({ cwd: targetCwd }),
                 cause instanceof Error ? cause.message : String(cause),
               ),
             ),
@@ -122,7 +122,7 @@ export const ExecutorControllerLive = (
             setIfCurrent(
               expectedGeneration,
               transitionConnectionFailed(
-                ExecutorState.Connecting.make({ cwd: targetCwd }),
+                ExecutorState.cases.Connecting.make({ cwd: targetCwd }),
                 cause instanceof Error ? cause.message : String(cause),
               ),
             ),

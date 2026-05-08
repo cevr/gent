@@ -23,11 +23,9 @@ import {
   Scope,
   Semaphore,
 } from "effect"
+import { isRecord, type ExtensionHostFacts } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord } from "@gent/core-internal/domain/guards"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
-import type { ExtensionHostFacts } from "@gent/core-internal/domain/extension"
 import { fileURLToPath } from "node:url"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {
@@ -68,8 +66,8 @@ const CloseableScopeSchema = Schema.declare<Scope.Closeable>(
   { identifier: "ExecutorCloseableScope" },
 )
 
-const SidecarRecord = TaggedEnumClass("SidecarRecord", {
-  Owned: TaggedEnumClass.variant("owned", {
+const SidecarRecord = Schema.Union([
+  Schema.TaggedStruct("owned", {
     cwd: Schema.String,
     port: Schema.Number,
     baseUrl: Schema.String,
@@ -78,13 +76,13 @@ const SidecarRecord = TaggedEnumClass("SidecarRecord", {
     handleScope: CloseableScopeSchema,
     scope: Schema.optional(ScopeInfo),
   }),
-  External: TaggedEnumClass.variant("external", {
+  Schema.TaggedStruct("external", {
     cwd: Schema.String,
     port: Schema.Number,
     baseUrl: Schema.String,
     scope: ScopeInfo,
   }),
-})
+]).pipe(Schema.toTaggedUnion("_tag"))
 type SidecarRecord = Schema.Schema.Type<typeof SidecarRecord>
 
 interface RegisteredSidecar {
@@ -100,18 +98,18 @@ interface SidecarRegistryFile {
   readonly sidecars: Record<string, RegisteredSidecar>
 }
 
-const PortProbe = TaggedEnumClass("PortProbe", {
-  Free: TaggedEnumClass.variant("free", {
+const PortProbe = Schema.Union([
+  Schema.TaggedStruct("free", {
     port: Schema.Number,
   }),
-  Reusable: TaggedEnumClass.variant("reusable", {
+  Schema.TaggedStruct("reusable", {
     port: Schema.Number,
     scope: ScopeInfo,
   }),
-  Occupied: TaggedEnumClass.variant("occupied", {
+  Schema.TaggedStruct("occupied", {
     port: Schema.Number,
   }),
-})
+]).pipe(Schema.toTaggedUnion("_tag"))
 type PortProbe = Schema.Schema.Type<typeof PortProbe>
 
 // ── Service interface ──
@@ -214,8 +212,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             Effect.map(
               (scope): PortProbe =>
                 scope.dir === cwd
-                  ? PortProbe.Reusable.make({ port, scope })
-                  : PortProbe.Occupied.make({ port }),
+                  ? PortProbe.cases.reusable.make({ port, scope })
+                  : PortProbe.cases.occupied.make({ port }),
             ),
             Effect.catchEager(() =>
               platform
@@ -223,7 +221,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                 .pipe(
                   Effect.map(
                     (free): PortProbe =>
-                      free ? PortProbe.Free.make({ port }) : PortProbe.Occupied.make({ port }),
+                      free
+                        ? PortProbe.cases.free.make({ port })
+                        : PortProbe.cases.occupied.make({ port }),
                   ),
                 ),
             ),
@@ -236,9 +236,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             for (let offset = 0; offset < PORT_SCAN_LIMIT; offset++) {
               probes.push(yield* probePort(cwd, DEFAULT_PORT_SEED + offset))
             }
-            const reusable = probes.find(PortProbe.guards.Reusable)
+            const reusable = probes.find(PortProbe.guards.reusable)
             if (reusable) return { reusable, freePort: undefined } as const
-            const free = probes.find(PortProbe.guards.Free)
+            const free = probes.find(PortProbe.guards.free)
             return { reusable: undefined, freePort: free?.port } as const
           })
 
@@ -423,7 +423,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               )
             yield* handle.unref.pipe(Effect.ignore)
 
-            return SidecarRecord.Owned.make({
+            return SidecarRecord.cases.owned.make({
               cwd,
               port,
               baseUrl: `http://127.0.0.1:${port}`,
@@ -490,7 +490,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // Register finalizer to shut down owned sidecars (respects stopLocalOnShutdown)
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            const owned = Array.from(sidecarsByCwd.values()).filter(SidecarRecord.guards.Owned)
+            const owned = Array.from(sidecarsByCwd.values()).filter(SidecarRecord.guards.owned)
             yield* Effect.all(
               owned.map((record) =>
                 Effect.gen(function* () {
@@ -525,7 +525,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             // Scan for a reusable sidecar on known ports
             const scan = yield* scanPorts(normalized)
             if (scan.reusable) {
-              const record = SidecarRecord.External.make({
+              const record = SidecarRecord.cases.external.make({
                 cwd: normalized,
                 port: scan.reusable.port,
                 baseUrl: `http://127.0.0.1:${scan.reusable.port}`,
@@ -571,7 +571,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                 })
               }
 
-              const updated = SidecarRecord.Owned.make({
+              const updated = SidecarRecord.cases.owned.make({
                 cwd: record.cwd,
                 port: record.port,
                 baseUrl: record.baseUrl,

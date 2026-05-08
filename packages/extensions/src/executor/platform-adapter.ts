@@ -1,10 +1,10 @@
 import { Context, Effect, Layer } from "effect"
 import {
   ExtensionHostProcessError,
+  runProcess,
   type ExtensionHostFacts,
   type ExtensionHostPlatform,
-} from "@gent/core-internal/domain/extension"
-import { runProcess } from "@gent/core-internal/utils/run-process"
+} from "@gent/core/extensions/api"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 export interface ExecutorPlatformShape {

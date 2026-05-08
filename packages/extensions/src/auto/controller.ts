@@ -5,7 +5,6 @@ import {
   type TurnProjection,
   withReadOnly,
 } from "@gent/core/extensions/api"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import type { AutoSnapshotReply } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
@@ -27,7 +26,7 @@ type AutoMetricEntry = typeof AutoMetricEntry.Type
 const TerminationReason = Schema.Literals(["completed", "abandoned", "cancelled", "wedged"])
 type TerminationReason = typeof TerminationReason.Type
 
-export const AutoState = TaggedEnumClass("AutoState", {
+export const AutoState = Schema.TaggedUnion({
   Inactive: {
     reason: Schema.optional(TerminationReason),
     finalLearnings: Schema.optional(Schema.Array(AutoLearning)),
@@ -225,7 +224,7 @@ const transitionStartAuto = (
   msg: { readonly goal: string; readonly maxIterations?: number | undefined },
 ): AutoState => {
   if (state._tag !== "Inactive") return state
-  return AutoState.Working.make({
+  return AutoState.cases.Working.make({
     iteration: 1,
     maxIterations: msg.maxIterations ?? DEFAULT_MAX_ITERATIONS,
     goal: msg.goal,
@@ -255,21 +254,21 @@ const transitionAutoSignal = (state: AutoState, msg: AutoSignalInput): AutoState
       : state.metrics
 
   if (msg.status === "complete") {
-    return AutoState.Inactive.make({
+    return AutoState.cases.Inactive.make({
       reason: "completed",
       finalLearnings: newLearnings,
       finalMetrics: newMetrics,
     })
   }
   if (msg.status === "abandon") {
-    return AutoState.Inactive.make({
+    return AutoState.cases.Inactive.make({
       reason: "abandoned",
       finalLearnings: newLearnings,
       finalMetrics: newMetrics,
     })
   }
 
-  return AutoState.AwaitingReview.make({
+  return AutoState.cases.AwaitingReview.make({
     iteration: state.iteration,
     maxIterations: state.maxIterations,
     goal: state.goal,
@@ -287,14 +286,14 @@ const transitionAutoSignal = (state: AutoState, msg: AutoSignalInput): AutoState
 const transitionReviewSignal = (state: AutoState): AutoState => {
   if (state._tag !== "AwaitingReview") return state
   if (state.iteration >= state.maxIterations) {
-    return AutoState.Inactive.make({
+    return AutoState.cases.Inactive.make({
       reason: "completed",
       finalLearnings: state.learnings,
       finalMetrics: state.metrics,
     })
   }
   const nextIteration = state.iteration + 1
-  return AutoState.Working.make({
+  return AutoState.cases.Working.make({
     iteration: nextIteration,
     maxIterations: state.maxIterations,
     goal: state.goal,
@@ -320,7 +319,7 @@ const transitionRequestHandoff = (
   msg: { readonly content: string },
 ): AutoState => {
   if (state._tag === "Working") {
-    return AutoState.Working.make({
+    return AutoState.cases.Working.make({
       ...state,
       handoffRequestSeq: state.handoffRequestSeq + 1,
       handoffContent: msg.content,
@@ -328,7 +327,7 @@ const transitionRequestHandoff = (
     })
   }
   if (state._tag === "AwaitingReview") {
-    return AutoState.AwaitingReview.make({
+    return AutoState.cases.AwaitingReview.make({
       ...state,
       handoffRequestSeq: state.handoffRequestSeq + 1,
       handoffContent: msg.content,
@@ -342,23 +341,23 @@ const transitionTurnCompleted = (state: AutoState): AutoState => {
   if (state._tag === "Working") {
     const next = state.turnsSinceCheckpoint + 1
     if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
-      return AutoState.Inactive.make({ reason: "wedged" })
+      return AutoState.cases.Inactive.make({ reason: "wedged" })
     }
-    return AutoState.Working.make({
+    return AutoState.cases.Working.make({
       ...state,
       promptPending: false,
       turnsSinceCheckpoint: next,
     })
   }
   if (state._tag === "AwaitingReview") {
-    return AutoState.AwaitingReview.make({ ...state, promptPending: false })
+    return AutoState.cases.AwaitingReview.make({ ...state, promptPending: false })
   }
   return state
 }
 
 const transitionCancelAuto = (state: AutoState): AutoState => {
   if (state._tag === "Working" || state._tag === "AwaitingReview") {
-    return AutoState.Inactive.make({ reason: "cancelled" })
+    return AutoState.cases.Inactive.make({ reason: "cancelled" })
   }
   return state
 }
@@ -378,12 +377,12 @@ const transitionToggleAuto = (
 
 const clearFollowUp = (state: AutoState): AutoState => {
   if (state._tag === "Inactive") {
-    return AutoState.Inactive.make({ ...state, pendingFollowUp: undefined })
+    return AutoState.cases.Inactive.make({ ...state, pendingFollowUp: undefined })
   }
   if (state._tag === "Working") {
-    return AutoState.Working.make({ ...state, pendingFollowUp: undefined })
+    return AutoState.cases.Working.make({ ...state, pendingFollowUp: undefined })
   }
-  return AutoState.AwaitingReview.make({ ...state, pendingFollowUp: undefined })
+  return AutoState.cases.AwaitingReview.make({ ...state, pendingFollowUp: undefined })
 }
 
 const followUpSourceId = (state: AutoState): string => {
@@ -408,7 +407,7 @@ const drainFollowUp = (state: AutoState) =>
 
 export const AutoControllerLive: Layer.Layer<AutoRead | AutoWrite> = Layer.unwrap(
   Effect.gen(function* () {
-    const state = yield* Ref.make<AutoState>(AutoState.Inactive.make({}))
+    const state = yield* Ref.make<AutoState>(AutoState.cases.Inactive.make({}))
     const update = (f: (current: AutoState) => AutoState) => Ref.update(state, f)
     const snapshot = () => Ref.get(state).pipe(Effect.map(projectSnapshot))
 

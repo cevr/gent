@@ -297,6 +297,12 @@ request({
 
 ## Commit 3: refactor(extension-api): remove private shipped-extension imports
 
+**Status**: Completed in current batch. Code imports and the package manifest are
+clean of `@gent/core-internal` under `packages/extensions`; the guardrail now
+fails shipped extension source that imports it. Broader docs are left to the
+extension-context/API collapse batch so the contract is documented after the
+facade shape is final.
+
 **Justification**: If builtins need a primitive, user/project extensions should
 either get the same stable primitive or the design should move behind a host
 service. `@gent/core-internal` in shipped extensions is a privileged lane.

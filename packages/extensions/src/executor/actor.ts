@@ -8,13 +8,12 @@
 
 import { Schema } from "effect"
 import { type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 
 // ── State ──
 
-export const ExecutorState = TaggedEnumClass("ExecutorState", {
+export const ExecutorState = Schema.TaggedUnion({
   Idle: {},
   Connecting: { cwd: Schema.String },
   Ready: {
@@ -103,7 +102,7 @@ export const viewForState = (state: ExecutorState): TurnProjection => {
 
 export const transitionConnect = (state: ExecutorState, cwd: string): ExecutorState => {
   if (state._tag === "Idle" || state._tag === "Error") {
-    return ExecutorState.Connecting.make({ cwd })
+    return ExecutorState.cases.Connecting.make({ cwd })
   }
   return state
 }
@@ -118,7 +117,7 @@ export const transitionConnected = (
   },
 ): ExecutorState => {
   if (state._tag !== "Connecting") return state
-  return ExecutorState.Ready.make({
+  return ExecutorState.cases.Ready.make({
     mode: msg.mode,
     baseUrl: msg.baseUrl,
     scopeId: msg.scopeId,
@@ -131,7 +130,7 @@ export const transitionConnectionFailed = (
   message: string,
 ): ExecutorState => {
   if (state._tag !== "Connecting") return state
-  return ExecutorState.Error.make({ message })
+  return ExecutorState.cases.Error.make({ message })
 }
 
 export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
@@ -139,6 +138,7 @@ export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
   // intent. The runtime service interrupts the in-flight connection fork
   // before writing Idle, so a disconnect mid-handshake cancels the sidecar
   // resolve before it can race back to Ready.
-  if (state._tag === "Ready" || state._tag === "Connecting") return ExecutorState.Idle.make({})
+  if (state._tag === "Ready" || state._tag === "Connecting")
+    return ExecutorState.cases.Idle.make({})
   return state
 }

@@ -26,9 +26,6 @@
     "picomatch": "catalog:",
     "turndown": "^7.2.4"
   },
-  "devDependencies": {
-    "@gent/core-internal": "workspace:*"
-  },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
     "effect": "catalog:"

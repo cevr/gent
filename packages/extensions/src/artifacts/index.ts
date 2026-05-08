@@ -6,8 +6,13 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineExtension, defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
-import { ArtifactId } from "@gent/core-internal/domain/ids"
+import {
+  ArtifactId,
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  tool,
+} from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
 
@@ -79,8 +84,11 @@ const ArtifactReadTool = tool({
     const ctx = yield* ExtensionContext
     const query =
       params.id !== undefined
-        ? ReadQuery.ById.make({ id: ArtifactId.make(params.id) })
-        : ReadQuery.BySource.make({ sourceTool: params.sourceTool ?? "", branchId: ctx.branchId })
+        ? ReadQuery.cases.ById.make({ id: ArtifactId.make(params.id) })
+        : ReadQuery.cases.BySource.make({
+            sourceTool: params.sourceTool ?? "",
+            branchId: ctx.branchId,
+          })
     const artifacts = yield* ArtifactsRead
     const artifact = yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
     if (artifact === null) return { found: false }

@@ -1,6 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { tool } from "@gent/core/extensions/api"
-import { FileLockService } from "@gent/core-internal/domain/file-lock"
+import { FileLockService, tool } from "@gent/core/extensions/api"
 
 // Write Tool Error
 

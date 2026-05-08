@@ -1,7 +1,6 @@
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { type BranchId, type SessionId, type ToolCallId } from "@gent/core/extensions/api"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export class BackgroundBashStorageError extends Schema.TaggedErrorClass<BackgroundBashStorageError>()(
   "BackgroundBashStorageError",
@@ -40,7 +39,7 @@ export const BackgroundBashTerminalState = Schema.Struct({
 })
 export type BackgroundBashTerminalState = typeof BackgroundBashTerminalState.Type
 
-export const BackgroundBashClaim = TaggedEnumClass("BackgroundBashClaim", {
+export const BackgroundBashClaim = Schema.TaggedUnion({
   Started: {},
   AlreadyRunning: {},
   Terminal: {
@@ -152,8 +151,10 @@ export class BackgroundBashStorage extends Context.Service<
                   const existing = yield* selectJob(input)
                   if (existing !== undefined) {
                     if (existing.status === "running")
-                      return BackgroundBashClaim.AlreadyRunning.make({})
-                    return BackgroundBashClaim.Terminal.make({ state: terminalState(existing) })
+                      return BackgroundBashClaim.cases.AlreadyRunning.make({})
+                    return BackgroundBashClaim.cases.Terminal.make({
+                      state: terminalState(existing),
+                    })
                   }
 
                   const startedAt = (yield* DateTime.nowAsDate).getTime()
@@ -177,7 +178,7 @@ export class BackgroundBashStorage extends Context.Service<
                     ${startedAt}
                   )
                 `
-                  return BackgroundBashClaim.Started.make({})
+                  return BackgroundBashClaim.cases.Started.make({})
                 }),
               )
             },

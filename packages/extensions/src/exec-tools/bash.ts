@@ -21,10 +21,11 @@ import {
   type ExtensionContextService,
   tool,
   PermissionRule,
+  OutputBuffer,
+  saveFullOutput,
   type SessionId,
   ToolCallId,
 } from "@gent/core/extensions/api"
-import { OutputBuffer, saveFullOutput } from "@gent/core-internal/domain/output-buffer"
 import { classify } from "./bash-guardrails.js"
 import {
   BackgroundBashStorage,

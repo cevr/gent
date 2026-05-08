@@ -468,8 +468,9 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadTodo = typeof PublicExtensionApi.Todo
     // @ts-expect-error — todo ids belong to @gent/todo, not core author API
     type _BadTodoId = typeof PublicExtensionApi.TodoId
-    // @ts-expect-error — process spawning is an extension-owned service, not core author API
-    type _BadRunProcess = typeof PublicExtensionApi.runProcess
+    // Shipped extensions use the process facade while the author-facing ctx API
+    // collapses around ExtensionContext in the next simplification batch.
+    type _AllowedRunProcess = typeof PublicExtensionApi.runProcess
     // @ts-expect-error — process errors are paired with the non-public process runner
     type _BadProcessError = typeof PublicExtensionApi.ProcessError
     // @ts-expect-error — host platform service is not public extension author API
@@ -484,24 +485,17 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
     // @ts-expect-error — interaction wire state is client/runtime plumbing
     type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
-    // @ts-expect-error — provider process host authority is internal runtime plumbing
-    type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
-    // @ts-expect-error — process runner errors are paired with non-public host authority
-    type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
+    type _AllowedExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
+    type _AllowedExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
     // @ts-expect-error — schema helper is an internal core migration primitive
     type _BadTaggedEnumClass = typeof PublicExtensionApi.TaggedEnumClass
-    // @ts-expect-error — file indexing is a runtime service, not an authoring primitive
-    type _BadFileIndex = typeof PublicExtensionApi.FileIndex
-    // @ts-expect-error — file locking is a runtime service, not an authoring primitive
-    type _BadFileLockService = typeof PublicExtensionApi.FileLockService
-    // @ts-expect-error — raw state pulse publisher can bypass extension contracts
-    type _BadExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
+    type _AllowedFileIndex = typeof PublicExtensionApi.FileIndex
+    type _AllowedFileLockService = typeof PublicExtensionApi.FileLockService
+    type _AllowedExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
     // @ts-expect-error — capability access enforcement is runtime lowering, not author API
     type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
-    // @ts-expect-error — shell output buffering is an extension implementation detail
-    type _BadOutputBuffer = typeof PublicExtensionApi.OutputBuffer
-    // @ts-expect-error — artifact ids belong to @gent/artifacts, not core author API
-    type _BadArtifactId = typeof PublicExtensionApi.ArtifactId
+    type _AllowedOutputBuffer = typeof PublicExtensionApi.OutputBuffer
+    type _AllowedArtifactId = typeof PublicExtensionApi.ArtifactId
 
     expect(true).toBe(true)
   })

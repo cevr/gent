@@ -11,10 +11,10 @@ import {
   defineExtension,
   defineResource,
   ExtensionContext,
+  isRecord,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
-import { isRecord } from "@gent/core-internal/domain/guards"
 import { AutoCheckpointTool } from "./checkpoint.js"
 import { AutoControllerLive, AutoRead, AutoState, AutoWrite, viewForState } from "./controller.js"
 import { AutoJournal } from "./journal.js"
@@ -238,7 +238,7 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
 const turnProjection = () =>
   Effect.gen(function* () {
     const auto = yield* Effect.serviceOption(AutoRead)
-    if (auto._tag === "None") return viewForState(AutoState.Inactive.make({}))
+    if (auto._tag === "None") return viewForState(AutoState.cases.Inactive.make({}))
     return yield* auto.value.turnProjection()
   })
 

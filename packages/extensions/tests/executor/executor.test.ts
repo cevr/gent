@@ -20,7 +20,7 @@ import { readExecutionId, normalizeToolResult } from "../../src/executor/mcp-bri
 // service composes them with the sidecar connection lifecycle; integration
 // coverage lives in executor-integration.test.ts.
 
-const idle = ExecutorState.Idle.make({})
+const idle = ExecutorState.cases.Idle.make({})
 const connectingFrom = (cwd = "/test") => transitionConnect(idle, cwd)
 
 describe("Executor state machine", () => {
@@ -106,8 +106,8 @@ describe("Executor state machine", () => {
   })
 
   test("ExecutorState constructors round-trip through tag discriminants", () => {
-    expect(ExecutorState.Idle.make({})._tag).toBe("Idle")
-    expect(ExecutorState.Connecting.make({ cwd: "/x" })._tag).toBe("Connecting")
+    expect(ExecutorState.cases.Idle.make({})._tag).toBe("Idle")
+    expect(ExecutorState.cases.Connecting.make({ cwd: "/x" })._tag).toBe("Connecting")
   })
 })
 
@@ -119,24 +119,24 @@ describe("Executor state machine", () => {
 
 describe("executor viewForState — prompt + tool policy", () => {
   test("Idle: excludes execute + resume, no prompt section", () => {
-    const view = viewForState(ExecutorState.Idle.make({}))
+    const view = viewForState(ExecutorState.cases.Idle.make({}))
     expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
     expect(view.promptSections).toBeUndefined()
   })
 
   test("Connecting: excludes execute + resume", () => {
-    const view = viewForState(ExecutorState.Connecting.make({ cwd: "/test" }))
+    const view = viewForState(ExecutorState.cases.Connecting.make({ cwd: "/test" }))
     expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
   })
 
   test("Error: excludes execute + resume", () => {
-    const view = viewForState(ExecutorState.Error.make({ message: "boom" }))
+    const view = viewForState(ExecutorState.cases.Error.make({ message: "boom" }))
     expect(view.toolPolicy).toEqual({ exclude: ["execute", "resume"] })
   })
 
   test("Ready without instructions: no prompt section, no policy exclusions", () => {
     const view = viewForState(
-      ExecutorState.Ready.make({
+      ExecutorState.cases.Ready.make({
         mode: "local",
         baseUrl: "http://x",
         scopeId: "scope-1",
@@ -148,7 +148,7 @@ describe("executor viewForState — prompt + tool policy", () => {
 
   test("Ready with instructions: prompt section includes guidance", () => {
     const view = viewForState(
-      ExecutorState.Ready.make({
+      ExecutorState.cases.Ready.make({
         mode: "local",
         baseUrl: "http://x",
         scopeId: "scope-1",

@@ -3,9 +3,8 @@
  *
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - no-extension-internal-imports: keeps external-looking extension code off
- *   public-looking @gent/core/* internals. Workspace-owned implementation can
- *   use the explicit private @gent/core-internal lane.
+ * - no-extension-internal-imports: keeps extension code on the public
+ *   @gent/core/extensions/api surface and off @gent/core internals.
  * - no-projection-writes: heuristic AST-string-match fence on
  *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
  *   for write-shaped method names. Projection coverage is enforced
@@ -394,9 +393,9 @@ const plugin: Plugin = {
      *     `@gent/core/server/*`, `@gent/core/providers/*`
      *   - Relative paths that escape into domain/, runtime/, storage/, etc.
      *
-     * `@gent/core-internal/*` is allowed for workspace-owned composition code
-     * (`@gent/extensions`, TUI builtins). It is private package surface, not
-     * extension author API.
+     * `@gent/core-internal/*` is forbidden for public extension implementations,
+     * including shipped extensions. Builtins are just the starting extension set,
+     * not a privileged API lane.
      *
      * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
      * and apps/tui/src/extensions/**
@@ -433,7 +432,10 @@ const plugin: Plugin = {
             return
           }
 
-          if (source.startsWith("@gent/core-internal") && inCoreExtensions) {
+          if (
+            source.startsWith("@gent/core-internal") &&
+            (inCoreExtensions || inExtensionsPackage)
+          ) {
             context.report({
               message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
               node,

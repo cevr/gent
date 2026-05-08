@@ -254,7 +254,7 @@ describe("Auto runtime", () => {
 
   it.live("inactive projection excludes auto checkpoint", () =>
     Effect.sync(() => {
-      const view = viewForState(AutoState.Inactive.make({}))
+      const view = viewForState(AutoState.cases.Inactive.make({}))
       expect(view.toolPolicy).toEqual({ exclude: ["auto_checkpoint"] })
     }),
   )

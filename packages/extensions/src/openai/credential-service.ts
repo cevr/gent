@@ -15,7 +15,6 @@
 
 import { Cause, Clock, Context, Effect, Layer, Option, Schema, SynchronizedRef } from "effect"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { refreshOpenAIOauth } from "./oauth.js"
 
 // ── Cache constants ──
@@ -44,7 +43,7 @@ const OpenAICredentialsSchema: Schema.Schema<OpenAICredentials> = Schema.Struct(
   accountId: Schema.optional(Schema.String),
 })
 
-export const CredentialCacheCell = TaggedEnumClass("@gent/extensions/openai/CredentialCacheCell", {
+export const CredentialCacheCell = Schema.TaggedUnion({
   Empty: {
     creds: Schema.Null,
     at: Schema.Literal(0),
@@ -62,7 +61,7 @@ export const CredentialCacheCell = TaggedEnumClass("@gent/extensions/openai/Cred
 })
 export type CredentialCacheCell = Schema.Schema.Type<typeof CredentialCacheCell>
 
-export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = CredentialCacheCell.Empty.make({
+export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = CredentialCacheCell.cases.Empty.make({
   creds: null,
   at: 0,
 })
@@ -84,7 +83,7 @@ const durableCell = (
   at: number,
   invalidated: boolean,
 ): CredentialCacheCell =>
-  CredentialCacheCell.Durable.make({
+  CredentialCacheCell.cases.Durable.make({
     creds,
     at,
     invalidated,
@@ -95,7 +94,7 @@ const pendingPersistCell = (
   at: number,
   invalidated: boolean,
 ): CredentialCacheCell =>
-  CredentialCacheCell.PendingPersist.make({
+  CredentialCacheCell.cases.PendingPersist.make({
     creds,
     at,
     invalidated,

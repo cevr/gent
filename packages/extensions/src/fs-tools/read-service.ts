@@ -1,10 +1,12 @@
 import { Context, Effect, FileSystem, Layer, Path } from "effect"
-import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 import {
   FileIndex,
   FileIndexError,
+  ReadOnlyBrand,
+  type ReadOnly,
   type FileIndexService,
-} from "@gent/core-internal/domain/file-index"
+  withReadOnly,
+} from "@gent/core/extensions/api"
 
 interface FsReadShape {
   readonly resolve: Path.Path["resolve"]

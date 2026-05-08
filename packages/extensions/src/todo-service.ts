@@ -1,6 +1,10 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
-import { type AgentName, type SessionId, type BranchId } from "@gent/core/extensions/api"
-import { ExtensionStatePublisher } from "@gent/core-internal/domain/event-publisher"
+import {
+  ExtensionStatePublisher,
+  type AgentName,
+  type BranchId,
+  type SessionId,
+} from "@gent/core/extensions/api"
 import { Todo, TodoId, type TodoStatus, type TodoTransitionError } from "./todo/domain.js"
 import { TodoStorage, type TodoStorageError } from "./todo-storage.js"
 import { TODO_EXTENSION_ID } from "./todo/identity.js"

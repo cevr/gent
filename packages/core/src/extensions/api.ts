@@ -123,7 +123,14 @@ export type {
   PersistAuth,
 } from "../domain/driver.js"
 export { DriverError } from "../domain/driver.js"
-export { SessionId, BranchId, MessageId, ToolCallId, ExtensionId } from "../domain/ids.js"
+export {
+  SessionId,
+  BranchId,
+  MessageId,
+  ToolCallId,
+  ExtensionId,
+  ArtifactId,
+} from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod, AuthOauth } from "../domain/auth.js"
 export {
@@ -134,6 +141,7 @@ export {
   MessageMetadata,
   type Branch,
 } from "../domain/message.js"
+export type { Question } from "../domain/event.js"
 export {
   messagePartImage,
   messagePartReasoning,
@@ -207,6 +215,18 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
+export { ExtensionStatePublisher } from "../domain/event-publisher.js"
+export { isRecord, isRecordArray } from "../domain/guards.js"
+export { FileIndex, FileIndexError, type FileIndexService } from "../domain/file-index.js"
+export { FileLockService } from "../domain/file-lock.js"
+export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
+export {
+  ExtensionHostProcessError,
+  type ExtensionHostFacts,
+  type ExtensionHostPlatform,
+  type ExtensionHostRunProcessOptions,
+} from "../domain/extension.js"
+export { runProcess } from "../utils/run-process.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only
 // be reachable from projections / read-intent capabilities by branding
