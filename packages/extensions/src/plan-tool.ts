@@ -191,7 +191,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
 
 export const PlanTool = tool({
   id: "plan",
-  needs: [ToolNeeds.write("agent")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("artifact"), ToolNeeds.write("interaction")],
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,

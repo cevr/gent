@@ -65,7 +65,7 @@ export const DelegateResult = Schema.Struct({
 
 export const DelegateTool = tool({
   id: "delegate",
-  needs: [ToolNeeds.write("agent")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("task")],
   description:
     "Delegate work to specialized agents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
   promptSnippet: "Delegate work to specialized subagents",

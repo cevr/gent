@@ -55,11 +55,9 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
  *   - `(input, ctx: ModelCapabilityContext) => …` — model tools that need
  *     subagent / interaction / follow-up surfaces
  *
- * The host always passes the full `ModelCapabilityContext`; the structural
- * subtype relationship guarantees that handlers asking for less get less in
- * their type-level surface, and any attempt to call wider-surface methods
- * (e.g., `ctx.interaction.approve(…)`) on a `CapabilityCoreContext` fails to
- * type-check.
+ * Request/action hosts pass the context required by the leaf type. Tool
+ * execution derives host facets from declared `ToolNeeds`, so handlers asking
+ * for less get less both at the type surface and at runtime.
  */
 export interface CapabilityCoreContext {
   readonly sessionId: SessionId
@@ -76,9 +74,7 @@ export interface CapabilityCoreContext {
 export interface ModelCapabilityContext extends ExtensionHostContext, CapabilityCoreContext {}
 
 /**
- * Default ctx parameter type for the host's `run` signature — the host always
- * passes a value that satisfies `ModelCapabilityContext`. Handlers that ask
- * for `CapabilityCoreContext` get a structurally-narrower view.
+ * Default ctx parameter type for request/action host signatures.
  *
  * Kept as an alias for the wide context so callers writing
  * `(input, ctx: CapabilityContext) => …` continue to compile, but new code

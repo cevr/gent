@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
+  ToolNeeds,
   defineAgent,
   makeRunSpec,
   tool,
@@ -55,6 +56,7 @@ const buildCounselPrompt = (prompt: string, context?: string) =>
 
 export const CounselTool = tool({
   id: "counsel",
+  needs: [ToolNeeds.write("agent")],
   description:
     "Get a cross-vendor second opinion. Deep mode for thorough analysis with exploration tools. Standard mode for quick focused opinions.",
   promptSnippet: "Cross-vendor second opinion",

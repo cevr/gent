@@ -43,6 +43,7 @@ const ArtifactSaveResult = Schema.Struct({
 
 const ArtifactSaveTool = tool({
   id: "artifact_save",
+  needs: [ToolNeeds.write("artifact")],
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
   params: ArtifactSaveParams,
@@ -77,6 +78,7 @@ const ArtifactReadResult = Schema.Struct({
 
 const ArtifactReadTool = tool({
   id: "artifact_read",
+  needs: [ToolNeeds.read("artifact")],
   description: "Read the full content of an artifact by label/source or ID.",
   params: ArtifactReadParams,
   output: ArtifactReadResult,
@@ -148,6 +150,7 @@ const ArtifactClearResult = Schema.Struct({
 
 const ArtifactClearTool = tool({
   id: "artifact_clear",
+  needs: [ToolNeeds.write("artifact")],
   description: "Remove an artifact by ID.",
   params: ArtifactClearParams,
   output: ArtifactClearResult,

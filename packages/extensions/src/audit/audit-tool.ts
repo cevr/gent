@@ -286,7 +286,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
 
 export const AuditTool = tool({
   id: "audit",
-  needs: [ToolNeeds.write("agent")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("artifact"), ToolNeeds.write("interaction")],
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode runs one detect-audit-synthesize-execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Audit code with dual-model concern analysis",

@@ -41,7 +41,7 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -1149,6 +1149,7 @@ describe("ephemeral service propagation", () => {
     Effect.gen(function* () {
       const approveTool = tool({
         id: "approve_test",
+        needs: [ToolNeeds.write("interaction")],
         description: "Tests approval",
         params: Schema.Struct({ text: Schema.String }),
         output: Schema.Struct({ approved: Schema.Boolean }),

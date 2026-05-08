@@ -41,7 +41,7 @@ export const HandoffResult = Schema.Struct({
 
 export const HandoffTool = tool({
   id: "handoff",
-  needs: [ToolNeeds.write("agent")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("interaction")],
   description:
     "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
   promptSnippet: "Transfer context to a new session",

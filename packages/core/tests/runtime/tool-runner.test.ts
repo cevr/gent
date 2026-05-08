@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { tool } from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCoreContext } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
@@ -71,6 +71,96 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
+    }),
+  )
+  it.live("derives tool host facets from declared needs", () =>
+    Effect.gen(function* () {
+      const Output = Schema.Struct({
+        hasAgent: Schema.Boolean,
+        hasSession: Schema.Boolean,
+        hasInteraction: Schema.Boolean,
+      })
+      const ProbeTool = tool({
+        id: "probe",
+        description: "Probe default tool context facets",
+        params: Schema.Struct({}),
+        output: Output,
+        execute: (_input, ctx: ToolCoreContext) =>
+          Effect.succeed({
+            hasAgent: "agent" in ctx,
+            hasSession: "session" in ctx,
+            hasInteraction: "interaction" in ctx,
+          }),
+      })
+      const PrivilegedProbeTool = tool({
+        id: "privileged_probe",
+        needs: [
+          ToolNeeds.write("agent"),
+          ToolNeeds.write("session"),
+          ToolNeeds.write("interaction"),
+        ],
+        description: "Probe requested tool context facets",
+        params: Schema.Struct({}),
+        output: Output,
+        execute: (_input, ctx: ToolCoreContext) =>
+          Effect.succeed({
+            hasAgent: "agent" in ctx,
+            hasSession: "session" in ctx,
+            hasInteraction: "interaction" in ctx,
+          }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [ProbeTool, PrivilegedProbeTool] },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        const ctx = testToolContext({
+          sessionId: SessionId.make("s"),
+          branchId: BranchId.make("b"),
+          toolCallId: ToolCallId.make("tc-probe"),
+          agentName: AgentName.make("cowork"),
+        })
+        const narrow = yield* runner.run(
+          { toolCallId: ToolCallId.make("tc-probe"), toolName: "probe", input: {} },
+          ctx,
+        )
+        const privileged = yield* runner.run(
+          {
+            toolCallId: ToolCallId.make("tc-privileged-probe"),
+            toolName: "privileged_probe",
+            input: {},
+          },
+          { ...ctx, toolCallId: ToolCallId.make("tc-privileged-probe") },
+        )
+        return { narrow, privileged }
+      }).pipe(Effect.provide(layer))
+
+      expect(result.narrow.isFailure).toBe(false)
+      expect(result.narrow.result).toEqual({
+        hasAgent: false,
+        hasSession: false,
+        hasInteraction: false,
+      })
+      expect(result.privileged.isFailure).toBe(false)
+      expect(result.privileged.result).toEqual({
+        hasAgent: true,
+        hasSession: true,
+        hasInteraction: true,
+      })
     }),
   )
   it.live("returns error result when tool fails", () =>

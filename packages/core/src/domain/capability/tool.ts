@@ -21,7 +21,6 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import {
   Capability,
   type CapabilityCoreContext,
-  type CapabilityEffect,
   type ModelCapabilityContext,
   type ToolCapability as ToolCapabilityVariant,
 } from "../capability.js"
@@ -64,6 +63,16 @@ export const ToolNeeds = {
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
 declare const ToolCapabilityType: unique symbol
+
+/** Minimal context passed to `tool({...}).execute` unless the author opts into
+ *  the wider `ToolCapabilityContext`. Tools are always invoked from the agent
+ *  loop with a real call id; the optional shape on `CapabilityCoreContext`
+ *  only exists for the audience-neutral case where no tool call is in flight. */
+export interface ToolCoreContext extends CapabilityCoreContext {
+  readonly toolCallId: ToolCallId
+  readonly capabilityContext?: Context.Context<never>
+}
+
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
   readonly intent: "read" | "write"
@@ -75,7 +84,7 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly interactive?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
-  readonly effect: CapabilityEffect<Input, Output, never, Error>
+  readonly effect: (input: unknown, ctx: ToolCoreContext) => Effect.Effect<Output, Error, never>
 }
 
 export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefined>(
@@ -148,17 +157,10 @@ export const getToolEffect = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
 
-/** Minimal context passed to `tool({...}).execute` unless the author opts into
- *  the wider `ToolCapabilityContext`. Tools are always invoked from the agent
- *  loop with a real call id; the optional shape on `CapabilityCoreContext`
- *  only exists for the audience-neutral case where no tool call is in flight. */
-export interface ToolCoreContext extends CapabilityCoreContext {
-  readonly toolCallId: ToolCallId
-}
-
 /** Wide context for tools that explicitly need model host authority
- *  (agent runner, session mutation, interaction). Authors opt in by annotating
- *  the second execute parameter as `ToolCapabilityContext`. */
+ *  (agent runner, session mutation, interaction). Authors opt in by declaring
+ *  matching `ToolNeeds` and annotating the second execute parameter as
+ *  `ToolCapabilityContext`. */
 export interface ToolCapabilityContext extends ModelCapabilityContext {
   readonly toolCallId: ToolCallId
 }
@@ -218,7 +220,8 @@ export interface ToolInput<
   readonly prompt?: PromptSection
   /** The tool body. Receives decoded `params` and the minimal
    *  `ToolCoreContext` by default. Tools that need subagents, interaction, or
-   *  session mutation must annotate `ctx: ToolCapabilityContext` explicitly. */
+   *  session mutation must both declare matching `ToolNeeds` and annotate
+   *  `ctx: ToolCapabilityContext` explicitly. */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
     ctx: Ctx,
@@ -261,12 +264,11 @@ export const tool = <
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-    effect: input.execute as unknown as CapabilityEffect<
+    effect: input.execute as unknown as GentToolMetadata<
       Schema.Schema.Type<Params>,
       Schema.Schema.Type<Output>,
-      never,
       Error
-    >,
+    >["effect"],
   }
 
   const native = AiTool.dynamic(input.id, {

@@ -305,7 +305,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
 export const ReviewTool = tool({
   id: "review",
-  needs: [ToolNeeds.write("agent")],
+  needs: [ToolNeeds.write("agent"), ToolNeeds.write("artifact")],
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Adversarial dual-model code review",

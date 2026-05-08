@@ -27,6 +27,7 @@ import { defineResource } from "@gent/core/domain/resource"
 import {
   action,
   CapabilityError,
+  ToolNeeds,
   request,
   tool,
   type ToolCapabilityContext,
@@ -533,6 +534,7 @@ describe("extension command RPCs", () => {
           tools: [
             tool({
               id: "create-branch",
+              needs: [ToolNeeds.write("session")],
               description: "Create a branch through the extension host session API.",
               params: Schema.Struct({}),
               output: Schema.String,

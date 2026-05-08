@@ -2,6 +2,8 @@ import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
 import {
   getToolId,
   getToolMetadata,
+  type ToolCoreContext,
+  type ToolNeed,
   type ToolCapabilityContext,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
@@ -42,9 +44,11 @@ interface ToolExecutionProfile {
 }
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
+type ToolRuntimeContext = ToolCoreContext &
+  Partial<Pick<ToolCapabilityContext, "agent" | "session" | "interaction">>
 
 const provideCapabilityContext = <A, E, R>(
-  ctx: ToolCapabilityContext,
+  ctx: ToolCoreContext,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   ctx.capabilityContext === undefined
@@ -91,6 +95,25 @@ const runPermissionCheck = (params: {
     (input) => params.permission.check(input.toolName, input.input),
     params.ctx,
   )
+
+const needsTag = (needs: ReadonlyArray<ToolNeed> | undefined, tag: ToolNeed["tag"]): boolean =>
+  needs?.some((need) => need.tag === tag) === true
+
+const deriveToolContext = (
+  ctx: ToolCapabilityContext,
+  needs: ReadonlyArray<ToolNeed> | undefined,
+): ToolRuntimeContext => ({
+  sessionId: ctx.sessionId,
+  branchId: ctx.branchId,
+  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+  toolCallId: ctx.toolCallId,
+  cwd: ctx.cwd,
+  home: ctx.home,
+  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
+  ...(needsTag(needs, "agent") ? { agent: ctx.agent } : {}),
+  ...(needsTag(needs, "session") ? { session: ctx.session } : {}),
+  ...(needsTag(needs, "interaction") ? { interaction: ctx.interaction } : {}),
+})
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   Prompt.toolResultPart({
@@ -145,6 +168,7 @@ const makeExecutionToolkit = (params: {
   const metadata = getToolMetadata(params.tool)
   const toolkit = convertTools([params.tool])
   const toolName = String(getToolId(params.tool))
+  const toolCtx = deriveToolContext(params.ctx, metadata.needs)
 
   const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
@@ -159,10 +183,10 @@ const makeExecutionToolkit = (params: {
           },
           () =>
             provideCapabilityContext(
-              params.ctx,
+              toolCtx,
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
               metadata
-                .effect(decodedInput, params.ctx)
+                .effect(decodedInput, toolCtx)
                 .pipe(Effect.mapError(normalizeToolExecutionError)),
             ),
           params.ctx,
