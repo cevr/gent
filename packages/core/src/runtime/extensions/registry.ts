@@ -67,6 +67,8 @@ export interface ResolvedExtensions {
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly permissionRules: ReadonlyArray<PermissionRule>
+  readonly slashCommands: ReadonlyArray<SlashCommand>
+  readonly publicSlashCommands: ReadonlyArray<SlashCommand>
   readonly extensionReactions: CompiledExtensionReactions
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
@@ -167,6 +169,21 @@ const compileCapabilityWinners = (
     }
   }
   return winners
+}
+
+const compileSlashCommands = (
+  winners: ReadonlyMap<string, RegisteredCapabilityEntry>,
+  options?: { readonly publicOnly?: boolean },
+): ReadonlyArray<SlashCommand> => {
+  const commands: SlashCommand[] = []
+  for (const entry of winners.values()) {
+    if (entry.kind !== "command" && entry.kind !== "rpc") continue
+    if (entry.kind === "command" && !entry.capability.surface.includes("slash")) continue
+    if (entry.kind === "rpc" && entry.capability.slash === undefined) continue
+    if (options?.publicOnly === true && entry.kind !== "rpc") continue
+    commands.push(capabilityToCommand(entry.extensionId, entry.capability))
+  }
+  return commands
 }
 
 const compileCapabilityEntries = (
@@ -392,6 +409,8 @@ export const resolveExtensions = (
     const rules = isToolCapability(cap) ? getToolMetadata(cap).permissionRules : cap.permissionRules
     if (rules) permissionRules.push(...rules)
   }
+  const slashCommands = compileSlashCommands(capabilityWinners)
+  const publicSlashCommands = compileSlashCommands(capabilityWinners, { publicOnly: true })
 
   const extensionReactions = compileExtensionReactions(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -421,6 +440,8 @@ export const resolveExtensions = (
     externalDrivers,
     promptSections: promptSectionsMap,
     permissionRules,
+    slashCommands,
+    publicSlashCommands,
     extensionReactions,
     extensions: sorted,
     failedExtensions: mergedFailures,
@@ -606,20 +627,10 @@ export class ExtensionRegistry extends Context.Service<
 }
 
 export const listSlashCommands = (
-  extensions: ReadonlyArray<LoadedExtension>,
+  resolved: ResolvedExtensions,
   options?: { readonly publicOnly?: boolean },
-): ReadonlyArray<SlashCommand> => {
-  const winners = compileCapabilityWinners(sortExtensionsByScope(extensions))
-  const commands: SlashCommand[] = []
-  for (const entry of winners.values()) {
-    if (entry.kind !== "command" && entry.kind !== "rpc") continue
-    if (entry.kind === "command" && !entry.capability.surface.includes("slash")) continue
-    if (entry.kind === "rpc" && entry.capability.slash === undefined) continue
-    if (options?.publicOnly === true && entry.kind !== "rpc") continue
-    commands.push(capabilityToCommand(entry.extensionId, entry.capability))
-  }
-  return commands
-}
+): ReadonlyArray<SlashCommand> =>
+  options?.publicOnly === true ? resolved.publicSlashCommands : resolved.slashCommands
 
 /** Resolve a required agent from the registry. Fails with a clear error if not found. */
 export const requireAgent = (name: string) =>

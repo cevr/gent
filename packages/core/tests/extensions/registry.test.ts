@@ -617,7 +617,7 @@ describe("resolveExtensions — slash command discovery", () => {
       promptSnippet: "Echo the args back.",
     })
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { actions: [cap] })])
-    const commands = listSlashCommands(resolved.extensions)
+    const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
@@ -638,7 +638,7 @@ describe("resolveExtensions — slash command discovery", () => {
       execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/request", "builtin", { requests: [cap] })])
-    const command = listSlashCommands(resolved.extensions).find((c) => c.name === "inspect")
+    const command = listSlashCommands(resolved).find((c) => c.name === "inspect")
     expect(cap.description).toBe("Registry description.")
     expect(command?.displayName).toBe("Inspect")
     expect(command?.description).toBe("Slash menu description.")
@@ -651,13 +651,13 @@ describe("resolveExtensions — slash command discovery", () => {
     const projectCap = makeCommand("act", { surface: "palette" })
     const project = makeExt("@test/shadow", "project", { actions: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
-    const commands = listSlashCommands(resolved.extensions)
+    const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
   test("palette-only command does not appear in the slash-backed command list", () => {
     const cap = makeCommand("palette-only", { surface: "palette" })
     const resolved = resolveExtensions([makeExt("@test/palette", "builtin", { actions: [cap] })])
-    const commands = listSlashCommands(resolved.extensions)
+    const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).not.toContain("palette-only")
   })
   // ── Model capability surface ────────────────────────────────────────

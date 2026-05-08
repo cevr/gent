@@ -143,7 +143,7 @@ describe("extension command RPCs", () => {
     () =>
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
-        const cmds = listSlashCommands(registry.getResolved().extensions)
+        const cmds = listSlashCommands(registry.getResolved())
         const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")

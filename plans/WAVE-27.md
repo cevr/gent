@@ -926,6 +926,10 @@ boilerplate only if cross-workspace isolation remains structurally proven.
 
 ## Commit 26: refactor(extensions): reuse capability winners for slash command listing
 
+**Status**: Implemented. `resolveExtensions` now compiles slash command lists
+from the existing capability winners once, and `listSlashCommands` reads the
+resolved snapshot instead of recompiling winners from raw extension arrays.
+
 **Justification**: Registry resolution already compiles capability winners.
 Slash command listing should not re-iterate tools/actions/requests in a second
 shape.
@@ -939,10 +943,12 @@ shape.
 
 **Changes**
 
-| File                                                                                           | Change                                                               | Lines                |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`          | Make `listSlashCommands` consume resolved entries/winners.           | `143-188`, `608-640` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts` | Preserve public-only slash command behavior and shadowing semantics. | multiple             |
+| File                                                                                           | Change                                                                                                                                            | Lines                                    |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`          | Compile `slashCommands` / `publicSlashCommands` from capability winners during resolution; make `listSlashCommands` consume `ResolvedExtensions`. | `62-74`, `143-188`, `390-424`, `608-614` |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts` | Preserve public-only slash command behavior and shadowing semantics.                                                                              | multiple                                 |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/registry.test.ts`           | Keep direct registry slash-command coverage on the resolved snapshot.                                                                             | `614-661`                                |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`                  | List public slash commands from the compiled resolved profile.                                                                                    | `580-586`                                |
 
 **Verification**
 

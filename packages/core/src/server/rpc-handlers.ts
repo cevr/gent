@@ -579,7 +579,7 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionServices(sessionId)
-      return listSlashCommands(registry.getResolved().extensions, { publicOnly: true }).map(
+      return listSlashCommands(registry.getResolved(), { publicOnly: true }).map(
         (command) =>
           new SlashCommandInfo({
             name: command.name,
