@@ -395,7 +395,6 @@ export const makeAgentLoopBehavior = (
             ? {
                 ...next.next,
                 stateEpoch: next.next.stateEpoch + 1,
-                startingState: undefined,
               }
             : next.next
           const decision = { ...next, next: committed }
@@ -490,9 +489,7 @@ export const makeAgentLoopBehavior = (
                 value: undefined,
                 next: {
                   ...current,
-                  state: current.startingState,
                   queue: nextQueue,
-                  startingState: undefined,
                 },
                 persist: true,
               }

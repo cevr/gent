@@ -30,6 +30,9 @@ class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()
   { message: Schema.String },
 ) {}
 
+const hasProperty = (value: unknown, key: PropertyKey): boolean =>
+  typeof value === "object" && value !== null && key in value
+
 describe("ToolRunner", () => {
   it.live("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
@@ -77,7 +80,10 @@ describe("ToolRunner", () => {
     Effect.gen(function* () {
       const Output = Schema.Struct({
         hasAgent: Schema.Boolean,
+        hasAgentRun: Schema.Boolean,
         hasSession: Schema.Boolean,
+        hasSessionListMessages: Schema.Boolean,
+        hasSessionDelete: Schema.Boolean,
         hasInteraction: Schema.Boolean,
       })
       const ProbeTool = tool({
@@ -88,7 +94,26 @@ describe("ToolRunner", () => {
         execute: (_input, ctx: ToolCoreContext) =>
           Effect.succeed({
             hasAgent: "agent" in ctx,
+            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
             hasSession: "session" in ctx,
+            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
+            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
+            hasInteraction: "interaction" in ctx,
+          }),
+      })
+      const ReadProbeTool = tool({
+        id: "read_probe",
+        needs: [ToolNeeds.read("agent"), ToolNeeds.read("session"), ToolNeeds.read("interaction")],
+        description: "Probe read needs",
+        params: Schema.Struct({}),
+        output: Output,
+        execute: (_input, ctx: ToolCoreContext) =>
+          Effect.succeed({
+            hasAgent: "agent" in ctx,
+            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
+            hasSession: "session" in ctx,
+            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
+            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
             hasInteraction: "interaction" in ctx,
           }),
       })
@@ -105,7 +130,10 @@ describe("ToolRunner", () => {
         execute: (_input, ctx: ToolCoreContext) =>
           Effect.succeed({
             hasAgent: "agent" in ctx,
+            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
             hasSession: "session" in ctx,
+            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
+            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
             hasInteraction: "interaction" in ctx,
           }),
       })
@@ -116,7 +144,7 @@ describe("ToolRunner", () => {
               manifest: { id: ExtensionId.make("test") },
               scope: "builtin",
               sourcePath: "test",
-              contributions: { tools: [ProbeTool, PrivilegedProbeTool] },
+              contributions: { tools: [ProbeTool, ReadProbeTool, PrivilegedProbeTool] },
             },
           ]),
         ),
@@ -146,19 +174,38 @@ describe("ToolRunner", () => {
           },
           { ...ctx, toolCallId: ToolCallId.make("tc-privileged-probe") },
         )
-        return { narrow, privileged }
+        const read = yield* runner.run(
+          { toolCallId: ToolCallId.make("tc-read-probe"), toolName: "read_probe", input: {} },
+          { ...ctx, toolCallId: ToolCallId.make("tc-read-probe") },
+        )
+        return { narrow, read, privileged }
       }).pipe(Effect.provide(layer))
 
       expect(result.narrow.isFailure).toBe(false)
       expect(result.narrow.result).toEqual({
         hasAgent: false,
+        hasAgentRun: false,
         hasSession: false,
+        hasSessionListMessages: false,
+        hasSessionDelete: false,
+        hasInteraction: false,
+      })
+      expect(result.read.isFailure).toBe(false)
+      expect(result.read.result).toEqual({
+        hasAgent: true,
+        hasAgentRun: false,
+        hasSession: true,
+        hasSessionListMessages: true,
+        hasSessionDelete: false,
         hasInteraction: false,
       })
       expect(result.privileged.isFailure).toBe(false)
       expect(result.privileged.result).toEqual({
         hasAgent: true,
+        hasAgentRun: true,
         hasSession: true,
+        hasSessionListMessages: true,
+        hasSessionDelete: true,
         hasInteraction: true,
       })
     }),

@@ -97,7 +97,7 @@ export function renderSessionTree(
 
 export const ReadSessionTool = tool({
   id: "read_session",
-  needs: [ToolNeeds.read("session"), ToolNeeds.read("agent")],
+  needs: [ToolNeeds.read("session"), ToolNeeds.write("agent")],
   description:
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,

@@ -45,7 +45,25 @@ interface ToolExecutionProfile {
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 type ToolRuntimeContext = ToolCoreContext &
-  Partial<Pick<ToolCapabilityContext, "agent" | "session" | "interaction">>
+  Partial<{
+    readonly agent:
+      | Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair">
+      | ExtensionHostContext.Agent
+    readonly session:
+      | Pick<
+          ExtensionHostContext.SessionFacet,
+          | "listMessages"
+          | "getSession"
+          | "getDetail"
+          | "estimateContextPercent"
+          | "search"
+          | "listBranches"
+          | "getChildSessions"
+          | "getSessionAncestors"
+        >
+      | ExtensionHostContext.SessionFacet
+    readonly interaction: ExtensionHostContext.Interaction
+  }>
 
 const provideCapabilityContext = <A, E, R>(
   ctx: ToolCoreContext,
@@ -99,21 +117,66 @@ const runPermissionCheck = (params: {
 const needsTag = (needs: ReadonlyArray<ToolNeed> | undefined, tag: ToolNeed["tag"]): boolean =>
   needs?.some((need) => need.tag === tag) === true
 
+const needsAccess = (
+  needs: ReadonlyArray<ToolNeed> | undefined,
+  tag: ToolNeed["tag"],
+  access: ToolNeed["access"],
+): boolean => needs?.some((need) => need.tag === tag && need.access === access) === true
+
+const readAgentFacet = (
+  agent: ExtensionHostContext.Agent,
+): Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair"> => ({
+  get: agent.get,
+  require: agent.require,
+  resolveDualModelPair: agent.resolveDualModelPair,
+})
+
+const readSessionFacet = (
+  session: ExtensionHostContext.SessionFacet,
+): Pick<
+  ExtensionHostContext.SessionFacet,
+  | "listMessages"
+  | "getSession"
+  | "getDetail"
+  | "estimateContextPercent"
+  | "search"
+  | "listBranches"
+  | "getChildSessions"
+  | "getSessionAncestors"
+> => ({
+  listMessages: session.listMessages,
+  getSession: session.getSession,
+  getDetail: session.getDetail,
+  estimateContextPercent: session.estimateContextPercent,
+  search: session.search,
+  listBranches: session.listBranches,
+  getChildSessions: session.getChildSessions,
+  getSessionAncestors: session.getSessionAncestors,
+})
+
 const deriveToolContext = (
   ctx: ToolCapabilityContext,
   needs: ReadonlyArray<ToolNeed> | undefined,
-): ToolRuntimeContext => ({
-  sessionId: ctx.sessionId,
-  branchId: ctx.branchId,
-  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-  toolCallId: ctx.toolCallId,
-  cwd: ctx.cwd,
-  home: ctx.home,
-  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
-  ...(needsTag(needs, "agent") ? { agent: ctx.agent } : {}),
-  ...(needsTag(needs, "session") ? { session: ctx.session } : {}),
-  ...(needsTag(needs, "interaction") ? { interaction: ctx.interaction } : {}),
-})
+): ToolRuntimeContext => {
+  const writeAgent = needsAccess(needs, "agent", "write")
+  const writeSession = needsAccess(needs, "session", "write")
+  return {
+    sessionId: ctx.sessionId,
+    branchId: ctx.branchId,
+    ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+    toolCallId: ctx.toolCallId,
+    cwd: ctx.cwd,
+    home: ctx.home,
+    ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
+    ...(needsTag(needs, "agent")
+      ? { agent: writeAgent ? ctx.agent : readAgentFacet(ctx.agent) }
+      : {}),
+    ...(needsTag(needs, "session")
+      ? { session: writeSession ? ctx.session : readSessionFacet(ctx.session) }
+      : {}),
+    ...(needsAccess(needs, "interaction", "write") ? { interaction: ctx.interaction } : {}),
+  }
+}
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   Prompt.toolResultPart({

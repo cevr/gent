@@ -25,7 +25,7 @@
  *
  * **Primary key (dedup)** per op:
  * - `Submit` / `QueueFollowUp` / `AcceptSubmit` / `AcceptQueueFollowUp` — `message.id`
- * - `Steer` — `commandId`
+ * - `Steer` / `AcceptSteer` — `commandId`
  * - `Interrupt` — `commandId`
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
@@ -310,6 +310,15 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
+    id: (p: SteerInput) => ({
+      entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
+      primaryKey: p.commandId,
+    }),
+  },
+  AcceptSteer: {
+    payload: SteerFields,
+    success: Schema.Void,
+    error: AgentLoopError,
     id: (p: SteerInput) => ({
       entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
       primaryKey: p.commandId,
@@ -908,6 +917,8 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
       ),
     Steer: ({ operation }: HandlerRequest<SteerInput>) =>
+      withWorkspace(applySteer(operation.commandId, operation.command)),
+    AcceptSteer: ({ operation }: HandlerRequest<SteerInput>) =>
       withWorkspace(applySteer(operation.commandId, operation.command)),
     Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
       withWorkspace(

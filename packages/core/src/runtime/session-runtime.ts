@@ -744,8 +744,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           Effect.gen(function* () {
             const commandId = ActorCommandId.make(yield* platform.randomId)
             const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.send(
-              AgentLoopActor.Steer.make({
+            yield* ref.execute(
+              AgentLoopActor.AcceptSteer.make({
                 workspaceId: yield* CurrentWorkspaceId,
                 commandId,
                 command,

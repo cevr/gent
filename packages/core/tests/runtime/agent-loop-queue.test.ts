@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, Semaphore, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -14,6 +14,7 @@ import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
+import { makeAgentLoopBehavior } from "../../src/runtime/agent/agent-loop.behavior"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -35,11 +36,103 @@ import {
 } from "../../src/domain/agent-loop-queue-state"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../src/domain/storage-error"
+import { ensureStorageParents } from "@gent/core/test-utils"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
 
 describe("queue drain regression", () => {
+  it.live(
+    "queued submit during start reservation keeps the worker start token private",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-start-window")
+        const branchId = BranchId.make("branch-loop-start-window")
+        const streamStarted = yield* Deferred.make<void>()
+        const streamReleased = yield* Deferred.make<void>()
+        const streamCallRef = yield* Ref.make(0)
+        const gatedProvider = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            yield* Ref.update(streamCallRef, (n) => n + 1)
+            yield* Deferred.succeed(streamStarted, undefined).pipe(Effect.ignore)
+            yield* Deferred.await(streamReleased)
+            return Stream.fromIterable([
+              textDeltaPart("started"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(),
+          gatedProvider,
+          ModelResolver.fromLanguageModel(gatedProvider),
+          makeExtRegistry(),
+          RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          BunServices.layer,
+          ResourceManagerLive,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const behaviorDepsLayer = Layer.provide(
+          AgentLoopBehaviorDeps.Live({ baseSections: [] }),
+          Layer.merge(deps, eventPublisherLayer),
+        )
+        const layer = Layer.mergeAll(deps, eventPublisherLayer, behaviorDepsLayer)
+        const makeMessage = (id: string, text: string) =>
+          Message.Regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          })
+
+        yield* Effect.gen(function* () {
+          yield* ensureStorageParents({ sessionId, branchId })
+          const behaviorDeps = yield* AgentLoopBehaviorDeps
+          const sideMutationSemaphore = yield* Semaphore.make(1)
+          const behavior = yield* makeAgentLoopBehavior(
+            {
+              ...behaviorDeps,
+              enqueueFollowUp: () => Effect.void,
+            },
+            sessionId,
+            branchId,
+            sideMutationSemaphore,
+          )
+          yield* Effect.addFinalizer(() => Scope.close(behavior.scope, Exit.void))
+          yield* behavior.start
+
+          const first = { message: makeMessage("msg-start-window-1", "first") }
+          const second = { message: makeMessage("msg-start-window-2", "second") }
+          const start = yield* behavior.reserveStartOrQueueFollowUp(first, {
+            coldQueueOnly: false,
+          })
+          expect(start).not.toBeUndefined()
+          const queued = yield* behavior.reserveStartOrQueueFollowUp(second, {
+            coldQueueOnly: false,
+          })
+          expect(queued).toBeUndefined()
+
+          const reserved = yield* behavior.readState
+          expect(reserved.state._tag).toBe("Idle")
+          expect(reserved.startingState?._tag).toBe("Running")
+          expect(reserved.queue.followUp).toHaveLength(1)
+
+          yield* behavior.startTurn(first)
+          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+          expect(yield* Ref.get(streamCallRef)).toBe(1)
+          yield* Deferred.succeed(streamReleased, undefined)
+        }).pipe(Effect.provide(layer), Effect.scoped)
+      }),
+    15000,
+  )
+
   it.live(
     "multiple submits during a Running turn drain in submission order after TurnDone",
     () =>
