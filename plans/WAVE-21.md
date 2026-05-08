@@ -109,6 +109,7 @@ Commits landed in this wave so far:
 - `2bdfdd60 docs(plan): record resource scope subtraction`
 - `99e6b35d refactor(acp): own managers per extension setup`
 - `53847ae1 test(extensions): lock resource-owned state`
+- `d7b9f61f refactor(extensions): remove ambient host reads`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -152,6 +153,10 @@ classes of privilege and races, but the deeper P1s remain:
 - Auto and Executor process-resource controllers are now locked as
   resource-owned state. Commit `53847ae1` proves independent `Layer.build`
   contexts do not share auto workflow state or executor connection state.
+- Memory and OpenAI Codex no longer perform incidental host reads in extension
+  code. Commit `d7b9f61f` routes the memory vault default through public
+  `ctx.home` and removes the `node:os` user-agent decoration from the Codex
+  transform.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -722,7 +727,8 @@ Status: in progress. Commit `f56553eb` closes the scheduler cron failure-open by
 moving cron install/remove behind `CronRuntime` and wiring `BunCronRuntimeLive`
 at the platform boundary. Commit `6338d9b7` moves SDK server-lock hostname,
 PID-liveness, and SIGTERM ownership through `GentPlatform`. Shipped-extension
-ambient process reads remain open in this lane.
+ambient process reads remain open in this lane, but incidental Memory/OpenAI
+reads are closed by `d7b9f61f`.
 
 Work:
 
@@ -730,6 +736,8 @@ Work:
       scheduled job failure, not silent success.
 - [x] Route SDK server-lock host identity, PID liveness, and signaling through
       `GentPlatform`.
+- [x] Remove incidental Memory/OpenAI host reads from shipped extensions.
+      Done in `d7b9f61f`.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -751,6 +759,11 @@ Validation:
 - `bun run gate`
 - Guard tests.
 - `bun run lint`
+- `bun run gate`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/memory/vault.test.ts tests/memory/dreaming.test.ts tests/openai/openai-codex-transform.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
 - `bun run gate`
 
 ### C21.9b — Serialize Extension Credential Refresh And Child Tracking
