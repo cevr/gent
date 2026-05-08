@@ -106,6 +106,8 @@ Commits landed in this wave so far:
 - `6338d9b7 refactor(sdk): use platform for server lock identity`
 - `d24f7e76 docs(plan): record server lock platform ownership`
 - `41a95117 refactor(extensions): remove unsupported resource scopes`
+- `2bdfdd60 docs(plan): record resource scope subtraction`
+- `99e6b35d refactor(acp): own managers per extension setup`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -141,6 +143,11 @@ classes of privilege and races, but the deeper P1s remain:
 - The scheduler cron runtime is now an explicit Effect service wired by the Bun
   platform adapter; desired schedules without a cron runtime become scheduled
   job failures instead of silently succeeding.
+- ACP protocol and Claude Code SDK managers are no longer module-scope
+  singletons. Commit `99e6b35d` creates them per extension setup and captures
+  them in that setup's external drivers plus Resource finalizer, with a
+  regression proving two setup invocations invalidate and dispose independent
+  manager instances.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -651,12 +658,15 @@ Goal: make extension state ownership explicit and scoped.
 
 Status: resource scope truthfulness is closed by `41a95117`; the public
 Resource API exposes only process lifetime because that is the only host-owned
-lifecycle today. Stateful extension internals remain open.
+lifecycle today. ACP manager ownership is closed by `99e6b35d`. Auto and
+executor controller ownership remain open.
 
 Work:
 
-- Convert ACP, auto, and executor process-local state into resource-owned
-  services or actors.
+- [x] Convert ACP process-local manager state into setup/resource-owned state.
+      Done in `99e6b35d`.
+- Convert auto and executor process-local state into resource-owned services or
+  actors.
 - [x] Implement truthful resource scopes used by current extensions, or delete
       unsupported scopes from the public API. Done in `41a95117`.
 - Add startup/shutdown/restart behavior tests.
@@ -665,6 +675,11 @@ Validation:
 
 - `bun run typecheck`
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/resource-host.test.ts tests/extensions/scheduler.test.ts tests/extensions/activation.test.ts tests/extensions/define-extension.test.ts`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/acp-agents/acp-extension-state.test.ts tests/acp-agents/acp-system-prompt-slot.test.ts tests/acp-agents/claude-sdk-lifecycle.test.ts`
+- `bun run typecheck`
 - `bun run lint`
 - `bun run fmt`
 - `bun run gate`
