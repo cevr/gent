@@ -53,20 +53,14 @@ export interface CapabilityCoreContext {
   readonly host: ExtensionHostFacts
 }
 
-/**
- * Default ctx parameter type for request/action host signatures.
- */
-export type CapabilityContext = CapabilityCoreContext
-
 export type CapabilityEffect<Input = unknown, Output = unknown, R = never, E = CapabilityError> = {
-  bivarianceHack(input: Input, ctx: CapabilityContext): Effect.Effect<Output, E, R>
+  bivarianceHack(input: Input): Effect.Effect<Output, E, R>
 }["bivarianceHack"]
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
 export type ErasedCapabilityEffect<E = any> = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
   input: any,
-  ctx: CapabilityContext,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
 ) => Effect.Effect<any, E, any>
 

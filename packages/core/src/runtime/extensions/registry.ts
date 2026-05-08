@@ -227,7 +227,6 @@ const runExtensionCapability = (
   capabilityId: RpcId | CommandId | string,
   capability: RequestCapability | ActionCapability,
   input: unknown,
-  ctx: CapabilityCoreContext,
 ) =>
   Effect.gen(function* () {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
@@ -248,11 +247,7 @@ const runExtensionCapability = (
     const output = yield* sealErasedEffect(
       () =>
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-        capability.effect(
-          decodedInput,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- leaf registry owns erased ctx boundary
-          ctx as Parameters<typeof capability.effect>[1],
-        ),
+        capability.effect(decodedInput),
       {
         onFailure: (error) =>
           Schema.is(CapabilityErrorClass)(error)
@@ -300,27 +295,6 @@ const provideExtensionServicesIfAvailable = <A, E, R>(
 ): Effect.Effect<A, E, R> =>
   hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect, { intent }) : effect
 
-const coreCapabilityContext = (ctx: CapabilityCoreContext): CapabilityCoreContext => ({
-  sessionId: ctx.sessionId,
-  branchId: ctx.branchId,
-  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-  ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
-  cwd: ctx.cwd,
-  home: ctx.home,
-  host: {
-    osInfo: ctx.host.osInfo,
-    execPath: ctx.host.execPath,
-    homeDirectory: ctx.host.homeDirectory,
-    pathListSeparator: ctx.host.pathListSeparator,
-    commandCandidates: ctx.host.commandCandidates,
-    isPortFree: ctx.host.isPortFree,
-    isPidAlive: ctx.host.isPidAlive,
-  },
-})
-
-const capabilityRuntimeContext = (ctx: CapabilityCoreContext): CapabilityCoreContext =>
-  coreCapabilityContext(ctx)
-
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
@@ -342,13 +316,7 @@ const compileRpcRegistry = (
       }
       return yield* provideExtensionServicesIfAvailable(
         ctx,
-        runExtensionCapability(
-          extensionId,
-          capabilityId,
-          entry.capability,
-          input,
-          capabilityRuntimeContext(ctx),
-        ),
+        runExtensionCapability(extensionId, capabilityId, entry.capability, input),
         entry.capability.intent,
       )
     }),

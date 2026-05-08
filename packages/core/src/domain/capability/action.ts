@@ -6,8 +6,8 @@
  * controlling where the action appears in the TUI. Actions always lower to
  * `intent: "write"` (UI affordances always express user intent).
  *
- * The handler context is `CapabilityCoreContext`. Host capabilities are
- * imported as constrained Effect services.
+ * Host capabilities are imported through `ExtensionContext`; action handlers
+ * receive decoded params only.
  *
  * @module
  */
@@ -17,7 +17,6 @@ import type {
   ActionCapability as ActionCapabilityVariant,
   CapabilityEffect,
   CapabilityError,
-  CapabilityCoreContext,
   ErasedCapabilityEffect,
 } from "../capability.js"
 import { Capability } from "../capability.js"
@@ -94,11 +93,8 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   readonly input: Schema.Schema<Input>
   /** Schema for output. */
   readonly output: Schema.Schema<Output>
-  /** Action handler. Receives the narrow core context. */
-  readonly execute: (
-    input: Input,
-    ctx: CapabilityCoreContext,
-  ) => Effect.Effect<Output, CapabilityError, R>
+  /** Action handler. Receives decoded params only. */
+  readonly execute: (input: Input) => Effect.Effect<Output, CapabilityError, R>
 }
 
 const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "palette"> => {

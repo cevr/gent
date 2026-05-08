@@ -11,7 +11,8 @@
  * audience array.
  *
  * Host/session authority is imported through `ExtensionContext`; runtime
- * dispatch provides a facade matching the declared intent.
+ * dispatch provides a facade matching the declared intent. Request handlers
+ * receive decoded params only.
  *
  * @module
  */
@@ -22,7 +23,6 @@ import {
   type RequestCapability as RequestCapabilityVariant,
   type ErasedCapabilityEffect,
   type CapabilityRef,
-  type CapabilityCoreContext,
   type CapabilityError,
 } from "../capability.js"
 import { Capability } from "../capability.js"
@@ -92,10 +92,7 @@ export interface ReadRequestInput<
   /** `intent: "read"` → runtime provides a read-intent `ExtensionContext` facade. */
   readonly intent: "read"
   /** The request handler. */
-  readonly execute: (
-    input: Input,
-    ctx: CapabilityCoreContext,
-  ) => Effect.Effect<Output, CapabilityError, R>
+  readonly execute: (input: Input) => Effect.Effect<Output, CapabilityError, R>
 }
 
 /** Author-facing input to `request({ intent: "write", ... })`. R is
@@ -108,10 +105,7 @@ export interface WriteRequestInput<
   /** `intent: "write"` → R is unconstrained. */
   readonly intent: "write"
   /** The request handler. */
-  readonly execute: (
-    input: Input,
-    ctx: CapabilityCoreContext,
-  ) => Effect.Effect<Output, CapabilityError, R>
+  readonly execute: (input: Input) => Effect.Effect<Output, CapabilityError, R>
 }
 
 /**
@@ -139,10 +133,7 @@ export function request(input: {
   readonly prompt?: PromptSection
   readonly description?: string
   readonly slash?: RequestInputBase<unknown, unknown>["slash"]
-  readonly execute: (
-    input: unknown,
-    ctx: CapabilityCoreContext,
-  ) => Effect.Effect<unknown, CapabilityError, unknown>
+  readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { ExtensionId, BranchId, request } from "@gent/core/extensions/api"
+import { ExtensionContext, ExtensionId, BranchId, request } from "@gent/core/extensions/api"
 import { ArtifactId } from "@gent/core-internal/domain/ids"
 import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { ArtifactsRead, ArtifactsWrite } from "./artifacts/store.js"
@@ -79,7 +79,8 @@ export const ArtifactRpc = {
       branchId: Schema.optional(BranchId),
     }),
     output: Artifact,
-    execute: Effect.fn("ArtifactRpc.Save")(function* (input, ctx) {
+    execute: Effect.fn("ArtifactRpc.Save")(function* (input) {
+      const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsWrite
       return yield* artifacts.save(ctx.sessionId, ctx.branchId, input)
     }),
@@ -90,7 +91,8 @@ export const ArtifactRpc = {
     intent: "read",
     input: Schema.Struct({ query: ReadQuery }),
     output: Schema.NullOr(Artifact),
-    execute: Effect.fn("ArtifactRpc.Read")(function* ({ query }, ctx) {
+    execute: Effect.fn("ArtifactRpc.Read")(function* ({ query }) {
+      const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsRead
       return yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
     }),
@@ -107,7 +109,8 @@ export const ArtifactRpc = {
       label: Schema.optional(Schema.String),
     }),
     output: Schema.NullOr(Artifact),
-    execute: Effect.fn("ArtifactRpc.Update")(function* (input, ctx) {
+    execute: Effect.fn("ArtifactRpc.Update")(function* (input) {
+      const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsWrite
       return yield* artifacts.update(ctx.sessionId, ctx.branchId, input)
     }),
@@ -118,7 +121,8 @@ export const ArtifactRpc = {
     intent: "write",
     input: Schema.Struct({ id: ArtifactId }),
     output: Schema.Void,
-    execute: Effect.fn("ArtifactRpc.Clear")(function* ({ id }, ctx) {
+    execute: Effect.fn("ArtifactRpc.Clear")(function* ({ id }) {
+      const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsWrite
       yield* artifacts.clear(ctx.sessionId, ctx.branchId, id)
     }),
@@ -129,7 +133,8 @@ export const ArtifactRpc = {
     intent: "read",
     input: Schema.Struct({ branchId: Schema.optional(BranchId) }),
     output: Schema.Array(Artifact),
-    execute: Effect.fn("ArtifactRpc.List")(function* (_input, ctx) {
+    execute: Effect.fn("ArtifactRpc.List")(function* () {
+      const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsRead
       return yield* artifacts.list(ctx.sessionId, ctx.branchId)
     }),

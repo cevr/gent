@@ -23,6 +23,8 @@ import {
   type ReadOnly,
   ReadOnlyBrand,
   type ReadOnlyTag,
+  type ActionInput,
+  type ReadRequestInput,
   makeRunSpec,
   request,
   resource,
@@ -167,22 +169,17 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("write request context is not privileged by default", () => {
-    request({
+  test("request handlers receive params only", () => {
+    const bad: WriteRequestInput<{}, string> = {
       id: "write-core-context",
       extensionId: ExtensionId.make("surface-locks"),
       intent: "write",
       input: NoInput,
       output: StringOutput,
-      execute: (_input, ctx) => {
-        void ctx.sessionId
-        // @ts-expect-error — write requests do not get session mutation authority by default
-        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
-        // @ts-expect-error — write requests do not get agent spawning authority by default
-        void ctx.agent.run
-        return Effect.succeed("ok")
-      },
-    })
+      // @ts-expect-error — request handlers receive decoded params only; host access comes from ExtensionContext
+      execute: (_input, _ctx) => Effect.succeed("ok"),
+    }
+    void bad
     expect(true).toBe(true)
   })
 
@@ -344,23 +341,18 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("default action context is not privileged", () => {
-    action({
+  test("action handlers receive params only", () => {
+    const bad: ActionInput<{}, void> = {
       id: "default-action-context",
       name: "Default Action Context",
       description: "ok",
       surface: "slash",
       input: Schema.Struct({}),
       output: Schema.Void,
-      execute: (_input, ctx) => {
-        void ctx.sessionId
-        // @ts-expect-error — public actions do not get session mutation authority by default
-        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
-        // @ts-expect-error — public actions do not get agent spawning authority by default
-        void ctx.agent.run
-        return Effect.void
-      },
-    })
+      // @ts-expect-error — action handlers receive decoded params only; host access comes from ExtensionContext
+      execute: (_input, _ctx) => Effect.void,
+    }
+    void bad
     expect(true).toBe(true)
   })
 
@@ -514,25 +506,17 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("read request context exposes host facts but not process authority", () => {
-    request({
+  test("read request handlers do not receive host facts by parameter", () => {
+    const bad: ReadRequestInput<{}, string> = {
       id: "facts-only-read",
       extensionId: ExtensionId.make("surface-locks"),
       intent: "read",
       input: Schema.Struct({}),
       output: Schema.String,
-      execute: (_input, ctx) => {
-        const platform = ctx.host.osInfo.platform
-        const candidates = ctx.host.commandCandidates("git")
-        // @ts-expect-error — read requests get host facts, not parent process env
-        void ctx.host.parentEnv
-        // @ts-expect-error — read requests cannot signal host processes
-        ctx.host.signalPid(1, "SIGTERM")
-        // @ts-expect-error — read requests cannot spawn host processes
-        ctx.host.runProcess("git", ["status"])
-        return Effect.succeed(`${platform}:${candidates.join(",")}`)
-      },
-    })
+      // @ts-expect-error — request handlers receive decoded params only; facts come from ExtensionContext/setup context
+      execute: (_input, _ctx) => Effect.succeed("ok"),
+    }
+    void bad
     expect(true).toBe(true)
   })
 

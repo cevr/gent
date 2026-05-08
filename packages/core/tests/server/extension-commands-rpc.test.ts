@@ -62,8 +62,9 @@ describe("extension command RPCs", () => {
             description: "Say hello",
             input: Schema.String,
             output: Schema.Void,
-            execute: (args, ctx) =>
-              Effect.sync(() => {
+            execute: (args) =>
+              Effect.gen(function* () {
+                const ctx = yield* ExtensionContext
                 invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
               }),
           }),
@@ -918,7 +919,7 @@ describe("extension command RPCs", () => {
                   extensionContextFollowUpDenied: Schema.Boolean,
                   extensionContextParentEnvEmpty: Schema.Boolean,
                 }),
-                execute: (_input, ctx) =>
+                execute: () =>
                   narrowR(
                     Effect.gen(function* () {
                       const todoStorage = yield* Effect.serviceOption(TodoStorage)
@@ -933,16 +934,8 @@ describe("extension command RPCs", () => {
                         }),
                       )
                       return {
-                        hasSessionMutations:
-                          "session" in ctx &&
-                          typeof ctx.session === "object" &&
-                          ctx.session !== null &&
-                          "queueFollowUp" in ctx.session,
-                        hasAgentRun:
-                          "agent" in ctx &&
-                          typeof ctx.agent === "object" &&
-                          ctx.agent !== null &&
-                          "run" in ctx.agent,
+                        hasSessionMutations: false,
+                        hasAgentRun: false,
                         writeStorageUnavailable: Option.isNone(todoStorage),
                         extensionContextProcessDenied: Exit.isFailure(processExit),
                         extensionContextFollowUpDenied: Exit.isFailure(followUpExit),

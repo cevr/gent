@@ -191,11 +191,7 @@ export {
   type ActionSurface,
   type ActionCapability,
 } from "../domain/capability/action.js"
-export type {
-  CapabilityContext,
-  CapabilityCoreContext,
-  CapabilityRef,
-} from "../domain/capability.js"
+export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export type {
   ResourceContribution,

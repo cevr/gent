@@ -200,29 +200,39 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("strips undeclared host authority from default action runtime context", () =>
+  it.live("provides ExtensionContext to action handlers", () =>
     Effect.gen(function* () {
       const cap = action({
-        id: "facts-only-action",
-        name: "Facts Only Action",
-        description: "Action without privileged needs",
+        id: "context-action",
+        name: "Context Action",
+        description: "Action with host context service",
         surface: "slash",
         input: Schema.Struct({}),
         output: Schema.Struct({ hasRunProcess: Schema.Boolean }),
-        execute: (_input, actionCtx) =>
-          Effect.succeed({ hasRunProcess: "runProcess" in actionCtx.host }),
+        execute: () =>
+          Effect.gen(function* () {
+            const extensionCtx = yield* ExtensionContext
+            return { hasRunProcess: "run" in extensionCtx.Process }
+          }),
       })
       const ext: LoadedExtension = {
         manifest: { id: extensionId },
         scope: "builtin",
-        sourcePath: "/test/facts-only-action",
+        sourcePath: "/test/context-action",
         contributions: { actions: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, {}, ctx, {
-        intent: "write",
-      })
-      expect(result).toEqual({ hasRunProcess: false })
+      const result = yield* resolved.rpcRegistry.run(
+        extensionId,
+        cap.id,
+        {},
+        testExtensionHostContext({
+          sessionId: SessionId.make("action-context-session"),
+          branchId: BranchId.make("action-context-branch"),
+        }),
+        { intent: "write" },
+      )
+      expect(result).toEqual({ hasRunProcess: true })
     }),
   )
 

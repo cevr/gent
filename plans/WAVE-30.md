@@ -237,6 +237,8 @@ plan must reflect the broader P1 findings before implementation continues.
 
 ## Commit 2: refactor(extensions): make requests and actions params-only
 
+**Status**: Completed in current batch.
+
 **Justification**: Extension code should not receive facts by parameter in one
 leaf kind and services by Effect context in another. The only authoring model is
 ordinary Effect code using `yield* ExtensionContext`.

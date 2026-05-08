@@ -8,7 +8,7 @@
  * @module
  */
 import { Effect, Schema } from "effect"
-import { AgentName, CapabilityError, request } from "@gent/core/extensions/api"
+import { AgentName, CapabilityError, ExtensionContext, request } from "@gent/core/extensions/api"
 import { Todo, TodoId } from "./domain.js"
 import { TodoService } from "../todo-service.js"
 import { TodoStorageReadOnly } from "../todo-storage.js"
@@ -55,8 +55,9 @@ export const TodoListRequest = request({
   intent: "read",
   input: TodoListInput,
   output: TodoListOutput,
-  execute: (_input, ctx) =>
+  execute: () =>
     Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
       const storage = yield* TodoStorageReadOnly
       return yield* storage
         .listTodos(ctx.sessionId, ctx.branchId)
@@ -109,8 +110,9 @@ export const TodoCreateRequest = request({
   intent: "write",
   input: TodoCreateInput,
   output: TodoCreateOutput,
-  execute: (input, ctx) =>
+  execute: (input) =>
     Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
       const todoService = yield* TodoService
       return yield* todoService
         .create({

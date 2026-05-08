@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { request } from "@gent/core/extensions/api"
+import { ExtensionContext, request } from "@gent/core/extensions/api"
 import { ExecutorRead, ExecutorWrite } from "./controller.js"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
@@ -27,7 +27,8 @@ export const ExecutorRpc = {
     description: "Connect to the configured Executor endpoint.",
     input: Schema.String,
     output: Schema.Void,
-    execute: Effect.fn("ExecutorRpc.Start")(function* (_input, ctx) {
+    execute: Effect.fn("ExecutorRpc.Start")(function* () {
+      const ctx = yield* ExtensionContext
       const executor = yield* ExecutorWrite
       yield* executor.connect(ctx.cwd)
     }),
