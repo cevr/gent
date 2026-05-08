@@ -348,7 +348,7 @@ export type {
 export interface ExtensionSetupContext {
   readonly cwd: string
   readonly source: string
-  /** User home directory (e.g. ~/.gent lives here). Defaults to os.homedir(). */
+  /** User home directory (e.g. ~/.gent lives here). Defaults to the platform home directory. */
   readonly home: string
   readonly host: ExtensionHostPlatform
 }

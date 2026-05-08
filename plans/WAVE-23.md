@@ -500,6 +500,13 @@ Validation:
 
 Status: planned.
 
+Progress:
+
+- Host process/OS facts in `apps/server` now flow through `GentPlatform`.
+- Platform duplication guard now rejects `process.platform`, `process.pid`,
+  `process.execPath`, `os.hostname()`, `os.homedir()`, and `os.release()` in
+  server/SDK composition code outside the platform adapter.
+
 Work:
 
 - Extract a core-internal server bootstrap/root builder.

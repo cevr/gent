@@ -460,4 +460,40 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([])
   })
+
+  test("flags host process and OS facts outside the platform adapter", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/server/src/main.ts",
+        [
+          "const pid = process.pid",
+          "const runtime = process.execPath",
+          "const hostname = os.hostname()",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "apps/server/src/main.ts",
+        line: 1,
+        message: "Host process facts are adapter-only; use GentPlatform",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 2,
+        message: "Host process facts are adapter-only; use GentPlatform",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 3,
+        message: "Host OS facts are adapter-only; use GentPlatform",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        ["const pid = process.pid", "const home = os.homedir()"].join("\n"),
+      ),
+    ).toEqual([])
+  })
 })

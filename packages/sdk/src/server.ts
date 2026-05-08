@@ -13,8 +13,6 @@ import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-c
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
-// @effect-diagnostics nodeBuiltinImport:off — server primitive reads process host metadata
-import * as os from "node:os"
 
 import { createDependencies } from "@gent/core-internal/server/dependencies.js"
 import { BuiltinExtensions } from "@gent/extensions"
@@ -152,13 +150,16 @@ const LocalPlatformLayer = Layer.mergeAll(
 
 // ── Helpers ──
 
-const resolveHome = (options: GentServerOptions, stateSpec: StateSpec): string =>
+const resolveHome = (
+  options: GentServerOptions,
+  stateSpec: StateSpec,
+  homeDirectory: string,
+): string =>
   (stateSpec._tag === "sqlite" ? stateSpec.home : undefined) ??
   options.env?.["HOME"] ??
-  os.homedir()
+  homeDirectory
 
-const resolveDbPath = (options: GentServerOptions, stateSpec: StateSpec): string => {
-  const home = resolveHome(options, stateSpec)
+const resolveDbPath = (home: string, stateSpec: StateSpec): string => {
   if (stateSpec._tag === "sqlite" && stateSpec.dbPath !== undefined)
     return pathResolve(stateSpec.dbPath)
   const dataDir = pathJoin(home, ".gent")
@@ -179,6 +180,7 @@ const buildOwnedServer = (
       const platform = yield* GentPlatform
       const osInfo = yield* platform.osInfo
       const pid = yield* platform.pid
+      const homeDirectory = yield* platform.homeDirectory
       const httpServerCtx = yield* Layer.buildWithScope(
         BunHttpServer.layer({ port: 0, idleTimeout: 0 }),
         scope,
@@ -197,7 +199,7 @@ const buildOwnedServer = (
       }
       const url = `http://127.0.0.1:${port}/rpc`
       const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
-      const home = resolveHome(options, stateSpec)
+      const home = resolveHome(options, stateSpec, homeDirectory)
       const serverId = yield* platform.randomId
       const buildFingerprint = yield* resolveBuildFingerprint.pipe(
         // @effect-diagnostics-next-line strictEffectProvide:off
@@ -208,7 +210,7 @@ const buildOwnedServer = (
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
 
       // Build dependency config
-      const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(options, stateSpec) : undefined
+      const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(home, stateSpec) : undefined
       const depsLive = createDependencies({
         cwd: options.cwd,
         home,
@@ -371,10 +373,10 @@ const resolveServerInternal = (
     }
 
     // SQLite state: shared-server aware
-    const home = resolveHome(options, stateSpec)
-    const dbPath = resolveDbPath(options, stateSpec)
-    const fingerprint = yield* computeLocalFingerprint
     const platform = yield* GentPlatform
+    const home = resolveHome(options, stateSpec, yield* platform.homeDirectory)
+    const dbPath = resolveDbPath(home, stateSpec)
+    const fingerprint = yield* computeLocalFingerprint
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
 

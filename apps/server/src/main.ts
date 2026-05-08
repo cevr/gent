@@ -5,7 +5,6 @@ import { GentTracerLive } from "@gent/core-internal/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core-internal/runtime/logger.js"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Deferred, Effect, Layer, Option, Context } from "effect"
-import * as os from "node:os"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { createDependencies } from "@gent/core-internal/server/dependencies.js"
@@ -25,8 +24,9 @@ const resolveProviderMode = (value: string | undefined) => {
   return "live" as const
 }
 
-const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string>] | undefined => {
-  const runtimePath = process.execPath
+const resolveScheduledJobCommand = (
+  runtimePath: string,
+): readonly [string, ...ReadonlyArray<string>] | undefined => {
   if (!runtimePath.includes("bun")) return undefined
   const cliEntryUrl = new URL("../../tui/src/main.tsx", import.meta.url)
   return [runtimePath, cliEntryUrl.pathname]
@@ -34,6 +34,10 @@ const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string
 
 const resolveRuntimeConfig = Effect.gen(function* () {
   const platform = yield* GentPlatform
+  const osInfo = yield* platform.osInfo
+  const pid = yield* platform.pid
+  const execPath = yield* platform.execPath
+  const homeDefault = yield* platform.homeDirectory
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
   const homeOpt = yield* Config.option(Config.string("HOME"))
@@ -53,7 +57,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
   const sharedServerUrlOpt = yield* Config.option(Config.string("GENT_SHARED_SERVER_URL"))
 
-  const home = Option.getOrElse(homeOpt, () => os.homedir())
+  const home = Option.getOrElse(homeOpt, () => homeDefault)
   const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
   const parsedPort = Number(Option.getOrElse(portRaw, () => "3000"))
 
@@ -64,6 +68,11 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     dataDir,
     dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
     authDirectory: Option.getOrUndefined(authDirectoryOpt),
+    platform: osInfo.platform,
+    osVersion: osInfo.release,
+    hostname: osInfo.hostname,
+    pid,
+    scheduledJobCommand: resolveScheduledJobCommand(execPath),
     persistenceMode:
       Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
     providerMode: resolveProviderMode(Option.getOrUndefined(providerOpt)),
@@ -100,14 +109,14 @@ const program = Effect.scoped(
     const depsLive = createDependencies({
       cwd: config.cwd,
       home: config.home,
-      platform: process.platform,
+      platform: config.platform,
       shell: config.shell,
-      osVersion: os.release(),
+      osVersion: config.osVersion,
       dbPath: config.dbPath,
       authDirectory: config.authDirectory,
       persistenceMode: config.persistenceMode,
       providerMode: config.providerMode,
-      scheduledJobCommand: resolveScheduledJobCommand(),
+      scheduledJobCommand: config.scheduledJobCommand,
       sharedServerUrl,
       extensions: BuiltinExtensions,
     }).pipe(
@@ -127,8 +136,8 @@ const program = Effect.scoped(
     // Server identity
     const serverIdentityLive = ServerIdentity.Live({
       serverId: config.serverId,
-      pid: process.pid,
-      hostname: os.hostname(),
+      pid: config.pid,
+      hostname: config.hostname,
       dbPath: config.dbPath,
       buildFingerprint,
       startedAt,
@@ -151,8 +160,8 @@ const program = Effect.scoped(
     const AllRoutes = buildServerRoutes(coreServicesLive, {
       identity: {
         serverId: config.serverId,
-        pid: process.pid,
-        hostname: os.hostname(),
+        pid: config.pid,
+        hostname: config.hostname,
         dbPath: config.dbPath,
         buildFingerprint,
       },
