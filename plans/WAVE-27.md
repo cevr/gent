@@ -1027,6 +1027,42 @@ Focus on whether tests are behavioral, whether test file names mirror code file 
 - `bun run smoke`
 - `bun run test:e2e`
 
+**Status**: Completed. The final independent audit found no P0s, but it did
+find remaining P1s. Wave 27 therefore does not close as complete. Follow-up work
+is synthesized in `/Users/cvr/Developer/personal/gent/plans/WAVE-28.md`, and
+the root continuation pointer now routes agents there.
+
+### Final Audit Results
+
+| Lane                                                  | Result             | P1 Signal                                                                                                                                                                                                   |
+| ----------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Architecture, LOC, and file-count reduction           | No P0; P1s remain. | `SessionRuntimeEntity` appears to be a shallow actor facade over `AgentLoop`; session mutation ownership is split between `SessionCommands` and `SessionMutations`; public extension API exports internals. |
+| File-merit and split justification                    | No P0; P1s remain. | Extension wrapper files mostly name arrays instead of boundaries; todo operation files are split more finely than the durable todo domain merits.                                                           |
+| Effect platform, actor model, and primitive ownership | No P0; P1s remain. | Submission idempotency/completion is still outside actor ownership; AgentLoop still owns an internal mini-runtime of refs/queues/semaphores; `TaggedEnumClass` is a public Gent-owned schema primitive.     |
+| Extension API, TUI client API, and harness comparison | No P0; P1s remain. | `@gent/core/extensions/api` is still privileged; server slash/action capabilities and TUI client commands duplicate command semantics.                                                                      |
+| Tests, docs, tooling, and behavioral guardrails       | No P0; P1s remain. | Active docs contradicted package exports; root `PLAN.md` was stale; actor/queue tests still lock implementation shape instead of product behavior.                                                          |
+
+### Wave 28 Synthesis
+
+Wave 28 batches the remaining P1/P2 work in this order:
+
+1. Promote the current wave in `PLAN.md` and remove stale public-looking import
+   guidance.
+2. Delete stale architecture guides that name non-existent package/app shapes.
+3. Prove and, if correct, collapse the shallow `SessionRuntimeEntity` facade.
+4. Move submission idempotency/completion ownership into the actor or
+   effect-encore operation primitive.
+5. Consolidate session mutation ownership.
+6. Split the public extension authoring API from builtin/internal authority.
+7. Route TUI slash/palette command semantics through server capabilities.
+8. Replace `TaggedEnumClass` with native Effect schema primitives if worked
+   examples preserve wire shape.
+9. Collapse thin extension wrapper files and todo operation files whose splits
+   do not earn their existence.
+10. Replace actor key/queue implementation tests with public behavior tests.
+11. Collapse suppression and regex guardrail implementations only if strictness
+    is preserved.
+
 ## Receipts
 
 ### Brain Principles
