@@ -22,6 +22,7 @@ import type { MessageStorageService } from "@gent/core/storage/message-storage"
 import type { RelationshipStorageService } from "@gent/core/storage/relationship-storage"
 import type { SessionStorageService } from "@gent/core/storage/session-storage"
 import type { StorageTransactionService } from "../../src/storage/storage-transaction"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
   const sessions = new Map<string, Session>()
@@ -255,6 +256,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       home: "/tmp",
       platform: "test",
     } as MakeExtensionHostContextDeps["platform"],
+    host: testExtensionHostContext().host,
     approvalService: {
       present: die("ApprovalService"),
       pendingRequestId: () => Effect.void,

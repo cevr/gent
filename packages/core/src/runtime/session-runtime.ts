@@ -32,6 +32,7 @@ import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
 import { GentPlatform } from "./gent-platform.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
+import { makeExtensionHostPlatform } from "./extensions/host-platform.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { SteerCommand as SteerCommandType } from "../domain/steer.js"
@@ -567,9 +568,11 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     },
   )
 
+  const host = yield* makeExtensionHostPlatform
   const hostDeps = yield* makeAmbientExtensionHostContextDeps({
     extensionRegistry,
     overrides: {
+      host,
       sessionControl: {
         queueFollowUp: queueFollowUpThroughActor,
       },

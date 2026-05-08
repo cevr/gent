@@ -1,5 +1,5 @@
 import { Clock, Context, DateTime, Effect, Layer, Ref, Stream } from "effect"
-import type { ExtensionSetupContext } from "../domain/extension.js"
+import { ExtensionHostProcessError, type ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/storage-error.js"
@@ -180,6 +180,13 @@ export const testSetupCtx = (
     isPortFree: () => Effect.succeed(true),
     isPidAlive: () => Effect.succeed(true),
     signalPid: () => Effect.void,
+    runProcess: (command) =>
+      Effect.fail(
+        new ExtensionHostProcessError({
+          command,
+          message: "test host runProcess unavailable",
+        }),
+      ),
   },
 })
 

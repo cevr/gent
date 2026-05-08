@@ -2,7 +2,6 @@ import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effec
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
-import { runProcess } from "../run-process.js"
 import { AnthropicPlatform } from "./platform-adapter.js"
 
 // ── Claude Code Keychain Reader ──
@@ -112,29 +111,28 @@ class ClaudeKeychainNotFoundError extends Schema.TaggedErrorClass<ClaudeKeychain
 
 const spawnSecurity = (
   args: readonly string[],
-): Effect.Effect<
-  string,
-  ProviderAuthError | ClaudeKeychainNotFoundError,
-  ChildProcessSpawner.ChildProcessSpawner
-> =>
+): Effect.Effect<string, ProviderAuthError | ClaudeKeychainNotFoundError, AnthropicPlatform> =>
   Effect.gen(function* () {
-    const result = yield* runProcess("security", args, { timeout: Duration.millis(5000) }).pipe(
-      Effect.catchTag("ProcessError", (e) => {
-        if (e.timedOut === true) {
+    const platform = yield* AnthropicPlatform
+    const result = yield* platform
+      .runProcess("security", args, { timeout: Duration.millis(5000) })
+      .pipe(
+        Effect.catchTag("ExtensionHostProcessError", (e) => {
+          if (e.timedOut === true) {
+            return Effect.fail(
+              new ProviderAuthError({
+                message: "Keychain read timed out. Try restarting Keychain Access.",
+              }),
+            )
+          }
           return Effect.fail(
             new ProviderAuthError({
-              message: "Keychain read timed out. Try restarting Keychain Access.",
+              message: `Failed to read Claude Code credentials from Keychain: ${e.message}`,
+              cause: e,
             }),
           )
-        }
-        return Effect.fail(
-          new ProviderAuthError({
-            message: `Failed to read Claude Code credentials from Keychain: ${e.message}`,
-            cause: e,
-          }),
-        )
-      }),
-    )
+        }),
+      )
     if (result.exitCode === 0) return result.stdout.trim()
     if (result.exitCode === 44) return yield* new ClaudeKeychainNotFoundError()
     if (result.exitCode === 36) {
@@ -158,7 +156,7 @@ const readFromKeychain = (
 ): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError | ClaudeKeychainNotFoundError,
-  ChildProcessSpawner.ChildProcessSpawner
+  AnthropicPlatform
 > =>
   spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
     Effect.flatMap(decodeCredentials),
@@ -248,9 +246,11 @@ export const listClaudeCodeKeychainServices = (): Effect.Effect<
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
-    const result = yield* runProcess("security", ["dump-keychain"], {
-      timeout: Duration.millis(5000),
-    }).pipe(Effect.catchEager(() => Effect.sync(() => undefined)))
+    const result = yield* platform
+      .runProcess("security", ["dump-keychain"], {
+        timeout: Duration.millis(5000),
+      })
+      .pipe(Effect.catchEager(() => Effect.sync(() => undefined)))
     if (result === undefined || result.exitCode !== 0)
       return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
     const services: string[] = []
@@ -327,44 +327,54 @@ export const listClaudeAccounts = (): Effect.Effect<
  */
 const getKeychainAccountName = (
   serviceName: string,
-): Effect.Effect<string | undefined, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess("security", ["find-generic-password", "-s", serviceName], {
-    timeout: Duration.millis(2000),
-  }).pipe(
-    Effect.map((result) => {
-      const match = /"acct"<blob>="([^"]*)"/.exec(result.stdout)
-      return match?.[1]
-    }),
-    Effect.catchEager(() => Effect.sync((): string | undefined => undefined)),
-  )
+): Effect.Effect<string | undefined, never, AnthropicPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    return yield* platform
+      .runProcess("security", ["find-generic-password", "-s", serviceName], {
+        timeout: Duration.millis(2000),
+      })
+      .pipe(
+        Effect.map((result) => {
+          const match = /"acct"<blob>="([^"]*)"/.exec(result.stdout)
+          return match?.[1]
+        }),
+        Effect.catchEager(() => Effect.sync((): string | undefined => undefined)),
+      )
+  })
 
 const writeKeychainEntry = (
   serviceName: string,
   accountName: string,
   payload: string,
-): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess(
-    "security",
-    ["add-generic-password", "-s", serviceName, "-a", accountName, "-w", payload, "-U"],
-    { timeout: Duration.millis(2000), stdout: "ignore" },
-  ).pipe(
-    Effect.flatMap((result) => {
-      if (result.exitCode === 0) return Effect.void
-      return Effect.fail(
-        new ProviderAuthError({
-          message: `Failed to write Claude credentials to Keychain: ${result.stderr.trim() || `security add-generic-password exit ${result.exitCode}`}`,
-        }),
+): Effect.Effect<void, ProviderAuthError, AnthropicPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    return yield* platform
+      .runProcess(
+        "security",
+        ["add-generic-password", "-s", serviceName, "-a", accountName, "-w", payload, "-U"],
+        { timeout: Duration.millis(2000), stdout: "ignore" },
       )
-    }),
-    Effect.catchTag("ProcessError", (e) =>
-      Effect.fail(
-        new ProviderAuthError({
-          message: `Failed to write Claude credentials to Keychain: ${e.message}`,
-          cause: e,
+      .pipe(
+        Effect.flatMap((result) => {
+          if (result.exitCode === 0) return Effect.void
+          return Effect.fail(
+            new ProviderAuthError({
+              message: `Failed to write Claude credentials to Keychain: ${result.stderr.trim() || `security add-generic-password exit ${result.exitCode}`}`,
+            }),
+          )
         }),
-      ),
-    ),
-  )
+        Effect.catchTag("ExtensionHostProcessError", (e) =>
+          Effect.fail(
+            new ProviderAuthError({
+              message: `Failed to write Claude credentials to Keychain: ${e.message}`,
+              cause: e,
+            }),
+          ),
+        ),
+      )
+  })
 
 /**
  * Splice fresh credentials into an existing keychain blob, preserving
@@ -433,7 +443,7 @@ export const writeBackCredentials = (
       // Counsel  deep — chmod 0600 after write so the credentials
       // file isn't world-readable on first creation. Matches the
       // opencode reference's keychain.ts:297 behavior.
-      yield* runProcess("chmod", ["600", credentialsFile], { stdout: "ignore" }).pipe(
+      yield* platform.runProcess("chmod", ["600", credentialsFile], { stdout: "ignore" }).pipe(
         Effect.mapError(
           (e) =>
             new ProviderAuthError({
@@ -568,29 +578,31 @@ const spawnClaudeCli = (): Effect.Effect<
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const env = { ...platform.parentEnv, TERM: "dumb" }
-    return yield* runProcess("claude", ["-p", ".", "--model", "haiku"], {
-      env,
-      timeout: Duration.millis(60_000),
-      stdout: "ignore",
-      stderr: "ignore",
-    }).pipe(
-      Effect.flatMap((result) => {
-        if (result.exitCode === 0) return Effect.void
-        return Effect.fail(
-          new ProviderAuthError({
-            message: `Failed to refresh Claude Code credentials via CLI: claude CLI exited with code ${result.exitCode}`,
-          }),
-        )
-      }),
-      Effect.catchTag("ProcessError", (e) =>
-        Effect.fail(
-          new ProviderAuthError({
-            message: `Failed to refresh Claude Code credentials via CLI: ${e.message}`,
-            cause: e,
-          }),
+    return yield* platform
+      .runProcess("claude", ["-p", ".", "--model", "haiku"], {
+        env,
+        timeout: Duration.millis(60_000),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      .pipe(
+        Effect.flatMap((result) => {
+          if (result.exitCode === 0) return Effect.void
+          return Effect.fail(
+            new ProviderAuthError({
+              message: `Failed to refresh Claude Code credentials via CLI: claude CLI exited with code ${result.exitCode}`,
+            }),
+          )
+        }),
+        Effect.catchTag("ExtensionHostProcessError", (e) =>
+          Effect.fail(
+            new ProviderAuthError({
+              message: `Failed to refresh Claude Code credentials via CLI: ${e.message}`,
+              cause: e,
+            }),
+          ),
         ),
-      ),
-    )
+      )
   })
 
 /**

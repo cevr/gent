@@ -26,6 +26,10 @@ import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { PricingLookup, TurnStorage } from "./turn-helpers.js"
+import type { ExtensionHostPlatform } from "../../domain/extension.js"
+import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { GentPlatform } from "../gent-platform.js"
 
 /**
  * Snapshot of layer-level dependencies and configuration captured at runtime
@@ -46,6 +50,7 @@ export type AgentLoopBehaviorDepsShape = {
   readonly configServiceForRun: typeof ConfigService.Service
   readonly getPricing: PricingLookup
   readonly baseSections: ReadonlyArray<PromptSection>
+  readonly host: ExtensionHostPlatform
 }
 
 export class AgentLoopBehaviorDeps extends Context.Service<
@@ -74,6 +79,8 @@ export class AgentLoopBehaviorDeps extends Context.Service<
     | ResourceManager
     | ConfigService
     | ModelRegistry
+    | ChildProcessSpawner
+    | GentPlatform
   > =>
     Layer.effect(
       AgentLoopBehaviorDeps,
@@ -97,6 +104,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
         const resourceManager = yield* ResourceManager
         const configServiceForRun = yield* ConfigService
         const modelRegistryForRun = yield* ModelRegistry
+        const host = yield* makeExtensionHostPlatform
         const getPricing: PricingLookup = (modelId) =>
           modelRegistryForRun.get(modelId).pipe(
             Effect.map((m) => m?.pricing),
@@ -120,6 +128,7 @@ export class AgentLoopBehaviorDeps extends Context.Service<
           configServiceForRun,
           getPricing,
           baseSections: config.baseSections,
+          host,
         }
       }),
     )

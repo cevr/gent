@@ -188,6 +188,8 @@ Validation:
 
 ### W22.5 — Recursive Verification
 
+Status: blocked by recursive audit P1s at `d1953406`; remediation in progress.
+
 Work:
 
 - Launch five independent audit lanes against the final Wave 22 HEAD:
@@ -207,3 +209,43 @@ Validation:
 - `bun run gate`
 - `bun run test:e2e`
 - `bun run smoke`
+
+Recursive findings to close:
+
+- P1: shipped extensions still had a duplicated process runner and direct
+  process helper ownership under `packages/extensions/src/run-process.ts`.
+  Status: implemented in sub-batch W22.6 by moving process execution to
+  `ExtensionSetupContext.host` / `ToolCapabilityContext.host` as
+  `host.runProcess(...)`, deleting the extension runner, and preserving
+  host-owned implementation in core.
+- P1: `@gent/core` package exports still expose internal runtime/storage/server
+  subpaths as package-public API, even though the extension contract says
+  authors use `@gent/core/extensions/api`.
+- P1: read-intent RPC/tool execution still provides broad service context and
+  relies on voluntary write checks by write-capable services.
+- P1: retried `message.send` only deduplicates `requestId` in process memory,
+  not across crash/restart.
+- P1: interaction approvals are acknowledged in memory before the human
+  decision itself is durable.
+- P1: `ModelResolver` builds Effect AI model layers in a scope, extracts
+  `LanguageModel.Service`, and returns the raw service outside the layer
+  lifetime.
+- P1: several extension services defect operational storage/file failures with
+  `Effect.orDie` instead of returning typed service/tool errors.
+
+### W22.6 — Host Process Primitive
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Add `ExtensionHostPlatform.runProcess` as the public host-owned process action.
+- Route extension setup and tool execution contexts through the same host view.
+- Migrate shipped workflow, Anthropic, and executor call sites.
+- Delete `packages/extensions/src/run-process.ts`.
+
+Validation:
+
+- `bun run typecheck`
+- `bun run lint`
+- Focused extension/core boundary tests

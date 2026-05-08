@@ -30,7 +30,7 @@ import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
-import { ref } from "@gent/core/extensions/api"
+import { ExtensionHostProcessError, ref } from "@gent/core/extensions/api"
 import {
   TaskCreateRequest,
   TaskDeleteRequest,
@@ -578,12 +578,41 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimeEnvironment
+    const gentPlatform = yield* GentPlatform
     const rpcRegistry = registry.getResolved().rpcRegistry
+    const osInfo = yield* gentPlatform.osInfo
+    const execPath = yield* gentPlatform.execPath
+    const homeDirectory = yield* gentPlatform.homeDirectory
+    const parentEnv = yield* gentPlatform.env
+    const pathListSeparator = yield* gentPlatform.pathListSeparator
     const ctx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       cwd: platform.cwd,
       home: platform.home,
+      host: {
+        osInfo,
+        execPath,
+        homeDirectory,
+        parentEnv,
+        pathListSeparator,
+        commandCandidates: gentPlatform.commandCandidates,
+        isPortFree: gentPlatform.isPortFree,
+        isPidAlive: (pid: number) =>
+          gentPlatform.signal(pid, 0).pipe(
+            Effect.as(true),
+            Effect.catchEager(() => Effect.succeed(false)),
+          ),
+        signalPid: (pid: number, signal: string | 0) =>
+          gentPlatform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
+        runProcess: (command: string) =>
+          Effect.fail(
+            new ExtensionHostProcessError({
+              command,
+              message: "debug scenario host.runProcess unavailable",
+            }),
+          ),
+      },
     }
 
     const invoke = <T>(

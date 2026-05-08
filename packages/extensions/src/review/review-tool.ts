@@ -128,8 +128,8 @@ const summarizeComments = (comments: ReadonlyArray<ReviewComment>) => {
   return summary
 }
 
-const runShellCommand = (cmd: string[], cwd: string) =>
-  runCommandBase(cmd, cwd).pipe(
+const runShellCommand = (ctx: ToolCapabilityContext, cmd: string[]) =>
+  runCommandBase(ctx.host, cmd, ctx.cwd).pipe(
     Effect.filterOrFail(
       (out) => out !== "",
       () => new ReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
@@ -142,7 +142,7 @@ const resolveReviewInput = (
     files?: ReadonlyArray<string>
     diffSpec?: string
   },
-  cwd: string,
+  ctx: ToolCapabilityContext,
 ) => {
   if (params.content !== undefined && params.content.trim() !== "") {
     return Effect.succeed(params.content)
@@ -157,7 +157,7 @@ const resolveReviewInput = (
     args.push("--", ...params.files)
   }
 
-  return runShellCommand(args, cwd)
+  return runShellCommand(ctx, args)
 }
 
 const buildReviewPrompt = (reviewInput: string, description?: string) =>
@@ -329,7 +329,7 @@ export const ReviewTool = tool({
         files: params.files,
         diffSpec: params.diff_spec,
       },
-      ctx.cwd,
+      ctx,
     )
 
     // Adversarial review cycle (always runs)

@@ -20,6 +20,7 @@ import {
 } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "./runtime-environment.js"
+import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
@@ -46,6 +47,7 @@ export interface ExtensionSessionControlService {
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimeEnvironmentShape
+  readonly host: ExtensionHostPlatform
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
@@ -71,6 +73,7 @@ export interface MakeExtensionHostContextRunInfo {
 type AmbientHostContextDefaults = Pick<
   MakeExtensionHostContextDeps,
   | "platform"
+  | "host"
   | "approvalService"
   | "promptPresenter"
   | "sessionStorage"
@@ -114,6 +117,36 @@ export const HostPlatformRef = Context.Reference<RuntimeEnvironmentShape>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
   {
     defaultValue: () => ({ cwd: "", home: "", platform: "unknown" }),
+  },
+)
+
+export const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>(
+  "@gent/core/src/runtime/make-extension-host-context/HostExtensionPlatformRef",
+  {
+    defaultValue: () => ({
+      osInfo: {
+        platform: "unknown",
+        arch: "unknown",
+        release: "unknown",
+        hostname: "unknown",
+        type: "unknown",
+      },
+      execPath: "",
+      homeDirectory: "",
+      parentEnv: {},
+      pathListSeparator: ":",
+      commandCandidates: (command) => [command],
+      isPortFree: () => Effect.succeed(false),
+      isPidAlive: () => Effect.succeed(false),
+      signalPid: () => Effect.void,
+      runProcess: (command) =>
+        Effect.fail(
+          new ExtensionHostProcessError({
+            command,
+            message: "host.runProcess unavailable",
+          }),
+        ),
+    }),
   },
 )
 
@@ -240,6 +273,7 @@ export const HostSessionMutationsRef = Context.Reference<SessionMutationsService
 
 const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> = Effect.all({
   platform: Effect.service(HostPlatformRef),
+  host: Effect.service(HostExtensionPlatformRef),
   approvalService: Effect.service(HostApprovalServiceRef),
   promptPresenter: Effect.service(HostPromptPresenterRef),
   sessionStorage: Effect.service(HostSessionStorageRef),
@@ -257,6 +291,7 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
   function* () {
     const available = yield* Effect.all({
       platform: Effect.serviceOption(RuntimeEnvironment),
+      host: Effect.serviceOption(HostExtensionPlatformRef),
       approvalService: Effect.serviceOption(ApprovalService),
       promptPresenter: Effect.serviceOption(PromptPresenter),
       sessionStorage: Effect.serviceOption(SessionStorage),
@@ -270,6 +305,7 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
 
     return {
       ...(available.platform._tag === "Some" ? { platform: available.platform.value } : {}),
+      ...(available.host._tag === "Some" ? { host: available.host.value } : {}),
       ...(available.approvalService._tag === "Some"
         ? { approvalService: available.approvalService.value }
         : {}),
@@ -308,6 +344,9 @@ const withAmbientHostContextOverrides = <A, E, R>(
   let next = effect
   if (overrides.platform !== undefined) {
     next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
+  }
+  if (overrides.host !== undefined) {
+    next = next.pipe(Effect.provideService(HostExtensionPlatformRef, overrides.host))
   }
   if (overrides.approvalService !== undefined) {
     next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
@@ -360,6 +399,7 @@ export const makeAmbientExtensionHostContextDeps = (
     })
     return {
       platform: defaults.platform,
+      host: defaults.host,
       approvalService: defaults.approvalService,
       promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,
@@ -387,6 +427,7 @@ export const makeExtensionHostContext = (
     agentName: runInfo.agentName,
     cwd: runInfo.sessionCwd ?? deps.platform.cwd,
     home: deps.platform.home,
+    host: deps.host,
     ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
 
     agent: {
@@ -592,6 +633,7 @@ export const readOnlyExtensionHostContext = (
   ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
   cwd: ctx.cwd,
   home: ctx.home,
+  host: ctx.host,
   ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
   agent: {
     get: ctx.agent.get,

@@ -27,7 +27,6 @@ import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstabl
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { isRecord, TaggedEnumClass, type ExtensionHostPlatform } from "@gent/core/extensions/api"
 import { fileURLToPath } from "node:url"
-import { runProcess } from "../run-process.js"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {
   type ExecutorEndpoint,
@@ -354,18 +353,20 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           if (!exists) {
             // Run postinstall to bootstrap
             const installerPath = path.join(pkgRoot, "postinstall.cjs")
-            const result = yield* runProcess(platform.execPath, [installerPath], {
-              cwd: pkgRoot,
-            }).pipe(
-              Effect.catchTag("ProcessError", (e) =>
-                Effect.fail(
-                  new ExecutorSidecarError({
-                    code: "BOOTSTRAP_FAILED",
-                    message: `Bootstrap failed: ${e.message}`,
-                  }),
+            const result = yield* platform
+              .runProcess(platform.execPath, [installerPath], {
+                cwd: pkgRoot,
+              })
+              .pipe(
+                Effect.catchTag("ExtensionHostProcessError", (e) =>
+                  Effect.fail(
+                    new ExecutorSidecarError({
+                      code: "BOOTSTRAP_FAILED",
+                      message: `Bootstrap failed: ${e.message}`,
+                    }),
+                  ),
                 ),
-              ),
-            )
+              )
             if (result.exitCode !== 0) {
               return yield* new ExecutorSidecarError({
                 code: "BOOTSTRAP_FAILED",

@@ -24,6 +24,7 @@ import {
   listSlashCommands,
   type ExtensionRegistryService,
 } from "../runtime/extensions/registry.js"
+import { makeExtensionHostPlatform } from "../runtime/extensions/host-platform.js"
 import {
   makeAmbientExtensionHostContextDeps,
   makeExtensionHostContext,
@@ -518,10 +519,12 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
       // Public write request handlers may ask for the wide host surface
       // (`session.*`, `agent.*`, storage, etc.). Build the full
       // ExtensionHostContext here so handlers use the same boundary as tools.
+      const host = yield* makeExtensionHostPlatform
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionRegistry: registry,
         ...(capabilityContext !== undefined ? { capabilityContext } : {}),
         overrides: {
+          host,
           sessionControl: {
             queueFollowUp: (input) => deps.sessionRuntime.queueFollowUp(input),
           },

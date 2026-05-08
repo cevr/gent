@@ -7,6 +7,7 @@
 
 import { type Effect, Schema } from "effect"
 import type { AgentName } from "./agent.js"
+import type { ExtensionHostPlatform } from "./extension.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import {
@@ -67,6 +68,7 @@ export interface CapabilityCoreContext {
   readonly toolCallId?: ToolCallId
   readonly cwd: string
   readonly home: string
+  readonly host: ExtensionHostPlatform
 }
 
 /** The wide tool-execution context. Read+write surfaces, agent runner,

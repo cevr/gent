@@ -35,7 +35,7 @@ import {
 } from "@gent/extensions/anthropic/credential-service"
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "@gent/extensions/anthropic/beta-cache"
 import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "@gent/extensions/anthropic/oauth"
-import type { ProviderAuthInfo } from "@gent/core/extensions/api"
+import { ExtensionHostProcessError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import {
   makeFakeFetchState,
@@ -47,6 +47,13 @@ const testPlatform = AnthropicPlatform.of({
   platform: "darwin",
   home: "/tmp/gent-test-home",
   parentEnv: {},
+  runProcess: (command) =>
+    Effect.fail(
+      new ExtensionHostProcessError({
+        command,
+        message: "test runProcess unavailable",
+      }),
+    ),
 })
 const buildAnthropicModelDriver = (
   ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [

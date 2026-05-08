@@ -5,6 +5,7 @@ export interface AnthropicPlatformShape {
   readonly platform: string
   readonly home: string
   readonly parentEnv: Record<string, string | undefined>
+  readonly runProcess: ExtensionHostPlatform["runProcess"]
 }
 
 export class AnthropicPlatform extends Context.Service<AnthropicPlatform, AnthropicPlatformShape>()(
@@ -15,6 +16,7 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
       platform: host.osInfo.platform,
       home: host.homeDirectory,
       parentEnv: host.parentEnv,
+      runProcess: host.runProcess,
     })
 
   static Live = (host: ExtensionHostPlatform): Layer.Layer<AnthropicPlatform> =>

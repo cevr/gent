@@ -36,6 +36,7 @@ import { EventPublisherLive } from "../domain/event-publisher.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
+import { testExtensionHostContext } from "./extension-host-context.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
@@ -178,6 +179,7 @@ export const testToolContext = (
   toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
   home: "/tmp",
+  host: testExtensionHostContext().host,
   agent: {
     get: dieStub("agent.get"),
     require: dieStub("agent.require"),

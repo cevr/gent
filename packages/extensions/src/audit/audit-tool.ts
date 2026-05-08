@@ -53,12 +53,15 @@ export const AuditResult = Schema.Struct({
   paths: Schema.Array(Schema.String),
 })
 
-const resolveAuditPaths = (paths: ReadonlyArray<string> | undefined, cwd: string) => {
+const resolveAuditPaths = (
+  paths: ReadonlyArray<string> | undefined,
+  ctx: ToolCapabilityContext,
+) => {
   if (paths !== undefined && paths.length > 0) {
     return Effect.succeed([...paths])
   }
 
-  return runCommand(["git", "diff", "--name-only"], cwd).pipe(
+  return runCommand(ctx.host, ["git", "diff", "--name-only"], ctx.cwd).pipe(
     Effect.map((stdout) =>
       stdout
         .split("\n")
@@ -300,7 +303,7 @@ export const AuditTool = tool({
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolCapabilityContext) {
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5
-    const paths = yield* resolveAuditPaths(params.paths, ctx.cwd)
+    const paths = yield* resolveAuditPaths(params.paths, ctx)
 
     const architect = yield* ctx.agent.require(AgentName.make("architect"))
     const auditor = yield* ctx.agent.require(AgentName.make("auditor"))

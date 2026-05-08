@@ -55,6 +55,7 @@ import type { ExtensionRegistryService } from "../extensions/registry.js"
 import type { DriverRegistry, DriverRegistryService } from "../extensions/driver-registry.js"
 import type { ToolRunner } from "./tool-runner.js"
 import type { ResourceManagerService } from "../resource-manager.js"
+import type { ExtensionHostPlatform } from "../../domain/extension.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
 import {
@@ -242,6 +243,7 @@ export type AgentLoopBehaviorDeps = {
   readonly configServiceForRun: typeof ConfigService.Service
   readonly getPricing: PricingLookup
   readonly baseSections: ReadonlyArray<PromptSection>
+  readonly host: ExtensionHostPlatform
   /**
    * Closure-local follow-up enqueue. Stand-in for the legacy
    * `service.queueFollowUp` recursive reference; in c.1.a it still routes
@@ -304,6 +306,7 @@ export const makeAgentLoopBehavior = (
     const hostDeps = yield* makeAmbientExtensionHostContextDeps({
       extensionRegistry,
       overrides: {
+        host: deps.host,
         sessionControl: {
           queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
             enqueueFollowUp(input),

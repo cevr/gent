@@ -5,6 +5,7 @@ import { BashTool } from "@gent/extensions/exec-tools/bash"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 
 const makePlatformLayer = () =>
   Layer.mergeAll(
@@ -27,6 +28,7 @@ const stubCtx: ToolCapabilityContext = {
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
+  host: testExtensionHostContext().host,
   agent: {
     get: dieStub("get"),
     require: dieStub("require"),

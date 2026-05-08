@@ -21,6 +21,7 @@ import {
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core/domain/ids"
+import { testExtensionHostContext } from "@gent/core/test-utils"
 
 const extensionId = ExtensionId.make("@test/c")
 const ctx: CapabilityCoreContext = {
@@ -28,6 +29,7 @@ const ctx: CapabilityCoreContext = {
   branchId: BranchId.make("b"),
   cwd: "/tmp",
   home: "/tmp",
+  host: testExtensionHostContext().host,
 }
 const extWith = (
   scope: "builtin" | "user" | "project",

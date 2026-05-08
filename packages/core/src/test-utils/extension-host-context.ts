@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { ExtensionHostProcessError } from "../domain/extension.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 
@@ -55,6 +56,30 @@ export const testExtensionHostContext = (
   branchId: overrides.branchId ?? BranchId.make("test-branch"),
   cwd: overrides.cwd ?? "/tmp",
   home: overrides.home ?? "/tmp",
+  host: overrides.host ?? {
+    osInfo: {
+      platform: "darwin",
+      arch: "arm64",
+      release: "test",
+      hostname: "test-host",
+      type: "Darwin",
+    },
+    execPath: "/usr/bin/node",
+    homeDirectory: overrides.home ?? "/tmp",
+    parentEnv: {},
+    pathListSeparator: ":",
+    commandCandidates: (command) => [command],
+    isPortFree: () => Effect.succeed(true),
+    isPidAlive: () => Effect.succeed(true),
+    signalPid: () => Effect.void,
+    runProcess: (command) =>
+      Effect.fail(
+        new ExtensionHostProcessError({
+          command,
+          message: "test host runProcess unavailable",
+        }),
+      ),
+  },
   ...(overrides.agentName !== undefined ? { agentName: overrides.agentName } : {}),
   ...(overrides.capabilityContext !== undefined
     ? { capabilityContext: overrides.capabilityContext }

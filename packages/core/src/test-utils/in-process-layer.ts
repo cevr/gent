@@ -78,6 +78,7 @@ const buildLayer = (
     extensionRegistryLive,
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunGentPlatformLive,
+    BunServices.layer,
     Permission.Test(),
     ConfigService.Test(),
     ModelRegistry.Test(),

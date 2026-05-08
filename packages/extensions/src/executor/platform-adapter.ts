@@ -9,6 +9,7 @@ export interface ExecutorPlatformShape {
   readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
   readonly signalPid: (pid: number, signal: NodeJS.Signals) => Effect.Effect<void>
+  readonly runProcess: ExtensionHostPlatform["runProcess"]
 }
 
 export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformShape>()(
@@ -27,6 +28,7 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
           isPortFree: host.isPortFree,
           isPidAlive: host.isPidAlive,
           signalPid: host.signalPid,
+          runProcess: host.runProcess,
         })
       }),
     )

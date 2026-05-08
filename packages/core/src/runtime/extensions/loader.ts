@@ -1,13 +1,8 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { GentPlatform } from "../gent-platform.js"
-import type {
-  ExtensionHostSignal,
-  ExtensionScope,
-  GentExtension,
-  LoadedExtension,
-} from "../../domain/extension.js"
+import type { GentPlatform } from "../gent-platform.js"
+import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
@@ -15,6 +10,7 @@ import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js
 import { validateExtensionPackageShape } from "../../domain/extension-package-shape.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { getToolMetadata } from "../../domain/capability/tool.js"
+import { makeExtensionHostPlatform } from "./host-platform.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
@@ -28,31 +24,6 @@ const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<Pro
 
 type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 type RuntimeLoadedExtension = GentExtension<ExtensionSetupServices>
-
-const makeExtensionHostPlatform = Effect.gen(function* () {
-  const platform = yield* GentPlatform
-  const osInfo = yield* platform.osInfo
-  const execPath = yield* platform.execPath
-  const homeDirectory = yield* platform.homeDirectory
-  const parentEnv = yield* platform.env
-  const pathListSeparator = yield* platform.pathListSeparator
-  return {
-    osInfo,
-    execPath,
-    homeDirectory,
-    parentEnv,
-    pathListSeparator,
-    commandCandidates: platform.commandCandidates,
-    isPortFree: platform.isPortFree,
-    isPidAlive: (pid: number) =>
-      platform.signal(pid, 0).pipe(
-        Effect.as(true),
-        Effect.catchEager(() => Effect.succeed(false)),
-      ),
-    signalPid: (pid: number, signal: ExtensionHostSignal) =>
-      platform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
-  }
-})
 
 // Discovery — scan directories for extension files
 

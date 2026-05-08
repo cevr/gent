@@ -1,4 +1,4 @@
-import type { Context, Effect } from "effect"
+import type { Context, Duration, Effect } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
@@ -363,6 +363,31 @@ export interface ExtensionHostOsInfo {
 
 export type ExtensionHostSignal = string | 0
 
+export class ExtensionHostProcessError extends Schema.TaggedErrorClass<ExtensionHostProcessError>()(
+  "ExtensionHostProcessError",
+  {
+    command: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+    timedOut: Schema.optional(Schema.Boolean),
+  },
+) {}
+
+export interface ExtensionHostProcessResult {
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+}
+
+export interface ExtensionHostRunProcessOptions {
+  readonly cwd?: string
+  readonly env?: Record<string, string | undefined>
+  readonly timeout?: Duration.Duration
+  readonly stdin?: "pipe" | "ignore" | "inherit"
+  readonly stdout?: "pipe" | "ignore" | "inherit"
+  readonly stderr?: "pipe" | "ignore" | "inherit"
+}
+
 export interface ExtensionHostPlatform {
   readonly osInfo: ExtensionHostOsInfo
   readonly execPath: string
@@ -373,6 +398,11 @@ export interface ExtensionHostPlatform {
   readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
   readonly signalPid: (pid: number, signal: ExtensionHostSignal) => Effect.Effect<void>
+  readonly runProcess: (
+    command: string,
+    args: ReadonlyArray<string>,
+    options?: ExtensionHostRunProcessOptions,
+  ) => Effect.Effect<ExtensionHostProcessResult, ExtensionHostProcessError>
 }
 
 export interface GentExtension<R = ChildProcessSpawner> {

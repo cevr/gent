@@ -47,6 +47,7 @@ interface ToolExecutionProfile {
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 type ToolRuntimeContext = ToolCoreContext &
   Partial<{
+    readonly host: ExtensionHostContext["host"]
     readonly agent:
       | Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair">
       | ExtensionHostContext.Agent
@@ -168,6 +169,7 @@ const deriveToolContext = (
     toolCallId: ctx.toolCallId,
     cwd: ctx.cwd,
     home: ctx.home,
+    host: ctx.host,
     ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
     ...(needsTag(needs, "agent")
       ? { agent: writeAgent ? ctx.agent : readAgentFacet(ctx.agent) }

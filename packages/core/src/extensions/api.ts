@@ -257,7 +257,13 @@ export {
 // ── Public API ──
 
 // ExtensionSetupContext re-exported from domain — single source of truth
-export type { ExtensionHostPlatform, ExtensionSetupContext } from "../domain/extension.js"
+export {
+  ExtensionHostProcessError,
+  type ExtensionHostPlatform,
+  type ExtensionHostProcessResult,
+  type ExtensionHostRunProcessOptions,
+  type ExtensionSetupContext,
+} from "../domain/extension.js"
 
 /**
  * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
