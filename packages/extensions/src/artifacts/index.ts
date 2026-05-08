@@ -6,13 +6,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import {
-  defineExtension,
-  defineResource,
-  tool,
-  ToolNeeds,
-  type ToolCapabilityContext,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { ArtifactId } from "@gent/core-internal/domain/ids"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
@@ -43,12 +37,11 @@ const ArtifactSaveResult = Schema.Struct({
 
 const ArtifactSaveTool = tool({
   id: "artifact_save",
-  needs: [ToolNeeds.write("artifact")],
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
   params: ArtifactSaveParams,
   output: ArtifactSaveResult,
-  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx) {
     const artifacts = yield* ArtifactsWrite
     const artifact = yield* artifacts.save(ctx.sessionId, ctx.branchId, params)
     return { id: artifact.id, label: artifact.label, sourceTool: artifact.sourceTool }
@@ -78,11 +71,10 @@ const ArtifactReadResult = Schema.Struct({
 
 const ArtifactReadTool = tool({
   id: "artifact_read",
-  needs: [ToolNeeds.read("artifact")],
   description: "Read the full content of an artifact by label/source or ID.",
   params: ArtifactReadParams,
   output: ArtifactReadResult,
-  execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx) {
     const query =
       params.id !== undefined
         ? ReadQuery.ById.make({ id: ArtifactId.make(params.id) })
@@ -117,12 +109,11 @@ const ArtifactUpdateResult = Schema.Struct({
 
 const ArtifactUpdateTool = tool({
   id: "artifact_update",
-  needs: [ToolNeeds.write("artifact")],
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
   params: ArtifactUpdateParams,
   output: ArtifactUpdateResult,
-  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params, ctx) {
     const patch =
       params.find !== undefined && params.replace !== undefined
         ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
@@ -150,11 +141,10 @@ const ArtifactClearResult = Schema.Struct({
 
 const ArtifactClearTool = tool({
   id: "artifact_clear",
-  needs: [ToolNeeds.write("artifact")],
   description: "Remove an artifact by ID.",
   params: ArtifactClearParams,
   output: ArtifactClearResult,
-  execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx) {
     const artifacts = yield* ArtifactsWrite
     yield* artifacts.clear(ctx.sessionId, ctx.branchId, ArtifactId.make(params.id))
     return { cleared: true }

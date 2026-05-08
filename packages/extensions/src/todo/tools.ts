@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { AgentName, SessionId, ToolNeeds, tool } from "@gent/core/extensions/api"
+import { AgentName, SessionId, tool } from "@gent/core/extensions/api"
 import { TodoId, TodoStatus, TodoTransitionError } from "./domain.js"
 import { TodoStorageReadOnly } from "../todo-storage.js"
 import { TodoService } from "../todo-service.js"
@@ -40,7 +40,6 @@ export const TodoCreateResult = Schema.Struct({
 
 export const TodoCreateTool = tool({
   id: "todo_create",
-  needs: [ToolNeeds.write("todo")],
   description:
     "Create a durable todo with optional dependencies. Todos persist across turns and can be run in the background. Set agent + prompt for executable todos.",
   params: TodoCreateParams,
@@ -105,7 +104,6 @@ export const TodoListResult = Schema.Struct({
 
 export const TodoListTool = tool({
   id: "todo_list",
-  needs: [ToolNeeds.read("todo")],
   description: "List all todos for the current session and branch, sorted by creation time.",
   params: TodoListParams,
   output: TodoListResult,
@@ -165,7 +163,6 @@ export const TodoGetResult = Schema.Struct({
 
 export const TodoGetTool = tool({
   id: "todo_get",
-  needs: [ToolNeeds.read("todo")],
   description: "Get full details of a todo including description, dependencies, and owner session.",
   params: TodoGetParams,
   output: TodoGetResult,
@@ -233,7 +230,6 @@ export const TodoUpdateResult = Schema.Struct({
 
 export const TodoUpdateTool = tool({
   id: "todo_update",
-  needs: [ToolNeeds.write("todo")],
   description:
     "Update a todo's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TodoUpdateParams,

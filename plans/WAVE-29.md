@@ -62,20 +62,20 @@ to `yield* ExtensionSession`.
 
 ## Batch 2: refactor(extensions): migrate remaining builtin host consumers
 
-**Status**: In progress.
+**Status**: Completed in `bf4cd769`.
 
 Migrate builtin tools/actions/reactions from `ModelCapabilityContext` to
 `ExtensionSession`, `ExtensionAgent`, and `ExtensionInteraction`. Keep process
 platform access internal to bundled host-owned extensions.
 
-Completed so far:
+Completed:
 
 - Session slash commands and `rename_session`.
 - Interaction tools.
 - Session search/read tools.
 - Counsel, research, handoff, auto, and handoff-threshold reactions.
 
-Targets include:
+Remaining host/process-heavy targets moved to Batch 4:
 
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/audit/audit-tool.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/plan-tool.ts`
@@ -91,7 +91,22 @@ Targets include:
 
 ## Batch 3: refactor(extensions): delete public needs authority
 
-**Status**: Pending.
+**Status**: In progress.
+
+First collapse removes `ToolNeeds` from extension-owned local service tools
+where the actual authority is already carried by Effect services/storage:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/artifacts/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/checkpoint.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/tools.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/search-skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/skills-tool.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/tools.ts`
+
+The next collapse should either remove `ToolNeeds` from read-only platform tools
+or replace process/session/interaction authority in host-heavy tools with
+constrained imported services. Do not reintroduce public `read`/`write`
+metadata.
 
 After all public extension call sites yield services instead of requesting
 authority metadata:

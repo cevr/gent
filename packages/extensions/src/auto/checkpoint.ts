@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 /**
  * Signal tool for the auto loop extension.
@@ -34,7 +34,6 @@ const AutoCheckpointParams = Schema.Struct({
 
 export const AutoCheckpointTool = tool({
   id: "auto_checkpoint",
-  needs: [ToolNeeds.write("auto")],
   description:
     "Report your iteration results. Call with status 'continue' to proceed to the next iteration, " +
     "'complete' when the goal is met, or 'abandon' to stop. You MUST call this tool at the end of each iteration.",
