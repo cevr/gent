@@ -117,8 +117,7 @@ Commits landed in this wave so far:
 - `3a7ab595 fix(tui): surface extension health in doctor`
 - `37274250 refactor(runtime): rename platform config service`
 - `06dd9a29 refactor(runtime): own agent loop turn worker`
-- `783ecf9a refactor(runtime): derive tool context facets`
-- `3a7ab595 fix(tui): surface extension health in doctor`
+- `4a7eba38 refactor(runtime): accept submissions through actor ops`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -756,18 +755,33 @@ Validation:
 Goal: SessionRuntime should not duplicate AgentLoop actor protocol or poll for
 actor acceptance.
 
+Status: closed by `4a7eba38`. `SessionRuntime` now routes public message
+submission through branch-actor acceptance ops (`AcceptSubmit` and
+`AcceptQueueFollowUp`) and deletes its storage/queue polling helper entirely.
+The persisted `Submit` / `QueueFollowUp` mailbox ops remain available for
+durable redelivery and cross-process fire-and-forget producers, while the
+runtime boundary waits only for actor-owned acceptance.
+
 Work:
 
-- Replace send-plus-poll with actor `execute` or an upstream acceptance helper.
-- Delete polling helper paths once public tests cover the behavior.
+- [x] Replace send-plus-poll with actor `execute` or an upstream acceptance
+      helper. Done via actor-owned acceptance ops in `4a7eba38`.
+- [x] Delete polling helper paths once public tests cover the behavior.
+- [x] Keep persisted mailbox commands intact for redelivery/producer-only
+      hosts while avoiding SessionRuntime storage polling.
 - Revisit `SessionRuntimeEntity` vs `SessionRuntimeService`; keep the public
   protocol small and actor-owned.
 
 Validation:
 
-- SessionRuntime acceptance tests.
-- RPC harness tests.
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/session-runtime.test.ts tests/server/message-send.test.ts tests/server/interaction-commands.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt:check`
+- `git diff --check`
 - `bun run gate`
+- Pre-commit hook for `4a7eba38`: `lint+fmt`, `typecheck`, `build`, and
+  full workspace test runner.
 
 ### C21.9 — Enforce Platform Ownership
 
