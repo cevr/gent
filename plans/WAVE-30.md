@@ -474,6 +474,8 @@ internals.
 
 ## Commit 8: refactor(files): collapse wrapper files that do not earn existence
 
+**Status**: Completed in current batch.
+
 **Justification**: File count is architectural surface. Tiny single-import
 wrappers and naming-only `index.ts` files slow readers down without protecting a
 boundary.
@@ -501,10 +503,28 @@ boundary.
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/index.ts`        | 36-line extension wrapper.                     |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`           | 39-line extension wrapper.                     |
 
+**Audit result**
+
+| File                                                                                   | Result                                                                                                                                                                |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/file-url.ts`                    | Deleted. The helpers were used only by file tool renderers and their own test, so they now live with `apps/tui/src/utils/file-refs.ts`.                               |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/file-url.test.ts`                   | Deleted. Assertions moved into `apps/tui/tests/file-refs.test.ts`.                                                                                                    |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/theme/index.ts`                       | Kept. It is the TUI theme entrypoint used by app setup, routes, and renderers.                                                                                        |
+| `/Users/cvr/Developer/personal/gent/packages/sdk/src/transport-headers.ts`             | Kept. It centralizes SDK workspace identity for both client and server transport paths and has direct SDK behavior tests.                                             |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/projection-error.ts`      | Kept. It is a public extension projection failure type exported through `@gent/core/extensions/api`.                                                                  |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/guards.ts`                | Kept. It is a small but shared boundary guard module consumed by core, TUI, and shipped extensions.                                                                   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/runtime-environment.ts`  | Kept. It is a high-fan-in runtime service Tag used by server, runtime services, and tests.                                                                            |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/run-with-built-layer.ts` | Kept. It is the shared runtime layer execution helper used by both `SessionProfileCache` and child agent runs; moving it into either caller would create worse drift. |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/audit/index.ts`            | Kept. It is a shipped extension entrypoint consumed by the extension preset and builtin agent registry.                                                               |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/index.ts`       | Kept. It is a shipped extension entrypoint consumed by the extension preset.                                                                                          |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/index.ts`        | Kept. It exports both the shipped extension and `GitReader` test/integration fixture service.                                                                         |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`           | Kept. It is a shipped extension entrypoint consumed by the extension preset and skills RPC tests.                                                                     |
+
 **Verification**
 
 - Import fan-in/fan-out audit for each candidate.
-- Focused package tests for moved code.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots apps/tui/tests/file-refs.test.ts`
+- `bun run typecheck`
 - `bun run gate`
 
 ## Commit 9: build(effect-wide-event): make effect peer-only

@@ -10,7 +10,7 @@ import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/window
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { fileUrl, isAbsPath } from "../../utils/file-refs"
 import { getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 import { getEditUnifiedDiff } from "./edit-utils"

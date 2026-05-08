@@ -12,7 +12,7 @@ import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
-import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { fileUrl, isAbsPath } from "../../utils/file-refs"
 import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 

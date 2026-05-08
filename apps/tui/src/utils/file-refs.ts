@@ -1,6 +1,6 @@
 /**
- * File reference parsing and expansion
- * Supports @path/to/file.ts#10-20 syntax
+ * File reference parsing, expansion, and display links.
+ * Supports @path/to/file.ts#10-20 syntax.
  */
 
 import { FileSystem, Effect } from "effect"
@@ -13,6 +13,14 @@ export interface FileRef {
 }
 
 const FILE_REF_PATTERN = /@([^\s#]+)(?:#(\d+)(?:-(\d+))?)?/g
+
+export function isAbsPath(path: string): boolean {
+  return path.startsWith("/")
+}
+
+export function fileUrl(path: string): string {
+  return `file://${path}`
+}
 
 /**
  * Parse file references from text

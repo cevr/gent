@@ -10,7 +10,7 @@ import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { fileUrl, isAbsPath } from "../../utils/file-refs"
 import { decodeToolOutput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
