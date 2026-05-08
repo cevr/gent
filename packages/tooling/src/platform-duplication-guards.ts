@@ -97,6 +97,10 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     pattern: /\bos\.(?:hostname|homedir|release)\s*\(/,
     message: "Host OS facts are adapter-only; use GentPlatform",
   },
+  {
+    pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
+    message: "Bun platform layers may only be provided by platform roots",
+  },
 ]
 
 const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
@@ -131,6 +135,15 @@ const hostFactPatternSources = new Set([
 ])
 
 const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
+const platformProviderRootFiles = new Set([
+  "packages/core/src/runtime/gent-platform.ts",
+  "packages/core/src/runtime/gent-platform-bun.ts",
+  "packages/core/src/server/server-root.ts",
+  "packages/core/src/test-utils/extension-harness.ts",
+  "apps/server/src/main.ts",
+  "apps/tui/src/main.tsx",
+  "packages/sdk/src/server.ts",
+])
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -154,7 +167,9 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
             pattern.source === "\\bprocess\\.(?:platform|pid|execPath)\\b" ||
             pattern.source === "\\bos\\.(?:hostname|homedir|release)\\s*\\(")) ||
         (file === "packages/core/src/test-utils/language-model.ts" &&
-          pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b")
+          pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b") ||
+        (platformProviderRootFiles.has(file) &&
+          pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
       ),
   ),
   ...(serverRootConsumerFiles.has(file) ? bannedServerRootConsumerPatterns : []),

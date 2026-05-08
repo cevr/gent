@@ -220,22 +220,25 @@ Validation:
 
 ### W24.3 — Platform-Owned Dependency Root
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Remove concrete Bun platform provisioning from `createDependencies`.
-- Make platform/file-system/cron services requirements of the root and provide
-  them only from `server-root`, test root presets, or app shells.
-- Add a guard that rejects nested `BunPlatformLive` / `BunGentPlatformLive` /
-  `BunCronRuntimeLive` provisioning outside approved platform roots.
+- Removed concrete `BunPlatformLive`, `BunGentPlatformLive`, and
+  `BunCronRuntimeLive` provisioning from `createDependencies`.
+- `server-root` now owns production FileSystem/Path/ChildProcess/GentPlatform
+  and CronRuntime provisioning through `ServerRootPlatformLayer`.
+- Added a platform duplication guard that rejects reintroduced Bun platform
+  layer provisioning outside approved platform roots/test root presets/app
+  shells.
 
 Validation:
 
-- `bun packages/tooling/src/check-platform-duplication-guards.ts`
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/platform-duplication-guards.test.ts packages/sdk/tests/server-lock.test.ts packages/e2e/tests/server-lifecycle.test.ts`
-- `bun run typecheck`
-- `bun run lint`
+- `bun packages/tooling/src/check-platform-duplication-guards.ts` — pass
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/platform-duplication-guards.test.ts packages/sdk/tests/server-lock.test.ts packages/e2e/tests/server-lifecycle.test.ts` — 45 pass, 0 fail
+- `bun run typecheck` — pass
+- `bun run lint` — pass, 0 warnings/errors
+- `bun run fmt:check` — pass
 
 ### W24.4 — Ephemeral Runs Use A Root Preset
 

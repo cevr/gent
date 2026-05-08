@@ -216,6 +216,28 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags Bun platform providers outside platform roots", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/dependencies.ts",
+        "Layer.provide(Auth.Live(dir), BunPlatformLive)",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/server/dependencies.ts",
+        line: 1,
+        message: "Bun platform layers may only be provided by platform roots",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/server-root.ts",
+        "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted agent-loop dispatch infrastructure", () => {
     expect(
       findPlatformDuplicationViolations(

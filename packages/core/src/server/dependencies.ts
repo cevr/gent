@@ -25,11 +25,6 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { resolveProfileRuntime } from "../runtime/profile.js"
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import {
-  BunCronRuntimeLive,
-  BunGentPlatformLive,
-  BunPlatformLive,
-} from "../runtime/gent-platform-bun.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
@@ -170,7 +165,7 @@ const makeProfileLayers = <A, E, R>(
   )
 
 const makeAuthLayer = (config: DependenciesConfig, authDirectory: string) =>
-  config.overrides?.authLayer ?? Layer.provide(Auth.Live(authDirectory), BunPlatformLive)
+  config.overrides?.authLayer ?? Auth.Live(authDirectory)
 
 const makeConfigServiceLayer = (
   config: DependenciesConfig,
@@ -362,8 +357,8 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
-  // `Auth.Live` requires FileSystem + Path; `BunPlatformLive` bundles
-  // `BunServices.layer` (which provides them) with `BunGentPlatformLive`.
+  // The composition root owns FileSystem/Path; this dependency graph only
+  // describes that Auth needs platform capabilities.
   const authDirectory = config.authDirectory ?? `${config.home}/.gent/auth`
   const authLive = makeAuthLayer(config, authDirectory)
 
@@ -374,12 +369,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // single owner.
   const extensionRegistryLive = makeProfileLayers(
     config,
-    Layer.mergeAll(
-      configServiceLive,
-      runtimeEnvironmentLive,
-      BunGentPlatformLive,
-      BunCronRuntimeLive,
-    ),
+    Layer.mergeAll(configServiceLive, runtimeEnvironmentLive),
     (runtime) => {
       const profile = sessionProfileFromRuntime(runtime)
       launchSessionProfileSeed = profile
@@ -401,25 +391,22 @@ export const createDependencies = (config: DependenciesConfig) => {
   const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
 
   const baseServicesLive = Layer.provideMerge(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        runtimeEnvironmentLive,
-        clusterRunnerLive,
-        eventServicesLive,
-        authLive,
-        authGuardLive,
-        providerAuthLive,
-        configServiceLive,
-        Layer.provide(modelRegistryLive, FetchHttpClient.layer),
-        extensionRegistryLive,
-        fileLockServiceLive,
-        modelResolverLive,
-        ...optionalPermissionLayer(config.overrides?.permissionLayer),
-        makeFileIndexLayer(config.overrides?.fileIndexLayer, runtimeEnvironmentLive),
-        ...(config.overrides?.extraLayers ?? []),
-        FetchHttpClient.layer,
-      ),
-      BunGentPlatformLive,
+    Layer.mergeAll(
+      runtimeEnvironmentLive,
+      clusterRunnerLive,
+      eventServicesLive,
+      authLive,
+      authGuardLive,
+      providerAuthLive,
+      configServiceLive,
+      Layer.provide(modelRegistryLive, FetchHttpClient.layer),
+      extensionRegistryLive,
+      fileLockServiceLive,
+      modelResolverLive,
+      ...optionalPermissionLayer(config.overrides?.permissionLayer),
+      makeFileIndexLayer(config.overrides?.fileIndexLayer, runtimeEnvironmentLive),
+      ...(config.overrides?.extraLayers ?? []),
+      FetchHttpClient.layer,
     ),
     storageLive,
   )

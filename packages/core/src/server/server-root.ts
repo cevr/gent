@@ -10,7 +10,7 @@ import { buildServerRoutes } from "./server-routes.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
 import { GentLogger, GentLogLevel } from "../runtime/logger.js"
 import { GentTracerLive } from "../runtime/tracer.js"
-import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunCronRuntimeLive, BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
@@ -41,6 +41,7 @@ export interface BuiltServerRoot {
 const ServerRootPlatformLayer = Layer.mergeAll(
   BunFileSystem.layer,
   BunServices.layer,
+  BunCronRuntimeLive,
   BunGentPlatformLive,
 )
 
