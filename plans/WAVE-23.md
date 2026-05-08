@@ -422,19 +422,33 @@ Validation:
 
 ### W23.5 — Durable Operation Idempotency
 
-Status: planned.
+Status: committed in `b4f38e1f`.
 
 Work:
 
-- Add durable operation/request-id records for create-session.
-- Preserve initial-prompt behavior as a deterministic child operation.
-- Add retry/restart regressions.
+- Added a `durable_operations` SQLite table and focused
+  `SessionOperationStorage` service keyed by workspace, operation, and
+  request id.
+- Made `createSession` store its session/branch result in the durable
+  operation table inside the same transaction as session, branch, and
+  `SessionStarted` event creation.
+- Replayed existing durable create-session results before allocating new ids,
+  so retries after process-cache eviction or command-layer restart converge on
+  the same session/branch.
+- Stored initial prompt inputs with the create operation and submit them as a
+  deterministic child message request id
+  `session.create:<requestId>:initial`, so a retry after post-commit prompt
+  dispatch failure sends the original prompt without duplicating completed
+  turns.
+- Added restart-style regression coverage with file-backed SQLite.
 
 Validation:
 
-- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/server/session-idempotency.test.ts tests/server/session-commands/*.test.ts tests/runtime/session-runtime.test.ts`
 - `bun run typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-idempotency.test.ts packages/core/tests/server/session-command-persistence.test.ts packages/core/tests/storage/sqlite-session-storage.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-idempotency.test.ts packages/core/tests/server/session-command-persistence.test.ts packages/core/tests/server/session-commands packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/storage/sqlite-session-storage.test.ts packages/core/tests/storage/sqlite-concurrency.test.ts`
 - `bun run lint`
+- `bun run test`
 
 ### W23.6 — Deterministic Follow-Up Identity
 
