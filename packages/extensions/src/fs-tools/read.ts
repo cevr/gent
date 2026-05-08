@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { FsRead } from "./read-service.js"
 
 // Read Tool Error
@@ -44,7 +44,6 @@ export const ReadResult = Schema.Struct({
 export const ReadTool = tool({
   id: "read",
   intent: "read",
-  needs: [ToolNeeds.read("fs")],
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   promptSnippet: "Read file contents with line numbers",
   promptGuidelines: ["Use read instead of bash cat/head/tail"],

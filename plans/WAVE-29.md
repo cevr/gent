@@ -103,10 +103,22 @@ where the actual authority is already carried by Effect services/storage:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/skills-tool.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/tools.ts`
 
-The next collapse should either remove `ToolNeeds` from read-only platform tools
-or replace process/session/interaction authority in host-heavy tools with
-constrained imported services. Do not reintroduce public `read`/`write`
-metadata.
+Second collapse removes `ToolNeeds` from platform/repo tools where safety is
+already owned by constrained services such as `FsRead`, `FileLockService`,
+`HttpClient`, and `GitReader`:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/read.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/write.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/edit.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/glob.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/grep.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/network-tools/webfetch.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/network-tools/websearch.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/repo-explorer.ts`
+
+The next collapse should replace process/session/interaction authority in
+host-heavy tools with constrained imported services. Do not reintroduce public
+`read`/`write` metadata.
 
 After all public extension call sites yield services instead of requesting
 authority metadata:

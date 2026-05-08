@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
 import { FsRead } from "./read-service.js"
 
@@ -41,7 +41,6 @@ export const GlobResult = Schema.Struct({
 export const GlobTool = tool({
   id: "glob",
   intent: "read",
-  needs: [ToolNeeds.read("fs")],
   description: "Find files matching glob pattern. Returns paths sorted by mtime.",
   promptSnippet: "Find files by glob pattern",
   promptGuidelines: ["Use instead of bash find/ls"],

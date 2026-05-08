@@ -1,6 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { tool, ToolNeeds, type ToolCoreContext } from "@gent/core/extensions/api"
+import { tool, type ToolCoreContext } from "@gent/core/extensions/api"
 import { $ } from "bun"
 import * as esGit from "es-git"
 
@@ -391,7 +391,6 @@ const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string
 
 export const RepoTool = tool({
   id: "repo",
-  needs: [ToolNeeds.read("repo")],
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
   params: RepoExplorerParams,

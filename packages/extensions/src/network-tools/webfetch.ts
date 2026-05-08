@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import TurndownService from "turndown"
 import { parseHTML } from "linkedom"
 
@@ -35,7 +35,6 @@ export const WebFetchResult = Schema.Struct({
 
 export const WebFetchTool = tool({
   id: "webfetch",
-  needs: [ToolNeeds.read("network")],
   description:
     "Fetch a URL and convert HTML to markdown. Use for researching documentation, reading web content, or gathering information from websites.",
   promptSnippet: "Fetch a URL and convert HTML to markdown",

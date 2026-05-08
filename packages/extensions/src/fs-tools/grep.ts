@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
 import { FsRead } from "./read-service.js"
 
@@ -70,7 +70,6 @@ export const GrepResult = Schema.Struct({
 export const GrepTool = tool({
   id: "grep",
   intent: "read",
-  needs: [ToolNeeds.read("fs")],
   description: "Search file contents with regex. Returns matching lines.",
   promptSnippet: "Search file contents with regex",
   promptGuidelines: ["Use instead of bash grep/rg"],
