@@ -1,6 +1,6 @@
 import { Schema, type Context, type Effect, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
-import type { ExtensionHostFacts, ExtensionHostPlatform } from "./extension"
+import type { ExtensionHostPlatform } from "./extension"
 import type { EventStoreError } from "./event"
 import { BranchId, SessionId, type MessageId } from "./ids"
 import type {
@@ -202,16 +202,4 @@ export declare namespace ExtensionHostContext {
       EventStoreError | PlatformError.PlatformError | InteractionPendingError
     >
   }
-}
-
-export interface ReadOnlyExtensionHostContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName?: AgentName
-  readonly cwd: string
-  readonly home: string
-  readonly capabilityContext?: Context.Context<never>
-  readonly host: ExtensionHostFacts
-  readonly agent: ExtensionHostContext.ReadOnlyAgent
-  readonly session: ExtensionHostContext.ReadOnlySessionFacet
 }

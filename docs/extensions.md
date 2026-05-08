@@ -215,11 +215,12 @@ export default defineExtension({
 ## Reactions (turn-time derivation)
 
 Use `reactions.turnProjection` for prompt shaping and tool-policy derivation.
-Handlers should depend on the smallest service Tag they need when they only
-inspect state.
+Reaction handlers receive their event input only. Host authority follows the
+same authoring model as tools, requests, and actions: `yield* ExtensionContext`
+or the smallest extension-owned service Tag needed.
 
 ```ts
-import { defineExtension } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionContext } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
@@ -230,6 +231,14 @@ export default defineExtension({
         promptSections: [{ id: "status", content: "ready", priority: 0 }],
         toolPolicy: { include: ["status"] },
       }),
+    turnAfter: {
+      failureMode: "isolate",
+      handler: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.queueFollowUp({ sourceId: "status-ext", content: "status updated" })
+        }),
+    },
   },
 })
 ```

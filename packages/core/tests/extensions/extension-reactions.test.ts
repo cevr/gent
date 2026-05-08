@@ -26,6 +26,7 @@ import {
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core-internal/domain/agent"
+import { ExtensionContext } from "../../src/domain/extension-services.js"
 
 const stubHostCtx = testExtensionHostContext()
 
@@ -189,15 +190,16 @@ describe("runtime slots", () => {
       )
   })
 
-  it.live("systemPrompt receives a physically read-only host context", () =>
+  it.live("systemPrompt receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
       const sawProcessAuthority = yield* Ref.make(false)
       const slots = compileExtensionReactions([
         makeExt("readonly", "project", {
           reactions: {
-            systemPrompt: (_input, ctx) =>
+            systemPrompt: () =>
               Effect.gen(function* () {
-                yield* Ref.set(sawProcessAuthority, "runProcess" in ctx.host)
+                const ctx = yield* ExtensionContext
+                yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
                 return "readonly"
               }),
           },
@@ -216,7 +218,7 @@ describe("runtime slots", () => {
       )
 
       expect(result).toBe("readonly")
-      expect(yield* Ref.get(sawProcessAuthority)).toBe(false)
+      expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
     }),
   )
 
@@ -478,7 +480,7 @@ describe("runtime slots", () => {
     })
   })
 
-  it.live("turnAfter handler parameter receives a physically read-only host context", () =>
+  it.live("turnAfter receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
       const sawProcessAuthority = yield* Ref.make(false)
       const slots = compileExtensionReactions([
@@ -486,7 +488,11 @@ describe("runtime slots", () => {
           reactions: {
             turnAfter: {
               failureMode: "halt",
-              handler: (_input, ctx) => Ref.set(sawProcessAuthority, "runProcess" in ctx.host),
+              handler: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
+                }),
             },
           },
         }),
@@ -503,7 +509,7 @@ describe("runtime slots", () => {
         stubHostCtx,
       )
 
-      expect(yield* Ref.get(sawProcessAuthority)).toBe(false)
+      expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
     }),
   )
 

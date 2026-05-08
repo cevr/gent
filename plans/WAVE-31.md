@@ -215,6 +215,8 @@ runtime denial traps.
 
 ## Commit 4: refactor(extensions): make reactions context-provided
 
+**Status**: Completed in current batch.
+
 **Justification**: Reaction handlers still take `ctx` parameters, preserving
 the old imperative extension-authoring shape. They should receive input and
 yield `ExtensionContext` like tools/requests/actions.
@@ -233,13 +235,15 @@ yield `ExtensionContext` like tools/requests/actions.
 | `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`                       | Change reaction handler types to params-only Effect handlers.      | ~211  |
 | `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts` | Provide `ExtensionContext`/narrow services through Effect context. | ~144  |
 | `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-host-context.ts`          | Delete read-only host context if no longer needed.                 | ~207  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`                     | Migrate worked reaction example.                                   | ~37   |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/index.ts`                       | Migrate worked reaction example.                                   | ~256  |
+| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                                          | Document event-input-only reactions and `yield* ExtensionContext`. | ~215  |
 
 **Verification**
 
-- Focused reaction tests.
-- Focused memory/auto extension tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-reactions.test.ts packages/core/tests/extensions/runtime-reactions.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/auto/auto.test.ts tests/auto/auto-rpc.test.ts tests/auto/auto-journal-decode.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run gate`
 
 ## Commit 5: refactor(extensions): make setup facts context-provided

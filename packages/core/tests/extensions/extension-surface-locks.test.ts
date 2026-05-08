@@ -370,16 +370,30 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         turnAfter: {
           failureMode: "continue",
-          handler: (_input: PublicExtensionApi.TurnAfterInput, ctx) => {
-            void ctx.session.listMessages
-            // @ts-expect-error — reactions are read-only; mutation authority lives behind tools/actions
-            void ctx.session.queueFollowUp
-            return Effect.void
-          },
+          handler: (_input: PublicExtensionApi.TurnAfterInput) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              void ctx.Session.listMessages
+              void ctx.Session.queueFollowUp
+            }),
         },
       },
     })
 
+    expect(true).toBe(true)
+  })
+
+  test("reaction handlers receive event input only", () => {
+    defineExtension({
+      id: "reaction-handler-params-lock",
+      reactions: {
+        turnAfter: {
+          failureMode: "continue",
+          // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
+          handler: (_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void,
+        },
+      },
+    })
     expect(true).toBe(true)
   })
 

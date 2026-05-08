@@ -255,8 +255,7 @@ export const AutoExtension = defineExtension({
   ],
   reactions: {
     turnProjection,
-    toolResult: (input, _hostCtx) =>
-      journalInterceptorImpl(input, (next) => Effect.succeed(next.result)),
+    toolResult: (input) => journalInterceptorImpl(input, (next) => Effect.succeed(next.result)),
     turnAfter: {
       failureMode: "isolate",
       handler: autoHandoffImpl,

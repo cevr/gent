@@ -8,7 +8,6 @@ import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import type { ReadOnlyExtensionHostContext } from "./extension-host-context.js"
 import type { PermissionResult } from "./permission.js"
 
 // Extension Manifest — authored by extension author
@@ -211,7 +210,7 @@ export type ExtensionReactionFailureMode = "continue" | "isolate" | "halt"
 /** Single reaction handler with explicit failure policy. */
 export type ExtensionReaction<Input, E = never, R = never> = {
   readonly failureMode: ExtensionReactionFailureMode
-  readonly handler: (input: Input, ctx: ReadOnlyExtensionHostContext) => Effect.Effect<void, E, R>
+  readonly handler: (input: Input) => Effect.Effect<void, E, R>
 }
 
 /**
@@ -229,25 +228,18 @@ export interface ExtensionReactions<E = never, R = never> {
    * and turn projections have been compiled, and returns the prompt to send
    * to the driver.
    */
-  readonly systemPrompt?: (
-    input: SystemPromptInput,
-    ctx: ReadOnlyExtensionHostContext,
-  ) => Effect.Effect<string, E, R>
+  readonly systemPrompt?: (input: SystemPromptInput) => Effect.Effect<string, E, R>
   /**
    * User-message rewrite before the message is committed. Runs in scope order;
    * failures are isolated and leave the current content unchanged.
    */
-  readonly messageInput?: (
-    input: MessageInputInput,
-    ctx: ReadOnlyExtensionHostContext,
-  ) => Effect.Effect<string, E, R>
+  readonly messageInput?: (input: MessageInputInput) => Effect.Effect<string, E, R>
   /**
    * Context-message rewrite before prompt assembly. Runs in scope order;
    * failures are isolated and leave the current message list unchanged.
    */
   readonly contextMessages?: (
     input: ContextMessagesInput,
-    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<ReadonlyArray<Message>, E, R>
   /**
    * Permission decision interceptor. Receives the current decision and may
@@ -255,7 +247,6 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly permissionCheck?: (
     input: PermissionCheckInput & { readonly current: PermissionResult },
-    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<PermissionResult, E, R>
   /**
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
@@ -271,10 +262,7 @@ export interface ExtensionReactions<E = never, R = never> {
    * consumers see it. Used for journaling, redaction, and structured-result
    * enrichment.
    */
-  readonly toolResult?: (
-    input: ToolResultInput,
-    ctx: ReadOnlyExtensionHostContext,
-  ) => Effect.Effect<unknown, E, R>
+  readonly toolResult?: (input: ToolResultInput) => Effect.Effect<unknown, E, R>
   /**
    * Tool execution wrapper. Receives the current result produced by the base
    * tool or a lower-scope wrapper. Use sparingly for auditing and
@@ -282,7 +270,6 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly toolExecute?: (
     input: ToolExecuteInput & { readonly current: unknown },
-    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<unknown, E, R>
 }
 
