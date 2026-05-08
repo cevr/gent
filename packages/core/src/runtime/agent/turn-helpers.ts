@@ -675,7 +675,7 @@ export const resolveTurnSource = (params: {
       } satisfies ExternalTurnSource
     }
 
-    const model = yield* params.modelResolver.resolve({
+    const modelRequest = {
       modelId: resolved.modelId,
       hints: {
         ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
@@ -685,17 +685,22 @@ export const resolveTurnSource = (params: {
       ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
         ? { driverId: resolved.driver.id }
         : {}),
-    })
+    }
     const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
     const toolkit = convertTools([...resolved.tools])
-    const rawStream =
-      resolved.tools.length > 0
-        ? model.streamText({
-            prompt,
-            toolkit,
-            disableToolCallResolution: true as const,
-          })
-        : model.streamText({ prompt })
+    const rawStream = Stream.unwrap(
+      params.modelResolver.resolve(modelRequest).pipe(
+        Effect.map((model) =>
+          resolved.tools.length > 0
+            ? model.streamText({
+                prompt,
+                toolkit,
+                disableToolCallResolution: true as const,
+              })
+            : model.streamText({ prompt }),
+        ),
+      ),
+    )
 
     return {
       driverKind: "model" as const,

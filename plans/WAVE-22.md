@@ -235,6 +235,8 @@ Recursive findings to close:
 - P1: `ModelResolver` builds Effect AI model layers in a scope, extracts
   `LanguageModel.Service`, and returns the raw service outside the layer
   lifetime.
+  Status: implemented in sub-batch W22.9 by resolving live provider models in
+  the caller/stream scope instead of a closed local scope.
 - P1: several extension services defect operational storage/file failures with
   `Effect.orDie` instead of returning typed service/tool errors.
 
@@ -275,7 +277,7 @@ Validation:
 
 ### W22.8 — Durable Interaction Decisions
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `5738e82e`.
 
 Work:
 
@@ -288,5 +290,25 @@ Work:
 Validation:
 
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/server/interaction-commands.test.ts tests/domain/interaction-request.test.ts tests/storage/sqlite-session-storage.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+
+### W22.9 — Scoped Model Resolution
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Make live `ModelResolver.resolve(...)` require the caller scope and build
+  provider model layers into that scope with `Layer.buildWithScope`.
+- Resolve model streams inside `Stream.unwrap(...)` so the provider layer lives
+  for stream consumption, not just construction.
+- Wrap non-stream branch summary model usage in `Effect.scoped`.
+- Move provider-resolution tests to scoped tests so the lifetime requirement is
+  visible in the type surface.
+
+Validation:
+
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/providers/provider-resolution.test.ts tests/runtime/session-runtime.test.ts tests/server/session-command-persistence.test.ts`
 - `bun run typecheck`
 - `bun run lint`

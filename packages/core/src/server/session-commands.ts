@@ -665,25 +665,28 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const model = yield* modelResolver.resolve({
-          modelId: NAME_GEN_MODEL,
-          hints: { maxTokens: 400 },
-        })
-        const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
-          Stream.mapError(
-            (error: unknown) =>
-              new ProviderError({
-                message: AiError.isAiError(error) ? error.message : String(error),
-                model: NAME_GEN_MODEL,
-                cause: error,
-              }),
-          ),
-        )
-
         const parts: string[] = []
-        yield* Stream.runForEach(stream, (part) =>
-          Effect.sync(() => {
-            if (part.type === "text-delta") parts.push(part.delta)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const model = yield* modelResolver.resolve({
+              modelId: NAME_GEN_MODEL,
+              hints: { maxTokens: 400 },
+            })
+            const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
+              Stream.mapError(
+                (error: unknown) =>
+                  new ProviderError({
+                    message: AiError.isAiError(error) ? error.message : String(error),
+                    model: NAME_GEN_MODEL,
+                    cause: error,
+                  }),
+              ),
+            )
+            yield* Stream.runForEach(stream, (part) =>
+              Effect.sync(() => {
+                if (part.type === "text-delta") parts.push(part.delta)
+              }),
+            )
           }),
         )
         return parts.join("").trim()

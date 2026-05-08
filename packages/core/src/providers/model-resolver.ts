@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, type Scope } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { Auth, AuthOauth, type AuthService } from "../domain/auth.js"
 import {
@@ -37,7 +37,7 @@ export const CurrentResolveModelAssertion = Context.Reference<
 export interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
-  ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError>
+  ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
 }
 
 export const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(function* (
@@ -153,7 +153,8 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
         resolve: (request) =>
           Effect.gen(function* () {
             const resolved = yield* resolveProviderModel(authStore, registry, request)
-            const context = yield* Effect.scoped(Layer.build(resolved))
+            const scope = yield* Effect.scope
+            const context = yield* Layer.buildWithScope(resolved, scope)
             return Context.get(context, LanguageModel.LanguageModel)
           }),
       } satisfies ModelResolverService

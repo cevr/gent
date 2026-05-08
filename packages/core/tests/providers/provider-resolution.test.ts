@@ -133,7 +133,7 @@ const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<s
     return yield* model.streamText({ prompt: request.prompt }).pipe(Stream.runCollect)
   })
 describe("Provider model resolution", () => {
-  it.live("resolves model through extension-registered provider", () =>
+  it.scoped("resolves model through extension-registered provider", () =>
     Effect.gen(function* () {
       const layer = buildProviderLayer([makeExt("test-ext", [makeProvider("custom")])])
       const result = yield* Effect.exit(
@@ -144,7 +144,7 @@ describe("Provider model resolution", () => {
       expect(result._tag).toBe("Success")
     }),
   )
-  it.live("ModelResolver resolves the LanguageModel service directly", () =>
+  it.scoped("ModelResolver resolves the LanguageModel service directly", () =>
     Effect.gen(function* () {
       const languageModel = makeLanguageModel({
         streamText: () => Stream.fromIterable([finishPart({ finishReason: "stop" })]),
@@ -163,7 +163,7 @@ describe("Provider model resolution", () => {
       expect(Array.from(result)).toEqual([expect.objectContaining({ type: "finish" })])
     }),
   )
-  it.live("errors for unregistered provider", () =>
+  it.scoped("errors for unregistered provider", () =>
     Effect.gen(function* () {
       const layer = buildProviderLayer([])
       const result = yield* Effect.exit(
@@ -174,7 +174,7 @@ describe("Provider model resolution", () => {
       expect(result._tag).toBe("Failure")
     }),
   )
-  it.live("failing test provider resolves before failing at stream boundary", () =>
+  it.scoped("failing test provider resolves before failing at stream boundary", () =>
     Effect.gen(function* () {
       const resolver = yield* ModelResolver
       const model = yield* resolver.resolve({ modelId: "test/failing" })
@@ -185,7 +185,7 @@ describe("Provider model resolution", () => {
       }
     }).pipe(Effect.provide(ModelResolver.fromLanguageModel(LanguageModelLayers.failing))),
   )
-  it.live("wraps extension resolveModel errors as ProviderError preserving cause", () =>
+  it.scoped("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {
       const original = new Error("kaboom")
       const throwingProvider: ModelDriverContribution = {
@@ -215,7 +215,7 @@ describe("Provider model resolution", () => {
       }
     }),
   )
-  it.live("driver ProviderAuthError surfaces typed at the provider boundary", () =>
+  it.scoped("driver ProviderAuthError surfaces typed at the provider boundary", () =>
     Effect.gen(function* () {
       // Drivers that fail closed at credential resolution throw
       // ProviderAuthError synchronously from `resolveModel`. The boundary
@@ -252,7 +252,7 @@ describe("Provider model resolution", () => {
       }
     }),
   )
-  it.live("BedrockExtension resolveModel fails closed as ProviderAuthError", () =>
+  it.scoped("BedrockExtension resolveModel fails closed as ProviderAuthError", () =>
     Effect.gen(function* () {
       // Bedrock has no @effect/ai provider at beta.47. The contribution
       // throws on resolveModel — that throw must surface as ProviderAuthError
@@ -284,7 +284,7 @@ describe("Provider model resolution", () => {
       }
     }),
   )
-  it.live("auth store read failures fail closed before resolving the model", () =>
+  it.scoped("auth store read failures fail closed before resolving the model", () =>
     Effect.gen(function* () {
       let resolved = false
       const provider: ModelDriverContribution = {
@@ -311,7 +311,7 @@ describe("Provider model resolution", () => {
     }),
   )
   // ── Per-turn driver registry override (per-cwd profile shadowing) ──
-  it.live("per-request driverRegistry overrides the captured one for model resolution", () =>
+  it.scoped("per-request driverRegistry overrides the captured one for model resolution", () =>
     Effect.gen(function* () {
       // Captured registry has only "captured-only" — would fail to find "shadowed"
       const capturedLayer = buildProviderLayer([
@@ -343,7 +343,7 @@ describe("Provider model resolution", () => {
     }),
   )
   // ── ModelDriverRef.id override ──
-  it.live("driverId override picks a driver other than the one parsed from modelId", () =>
+  it.scoped("driverId override picks a driver other than the one parsed from modelId", () =>
     Effect.gen(function* () {
       // Both drivers registered. Default parse from "primary/foo" → "primary".
       // We force "alt" via driverId override and check `alt` was chosen by giving it
@@ -380,7 +380,7 @@ describe("Provider model resolution", () => {
       expect(chosenDriver).toBe("alt")
     }),
   )
-  it.live("runtime tools advertise capabilities through the live stream path", () =>
+  it.scoped("runtime tools advertise capabilities through the live stream path", () =>
     Effect.gen(function* () {
       let captured:
         | {
@@ -452,7 +452,7 @@ describe("Provider model resolution", () => {
       )
     }),
   )
-  it.live("runtime toolkit preserves typed Effect tool maps through the live stream path", () =>
+  it.scoped("runtime toolkit preserves typed Effect tool maps through the live stream path", () =>
     Effect.gen(function* () {
       const typedEchoTool = AiTool.dynamic("typedEcho", {
         description: "Typed echo input",
@@ -519,7 +519,7 @@ describe("Provider model resolution", () => {
       )
     }),
   )
-  it.live("live stream path builds Effect Prompt with multimodal and reasoning parts", () =>
+  it.scoped("live stream path builds Effect Prompt with multimodal and reasoning parts", () =>
     Effect.gen(function* () {
       let capturedPrompt: Prompt.Prompt | undefined
       const streamingProvider: ModelDriverContribution = {
