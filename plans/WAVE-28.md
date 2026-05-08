@@ -495,6 +495,8 @@ their existence.
 
 ## Commit 12: test(runtime): replace actor key tests with public behavior
 
+**Status**: Completed in this wave.
+
 **Justification**: Some runtime tests assert private `_meta` and exact
 effect-encore execution id strings. Keep only tests that protect Gent-visible
 behavior.
@@ -506,15 +508,17 @@ behavior.
 
 **Changes**
 
-| File                                                                                            | Change                                                                                      |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`       | Move queue semantics to public SessionRuntime/RPC behavior where possible.                  |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts` | Keep only a narrow actor integration smoke if needed; delete private key-format assertions. |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/workspace-rpc.test.ts`           | Extend public isolation/queue coverage if it replaces actor internals.                      |
+| File                                                                                                | Change                                                                                                                               |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`           | Deleted direct `AgentLoopBehavior` state-token tests; kept actor-service queue ordering, persistence, restart, and failure behavior. |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts`     | Deleted private `_meta` and exact effect-encore execution-id assertions.                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.entity-id.test.ts` | Kept entity-id behavior coverage where the encoding is Gent-owned and parsed by Gent.                                                |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/workspace-rpc.test.ts`               | Confirmed workspace isolation remains covered through public RPC behavior.                                                           |
 
 **Verification**
 
-- Focused runtime tests.
+- `bun run --cwd packages/core typecheck`
+- `cd packages/core && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/server/workspace-rpc.test.ts tests/server/session-idempotency.test.ts tests/runtime/session-runtime.test.ts tests/runtime/agent/agent-loop.entity-id.test.ts`
 - `bun run test:e2e`
 - `bun run gate`
 
