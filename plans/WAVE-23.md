@@ -346,7 +346,7 @@ Validation:
 
 ### W23.2 — Convert Promise Test Bodies To Effect Test Control Flow
 
-Status: implemented locally; ready for commit.
+Status: committed and pushed in `79b60e91`.
 
 Work:
 
