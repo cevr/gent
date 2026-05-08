@@ -7,7 +7,7 @@
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
-- **Message part types** - Import `MessagePart`, `TextPart` from `@gent/core/domain/message` when a UI projection needs them. Never redeclare.
+- **Message part types** - Import `MessagePart`, `TextPart` from `@gent/core-internal/domain/message` when a UI projection needs them. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.

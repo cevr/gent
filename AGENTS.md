@@ -43,14 +43,14 @@ bun run --cwd apps/tui dev sessions
 - **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
-- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import types from `@gent/core/domain/<file>`, don't redeclare.
-- **No barrels** - `@gent/core` uses subpath exports. Import from specific files: `@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop.actor`, etc.
+- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
+- **Package boundary imports** - `@gent/core` only exposes the public extension authoring API at `@gent/core/extensions/api`. Shipped apps, packages, and tests that need core internals import from `@gent/core-internal/*`. Files inside `packages/core/src/` and `packages/core-internal/src/` use relative imports.
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
-- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core-internal/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer from a parent context snapshot plus explicit child-owned override families. Parent services become a `Layer.succeedContext(...)` source; child overrides merge with `Layer.provideMerge` so child Tags occlude parent Tags. The builder keeps `Layer.fresh` on the final merged layer so ephemeral SQLite and mutable services do not alias the parent memo map.
@@ -75,7 +75,7 @@ Use `effect` skill. Key patterns:
 - Telegraph style, minimal tokens
 - Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
-- **Tagged/discriminated unions ALWAYS use `TaggedEnumClass`** (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Never hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions, even for internal driver/state events. Construct via `Variant.make({...})`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
+- **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedStruct` / `Schema.Union` / `Schema.TaggedErrorClass`; do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions. Existing `TaggedEnumClass` use is transitional and should not expand.
 - **File naming**: kebab-case everywhere (`agent-loop.actor.ts`, `message-list.tsx`)
 
 ## Package Structure
@@ -111,7 +111,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core-internal/debug/provider`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -134,15 +134,19 @@ const { layer: providerLayer, controls } =
   yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
 // Full in-process stack (AppServicesLive + real event store + real storage)
-import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
+import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
 const layer = baseLocalLayer()
 
 // RPC acceptance harness (real per-request scopes)
-import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 const { client, sessionId, branchId } = yield * createRpcHarness({ providerLayer, extensions })
 
 // Sequence recording for event assertions
-import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+import {
+  SequenceRecorder,
+  RecordingEventStore,
+  assertSequence,
+} from "@gent/core-internal/test-utils"
 assertSequence(calls, [
   { service: "EventStore", method: "publish", match: { _tag: "TurnCompleted" } },
 ])

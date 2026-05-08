@@ -83,6 +83,8 @@ All final audit lanes found no P0. They did find P1s:
 
 ## Commit 1: docs(plan): promote current wave and remove stale import guidance
 
+**Status**: Completed in this wave.
+
 **Justification**: The root continuation artifact and instruction examples must
 not point agents at superseded waves or public-looking imports that package
 exports reject.

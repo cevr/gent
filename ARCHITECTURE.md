@@ -35,7 +35,8 @@ apps/
 └── server/    # HTTP + RPC adapter over the same app services
 
 packages/
-├── core/
+├── core/          # public extension authoring API only
+├── core-internal/ # monorepo-internal domain/runtime/server/test surface
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
 │   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
 │   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
@@ -309,12 +310,12 @@ Extensions may import from:
 - `@gent/core/extensions/api` — the authoring surface
 - `effect`, `@effect/*` — as peer deps
 
-Extensions may NOT import from `@gent/core/domain/*`,
-`@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`,
-or `@gent/core/providers/*`. The `no-extension-internal-imports` oxlint rule
-enforces this for shipped extensions, and the same rule defines the contract
-for user/project extensions. "Builtin" means "included in the default
-distribution", not privileged.
+Extensions may NOT import Gent domain, runtime, storage, server, or provider
+internals through either `@gent/core` or `@gent/core-internal`. The
+`no-extension-internal-imports` oxlint rule enforces this for shipped
+extensions, and the same rule defines the contract for user/project
+extensions. "Builtin" means "included in the default distribution", not
+privileged.
 
 ### Extension API Inventory
 
@@ -458,7 +459,7 @@ Use the smallest honest boundary:
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
 
-**Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core/test-utils/language-model` for model mocking and `EventStore.Memory` for in-memory event stores.
+**Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core-internal/test-utils/language-model` for model mocking and `EventStore.Memory` for in-memory event stores.
 
 **Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
 
@@ -559,7 +560,7 @@ stays a DAG.
 - `withTinyContextWindow(effect)` — patches `MODEL_CONTEXT_WINDOWS` to 5k tokens for threshold tests
 - `trackingApprovalService()` — returns `{ layer, presentCalled: Ref<boolean> }` for approval assertions
 
-Both exported from `@gent/core/test-utils/e2e-layer`.
+Both exported from `@gent/core-internal/test-utils/e2e-layer`.
 
 ## Memory Extension
 
