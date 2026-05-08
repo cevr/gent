@@ -6,9 +6,15 @@
  * child process scope and completion follow-up.
  */
 
+import { Effect, Layer } from "effect"
 import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { BackgroundBashSupervisorLive, BashTool } from "./bash.js"
+import { BackgroundBashStorage } from "./bash-storage.js"
 import { EXEC_TOOLS_EXTENSION_ID } from "./protocol.js"
+
+const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+  Layer.provideMerge(BackgroundBashStorage.Live),
+)
 
 export const ExecToolsExtension = defineExtension({
   id: EXEC_TOOLS_EXTENSION_ID,
@@ -16,7 +22,11 @@ export const ExecToolsExtension = defineExtension({
   resources: [
     defineResource({
       scope: "process",
-      layer: BackgroundBashSupervisorLive,
+      layer: BackgroundBashLayer,
+      start: Effect.gen(function* () {
+        const storage = yield* BackgroundBashStorage
+        yield* storage.reconcileInterrupted()
+      }),
     }),
   ],
 })

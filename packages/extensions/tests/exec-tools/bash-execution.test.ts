@@ -1,20 +1,29 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Exit, Layer, Path, Scope } from "effect"
-import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
+import { Clock, Deferred, Effect, Exit, Layer, Path, Scope } from "effect"
+import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BackgroundBashSupervisorLive, BashTool } from "../../src/exec-tools/bash.js"
+import { BackgroundBashStorage } from "../../src/exec-tools/bash-storage.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 
-const makePlatformLayer = () =>
-  Layer.mergeAll(
+const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
+  const base = Layer.mergeAll(
+    storageLayer,
     BunFileSystem.layer,
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-    BackgroundBashSupervisorLive,
   )
+  return BackgroundBashSupervisorLive.pipe(
+    Layer.provideMerge(BackgroundBashStorage.Live),
+    Layer.provideMerge(base),
+  )
+}
+
+const makePlatformLayer = () => makeProcessLayer(SqliteStorage.MemoryWithSql())
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
 
@@ -249,6 +258,71 @@ describe("BashTool execution", () => {
             Deferred.await(sent).pipe(Effect.timeout("250 millis")),
           )
           expect(followUp._tag).toBe("Failure")
+        }),
+      ),
+    processTestTimeout,
+  )
+
+  it.live(
+    "background job interrupted by restart is reconciled once",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+          const ctx: ToolCapabilityContext = {
+            ...stubCtx,
+            toolCallId: ToolCallId.make("tc-restart"),
+            session: {
+              ...stubCtx.session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: () =>
+                Effect.succeed([
+                  new Branch({
+                    id: stubCtx.branchId,
+                    sessionId: stubCtx.sessionId,
+                    createdAt: now,
+                  }),
+                ]),
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+          const scope = yield* Scope.make()
+          const millis = yield* Clock.currentTimeMillis
+          const storageLayer = SqliteStorage.LiveWithSql(
+            `/tmp/gent-background-bash-${millis}.db`,
+          ).pipe(Layer.provide(BunServices.layer))
+          const processLayer = makeProcessLayer(storageLayer)
+          const firstContext = yield* Layer.buildWithScope(processLayer, scope)
+          const started = yield* getToolEffect(BashTool)(
+            { command: "sleep 2; printf should-not-arrive", run_in_background: true },
+            ctx,
+          ).pipe(Effect.provideContext(firstContext))
+          expect(started.exitCode).toBe(0)
+          yield* Scope.close(scope, Exit.void)
+
+          yield* Effect.gen(function* () {
+            const storage = yield* BackgroundBashStorage
+            yield* storage.reconcileInterrupted()
+          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+
+          const retried = yield* getToolEffect(BashTool)(
+            { command: "printf should-not-run", run_in_background: true },
+            ctx,
+          ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+          expect(retried.exitCode).toBe(0)
+
+          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+          expect(message.sourceId).toBe("bash:tc-restart:failure")
+          expect(message.content).toContain("Background command interrupted by server restart")
+          expect(message.content).not.toContain("Background command completed")
         }),
       ),
     processTestTimeout,

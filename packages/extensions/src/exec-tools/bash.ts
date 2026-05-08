@@ -26,6 +26,11 @@ import {
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
+import {
+  BackgroundBashStorage,
+  type BackgroundBashJobKeyFields,
+  type BackgroundBashStorageError,
+} from "./bash-storage.js"
 
 // Bash Tool Error
 
@@ -148,6 +153,12 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
 const backgroundJobKey = (ctx: ToolCapabilityContext): BackgroundBashJobKey =>
   `${ctx.sessionId}:${ctx.branchId}:${ctx.toolCallId}`
 
+const backgroundJobKeyFields = (ctx: ToolCapabilityContext): BackgroundBashJobKeyFields => ({
+  sessionId: ctx.sessionId,
+  branchId: ctx.branchId,
+  toolCallId: ctx.toolCallId,
+})
+
 const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey) => {
   const active = new Map(state.active)
   active.delete(key)
@@ -184,7 +195,7 @@ export interface BackgroundBashSupervisorService {
     job: BackgroundBashJob,
   ) => Effect.Effect<
     void,
-    never,
+    BackgroundBashStorageError,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   >
 }
@@ -194,9 +205,14 @@ export class BackgroundBashSupervisor extends Context.Service<
   BackgroundBashSupervisorService
 >()("@gent/extensions/src/exec-tools/bash/BackgroundBashSupervisor") {}
 
-export const BackgroundBashSupervisorLive: Layer.Layer<BackgroundBashSupervisor> = Layer.effect(
+export const BackgroundBashSupervisorLive: Layer.Layer<
+  BackgroundBashSupervisor,
+  never,
+  BackgroundBashStorage
+> = Layer.effect(
   BackgroundBashSupervisor,
   Effect.gen(function* () {
+    const storage = yield* BackgroundBashStorage
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
     const gate = yield* Semaphore.make(1)
@@ -241,14 +257,23 @@ export const BackgroundBashSupervisorLive: Layer.Layer<BackgroundBashSupervisor>
         sourceId: `bash:${job.ctx.toolCallId}:complete`,
         content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${job.command}\n${outputText}\n\`\`\``,
       })
+      yield* storage.markCompleted(backgroundJobKeyFields(job.ctx), {
+        exitCode: bgResult.exitCode,
+        message: outputText,
+      })
     })
 
     const queueFailure = (job: BackgroundBashJob, message: string) =>
-      queueBackgroundFollowUp({
-        ctx: job.ctx,
-        sourceId: `bash:${job.ctx.toolCallId}:failure`,
-        content: `Background command failed:\n\`\`\`\n$ ${job.command}\n${message}\n\`\`\``,
-      })
+      storage.markFailed(backgroundJobKeyFields(job.ctx), message).pipe(
+        Effect.catchEager(() => Effect.void),
+        Effect.andThen(
+          queueBackgroundFollowUp({
+            ctx: job.ctx,
+            sourceId: `bash:${job.ctx.toolCallId}:failure`,
+            content: `Background command failed:\n\`\`\`\n$ ${job.command}\n${message}\n\`\`\``,
+          }),
+        ),
+      )
 
     const start = (job: BackgroundBashJob) =>
       gate.withPermits(1)(
@@ -256,6 +281,22 @@ export const BackgroundBashSupervisorLive: Layer.Layer<BackgroundBashSupervisor>
           const key = backgroundJobKey(job.ctx)
           const current = yield* Ref.get(state)
           if (current.completed.has(key) || current.active.has(key)) return
+          const claim = yield* storage.claimStart({
+            ...backgroundJobKeyFields(job.ctx),
+            command: job.command,
+            cwd: job.cwd,
+          })
+          if (claim._tag === "AlreadyRunning") return
+          if (claim._tag === "Terminal") {
+            if (claim.state.status === "interrupted") {
+              yield* queueFailure(
+                job,
+                claim.state.message ?? "Background command interrupted by server restart",
+              )
+            }
+            yield* Ref.update(state, (s) => markJobCompleted(s, key))
+            return
+          }
 
           const started = yield* Deferred.make<void>()
           const jobContext = yield* Effect.context<

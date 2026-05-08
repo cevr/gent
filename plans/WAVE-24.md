@@ -196,23 +196,27 @@ Validation:
 
 ### W24.2 — Durable Background Bash Reconciliation
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Add durable background bash job records keyed by session, branch, and tool
-  call.
-- Persist start/terminal state and reconcile started-but-not-terminal jobs on
-  restart with deterministic completion/failure follow-up semantics.
-- Replace sleep-based background assertions with deterministic polling/signals
-  where touched.
+- Added `background_bash_jobs` owned by the exec-tools extension, keyed by
+  `(session_id, branch_id, tool_call_id)`.
+- Background supervisor now claims starts durably, persists completion/failure
+  terminal state, and resource startup reconciles pre-restart `running` rows to
+  `interrupted`.
+- A retry of the same interrupted background tool call emits one deterministic
+  failure follow-up instead of spawning duplicate process work.
+- Replaced the core deleted-session background assertion's fixed sleep with a
+  shell marker + `waitFor` polling path.
 
 Validation:
 
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/exec-tools/bash-execution.test.ts packages/core/tests/extensions/exec-tools-background.test.ts`
-- restart-style background bash regression with file-backed storage
-- `bun run typecheck`
-- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/exec-tools/bash-execution.test.ts packages/core/tests/extensions/exec-tools-background.test.ts` — 9 pass, 0 fail
+- restart-style background bash regression with file-backed storage — covered by `background job interrupted by restart is reconciled once`
+- `bun run typecheck` — pass
+- `bun run lint` — pass, 0 warnings/errors
+- `bun run fmt:check` — pass
 
 ### W24.3 — Platform-Owned Dependency Root
 
