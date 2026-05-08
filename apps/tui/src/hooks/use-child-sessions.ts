@@ -4,7 +4,7 @@
  * Creates a tracker, subscribes to changes, writes to Solid store.
  * All event projection logic lives in the runtime service.
  */
-import { createStore, produce } from "solid-js/store"
+import { createStore } from "solid-js/store"
 import { createEffect, on, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { SessionId, BranchId } from "@gent/core-internal/domain/ids.js"
@@ -50,33 +50,11 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
         Effect.gen(function* () {
           const tracker = yield* makeChildSessionTracker
 
-          // Fork: pump change stream → Solid store
+          // Fork: pump tracker snapshots → Solid store
           yield* Effect.forkScoped(
-            Stream.runForEach(tracker.changes, (change) =>
+            Stream.runForEach(tracker.changes, (entries) =>
               Effect.sync(() => {
-                switch (change._tag) {
-                  case "added":
-                    setStore(
-                      produce((draft) => {
-                        draft.entries[change.entry.childSessionId] = change.entry
-                      }),
-                    )
-                    break
-                  case "updated":
-                    setStore(
-                      produce((draft) => {
-                        draft.entries[change.childSessionId] = change.entry
-                      }),
-                    )
-                    break
-                  case "removed":
-                    setStore(
-                      produce((draft) => {
-                        delete draft.entries[change.childSessionId]
-                      }),
-                    )
-                    break
-                }
+                setStore({ entries: Object.fromEntries(entries) })
               }),
             ).pipe(Effect.catchEager(() => Effect.void)),
           )

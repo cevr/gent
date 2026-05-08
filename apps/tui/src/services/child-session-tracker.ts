@@ -6,7 +6,7 @@
  * Entries persist after completion as the single TUI source of truth.
  * Child subscription fibers are interrupted on terminal state.
  */
-import { Effect, Fiber, FiberSet, PubSub, Ref, Stream } from "effect"
+import { Effect, Fiber, FiberSet, Option, Ref, Stream, SubscriptionRef } from "effect"
 import type { Scope } from "effect"
 import {
   EventStore,
@@ -49,11 +49,6 @@ export interface ChildSessionEntry {
   savedPath?: string
 }
 
-export type ChildSessionChange =
-  | { _tag: "added"; entry: ChildSessionEntry }
-  | { _tag: "updated"; childSessionId: string; entry: ChildSessionEntry }
-  | { _tag: "removed"; childSessionId: string }
-
 // =============================================================================
 // Service
 // =============================================================================
@@ -67,32 +62,31 @@ export interface ChildSessionTrackerService {
   readonly getChildren: (toolCallId: ToolCallId) => Effect.Effect<ReadonlyArray<ChildSessionEntry>>
   /** Get all tracked children */
   readonly getAll: () => Effect.Effect<ReadonlyMap<string, ChildSessionEntry>>
-  /** Stream of child state changes for reactive consumers */
-  readonly changes: Stream.Stream<ChildSessionChange>
+  /** Current children plus subsequent state snapshots for reactive consumers */
+  readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
 }
 
 export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore | Scope.Scope> =
   Effect.gen(function* () {
     const eventStore = yield* EventStore
 
-    const entries = yield* Ref.make(new Map<string, ChildSessionEntry>())
+    const entries = yield* SubscriptionRef.make(new Map<string, ChildSessionEntry>())
     const childFibers = yield* Ref.make(new Map<string, Fiber.Fiber<void>>())
-    const pubsub = yield* PubSub.unbounded<ChildSessionChange>()
     const fiberSet = yield* FiberSet.make<void>()
-
-    const publish = (change: ChildSessionChange) => PubSub.publish(pubsub, change)
 
     const updateEntry = (
       childSessionId: string,
       f: (entry: ChildSessionEntry) => ChildSessionEntry,
     ) =>
-      Ref.modify(
+      SubscriptionRef.modifySome(
         entries,
-        (current): [ChildSessionEntry | undefined, Map<string, ChildSessionEntry>] => {
+        (
+          current,
+        ): [ChildSessionEntry | undefined, Option.Option<Map<string, ChildSessionEntry>>] => {
           const entry = current.get(childSessionId)
-          if (entry === undefined) return [undefined, current]
+          if (entry === undefined) return [undefined, Option.none()]
           const updated = f(entry)
-          return [updated, new Map(current).set(childSessionId, updated)]
+          return [updated, Option.some(new Map(current).set(childSessionId, updated))]
         },
       )
 
@@ -113,7 +107,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               ],
             }))
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
@@ -125,7 +118,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               ),
             }))
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
@@ -137,7 +129,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               ),
             }))
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
 
@@ -153,7 +144,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               }
             })
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
         }
@@ -204,15 +194,14 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               toolCalls: [],
               streamText: "",
             }
-            const added = yield* Ref.modify(
+            const added = yield* SubscriptionRef.modifySome(
               entries,
-              (current): [boolean, Map<string, ChildSessionEntry>] => {
-                if (current.has(childId)) return [false, current]
-                return [true, new Map(current).set(childId, entry)]
+              (current): [boolean, Option.Option<Map<string, ChildSessionEntry>>] => {
+                if (current.has(childId)) return [false, Option.none()]
+                return [true, Option.some(new Map(current).set(childId, entry))]
               },
             )
             if (!added) return
-            yield* publish({ _tag: "added", entry })
             // Subscribe to child events for tool call hydration.
             // On replay, the subscription replays child history then gets interrupted
             // when AgentRunSucceeded/Failed fires interruptChild.
@@ -230,7 +219,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               savedPath: event.savedPath,
             }))
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
             yield* interruptChild(childId)
             break
           }
@@ -242,7 +230,6 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               status: "error" as const,
             }))
             if (updated === undefined) return
-            yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
             yield* interruptChild(childId)
             break
           }
@@ -267,16 +254,12 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       stop: () =>
         Effect.gen(function* () {
           yield* FiberSet.clear(fiberSet)
-          const current = yield* Ref.get(entries)
-          for (const childId of current.keys()) {
-            yield* publish({ _tag: "removed", childSessionId: childId })
-          }
-          yield* Ref.set(entries, new Map())
+          yield* SubscriptionRef.set(entries, new Map())
         }),
 
       getChildren: (toolCallId) =>
         Effect.gen(function* () {
-          const current = yield* Ref.get(entries)
+          const current = yield* SubscriptionRef.get(entries)
           const result: ChildSessionEntry[] = []
           for (const entry of current.values()) {
             if (entry.toolCallId === toolCallId) result.push(entry)
@@ -284,9 +267,9 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
           return result
         }),
 
-      getAll: () => Ref.get(entries),
+      getAll: () => SubscriptionRef.get(entries),
 
-      changes: Stream.fromPubSub(pubsub),
+      changes: SubscriptionRef.changes(entries),
     }
 
     return service

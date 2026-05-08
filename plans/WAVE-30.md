@@ -593,6 +593,8 @@ cold state reads possible.
 
 ## Commit 11: refactor(tui): use Effect subscription primitives for child sessions
 
+**Status**: Completed in current batch.
+
 **Justification**: `Ref + PubSub` manual publishing reimplements a reactive
 store. `SubscriptionRef` is the Effect primitive for snapshot plus changes.
 
@@ -603,13 +605,16 @@ store. `SubscriptionRef` is the Effect primitive for snapshot plus changes.
 
 **Changes**
 
-| File                                                                                | Change                                                                                                                 |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/services/child-session-tracker.ts` | Replace manual `Ref`/`PubSub` pairing with `SubscriptionRef` or document why current Effect v4 primitive does not fit. |
+| File                                                                                | Change                                                                                                  |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/services/child-session-tracker.ts` | Replaced manual `Ref`/`PubSub` change publishing with `SubscriptionRef` snapshot state.                 |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-child-sessions.ts`       | Consumes full tracker snapshots directly instead of interpreting added/updated/removed deltas.          |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/child-session-tracker.test.ts`   | Added coverage for the snapshot stream contract while preserving the interleaved-completion regression. |
 
 **Verification**
 
-- Focused TUI service tests.
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts --reporter=dots tests/child-session-tracker.test.ts`
+- `bun run typecheck`
 - `bun run smoke`
 - `bun run gate`
 

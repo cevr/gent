@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Fiber, Schema, Stream } from "effect"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { AgentEvent, EventStore } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -38,6 +38,48 @@ const waitForEntry = (
 }
 
 describe("ChildSessionTracker", () => {
+  it.live("emits current child snapshots", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const eventStore = yield* EventStore
+        const tracker = yield* makeChildSessionTracker
+
+        const parentSessionId = SessionId.make("snapshot-parent-session")
+        const parentBranchId = BranchId.make("snapshot-parent-branch")
+        const childSessionId = SessionId.make("snapshot-child-session")
+        const childBranchId = BranchId.make("snapshot-child-branch")
+        const parentToolCallId = ToolCallId.make("snapshot-delegate-call")
+
+        const snapshotFiber = yield* tracker.changes.pipe(
+          Stream.filter((entries) => entries.has(childSessionId)),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+
+        yield* tracker.track({ sessionId: parentSessionId, branchId: parentBranchId })
+        yield* Effect.yieldNow
+
+        yield* eventStore.publish(
+          AgentEvent.AgentRunSpawned.make({
+            parentSessionId,
+            childSessionId,
+            childBranchId,
+            branchId: parentBranchId,
+            agentName: AgentName.make("review"),
+            prompt: "audit this",
+            toolCallId: parentToolCallId,
+          }),
+        )
+
+        const snapshots = yield* Fiber.join(snapshotFiber).pipe(Effect.timeout("1 second"))
+        const entry = snapshots[0]?.get(childSessionId)
+        expect(entry?.childSessionId).toBe(childSessionId)
+        expect(entry?.status).toBe("running")
+      }).pipe(Effect.provide(EventStore.Memory)),
+    ),
+  )
+
   it.live("preserves child tool state when parent completion interleaves", () =>
     Effect.scoped(
       Effect.gen(function* () {
