@@ -21,12 +21,14 @@ import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
+import { assistantMessageIdForTurn } from "./agent/agent-loop.utils.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
@@ -321,6 +323,7 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 }
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
+const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
 const wrapEntitySessionRuntimeError = (operation: string, error: unknown) =>
   Schema.is(SessionRuntimeError)(error)
@@ -388,6 +391,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
+  const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
@@ -594,7 +598,24 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     input: SendUserMessagePayload,
   ) {
     yield* requireSessionBranch(input)
-    const commandId = input.commandId ?? ActorCommandId.make(yield* platform.randomId)
+    const commandId =
+      input.commandId ??
+      (input.requestId !== undefined
+        ? commandIdForRequestId(input.requestId)
+        : ActorCommandId.make(yield* platform.randomId))
+    const messageId = userMessageIdForCommand(commandId)
+    const duplicateCompletedTurn = yield* messageStorage
+      .getMessage(messageId)
+      .pipe(
+        Effect.flatMap((existing) =>
+          existing === undefined
+            ? Effect.succeed(false)
+            : messageStorage
+                .getMessage(assistantMessageIdForTurn(messageId, 1))
+                .pipe(Effect.map((assistant) => assistant !== undefined)),
+        ),
+      )
+    if (duplicateCompletedTurn) return
     const resolved = yield* resolveSessionEnvironmentOrFail({
       sessionId: input.sessionId,
       branchId: input.branchId,
@@ -628,7 +649,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     )
 
     const message = Message.Regular.make({
-      id: userMessageIdForCommand(commandId),
+      id: messageId,
       sessionId: input.sessionId,
       branchId: input.branchId,
       role: "user",

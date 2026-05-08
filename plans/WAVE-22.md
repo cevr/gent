@@ -225,6 +225,8 @@ Recursive findings to close:
   relies on voluntary write checks by write-capable services.
 - P1: retried `message.send` only deduplicates `requestId` in process memory,
   not across crash/restart.
+  Status: implemented in sub-batch W22.7 by deriving the runtime command/message
+  id from `requestId` when no explicit command id is supplied.
 - P1: interaction approvals are acknowledged in memory before the human
   decision itself is durable.
 - P1: `ModelResolver` builds Effect AI model layers in a scope, extracts
@@ -235,7 +237,7 @@ Recursive findings to close:
 
 ### W22.6 — Host Process Primitive
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `f732ab10`.
 
 Work:
 
@@ -249,3 +251,19 @@ Validation:
 - `bun run typecheck`
 - `bun run lint`
 - Focused extension/core boundary tests
+
+### W22.7 — Durable Message Request Idempotency
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Convert `sendUserMessage.requestId` into a deterministic actor command id when
+  callers do not supply an explicit `commandId`.
+- Let the existing durable message id and actor operation primary key collapse
+  retried sends across runtime/server cache boundaries.
+- Preserve explicit `commandId` as the stronger caller-owned idempotency key.
+
+Validation:
+
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/session-runtime.test.ts`

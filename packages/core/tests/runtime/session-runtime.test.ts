@@ -495,6 +495,44 @@ describe("SessionRuntime", () => {
         )
       }),
   )
+  it.live("retried sendUserMessage requestId reuses the durable user message", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        textStep("duplicate reply"),
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const messageStorage = yield* MessageStorage
+          const { sessionId, branchId } = yield* createSessionBranch
+          yield* sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "first attempt",
+            requestId: "req-runtime-send-1",
+          })
+          yield* sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "retry should not create a new message",
+            requestId: "req-runtime-send-1",
+          })
+          const messages = yield* waitFor(
+            messageStorage.listMessages(branchId),
+            (current) => current.filter((message) => message.role === "assistant").length === 1,
+            5000,
+            "single assistant reply for retried send",
+          )
+          expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
+          expect(messages[0]?.id).toBe(MessageId.make("message:req-runtime-send-1"))
+          expect(messages[0]?.parts).toEqual([Prompt.textPart({ text: "first attempt" })])
+          expect(yield* controls.callCount).toBe(1)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
   it.live("persists tool messages without queueing or duplicating durable results", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
