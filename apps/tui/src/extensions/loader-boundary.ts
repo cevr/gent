@@ -17,6 +17,7 @@ import type {
   ClientContribution,
   ClientRuntime,
 } from "./client-facets.js"
+import { ClientSetupError } from "./client-effect.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
@@ -68,6 +69,34 @@ interface ImportedExtension {
   readonly scope: DiscoveredTuiExtension["scope"]
   readonly filePath: string
 }
+
+const setupLoadedExtension = (params: {
+  readonly module: AnyExtensionClientModule
+  readonly scope: LoadedTuiExtension["scope"]
+  readonly filePath: string
+  readonly runtime: ClientRuntime
+}): Effect.Effect<LoadedTuiExtension | undefined> =>
+  Effect.tryPromise({
+    try: () =>
+      invokeSetup(params.module, params.runtime).then((contributions) => ({
+        id: params.module.id,
+        scope: params.scope,
+        filePath: params.filePath,
+        contributions,
+      })),
+    catch: (cause) =>
+      new ClientSetupError({
+        extensionId: params.module.id,
+        message: `Setup failed for ${params.module.id}`,
+        cause,
+      }),
+  }).pipe(
+    Effect.catch((cause: ClientSetupError) =>
+      Effect.log(`[tui-ext] Setup failed for ${params.filePath}: ${cause.message}`).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  )
 
 /** Import module and validate shape — does NOT call setup() */
 const importExtension = (
@@ -144,29 +173,25 @@ export const loadTuiExtensions = (opts: {
         (opts.builtins ?? [])
           .filter((ext) => !disabledSet.has(ext.id))
           .map((ext) =>
-            Effect.promise(() =>
-              invokeSetup(ext, opts.runtime).then((contributions) => ({
-                id: ext.id,
-                scope: "builtin" as const,
-                filePath: `builtin:${ext.id}`,
-                contributions,
-              })),
-            ),
+            setupLoadedExtension({
+              module: ext,
+              scope: "builtin",
+              filePath: `builtin:${ext.id}`,
+              runtime: opts.runtime,
+            }),
           ),
-      )
+      ).pipe(Effect.map((loaded) => loaded.filter((ext) => ext !== undefined)))
 
       const externalLoaded: LoadedTuiExtension[] = yield* Effect.all(
         enabled.map((ext) =>
-          Effect.promise(() =>
-            invokeSetup(ext.module, opts.runtime).then((contributions) => ({
-              id: ext.module.id,
-              scope: ext.scope,
-              filePath: ext.filePath,
-              contributions,
-            })),
-          ),
+          setupLoadedExtension({
+            module: ext.module,
+            scope: ext.scope,
+            filePath: ext.filePath,
+            runtime: opts.runtime,
+          }),
         ),
-      )
+      ).pipe(Effect.map((loaded) => loaded.filter((ext) => ext !== undefined)))
 
       const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
 

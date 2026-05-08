@@ -17,6 +17,7 @@ import {
   type ExtensionClientModule,
 } from "../src/extensions/client-facets.js"
 import type { ClientEffect } from "../src/extensions/client-effect.js"
+import { ClientSetupError } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
 const runtime = ManagedRuntime.make(
@@ -48,6 +49,38 @@ describe("loadTuiExtensions Effect setup", () => {
           builtins: [ext],
           userDir: "/tmp/u-c9-1-fx",
           projectDir: "/tmp/p-c9-1-fx",
+          runtime,
+        }),
+      )
+      expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+    }),
+  )
+  it.live("isolates enabled setup failures and keeps healthy contributions", () =>
+    Effect.gen(function* () {
+      const good: ExtensionClientModule = {
+        id: "@test/good",
+        setup: Effect.succeed([
+          autocompleteContribution({
+            prefix: "!",
+            title: "good",
+            items: () => [{ id: "good", label: "good" }],
+          }),
+        ]),
+      }
+      const broken: ExtensionClientModule = {
+        id: "@test/broken",
+        setup: Effect.fail(
+          new ClientSetupError({
+            extensionId: "@test/broken",
+            message: "setup failed",
+          }),
+        ),
+      }
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: [good, broken],
+          userDir: "/tmp/u-c9-1-fx-failure",
+          projectDir: "/tmp/p-c9-1-fx-failure",
           runtime,
         }),
       )
