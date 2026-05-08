@@ -19,6 +19,7 @@
  */
 import { Effect, Layer } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import {
   AgentName,
   defineAgent,
@@ -31,7 +32,6 @@ import {
   type GentExtension,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
 import { createAcpSessionManager } from "./session-manager.js"
@@ -41,7 +41,7 @@ import {
 } from "./claude-code-executor.js"
 import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 import { live as claudeSdkLive, type AcpAgentsPlatformShape } from "./claude-sdk.js"
-import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
+import { AnthropicPlatform, runHostProcessWithSpawner } from "../anthropic/platform-adapter.js"
 import { generateToolDescription } from "./mcp-codemode.js"
 
 const claudeCodeAgent = defineAgent({
@@ -227,10 +227,15 @@ export const makeAcpAgentsExtension = (
   setup: (ctx) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ACP agents are bundled host-owned drivers
-      const host = ctx.host as ExtensionHostPlatform
-      const acpPlatform = { parentEnv: host.parentEnv } satisfies AcpAgentsPlatformShape
-      const anthropicPlatform = AnthropicPlatform.fromHost(host)
+      const gentPlatform = yield* Effect.serviceOption(GentPlatform)
+      const parentEnv = gentPlatform._tag === "Some" ? yield* gentPlatform.value.env : {}
+      const acpPlatform = { parentEnv } satisfies AcpAgentsPlatformShape
+      const anthropicPlatform = AnthropicPlatform.of({
+        platform: ctx.host.osInfo.platform,
+        home: ctx.home,
+        parentEnv,
+        runProcess: runHostProcessWithSpawner(spawner),
+      })
       return buildAcpContributions(spawner, deps, {
         acp: acpPlatform,
         anthropic: anthropicPlatform,

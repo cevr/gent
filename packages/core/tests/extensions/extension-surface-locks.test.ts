@@ -4,7 +4,7 @@
  * One intentional lock pack for the public extension authoring surface:
  * 1. capability factory shapes stay honest
  * 2. Promise handlers stay out of Effect-returning seams
- * 3. read-only branding remains available for request/reaction service seams
+ * 3. ExtensionContext stays the single host-authority import
  *
  * Runtime composition has separate behavior tests; this file only locks the
  * public extension authoring surface.
@@ -23,7 +23,6 @@ import {
   type ReadOnly,
   ReadOnlyBrand,
   type ReadOnlyTag,
-  type ReadRequestInput,
   makeRunSpec,
   request,
   resource,
@@ -37,14 +36,6 @@ class WriteCapableService extends Context.Service<
   WriteCapableService,
   { readonly write: () => Effect.Effect<void> }
 >()("@gent/core/tests/extensions/extension-surface-locks.test/WriteCapableService") {}
-
-type WriteCapableReadExecuteAssignable = (() => Effect.Effect<
-  string,
-  never,
-  WriteCapableService
->) extends ReadRequestInput<unknown, string, never>["execute"]
-  ? true
-  : false
 
 interface ReadOnlyShape {
   readonly read: () => Effect.Effect<string>
@@ -139,9 +130,21 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({ intent: 'read' }) rejects write-capable Tag in R", () => {
-    const writeCapableIsRejected: WriteCapableReadExecuteAssignable = false
-    void writeCapableIsRejected
+  test("request({ intent: 'read' }) may yield ExtensionContext", () => {
+    const ok = request({
+      id: "read-context",
+      extensionId: ExtensionId.make("test-ext"),
+      intent: "read",
+      input: NoInput,
+      output: StringOutput,
+      execute: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          return ctx.cwd
+        }),
+    })
+
+    void ok
     expect(true).toBe(true)
   })
 
@@ -391,11 +394,12 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         turnAfter: {
           failureMode: "continue",
-          handler: (_input: PublicExtensionApi.TurnAfterInput) =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
-            }),
+          handler: (_input: PublicExtensionApi.TurnAfterInput, ctx) => {
+            void ctx.session.listMessages
+            // @ts-expect-error — reactions are read-only; mutation authority lives behind tools/actions
+            void ctx.session.queueFollowUp
+            return Effect.void
+          },
         },
       },
     })

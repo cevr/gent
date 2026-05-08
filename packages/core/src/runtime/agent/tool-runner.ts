@@ -5,7 +5,7 @@ import {
   type ToolCoreContext,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
-import { provideExtensionServices } from "../../domain/extension-services.js"
+import { ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
@@ -60,10 +60,15 @@ const provideCapabilityContext = <A, E, R>(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane supplies the erased R channel from the filtered read-only context
     const closed = effect as Effect.Effect<A, E, never>
     const masked = closed.pipe(
-      Effect.updateContext(
-        (current: Context.Context<never>) =>
-          readOnlyCapabilityContext(ctx.capabilityContext ?? current) ?? Context.empty(),
-      ),
+      Effect.updateContext((current: Context.Context<never>) => {
+        const currentExtensionContext = Context.getOption(current, ExtensionContext)
+        const base =
+          currentExtensionContext._tag === "Some"
+            ? Context.empty().pipe(Context.add(ExtensionContext, currentExtensionContext.value))
+            : Context.empty()
+        const readContext = readOnlyCapabilityContext(ctx.capabilityContext ?? current)
+        return readContext === undefined ? base : Context.merge(base, readContext)
+      }),
     )
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane replaces the erased runtime context with the filtered read-only context
     return masked as Effect.Effect<A, E, R>
@@ -212,6 +217,7 @@ const makeExecutionToolkit = (params: {
                   .effect(decodedInput, toolCtx)
                   .pipe(Effect.mapError(normalizeToolExecutionError)),
               ),
+              { intent: metadata.intent },
             ),
           params.ctx,
         )

@@ -29,7 +29,6 @@ import { makeExtensionHostPlatform } from "../runtime/extensions/host-platform.j
 import {
   makeAmbientExtensionHostContextDeps,
   makeExtensionHostContext,
-  readOnlyExtensionHostContext,
 } from "../runtime/make-extension-host-context.js"
 import { ModelRegistry, type ModelRegistryService } from "../runtime/model-registry.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "../runtime/runtime-environment.js"
@@ -549,11 +548,10 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         hostDeps,
       )
       const rpcRegistry = registry.getResolved().rpcRegistry
-      const requestCtx = intent === "read" ? readOnlyExtensionHostContext(hostCtx) : hostCtx
       const requestCapabilityContext =
         intent === "read" ? readOnlyCapabilityContext(capabilityContext) : capabilityContext
       const request = rpcRegistry
-        .run(extensionId, RpcId.make(capabilityId), input, requestCtx, { intent })
+        .run(extensionId, RpcId.make(capabilityId), input, hostCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({
@@ -579,7 +577,7 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionServices(sessionId)
-      return listSlashCommands(registry.getResolved(), { publicOnly: true }).map(
+      return listSlashCommands(registry.getResolved()).map(
         (command) =>
           new SlashCommandInfo({
             name: command.name,

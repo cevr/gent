@@ -21,7 +21,7 @@ import {
   type AgentRunner,
 } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
-import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { ExtensionSetupContext, GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
 import { SessionId, type ExtensionId, type InteractionRequestId } from "../domain/ids.js"
@@ -124,7 +124,7 @@ const wrapExtensionInput = (
   layerOverrides: E2ELayerConfig["layerOverrides"],
 ): GentExtension<ChildProcessSpawner | GentPlatform> => ({
   manifest: extension.manifest,
-  setup: (ctx) =>
+  setup: (ctx: ExtensionSetupContext) =>
     extension
       .setup(ctx)
       .pipe(

@@ -69,7 +69,6 @@ export interface ResolvedExtensions {
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly slashCommands: ReadonlyArray<SlashCommand>
-  readonly publicSlashCommands: ReadonlyArray<SlashCommand>
   readonly extensionReactions: CompiledExtensionReactions
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
@@ -297,8 +296,9 @@ const hasExtensionServices = (ctx: CapabilityCoreContext): ctx is ExtensionHostC
 const provideExtensionServicesIfAvailable = <A, E, R>(
   ctx: CapabilityCoreContext,
   effect: Effect.Effect<A, E, R>,
+  intent: "read" | "write",
 ): Effect.Effect<A, E, R> =>
-  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect) : effect
+  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect, { intent }) : effect
 
 const coreCapabilityContext = (ctx: CapabilityCoreContext): CapabilityCoreContext => ({
   sessionId: ctx.sessionId,
@@ -349,6 +349,7 @@ const compileRpcRegistry = (
           input,
           capabilityRuntimeContext(ctx),
         ),
+        entry.capability.intent,
       )
     }),
 })
@@ -445,7 +446,6 @@ export const resolveExtensions = (
     if (rules) permissionRules.push(...rules)
   }
   const slashCommands = compileSlashCommands(capabilityWinners)
-  const publicSlashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionReactions = compileExtensionReactions(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -476,7 +476,6 @@ export const resolveExtensions = (
     promptSections: promptSectionsMap,
     permissionRules,
     slashCommands,
-    publicSlashCommands,
     extensionReactions,
     extensions: sorted,
     failedExtensions: mergedFailures,
@@ -661,11 +660,8 @@ export class ExtensionRegistry extends Context.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-export const listSlashCommands = (
-  resolved: ResolvedExtensions,
-  options?: { readonly publicOnly?: boolean },
-): ReadonlyArray<SlashCommand> =>
-  options?.publicOnly === true ? resolved.publicSlashCommands : resolved.slashCommands
+export const listSlashCommands = (resolved: ResolvedExtensions): ReadonlyArray<SlashCommand> =>
+  resolved.slashCommands
 
 /** Resolve a required agent from the registry. Fails with a clear error if not found. */
 export const requireAgent = (name: string) =>

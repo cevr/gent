@@ -10,6 +10,7 @@ import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js
 import { validateExtensionPackageShape } from "../../domain/extension-package-shape.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { getToolMetadata } from "../../domain/capability/tool.js"
+import { extensionHostFacts } from "../make-extension-host-context.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
@@ -23,7 +24,7 @@ const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<Pro
   ].filter((p): p is PromptSection => p !== undefined)
 
 type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
-type RuntimeLoadedExtension = GentExtension<ExtensionSetupServices>
+type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 
 // Discovery — scan directories for extension files
 
@@ -89,7 +90,7 @@ const discoverDir = (
 /** Load a single extension from a file path. */
 const loadExtensionFile = (
   filePath: string,
-): Effect.Effect<RuntimeLoadedExtension, ExtensionLoadError> =>
+): Effect.Effect<LoadedUserExtension, ExtensionLoadError> =>
   Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
       try: () =>
@@ -104,7 +105,7 @@ const loadExtensionFile = (
     })
 
     // Find the extension — check default export, then named exports
-    const candidates: RuntimeLoadedExtension[] = []
+    const candidates: LoadedUserExtension[] = []
     const seen = new Set<unknown>()
 
     if (mod["default"] !== undefined) {
@@ -149,7 +150,7 @@ const loadExtensionFile = (
   }).pipe(Effect.withSpan("ExtensionLoader.loadExtensionFile"))
 
 /** Type guard for GentExtension shape */
-const isGentExtension = (value: unknown): value is RuntimeLoadedExtension => {
+const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   if (typeof value !== "object" || value === null) return false
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const obj = value as Record<string, unknown>
@@ -164,7 +165,7 @@ const isGentExtension = (value: unknown): value is RuntimeLoadedExtension => {
 
 /** Extract GentExtension from a module export. Paired-package wrapping is gone;
  *  only raw `GentExtension` values are valid now. */
-const resolveToGentExtension = (value: unknown): RuntimeLoadedExtension | undefined => {
+const resolveToGentExtension = (value: unknown): LoadedUserExtension | undefined => {
   if (isGentExtension(value)) return value
   return undefined
 }
@@ -172,8 +173,14 @@ const resolveToGentExtension = (value: unknown): RuntimeLoadedExtension | undefi
 // Full discovery + loading pipeline
 
 export interface DiscoveredExtension {
-  readonly extension: RuntimeLoadedExtension
-  readonly scope: ExtensionScope
+  readonly extension: LoadedUserExtension
+  readonly scope: Exclude<ExtensionScope, "builtin">
+  readonly sourcePath: string
+}
+
+export interface DiscoveredBuiltinExtension {
+  readonly extension: LoadedUserExtension
+  readonly scope: "builtin"
   readonly sourcePath: string
 }
 
@@ -239,22 +246,21 @@ export const discoverExtensions = (opts: {
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
 export const setupExtension = (
-  discovered: DiscoveredExtension,
+  discovered: DiscoveredExtension | DiscoveredBuiltinExtension,
   cwd: string,
   home: string,
 ): Effect.Effect<LoadedExtension, ExtensionLoadError, ExtensionSetupServices> =>
   Effect.gen(function* () {
-    const { extension, scope, sourcePath } = discovered
     const host = yield* makeExtensionHostPlatform
+    const setupEffect = discovered.extension.setup({
+      cwd,
+      source: discovered.sourcePath,
+      home,
+      host: extensionHostFacts(host),
+    })
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
-      extensionId: extension.manifest.id,
-      effect: () =>
-        extension.setup({
-          cwd,
-          source: sourcePath,
-          home,
-          host,
-        }),
+      extensionId: discovered.extension.manifest.id,
+      effect: () => setupEffect,
       failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
       defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
     })
@@ -263,12 +269,12 @@ export const setupExtension = (
     // setups already run this; raw `{ manifest, setup }` objects (e.g. tests,
     // hand-rolled extensions) bypass it. Running here closes the install
     // boundary — malformed contributions fail activation, not mid-dispatch.
-    yield* validateExtensionPackageShape(extension.manifest, contributions)
+    yield* validateExtensionPackageShape(discovered.extension.manifest, contributions)
 
     return {
-      manifest: extension.manifest,
-      scope,
-      sourcePath,
+      manifest: discovered.extension.manifest,
+      scope: discovered.scope,
+      sourcePath: discovered.sourcePath,
       contributions,
     }
   }).pipe(Effect.withSpan("ExtensionLoader.setupExtension"))

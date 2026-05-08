@@ -8,10 +8,7 @@ import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import type {
-  ExtensionHostContext,
-  ReadOnlyExtensionHostContext,
-} from "./extension-host-context.js"
+import type { ReadOnlyExtensionHostContext } from "./extension-host-context.js"
 import type { PermissionResult } from "./permission.js"
 
 // Extension Manifest — authored by extension author
@@ -285,7 +282,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly toolExecute?: (
     input: ToolExecuteInput & { readonly current: unknown },
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<unknown, E, R>
 }
 
@@ -353,7 +350,7 @@ export interface ExtensionSetupContext {
   readonly source: string
   /** User home directory (e.g. ~/.gent lives here). Defaults to the platform home directory. */
   readonly home: string
-  readonly host: ExtensionHostPlatform
+  readonly host: ExtensionHostFacts
 }
 
 export interface ExtensionHostOsInfo {

@@ -5,8 +5,8 @@ import type { GentPlatform } from "../gent-platform.js"
 import type {
   FailedExtension,
   FailedExtensionPhase,
-  GentExtension,
   LoadedExtension,
+  GentExtension,
 } from "../../domain/extension.js"
 import {
   type ExtensionContributions,

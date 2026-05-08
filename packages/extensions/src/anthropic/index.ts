@@ -1,5 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import {
   AuthMethod,
   ExtensionId,
@@ -30,7 +32,11 @@ import {
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
-import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
+import {
+  AnthropicPlatform,
+  runHostProcessWithSpawner,
+  type AnthropicPlatformShape,
+} from "./platform-adapter.js"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -251,7 +257,7 @@ export const buildAnthropicModelDriver = (
   },
 })
 
-export const AnthropicExtension: GentExtension = {
+export const AnthropicExtension: GentExtension<ChildProcessSpawner> = {
   manifest: { id: ExtensionId.make("@gent/provider-anthropic") },
   setup: (ctx) =>
     Effect.gen(function* () {
@@ -264,7 +270,15 @@ export const AnthropicExtension: GentExtension = {
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromHost(ctx.host)
+      const spawner = yield* ChildProcessSpawner
+      const gentPlatform = yield* Effect.serviceOption(GentPlatform)
+      const parentEnv = gentPlatform._tag === "Some" ? yield* gentPlatform.value.env : {}
+      const platform = AnthropicPlatform.of({
+        platform: ctx.host.osInfo.platform,
+        home: ctx.home,
+        parentEnv,
+        runProcess: runHostProcessWithSpawner(spawner),
+      })
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension

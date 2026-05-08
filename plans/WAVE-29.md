@@ -172,6 +172,103 @@ Implemented:
 - `bun run lint`
 - `bun run fmt`
 
+## Batch 5: refactor(extensions): close runtime authority leaks
+
+**Status**: Completed in current batch.
+
+Independent audit found two remaining P1 leaks:
+
+- Read-only reaction handlers were typed with `ReadOnlyExtensionHostContext`,
+  but runtime execution still passed the full `ExtensionHostContext` and
+  provided full `ExtensionContext` services.
+- Runtime execution for read-intent tools/RPCs still provided full
+  `ExtensionContext`, so read capabilities could reach session mutation,
+  interaction, agent-run, process-run, and parent environment authority.
+- Raw runtime-loaded extension setup still had a builtin-only privileged setup
+  class, which treated builtins as more than the starting extension set.
+
+Fixed:
+
+- `ExtensionSetupContext` is now the only setup surface and is physically
+  facts-only for every extension scope. The `HostGentExtension` /
+  `RuntimeGentExtension` split is gone.
+- `setupExtension` always passes a fresh facts-only host object. Builtins are
+  just the initial extension set.
+- Reaction handler parameters now derive `readOnlyExtensionHostContext(ctx)` at
+  runtime. Prompt/context/permission/tool-execute rewrites receive only the
+  read-only capability context. Lifecycle hooks (`turnBefore`, `turnAfter`,
+  `messageOutput`, `toolResult`) may still import constrained mutation through
+  `yield* ExtensionContext`; they no longer receive raw host/process authority
+  as a function parameter.
+- `toolExecute` follows the same read-only host-context rule as the other
+  reaction wrappers; ordinary host authority belongs in tools/actions via
+  `yield* ExtensionContext`.
+- `provideExtensionServices(..., { intent: "read" })` now supplies a read-intent
+  facade: mutation methods, `Agent.run`, interaction prompts, process run,
+  process signal, and parent environment are unavailable while read methods
+  remain available.
+- Read-request authoring no longer requires branded read-only service ceremony.
+  Authors can `yield* ExtensionContext`; the host-provided facade enforces the
+  intent at runtime.
+- Bundled Anthropic/ACP/Executor internals now use internal platform services
+  and `GentPlatform.env` when available, without exposing those process
+  primitives through public setup.
+- Public RPC dispatch now passes the full host context to the registry and lets
+  the registry apply the read-intent facade. This preserves the direct handler
+  parameter as facts-only while making `yield* ExtensionContext` work through
+  the real transport path.
+- The stale `publicSlashCommands` duplicate was removed. Slash commands now
+  have one resolved list; palette-only actions remain omitted by construction.
+
+Regression coverage:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/loader.test.ts`
+  asserts runtime-loaded setup receives host facts only.
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-reactions.test.ts`
+  asserts system prompt and lifecycle handler parameters see no process
+  authority while lifecycle hooks still run inside the extension service
+  context required by auto/handoff-style loops.
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`
+- locks the simpler authoring surface: tools receive params only, read
+  requests may yield `ExtensionContext`, private host/setup helpers are not
+  public exports.
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/tool-runner.test.ts`
+  asserts read tools receive an `ExtensionContext` facade that denies process,
+  follow-up, and interaction authority.
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/capability-host.test.ts`
+  asserts read RPC handlers receive the same read-intent `ExtensionContext`
+  facade.
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`
+  asserts public read RPC transport provides a read-intent `ExtensionContext`
+  facade while keeping the handler parameter read-only.
+
+**Verification**
+
+- `bun run typecheck`
+- `bun test packages/core/tests/runtime/tool-runner.test.ts packages/core/tests/extensions/capability-host.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/loader.test.ts packages/core/tests/extensions/extension-reactions.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts packages/core/tests/extensions/registry.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/anthropic/anthropic-keychain-transform.test.ts packages/extensions/tests/anthropic/anthropic-credential-service.test.ts packages/extensions/tests/acp-agents/acp-extension-state.test.ts packages/core/tests/extensions/executor-integration.test.ts`
+- `bun run gate`
+
+## Batch 6: test(runtime): remove unstable timing/native-test paths
+
+**Status**: Completed in current batch.
+
+While running the full gate, two unrelated test-stability issues surfaced:
+
+- `agent-loop-concurrency.test.ts` used a tiny sleep to infer overlap. It now
+  uses a `Deferred` barrier: both tool calls must start before either can
+  finish, so the test measures concurrency directly.
+- `file-index.test.ts` repeatedly crashed Bun 1.3.13 through the native FFF
+  adapter even when assertions passed. `FileIndexLive` now uses the pure
+  fallback when `RuntimeEnvironment.platform === "test"`, keeping production
+  native-first behavior while making the test runtime deterministic.
+
+**Verification**
+
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-concurrency.test.ts`
+- `for i in 1 2 3; do bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/file-index/file-index.test.ts || exit $?; done`
+
 ## Final Verification Audit
 
 Run this exact lane independently:
@@ -186,3 +283,18 @@ Run this exact lane independently:
 > `needs` carveout remains.
 
 Close this wave only when the independent audit reports no P0/P1.
+
+First independent audit found one P1: public read RPC transport used
+`readOnlyExtensionHostContext(hostCtx)`, so direct registry tests passed but
+transport handlers could not `yield* ExtensionContext`. Fixed in Batch 5 and
+covered by `extension-commands-rpc.test.ts`.
+
+Second independent audit found no P0/P1/P2/P3 findings:
+
+- Prior P1 fixed: public read RPC transport dispatches with full host context
+  so the registry can install the read-intent `ExtensionContext` facade, while
+  the handler parameter remains facts-only.
+- Prior P3 fixed: `publicSlashCommands` / `publicOnly` duplicate command
+  surface removed.
+- Verification receipts from the audit: `bun run typecheck`, `bun run test`,
+  and focused extension-authority suites all passed.

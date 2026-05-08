@@ -42,4 +42,30 @@ describe("setupExtension", () => {
       }
     }).pipe(Effect.provide(fsLayer)),
   )
+
+  it.live("runtime-loaded setup receives public host facts only", () =>
+    Effect.gen(function* () {
+      const sawProcessAuthority = yield* Effect.sync(() => ({ value: false }))
+      const extension: GentExtension = {
+        manifest: { id: ExtensionId.make("@gent/test-public-setup") },
+        setup: (ctx) =>
+          Effect.sync(() => {
+            sawProcessAuthority.value = "runProcess" in ctx.host || "parentEnv" in ctx.host
+            return {}
+          }),
+      }
+
+      yield* setupExtension(
+        {
+          extension,
+          scope: "project",
+          sourcePath: "/tmp/test-public-setup.ts",
+        },
+        "/tmp/project",
+        "/tmp/home",
+      )
+
+      expect(sawProcessAuthority.value).toBe(false)
+    }).pipe(Effect.provide(fsLayer)),
+  )
 })

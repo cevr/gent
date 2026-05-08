@@ -20,7 +20,7 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform } from "./gent-platform.js"
-import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { LoadedExtension, GentExtension } from "../domain/extension.js"
 import { type PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {

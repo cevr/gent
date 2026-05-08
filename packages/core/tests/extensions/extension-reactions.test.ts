@@ -189,6 +189,37 @@ describe("runtime slots", () => {
       )
   })
 
+  it.live("systemPrompt receives a physically read-only host context", () =>
+    Effect.gen(function* () {
+      const sawProcessAuthority = yield* Ref.make(false)
+      const slots = compileExtensionReactions([
+        makeExt("readonly", "project", {
+          reactions: {
+            systemPrompt: (_input, ctx) =>
+              Effect.gen(function* () {
+                yield* Ref.set(sawProcessAuthority, "runProcess" in ctx.host)
+                return "readonly"
+              }),
+          },
+        }),
+      ])
+
+      const result = yield* slots.resolveSystemPrompt(
+        {
+          basePrompt: "base",
+          agent: getBuiltinAgent("cowork")!,
+        },
+        {
+          projection: stubProjectionCtx,
+          host: stubHostCtx,
+        },
+      )
+
+      expect(result).toBe("readonly")
+      expect(yield* Ref.get(sawProcessAuthority)).toBe(false)
+    }),
+  )
+
   it.live("contextMessages is a pass-through without explicit rewrites", () => {
     const baseMessage = Message.Regular.make({
       id: MessageId.make("m1"),
@@ -447,7 +478,36 @@ describe("runtime slots", () => {
     })
   })
 
-  it.live("turnAfter reactions run inside capability context", () =>
+  it.live("turnAfter handler parameter receives a physically read-only host context", () =>
+    Effect.gen(function* () {
+      const sawProcessAuthority = yield* Ref.make(false)
+      const slots = compileExtensionReactions([
+        makeExt("readonly-lifecycle", "project", {
+          reactions: {
+            turnAfter: {
+              failureMode: "halt",
+              handler: (_input, ctx) => Ref.set(sawProcessAuthority, "runProcess" in ctx.host),
+            },
+          },
+        }),
+      ])
+
+      yield* slots.emitTurnAfter(
+        {
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
+          durationMs: 10,
+          agentName: AgentName.make("cowork"),
+          interrupted: false,
+        } satisfies TurnAfterInput,
+        stubHostCtx,
+      )
+
+      expect(yield* Ref.get(sawProcessAuthority)).toBe(false)
+    }),
+  )
+
+  it.live("turnAfter reactions run inside lifecycle capability context", () =>
     Effect.gen(function* () {
       const ref = yield* Ref.make(0)
       const counter = {

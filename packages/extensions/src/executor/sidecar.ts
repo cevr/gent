@@ -27,7 +27,7 @@ import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstabl
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { isRecord } from "@gent/core-internal/domain/guards"
 import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
+import type { ExtensionHostFacts } from "@gent/core-internal/domain/extension"
 import { fileURLToPath } from "node:url"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {
@@ -132,7 +132,7 @@ export interface ExecutorSidecarService {
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
   "@gent/extensions/src/executor/sidecar/ExecutorSidecar",
 ) {
-  static Live = (home: string, host: ExtensionHostPlatform) =>
+  static Live = (home: string, host: ExtensionHostFacts) =>
     Layer.effect(
       ExecutorSidecar,
       Effect.gen(function* () {

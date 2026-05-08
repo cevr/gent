@@ -47,12 +47,12 @@ export const FileIndexLive: Layer.Layer<
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
     const fallback = makeFallbackService(fs, path)
+    const { home, platform } = yield* RuntimeEnvironment
 
-    if (!isNativeFileIndexAvailable()) {
+    if (platform === "test" || !isNativeFileIndexAvailable()) {
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const { home } = yield* RuntimeEnvironment
     const dbDir = yield* ensureDbDir(home, path, fs)
 
     const { service, finalize } = makeNativeServiceFromModule(dbDir, path)

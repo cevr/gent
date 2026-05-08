@@ -1,5 +1,11 @@
 import { Context, Effect, Layer } from "effect"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
+import {
+  ExtensionHostProcessError,
+  type ExtensionHostFacts,
+  type ExtensionHostPlatform,
+} from "@gent/core-internal/domain/extension"
+import { runProcess } from "@gent/core-internal/utils/run-process"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 export interface ExecutorPlatformShape {
   readonly execPath: string
@@ -15,10 +21,11 @@ export interface ExecutorPlatformShape {
 export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformShape>()(
   "@gent/extensions/src/executor/platform-adapter/ExecutorPlatform",
 ) {
-  static Live = (host: ExtensionHostPlatform): Layer.Layer<ExecutorPlatform> =>
+  static Live = (host: ExtensionHostFacts) =>
     Layer.effect(
       ExecutorPlatform,
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner
         const isWindows = host.osInfo.platform === "win32"
         return ExecutorPlatform.of({
           execPath: host.execPath,
@@ -27,8 +34,23 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
           commandCandidates: host.commandCandidates,
           isPortFree: host.isPortFree,
           isPidAlive: host.isPidAlive,
-          signalPid: host.signalPid,
-          runProcess: host.runProcess,
+          signalPid: (pid, signal) =>
+            Effect.sync(() => {
+              process.kill(pid, signal)
+            }),
+          runProcess: (command, args, options) =>
+            runProcess(command, args, options).pipe(
+              Effect.provideService(ChildProcessSpawner, spawner),
+              Effect.mapError(
+                (e) =>
+                  new ExtensionHostProcessError({
+                    command: e.command,
+                    message: e.message,
+                    cause: e.cause,
+                    timedOut: e.timedOut,
+                  }),
+              ),
+            ),
         })
       }),
     )

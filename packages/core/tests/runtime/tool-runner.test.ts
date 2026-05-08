@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import {
@@ -558,6 +558,82 @@ describe("ToolRunner", () => {
       expect(result.result).toEqual({
         readValue: "read-ok",
         writeUnavailable: true,
+      })
+    }),
+  )
+  it.live("read tools receive read-intent ExtensionContext authority", () =>
+    Effect.gen(function* () {
+      const ReadContextTool = tool({
+        id: "read_extension_context",
+        intent: "read",
+        description: "Reads the extension context facade",
+        params: Schema.Struct({}),
+        output: Schema.Struct({
+          sessionId: Schema.String,
+          parentEnvEmpty: Schema.Boolean,
+          processDenied: Schema.Boolean,
+          followUpDenied: Schema.Boolean,
+          interactionDenied: Schema.Boolean,
+        }),
+        execute: () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            const processExit = yield* Effect.exit(ctx.Process.run("echo", ["hi"]))
+            const followUpExit = yield* Effect.exit(
+              ctx.Session.queueFollowUp({ sourceId: "read-tool", content: "nope" }),
+            )
+            const interactionExit = yield* Effect.exit(
+              ctx.Interaction.present({ content: "nope", title: "read tool" }),
+            )
+            return {
+              sessionId: ctx.sessionId,
+              parentEnvEmpty: Object.keys(ctx.Process.parentEnv).length === 0,
+              processDenied: Exit.isFailure(processExit),
+              followUpDenied: Exit.isFailure(followUpExit),
+              interactionDenied: Exit.isFailure(interactionExit),
+            }
+          }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [ReadContextTool] },
+            },
+          ]),
+        ),
+        Permission.Test(),
+        ApprovalService.Test(),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          {
+            toolCallId: ToolCallId.make("tc-read-extension-context"),
+            toolName: "read_extension_context",
+            input: {},
+          },
+          testToolContext({
+            sessionId: SessionId.make("session-read-extension-context"),
+            branchId: BranchId.make("branch-read-extension-context"),
+            toolCallId: ToolCallId.make("tc-read-extension-context"),
+            agentName: AgentName.make("cowork"),
+          }),
+        )
+      }).pipe(Effect.provide(layer))
+      expect(result.isFailure).toBe(false)
+      expect(result.result).toEqual({
+        sessionId: "session-read-extension-context",
+        parentEnvEmpty: true,
+        processDenied: true,
+        followUpDenied: true,
+        interactionDenied: true,
       })
     }),
   )

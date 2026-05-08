@@ -13,6 +13,8 @@ import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ModelId } from "./model.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
 
+export type ExtensionServiceIntent = "read" | "write"
+
 export class ExtensionServiceError extends Schema.TaggedErrorClass<ExtensionServiceError>()(
   "@gent/core/src/domain/extension-services/ExtensionServiceError",
   {
@@ -52,6 +54,16 @@ const mapError = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, ExtensionServiceError, R> =>
   effect.pipe(Effect.mapError(serviceError(service, operation)))
+
+const denied = (service: string, operation: string): ExtensionServiceError =>
+  new ExtensionServiceError({
+    service,
+    operation,
+    message: `${service}.${operation} is not available in read-intent extension context`,
+  })
+
+const deny = <A>(service: string, operation: string): Effect.Effect<A, ExtensionServiceError> =>
+  Effect.fail(denied(service, operation))
 
 export interface ExtensionSessionService {
   readonly listMessages: (
@@ -214,9 +226,11 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
 
 export const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
+  options?: { readonly intent?: ExtensionServiceIntent },
 ): Context.Context<
   ExtensionContext | ExtensionSession | ExtensionAgent | ExtensionInteraction | ExtensionProcess
 > => {
+  const readIntent = options?.intent === "read"
   const Session: ExtensionSessionService = {
     listMessages: (branchId) =>
       mapError("ExtensionSession", "listMessages", ctx.session.listMessages(branchId)),
@@ -235,16 +249,30 @@ export const extensionServicesFromHostContext = (
     search: (query, options) =>
       mapError("ExtensionSession", "search", ctx.session.search(query, options)),
     queueFollowUp: (params) =>
-      mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
+      readIntent
+        ? deny("ExtensionSession", "queueFollowUp")
+        : mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
     listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
     createBranch: (params) =>
-      mapError("ExtensionSession", "createBranch", ctx.session.createBranch(params)),
+      readIntent
+        ? deny("ExtensionSession", "createBranch")
+        : mapError("ExtensionSession", "createBranch", ctx.session.createBranch(params)),
     forkBranch: (params) =>
-      mapError("ExtensionSession", "forkBranch", ctx.session.forkBranch(params)),
+      readIntent
+        ? deny("ExtensionSession", "forkBranch")
+        : mapError("ExtensionSession", "forkBranch", ctx.session.forkBranch(params)),
     switchBranch: (params) =>
-      mapError("ExtensionSession", "switchBranch", ctx.session.switchBranch(params)),
+      readIntent
+        ? deny("ExtensionSession", "switchBranch")
+        : mapError("ExtensionSession", "switchBranch", ctx.session.switchBranch(params)),
     createChildSession: (params) =>
-      mapError("ExtensionSession", "createChildSession", ctx.session.createChildSession(params)),
+      readIntent
+        ? deny("ExtensionSession", "createChildSession")
+        : mapError(
+            "ExtensionSession",
+            "createChildSession",
+            ctx.session.createChildSession(params),
+          ),
     getChildSessions: () =>
       mapError("ExtensionSession", "getChildSessions", ctx.session.getChildSessions()),
     getSessionAncestors: (sessionId) =>
@@ -254,46 +282,70 @@ export const extensionServicesFromHostContext = (
         ctx.session.getSessionAncestors(sessionId),
       ),
     deleteSession: (sessionId) =>
-      mapError("ExtensionSession", "deleteSession", ctx.session.deleteSession(sessionId)),
+      readIntent
+        ? deny("ExtensionSession", "deleteSession")
+        : mapError("ExtensionSession", "deleteSession", ctx.session.deleteSession(sessionId)),
     deleteBranch: (branchId) =>
-      mapError("ExtensionSession", "deleteBranch", ctx.session.deleteBranch(branchId)),
+      readIntent
+        ? deny("ExtensionSession", "deleteBranch")
+        : mapError("ExtensionSession", "deleteBranch", ctx.session.deleteBranch(branchId)),
     deleteMessages: (params) =>
-      mapError("ExtensionSession", "deleteMessages", ctx.session.deleteMessages(params)),
+      readIntent
+        ? deny("ExtensionSession", "deleteMessages")
+        : mapError("ExtensionSession", "deleteMessages", ctx.session.deleteMessages(params)),
   }
   const Agent: ExtensionAgentService = {
     get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),
     require: (name) => mapError("ExtensionAgent", "require", ctx.agent.require(name)),
     run: (params) =>
-      ctx.agent.run(params).pipe(
-        Effect.mapError((cause) =>
-          Schema.is(ExtensionServiceError)(cause)
-            ? cause
-            : new ExtensionServiceError({
-                service: "ExtensionAgent",
-                operation: "run",
-                message: errorMessage(cause),
-                cause,
-              }),
-        ),
-      ),
+      readIntent
+        ? deny("ExtensionAgent", "run")
+        : ctx.agent.run(params).pipe(
+            Effect.mapError((cause) =>
+              Schema.is(ExtensionServiceError)(cause)
+                ? cause
+                : new ExtensionServiceError({
+                    service: "ExtensionAgent",
+                    operation: "run",
+                    message: errorMessage(cause),
+                    cause,
+                  }),
+            ),
+          ),
     resolveDualModelPair: () =>
       mapError("ExtensionAgent", "resolveDualModelPair", ctx.agent.resolveDualModelPair()),
   }
   const Interaction: ExtensionInteractionService = {
-    approve: (params) => mapInteraction("approve", ctx.interaction.approve(params)),
-    present: (params) => mapInteraction("present", ctx.interaction.present(params)),
-    confirm: (params) => mapInteraction("confirm", ctx.interaction.confirm(params)),
-    review: (params) => mapInteraction("review", ctx.interaction.review(params)),
+    approve: (params) =>
+      readIntent
+        ? deny("ExtensionInteraction", "approve")
+        : mapInteraction("approve", ctx.interaction.approve(params)),
+    present: (params) =>
+      readIntent
+        ? deny("ExtensionInteraction", "present")
+        : mapInteraction("present", ctx.interaction.present(params)),
+    confirm: (params) =>
+      readIntent
+        ? deny("ExtensionInteraction", "confirm")
+        : mapInteraction("confirm", ctx.interaction.confirm(params)),
+    review: (params) =>
+      readIntent
+        ? deny("ExtensionInteraction", "review")
+        : mapInteraction("review", ctx.interaction.review(params)),
   }
   const Process: ExtensionProcessService = {
     run: (command, args, options) =>
-      mapError("ExtensionProcess", "run", ctx.host.runProcess(command, args, options)),
+      readIntent
+        ? deny("ExtensionProcess", "run")
+        : mapError("ExtensionProcess", "run", ctx.host.runProcess(command, args, options)),
     signalPid: (pid, signal) =>
-      mapError("ExtensionProcess", "signalPid", ctx.host.signalPid(pid, signal)),
+      readIntent
+        ? deny("ExtensionProcess", "signalPid")
+        : mapError("ExtensionProcess", "signalPid", ctx.host.signalPid(pid, signal)),
     isPortFree: (port) => mapError("ExtensionProcess", "isPortFree", ctx.host.isPortFree(port)),
     isPidAlive: (pid) => mapError("ExtensionProcess", "isPidAlive", ctx.host.isPidAlive(pid)),
     commandCandidates: ctx.host.commandCandidates,
-    parentEnv: ctx.host.parentEnv,
+    parentEnv: readIntent ? {} : ctx.host.parentEnv,
   }
 
   return Context.empty().pipe(
@@ -331,5 +383,6 @@ const mapInteraction = <A>(
 export const provideExtensionServices = <A, E, R>(
   ctx: ExtensionHostContext,
   effect: Effect.Effect<A, E, R>,
+  options?: { readonly intent?: ExtensionServiceIntent },
 ): Effect.Effect<A, E, R> =>
-  effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
+  effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx, options)))

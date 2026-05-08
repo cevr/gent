@@ -10,7 +10,7 @@ import {
   type AgentRunner,
 } from "../domain/agent.js"
 import { EventStore } from "../domain/event.js"
-import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { LoadedExtension, GentExtension } from "../domain/extension.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { ToolCapability } from "../domain/capability/tool.js"

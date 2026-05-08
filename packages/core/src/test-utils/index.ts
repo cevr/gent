@@ -1,5 +1,9 @@
 import { Clock, Context, DateTime, Effect, Layer, PubSub, Ref, Stream } from "effect"
-import { ExtensionHostProcessError, type ExtensionSetupContext } from "../domain/extension.js"
+import {
+  ExtensionHostProcessError,
+  type ExtensionHostPlatform,
+  type ExtensionSetupContext,
+} from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/storage-error.js"
@@ -197,9 +201,13 @@ export const assertSequence = (
 // ── Test Extension Setup Context ──
 
 /** Pre-built ExtensionSetupContext for tests. */
+export type TestExtensionSetupContext = Omit<ExtensionSetupContext, "host"> & {
+  readonly host: ExtensionHostPlatform
+}
+
 export const testSetupCtx = (
   overrides?: Partial<Pick<ExtensionSetupContext, "cwd" | "source" | "home">>,
-): ExtensionSetupContext => ({
+): TestExtensionSetupContext => ({
   cwd: overrides?.cwd ?? "/tmp",
   source: overrides?.source ?? "test",
   home: overrides?.home ?? "/tmp",

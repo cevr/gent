@@ -10,13 +10,8 @@
  * registries dispatch by factory-origin metadata; authors never write an
  * audience array.
  *
- * Read-fence: `intent: "read"` capabilities have `R extends ReadOnlyTag`
- * (a structural narrowing of the constraint to the same brand projection
- * R-channels use). Write-capable service Tags fail to compile in the
- * read-intent factory's R, mirroring the projection fence from .
- *
- * Host/session authority is imported as constrained Effect services; request
- * handlers receive only `CapabilityCoreContext`.
+ * Host/session authority is imported through `ExtensionContext`; runtime
+ * dispatch provides a facade matching the declared intent.
  *
  * @module
  */
@@ -33,7 +28,6 @@ import {
 import { Capability } from "../capability.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-import type { ReadOnlyTag } from "../read-only.js"
 
 /**
  * `RequestCapability` — `request({...})` return type. The
@@ -89,16 +83,15 @@ interface RequestInputBase<Input, Output> {
   }
 }
 
-/** Author-facing input to `request({ intent: "read", ... })`. R is
- *  fenced read-only by `R extends ReadOnlyTag` — write Tags fail compile. */
+/** Author-facing input to `request({ intent: "read", ... })`. */
 export interface ReadRequestInput<
   Input = unknown,
   Output = unknown,
-  R extends ReadOnlyTag = never,
+  R = never,
 > extends RequestInputBase<Input, Output> {
-  /** `intent: "read"` → R is fenced read-only at the type level. */
+  /** `intent: "read"` → runtime provides a read-intent `ExtensionContext` facade. */
   readonly intent: "read"
-  /** The request handler. R must be ReadOnly-branded. */
+  /** The request handler. */
   readonly execute: (
     input: Input,
     ctx: CapabilityCoreContext,
@@ -128,11 +121,10 @@ export interface WriteRequestInput<
  * read via the `ref(capability)` accessor — so callers no longer hand-roll a
  * parallel `*Ref` const next to every request.
  *
- * Two overloads — one per intent. Read-intent overload constrains R to
- * `ReadOnlyTag` so the projection-style fence catches write-tagged
- * services in the read RPC's R channel.
+ * Two overloads — one per intent. Runtime dispatch provides an
+ * `ExtensionContext` facade matching the chosen intent.
  */
-export function request<Input, Output, R extends ReadOnlyTag = never>(
+export function request<Input, Output, R = never>(
   input: ReadRequestInput<Input, Output, R>,
 ): RequestCapability<Input, Output>
 export function request<Input, Output, R = never>(

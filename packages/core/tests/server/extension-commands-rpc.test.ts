@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
 import { narrowR } from "../helpers/effect"
 import {
   ExtensionLoadError,
@@ -914,11 +914,24 @@ describe("extension command RPCs", () => {
                   hasSessionMutations: Schema.Boolean,
                   hasAgentRun: Schema.Boolean,
                   writeStorageUnavailable: Schema.Boolean,
+                  extensionContextProcessDenied: Schema.Boolean,
+                  extensionContextFollowUpDenied: Schema.Boolean,
+                  extensionContextParentEnvEmpty: Schema.Boolean,
                 }),
                 execute: (_input, ctx) =>
                   narrowR(
                     Effect.gen(function* () {
                       const todoStorage = yield* Effect.serviceOption(TodoStorage)
+                      const extensionCtx = yield* ExtensionContext
+                      const processExit = yield* Effect.exit(
+                        extensionCtx.Process.run("echo", ["hi"]),
+                      )
+                      const followUpExit = yield* Effect.exit(
+                        extensionCtx.Session.queueFollowUp({
+                          sourceId: "read-rpc",
+                          content: "nope",
+                        }),
+                      )
                       return {
                         hasSessionMutations:
                           "session" in ctx &&
@@ -931,6 +944,10 @@ describe("extension command RPCs", () => {
                           ctx.agent !== null &&
                           "run" in ctx.agent,
                         writeStorageUnavailable: Option.isNone(todoStorage),
+                        extensionContextProcessDenied: Exit.isFailure(processExit),
+                        extensionContextFollowUpDenied: Exit.isFailure(followUpExit),
+                        extensionContextParentEnvEmpty:
+                          Object.keys(extensionCtx.Process.parentEnv).length === 0,
                       }
                     }),
                   ),
@@ -959,6 +976,9 @@ describe("extension command RPCs", () => {
             hasSessionMutations: false,
             hasAgentRun: false,
             writeStorageUnavailable: true,
+            extensionContextProcessDenied: true,
+            extensionContextFollowUpDenied: true,
+            extensionContextParentEnvEmpty: true,
           })
         }).pipe(Effect.timeout("4 seconds")),
       )

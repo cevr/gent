@@ -15,6 +15,7 @@ import {
 } from "@gent/core-internal/domain/capability"
 import {
   action,
+  ExtensionContext,
   request,
   tool,
   type RequestCapability,
@@ -93,6 +94,59 @@ describe("extension capability registries", () => {
         intent: "read",
       })
       expect(result).toEqual({ value: "hi" })
+    }),
+  )
+
+  it.live("read request handlers receive read-intent ExtensionContext authority", () =>
+    Effect.gen(function* () {
+      const cap = request({
+        id: "read-context-facade",
+        extensionId,
+        intent: "read",
+        input: Schema.Struct({}),
+        output: Schema.Struct({
+          parentEnvEmpty: Schema.Boolean,
+          processDenied: Schema.Boolean,
+          followUpDenied: Schema.Boolean,
+          interactionDenied: Schema.Boolean,
+        }),
+        execute: () =>
+          Effect.gen(function* () {
+            const extensionCtx = yield* ExtensionContext
+            const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
+            const followUpExit = yield* Effect.exit(
+              extensionCtx.Session.queueFollowUp({ sourceId: "read-request", content: "nope" }),
+            )
+            const interactionExit = yield* Effect.exit(
+              extensionCtx.Interaction.present({ content: "nope", title: "read request" }),
+            )
+            return {
+              parentEnvEmpty: Object.keys(extensionCtx.Process.parentEnv).length === 0,
+              processDenied: Exit.isFailure(processExit),
+              followUpDenied: Exit.isFailure(followUpExit),
+              interactionDenied: Exit.isFailure(interactionExit),
+            }
+          }),
+      })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const result = yield* resolved.rpcRegistry.run(
+        extensionId,
+        cap.id,
+        {},
+        testExtensionHostContext({
+          sessionId: SessionId.make("read-request-session"),
+          branchId: BranchId.make("read-request-branch"),
+        }),
+        {
+          intent: "read",
+        },
+      )
+      expect(result).toEqual({
+        parentEnvEmpty: true,
+        processDenied: true,
+        followUpDenied: true,
+        interactionDenied: true,
+      })
     }),
   )
 

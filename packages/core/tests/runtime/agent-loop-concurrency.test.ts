@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Deferred, Effect, Schema } from "effect"
 import { finishPart, toolCallPart } from "@gent/core-internal/test-utils/language-model"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import { AgentName } from "@gent/core-internal/domain/agent"
@@ -15,6 +15,7 @@ describe("concurrency", () => {
       const events: string[] = []
       let running = 0
       let maxRunning = 0
+      const bothStarted = yield* Deferred.make<void>()
       const makeSerialTool = (name: string) =>
         tool({
           id: name,
@@ -28,7 +29,8 @@ describe("concurrency", () => {
                 maxRunning = Math.max(maxRunning, running)
                 events.push(`start:${name}`)
               })
-              yield* Effect.sleep(1)
+              if (running > 1) yield* Deferred.succeed(bothStarted, undefined)
+              yield* Deferred.await(bothStarted).pipe(Effect.timeout("1 second"))
               yield* Effect.sync(() => {
                 events.push(`end:${name}`)
                 running -= 1

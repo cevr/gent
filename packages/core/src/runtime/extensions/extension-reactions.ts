@@ -17,12 +17,16 @@ import type {
   ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import type {
+  ExtensionHostContext,
+  ReadOnlyExtensionHostContext,
+} from "../../domain/extension-host-context.js"
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
+import { readOnlyExtensionHostContext } from "../make-extension-host-context.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
 
 export class ExtensionReactionHaltError extends Schema.TaggedErrorClass<ExtensionReactionHaltError>()(
@@ -143,9 +147,10 @@ const runReaction = <Input>(
   reaction: RegisteredReaction<Input>,
 ) =>
   Effect.gen(function* () {
+    const readOnlyCtx = readOnlyExtensionHostContext(ctx)
     const exit = yield* exitErasedEffect(() =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-      provideHostContext(ctx, reaction.slot.handler(input, ctx)),
+      provideLifecycleHostContext(ctx, reaction.slot.handler(input, readOnlyCtx)),
     )
     if (exit._tag === "Success") return
     const cause = exit.cause
@@ -181,7 +186,15 @@ const runReaction = <Input>(
     }
   })
 
-const provideHostContext = <A, E, R>(
+const provideReadOnlyHostContext = <A, E, R>(
+  ctx: ReadOnlyExtensionHostContext,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  ctx.capabilityContext === undefined
+    ? effect
+    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+
+const provideLifecycleHostContext = <A, E, R>(
   ctx: ExtensionHostContext,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
@@ -309,10 +322,15 @@ export const compileExtensionReactions = (
     normalizeMessageInput: (input, ctx) =>
       Effect.gen(function* () {
         let current = input.content
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx)
         for (const slot of messageInputSlots) {
           current = yield* sealErasedEffect(
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous message-input slot
-            () => provideHostContext(ctx, slot.handler({ ...input, content: current }, ctx)),
+            () =>
+              provideReadOnlyHostContext(
+                readOnlyCtx,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous message-input slot
+                slot.handler({ ...input, content: current }, readOnlyCtx),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.message-input.failed").pipe(
@@ -339,10 +357,15 @@ export const compileExtensionReactions = (
     checkPermission: (input, base, ctx) =>
       Effect.gen(function* () {
         let current = yield* base(input)
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx)
         for (const slot of permissionCheckSlots) {
           current = yield* sealErasedEffect(
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous permission-check slot
-            () => provideHostContext(ctx, slot.handler({ ...input, current }, ctx)),
+            () =>
+              provideReadOnlyHostContext(
+                readOnlyCtx,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous permission-check slot
+                slot.handler({ ...input, current }, readOnlyCtx),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.permission-check.failed").pipe(
@@ -369,11 +392,15 @@ export const compileExtensionReactions = (
     resolveContextMessages: (input, ctx) =>
       Effect.gen(function* () {
         let current = input.messages
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx.host)
         for (const slot of contextMessagesSlots) {
           current = yield* sealErasedEffect(
             () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              provideHostContext(ctx.host, slot.handler({ ...input, messages: current }, ctx.host)),
+              provideReadOnlyHostContext(
+                readOnlyCtx,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                slot.handler({ ...input, messages: current }, readOnlyCtx),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.context-messages.failed").pipe(
@@ -400,13 +427,14 @@ export const compileExtensionReactions = (
     resolveSystemPrompt: (input, ctx) =>
       Effect.gen(function* () {
         let current = input.basePrompt
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx.host)
         for (const slot of systemPromptSlots) {
           current = yield* sealErasedEffect(
             () =>
-              provideHostContext(
-                ctx.host,
+              provideReadOnlyHostContext(
+                readOnlyCtx,
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                slot.handler({ ...input, basePrompt: current }, ctx.host),
+                slot.handler({ ...input, basePrompt: current }, readOnlyCtx),
               ),
             {
               onFailure: (error) =>
@@ -450,10 +478,15 @@ export const compileExtensionReactions = (
     executeTool: (input, base, ctx) =>
       Effect.gen(function* () {
         let current = yield* base(input)
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx)
         for (const slot of toolExecuteSlots) {
           current = yield* sealErasedEffect(
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-execute slot
-            () => provideHostContext(ctx, slot.handler({ ...input, current }, ctx)),
+            () =>
+              provideReadOnlyHostContext(
+                readOnlyCtx,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-execute slot
+                slot.handler({ ...input, current }, readOnlyCtx),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.tool-execute.failed").pipe(
@@ -480,10 +513,15 @@ export const compileExtensionReactions = (
     transformToolResult: (input, ctx) =>
       Effect.gen(function* () {
         let current: unknown = input.result
+        const readOnlyCtx = readOnlyExtensionHostContext(ctx)
         for (const slot of toolResultSlots) {
           const next = yield* sealErasedEffect(
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
-            () => provideHostContext(ctx, slot.handler({ ...input, result: current }, ctx)),
+            () =>
+              provideLifecycleHostContext(
+                ctx,
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
+                slot.handler({ ...input, result: current }, readOnlyCtx),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.reaction.tool-result.failed").pipe(

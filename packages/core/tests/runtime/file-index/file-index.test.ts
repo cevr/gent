@@ -125,12 +125,16 @@ describe("FileIndex.Live", () => {
 
   it.scopedLive("listFiles returns results for cwd", () =>
     Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ cwd: process.cwd() })
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/indexed.txt`, "hello")
 
-      expect(files.length).toBeGreaterThan(0)
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ cwd: tmpDir })
+
+      expect(files.length).toBe(1)
       expect(files[0]!.path.length).toBeGreaterThan(0)
-      expect(files[0]!.relativePath.length).toBeGreaterThan(0)
+      expect(files[0]!.relativePath).toBe("indexed.txt")
       expect(files[0]!.modifiedMs).toBeGreaterThan(0)
     }).pipe(
       Effect.provide(

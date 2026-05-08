@@ -1,5 +1,11 @@
 import { Context, Effect, Layer } from "effect"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
+import {
+  ExtensionHostProcessError,
+  type ExtensionHostPlatform,
+  type ExtensionHostRunProcessOptions,
+} from "@gent/core-internal/domain/extension"
+import { runProcess } from "@gent/core-internal/utils/run-process"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 export interface AnthropicPlatformShape {
   readonly platform: string
@@ -22,3 +28,25 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
   static Live = (host: ExtensionHostPlatform): Layer.Layer<AnthropicPlatform> =>
     Layer.effect(AnthropicPlatform, Effect.succeed(AnthropicPlatform.fromHost(host)))
 }
+
+export const runHostProcess = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options?: ExtensionHostRunProcessOptions,
+) =>
+  runProcess(command, args, options).pipe(
+    Effect.mapError(
+      (e) =>
+        new ExtensionHostProcessError({
+          command: e.command,
+          message: e.message,
+          cause: e.cause,
+          timedOut: e.timedOut,
+        }),
+    ),
+  )
+
+export const runHostProcessWithSpawner =
+  (spawner: ChildProcessSpawner["Service"]): ExtensionHostPlatform["runProcess"] =>
+  (command, args, options) =>
+    runHostProcess(command, args, options).pipe(Effect.provideService(ChildProcessSpawner, spawner))
