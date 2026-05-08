@@ -3,7 +3,7 @@ import { Effect, Fiber, Stream } from "effect"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { EventStore } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { layer, narrowR, setup } from "./helpers.js"
+import { layer, narrowR, setup, withTaskWrite } from "./helpers.js"
 
 describe("TaskService.remove", () => {
   it.live("publishes state change on delete", () =>
@@ -33,7 +33,7 @@ describe("TaskService.remove", () => {
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
         expect(events).toContain("ExtensionStateChanged")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -58,7 +58,7 @@ describe("TaskService.remove", () => {
 
         yield* taskService.remove(blocker.id)
         expect(yield* taskService.getDeps(blocked.id)).toEqual([])
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })

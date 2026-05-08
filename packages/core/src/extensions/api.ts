@@ -231,8 +231,7 @@ export type {
   CapabilityRef,
 } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
-export { CapabilityAccess } from "../domain/capability-access.js"
-export type { CapabilityAccessNeed } from "../domain/capability-access.js"
+export { requireCapabilityWrite } from "../domain/capability-access.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,

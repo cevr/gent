@@ -5,8 +5,8 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive, ExtensionStatePublisher } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
-import { CapabilityAccess } from "@gent/core/extensions/api"
 import { CapabilityError } from "@gent/core/domain/capability"
+import { provideCapabilityAccessNeeds } from "../../src/domain/capability-access"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -15,6 +15,7 @@ import { ensureStorageParents } from "@gent/core/test-utils"
 
 const sessionId = SessionId.make("task-test-session")
 const branchId = BranchId.make("task-test-branch")
+const withTaskWrite = provideCapabilityAccessNeeds([{ tag: "task", access: "write" }])
 
 const makeLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql()
@@ -48,7 +49,10 @@ describe("TaskService", () => {
       expect(reason !== undefined && Schema.is(TaskServiceUnavailableError)(reason.error)).toBe(
         true,
       )
-    }).pipe(Effect.provide(Layer.mergeAll(TaskService.Live, ExtensionStatePublisher.Test()))),
+    }).pipe(
+      withTaskWrite,
+      Effect.provide(Layer.mergeAll(TaskService.Live, ExtensionStatePublisher.Test())),
+    ),
   )
 
   it.live("supports sibling layer composition used by extensions", () =>
@@ -66,7 +70,7 @@ describe("TaskService", () => {
         expect(created.subject).toBe("Sibling layer task")
         const loaded = yield* taskService.get(created.id)
         expect(loaded?.id).toBe(created.id)
-      }).pipe(Effect.provide(layer))
+      }).pipe(withTaskWrite, Effect.provide(layer))
     }),
   )
 
@@ -87,7 +91,7 @@ describe("TaskService", () => {
         const updated = yield* taskService.update(task.id, { status: "stopped" })
         expect(updated).toBeDefined()
         expect(updated!.status).toBe("stopped")
-      }).pipe(Effect.provide(layer))
+      }).pipe(withTaskWrite, Effect.provide(layer))
     }),
   )
 
@@ -110,7 +114,7 @@ describe("TaskService", () => {
         const reason = exit.cause.reasons.find(Cause.isFailReason)
         expect(reason !== undefined && Schema.is(CapabilityError)(reason.error)).toBe(true)
       }).pipe(
-        CapabilityAccess.provideNeeds([{ tag: "task", access: "read" }]),
+        provideCapabilityAccessNeeds([{ tag: "task", access: "read" }]),
         Effect.provide(layer),
       )
     }),

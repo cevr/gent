@@ -745,7 +745,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         Effect.andThen(
           Effect.gen(function* () {
             const hasRecoveredQueue =
-              initialQueue.steering.length > 0 || initialQueue.followUp.length > 0
+              initialQueue.inFlight !== undefined ||
+              initialQueue.steering.length > 0 ||
+              initialQueue.followUp.length > 0
             if (!hasRecoveredQueue) return
             if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
               yield* startNextQueuedTurnIfIdle

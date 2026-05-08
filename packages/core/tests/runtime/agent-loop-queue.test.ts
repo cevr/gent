@@ -135,6 +135,84 @@ describe("queue drain regression", () => {
   )
 
   it.live(
+    "draining visible queue entries preserves the in-flight recovery token",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-drain-inflight")
+        const branchId = BranchId.make("branch-loop-drain-inflight")
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.succeed(
+            Stream.fromIterable([
+              textDeltaPart("ok"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[]),
+          ),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(),
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          BunServices.layer,
+          ResourceManagerLive,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const behaviorDepsLayer = Layer.provide(
+          AgentLoopBehaviorDeps.Live({ baseSections: [] }),
+          Layer.merge(deps, eventPublisherLayer),
+        )
+        const layer = Layer.mergeAll(deps, eventPublisherLayer, behaviorDepsLayer)
+        const makeMessage = (id: string, text: string) =>
+          Message.Regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          })
+
+        yield* Effect.gen(function* () {
+          yield* ensureStorageParents({ sessionId, branchId })
+          const behaviorDeps = yield* AgentLoopBehaviorDeps
+          const sideMutationSemaphore = yield* Semaphore.make(1)
+          const inFlight = { message: makeMessage("msg-drain-inflight", "in flight") }
+          const behavior = yield* makeAgentLoopBehavior(
+            {
+              ...behaviorDeps,
+              enqueueFollowUp: () => Effect.void,
+            },
+            sessionId,
+            branchId,
+            sideMutationSemaphore,
+            LoopQueueState.make({
+              steering: [{ message: makeMessage("msg-drain-steering", "steer") }],
+              followUp: [{ message: makeMessage("msg-drain-follow-up", "follow") }],
+              inFlight,
+            }),
+          )
+          yield* Effect.addFinalizer(() => Scope.close(behavior.scope, Exit.void))
+          yield* behavior.start
+
+          const drained = yield* behavior.drainQueue
+          expect(drained.steering).toHaveLength(1)
+          expect(drained.followUp).toHaveLength(1)
+          const state = yield* behavior.readState
+          expect(state.queue.steering).toEqual([])
+          expect(state.queue.followUp).toEqual([])
+          expect(state.queue.inFlight?.message.id).toBe(inFlight.message.id)
+        }).pipe(Effect.provide(layer), Effect.scoped)
+      }),
+    15000,
+  )
+
+  it.live(
     "multiple submits during a Running turn drain in submission order after TurnDone",
     () =>
       Effect.gen(function* () {

@@ -8,6 +8,7 @@ import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-st
 import { dateFromMillis, Session, Branch } from "@gent/core/domain/message"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Task, TaskId } from "@gent/extensions/task-tools/domain"
+import { capabilityAccessNeedsLayer } from "@gent/core/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
@@ -15,7 +16,11 @@ const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 // TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
 const baseLayer = SqliteStorage.TestWithSql()
 const taskStorageLayer = Layer.provide(TaskStorage.Live, baseLayer)
-const testLayer = Layer.merge(baseLayer, taskStorageLayer)
+const testLayer = Layer.mergeAll(
+  baseLayer,
+  taskStorageLayer,
+  capabilityAccessNeedsLayer([{ tag: "task", access: "write" }]),
+)
 
 const test = it.live.layer(testLayer)
 

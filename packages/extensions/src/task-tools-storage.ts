@@ -10,15 +10,18 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import {
   AgentName,
+  CapabilityError,
   ReadOnlyBrand,
   SessionId,
   dateFromMillis,
+  requireCapabilityWrite,
   withReadOnly,
   type BranchId,
   type ReadOnly,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 import { Task, TaskStatus, type TaskId } from "./task-tools/domain.js"
+import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
 export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
   "TaskStorageError",
@@ -56,6 +59,17 @@ const encodeTaskMetadata = (metadata: unknown) =>
     try: () => encodeMetadataJson(metadata),
     catch: () => new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
   })
+
+const requireTaskWrite = (operation: string) =>
+  requireCapabilityWrite({
+    tag: "task",
+    extensionId: TASK_TOOLS_EXTENSION_ID,
+    capabilityId: operation,
+    operation,
+  })
+
+const mapWriteError = (message: string) => (e: unknown) =>
+  Schema.is(CapabilityError)(e) ? e : mapError(message)(e)
 
 const decodeTaskMetadata = (metadata: string | null) =>
   metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
@@ -200,7 +214,7 @@ export interface TaskStorageReadOnlyService {
 }
 
 export interface TaskStorageService extends TaskStorageReadOnlyService {
-  readonly createTask: (task: Task) => Effect.Effect<Task, TaskStorageError>
+  readonly createTask: (task: Task) => Effect.Effect<Task, TaskStorageError | CapabilityError>
   readonly updateTask: (
     id: TaskId,
     fields: Partial<{
@@ -209,16 +223,16 @@ export interface TaskStorageService extends TaskStorageReadOnlyService {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskStorageError>
-  readonly deleteTask: (id: TaskId) => Effect.Effect<void, TaskStorageError>
+  ) => Effect.Effect<Task | undefined, TaskStorageError | CapabilityError>
+  readonly deleteTask: (id: TaskId) => Effect.Effect<void, TaskStorageError | CapabilityError>
   readonly addTaskDep: (
     taskId: TaskId,
     blockedById: TaskId,
-  ) => Effect.Effect<void, TaskStorageError>
+  ) => Effect.Effect<void, TaskStorageError | CapabilityError>
   readonly removeTaskDep: (
     taskId: TaskId,
     blockedById: TaskId,
-  ) => Effect.Effect<void, TaskStorageError>
+  ) => Effect.Effect<void, TaskStorageError | CapabilityError>
 }
 
 /**
@@ -291,11 +305,12 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
     return {
       createTask: Effect.fn("TaskStorage.createTask")(
         function* (task) {
+          yield* requireTaskWrite("TaskStorage.createTask")
           const meta = task.metadata === undefined ? null : yield* encodeTaskMetadata(task.metadata)
           yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
           return task
         },
-        Effect.mapError(mapError("Failed to create task")),
+        Effect.mapError(mapWriteError("Failed to create task")),
       ),
 
       getTask: Effect.fn("TaskStorage.getTask")(
@@ -318,6 +333,7 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
 
       updateTask: Effect.fn("TaskStorage.updateTask")(
         function* (id, fields) {
+          yield* requireTaskWrite("TaskStorage.updateTask")
           const now = yield* Clock.currentTimeMillis
           if (fields.status !== undefined && !isTaskStatus(fields.status)) {
             return yield* new TaskStorageError({
@@ -352,11 +368,12 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
             }),
           )
         },
-        Effect.mapError(mapError("Failed to update task")),
+        Effect.mapError(mapWriteError("Failed to update task")),
       ),
 
       deleteTask: Effect.fn("TaskStorage.deleteTask")(
         function* (id) {
+          yield* requireTaskWrite("TaskStorage.deleteTask")
           yield* sql.withTransaction(
             Effect.gen(function* () {
               yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
@@ -364,20 +381,26 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
             }),
           )
         },
-        Effect.mapError(mapError("Failed to delete task")),
+        Effect.mapError(mapWriteError("Failed to delete task")),
       ),
 
       addTaskDep: (taskId, blockedById) =>
-        sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
+        requireTaskWrite("TaskStorage.addTaskDep").pipe(
+          Effect.andThen(
+            sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`,
+          ),
           Effect.asVoid,
-          Effect.mapError(mapError("Failed to add task dep")),
+          Effect.mapError(mapWriteError("Failed to add task dep")),
           Effect.withSpan("TaskStorage.addTaskDep"),
         ),
 
       removeTaskDep: (taskId, blockedById) =>
-        sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`.pipe(
+        requireTaskWrite("TaskStorage.removeTaskDep").pipe(
+          Effect.andThen(
+            sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`,
+          ),
           Effect.asVoid,
-          Effect.mapError(mapError("Failed to remove task dep")),
+          Effect.mapError(mapWriteError("Failed to remove task dep")),
           Effect.withSpan("TaskStorage.removeTaskDep"),
         ),
 

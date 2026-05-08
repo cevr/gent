@@ -1066,7 +1066,10 @@ Status: in progress. First recursive audit batch at `c570d693` found no P0,
 but it did find P1s. Runtime actor/authority P1s were closed by `16c733eb`; TUI
 client extension setup isolation was closed by `06724c8d`. A fresh recursive
 batch at `376d1af2` found no P0, but more P1s remained and must be verified
-again after the current fix batch.
+again after the current fix batch. The third recursive batch at `a472f895`
+found no P0, but it found remaining P1s in durable `inFlight` recovery and
+capability authority forgery. Those are now patched in the current working
+tree and need a fresh recursive audit after commit.
 
 First recursive audit results:
 
@@ -1094,6 +1097,33 @@ First recursive audit results:
   and agent-run surfaces.
 - Raman at `376d1af2`: no P0/P1; residual findings were P2 guardrail/docs/test
   follow-ups.
+- Ramanujan and Avicenna at `a472f895`: P1 persisted `queue.inFlight` was not
+  treated as recoverable startup work, so a crash after durable dequeue but
+  before `MessageReceived` could strand the turn.
+- Chandrasekhar at `a472f895`: P1 `queue.drain` erased the private
+  `inFlight` recovery token during the same handoff window.
+- Halley at `a472f895`: P1 read-intent RPCs narrowed the host object but still
+  carried a full Effect context, letting raw extension storage Tags mutate
+  extension-owned task state.
+- Bernoulli at `a472f895`: P1 `CapabilityAccess.provideNeeds` was exported
+  through the public extension API, so a read handler could forge write
+  authority locally.
+
+Current fix batch:
+
+- Replaced public, forgeable `CapabilityAccess` service export with an
+  internal `Context.Reference` authority. Runtime/tool dispatch uses the
+  internal provider; extension authors only receive the safe
+  `requireCapabilityWrite` guard through `@gent/core/extensions/api`.
+- Added task write guards at the extension-owned `TaskStorage` substrate, not
+  only `TaskService`, so read RPCs cannot mutate by yielding raw storage.
+- Kept task domain/storage/service in `packages/extensions`; core still owns
+  only generic capability and queue primitives.
+- Treated persisted `inFlight` as recoverable startup work and changed queue
+  drain to clear only visible `steering`/`followUp` entries while preserving
+  the private recovery token.
+- Added regressions for read RPC direct-storage mutation denial, public API
+  non-export of authority providers, and `queue.drain` preserving `inFlight`.
 
 Work:
 
@@ -1119,8 +1149,9 @@ Validation:
 - `cd apps/tui && bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-effect-setup.test.ts`
 - `bun run typecheck`
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/task-service.test.ts tests/server/extension-commands-rpc.test.ts`
-- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/acp-agents/acp-extension-state.test.ts tests/acp-agents/acp-system-prompt-slot.test.ts tests/task-tools/task-tool-execution.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-service.test.ts tests/task-tools/task-storage.test.ts tests/task-tools/task-storage-integration.test.ts tests/task-tools/task-tool-execution.test.ts`
 - `bun run lint`
+- `bun run fmt:check`
 - `bun run gate`
 - `bun run test:e2e`
 - `bun run smoke`

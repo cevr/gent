@@ -5,7 +5,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Task, TaskId } from "@gent/extensions/task-tools/domain"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { FIXTURE_DATE, layer, narrowR, setup } from "./helpers.js"
+import { FIXTURE_DATE, layer, narrowR, setup, withTaskWrite } from "./helpers.js"
 
 describe("TaskStorage metadata boundary", () => {
   it.live("decodes invalid stored metadata to undefined instead of crashing", () =>
@@ -29,7 +29,7 @@ describe("TaskStorage metadata boundary", () => {
 
         expect(loaded?.metadata).toBeUndefined()
         expect(listed[0]?.metadata).toBeUndefined()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -50,7 +50,7 @@ describe("TaskStorage metadata boundary", () => {
 
         expect(updated?.metadata).toBeUndefined()
         expect(reloaded?.metadata).toBeUndefined()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -80,7 +80,7 @@ describe("TaskStorage metadata boundary", () => {
         expect(result._tag).toBe("TaskStorageError")
         expect(result.message).toBe("Failed to create task")
         expect(String(result.cause)).toContain("JSON-serializable")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })
@@ -119,7 +119,7 @@ describe("TaskStorage.deleteTask", () => {
         expect(result._tag).toBe("TaskStorageError")
         expect(yield* taskService.getDeps(blocked.id)).toEqual([blocker.id])
         expect((yield* taskService.get(blocker.id))?.id).toBe(blocker.id)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })

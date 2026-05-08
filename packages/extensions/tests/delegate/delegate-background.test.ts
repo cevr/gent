@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
 import { AgentName } from "@gent/core/domain/agent"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
-import { layer, makeCtx, narrowR, setup } from "../task-tools/helpers.js"
+import { layer, makeCtx, narrowR, setup, withTaskWrite } from "../task-tools/helpers.js"
 
 describe("DelegateTool background mode", () => {
   it.live("returns running status via background param", () =>
@@ -24,7 +24,7 @@ describe("DelegateTool background mode", () => {
         }
         expect(result.taskId).toBeDefined()
         expect(result.status).toBe("running")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })

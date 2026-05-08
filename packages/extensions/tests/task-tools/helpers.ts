@@ -6,11 +6,17 @@ import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
-import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
+import {
+  createToolTestLayer,
+  provideCapabilityAccessNeeds,
+  testToolContext,
+} from "@gent/core/test-utils"
 import { toolPreset } from "../helpers/test-preset.js"
 
 export const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
+
+export const withTaskWrite = provideCapabilityAccessNeeds([{ tag: "task", access: "write" }])
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

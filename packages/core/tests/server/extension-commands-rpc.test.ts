@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Exit, FileSystem, Layer, Schema } from "effect"
 import {
   ExtensionLoadError,
   type GentExtension,
@@ -32,8 +32,12 @@ import {
   tool,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
+import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis } from "@gent/core/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
+import { TaskStorage } from "@gent/extensions/task-tools-storage"
+import { Task, TaskId } from "@gent/extensions/task-tools/domain"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -90,6 +94,12 @@ describe("extension command RPCs", () => {
   }
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
     Layer.provideMerge(ApprovalService.Test()),
+  )
+  it.live("extension author API does not export capability authority providers", () =>
+    Effect.sync(() => {
+      expect("CapabilityAccess" in ExtensionApi).toBe(false)
+      expect("provideCapabilityAccessNeeds" in ExtensionApi).toBe(false)
+    }),
   )
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
@@ -808,37 +818,60 @@ describe("extension command RPCs", () => {
   it.live("read RPC handlers receive a read-only runtime host context", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/read-context")
-      const ext: LoadedExtension = {
+      const ext: GentExtension = {
         manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "inspect",
-              extensionId,
-              intent: "read",
-              input: Schema.Void,
-              output: Schema.Struct({
-                hasSessionMutations: Schema.Boolean,
-                hasAgentRun: Schema.Boolean,
-              }),
-              execute: (_input, ctx) =>
-                Effect.succeed({
-                  hasSessionMutations:
-                    "session" in ctx &&
-                    typeof ctx.session === "object" &&
-                    ctx.session !== null &&
-                    "queueFollowUp" in ctx.session,
-                  hasAgentRun:
-                    "agent" in ctx &&
-                    typeof ctx.agent === "object" &&
-                    ctx.agent !== null &&
-                    "run" in ctx.agent,
+        setup: () =>
+          Effect.succeed({
+            requests: [
+              request({
+                id: "inspect",
+                extensionId,
+                intent: "read",
+                input: Schema.Void,
+                output: Schema.Struct({
+                  hasSessionMutations: Schema.Boolean,
+                  hasAgentRun: Schema.Boolean,
+                  directStorageWriteDenied: Schema.Boolean,
                 }),
-            }),
-          ],
-        },
+                execute: (_input, ctx) =>
+                  narrowR(
+                    Effect.gen(function* () {
+                      const taskStorage = yield* TaskStorage
+                      const now = dateFromMillis(1_767_225_600_000)
+                      const directWrite = yield* taskStorage
+                        .createTask(
+                          Task.make({
+                            id: TaskId.make("read-rpc-direct-storage-write"),
+                            sessionId: ctx.sessionId,
+                            branchId: ctx.branchId,
+                            subject: "blocked",
+                            status: "pending",
+                            createdAt: now,
+                            updatedAt: now,
+                          }),
+                        )
+                        .pipe(Effect.exit)
+                      const directStorageWriteDenied =
+                        Exit.isFailure(directWrite) &&
+                        Schema.is(CapabilityError)(Cause.squash(directWrite.cause))
+                      return {
+                        hasSessionMutations:
+                          "session" in ctx &&
+                          typeof ctx.session === "object" &&
+                          ctx.session !== null &&
+                          "queueFollowUp" in ctx.session,
+                        hasAgentRun:
+                          "agent" in ctx &&
+                          typeof ctx.agent === "object" &&
+                          ctx.agent !== null &&
+                          "run" in ctx.agent,
+                        directStorageWriteDenied,
+                      }
+                    }),
+                  ),
+              }),
+            ],
+          }),
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -846,7 +879,7 @@ describe("extension command RPCs", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [ext],
+            extensionInputs: [...e2ePreset.extensionInputs, ext],
             cwd: "/tmp",
           })
           const result = yield* client.extension.request({
@@ -857,7 +890,11 @@ describe("extension command RPCs", () => {
             intent: "read",
             input: undefined,
           })
-          expect(result).toEqual({ hasSessionMutations: false, hasAgentRun: false })
+          expect(result).toEqual({
+            hasSessionMutations: false,
+            hasAgentRun: false,
+            directStorageWriteDenied: true,
+          })
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),

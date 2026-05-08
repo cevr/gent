@@ -12,7 +12,7 @@ import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
-import { CapabilityAccess } from "../../domain/capability-access.js"
+import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
 import type {
   ExtensionStatusInfo,
   FailedExtension,
@@ -295,7 +295,7 @@ const compileRpcRegistry = (
         entry.capability.intent === "write"
           ? [{ tag: "*", access: "write" } as const]
           : [{ tag: "*", access: "read" } as const]
-      return yield* CapabilityAccess.provideNeeds(needs)(
+      return yield* provideCapabilityAccessNeeds(needs)(
         runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx),
       )
     }),

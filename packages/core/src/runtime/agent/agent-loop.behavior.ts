@@ -61,6 +61,7 @@ import {
   buildIdleState,
   buildRunningState,
   clearInFlightQueuedTurn,
+  drainVisibleQueueItems,
   emptyLoopQueueState,
   takeNextQueuedTurn,
   toWaitingForInteractionState,
@@ -590,7 +591,7 @@ export const makeAgentLoopBehavior = (
 
     const drainQueue = commitQueueTransaction("drained queue", (s) => ({
       value: queueSnapshotFromQueueState(s.queue),
-      next: { ...s, queue: emptyLoopQueueState() },
+      next: { ...s, queue: drainVisibleQueueItems(s.queue) },
       persist: true,
     }))
 

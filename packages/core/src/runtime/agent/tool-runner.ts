@@ -7,7 +7,7 @@ import {
   type ToolCapabilityContext,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
-import { CapabilityAccess } from "../../domain/capability-access.js"
+import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
@@ -248,7 +248,7 @@ const makeExecutionToolkit = (params: {
           () =>
             provideCapabilityContext(
               toolCtx,
-              CapabilityAccess.provideNeeds(metadata.needs)(
+              provideCapabilityAccessNeeds(metadata.needs)(
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 metadata
                   .effect(decodedInput, toolCtx)

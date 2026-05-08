@@ -115,6 +115,12 @@ export const emptyLoopQueueState = (): LoopQueueState => ({
   followUp: [],
 })
 
+export const drainVisibleQueueItems = (queue: LoopQueueState): LoopQueueState => ({
+  steering: [],
+  followUp: [],
+  ...(queue.inFlight !== undefined ? { inFlight: queue.inFlight } : {}),
+})
+
 export const appendSteeringItem = (
   queue: LoopQueueState,
   item: QueuedTurnItem,

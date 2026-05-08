@@ -8,7 +8,7 @@ import { EventStore } from "@gent/core/domain/event"
 import { SessionId } from "@gent/core/domain/ids"
 import { TaskId } from "@gent/extensions/task-tools/domain"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
-import { layer, makeCtx, narrowR, setup } from "./helpers.js"
+import { layer, makeCtx, narrowR, setup, withTaskWrite } from "./helpers.js"
 
 describe("TaskCreateTool", () => {
   it.live("creates a task and returns id", () =>
@@ -20,7 +20,7 @@ describe("TaskCreateTool", () => {
         expect(result.taskId).toBeDefined()
         expect(result.subject).toBe("Fix auth bug")
         expect(result.status).toBe("pending")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -39,7 +39,7 @@ describe("TaskCreateTool", () => {
         )
         expect(t2.blockedBy).toEqual([t1.taskId])
         expect(t2.status).toBe("pending")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })
@@ -59,7 +59,7 @@ describe("TaskListTool", () => {
         }
         expect(result.summary.total).toBe(2)
         expect(result.summary.pending).toBe(2)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -71,7 +71,7 @@ describe("TaskListTool", () => {
         const result = yield* getToolEffect(TaskListTool)({}, ctx)
         expect(result.tasks.length).toBe(0)
         expect(result.summary).toBe("No tasks")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })
@@ -95,7 +95,7 @@ describe("TaskGetTool", () => {
         }
         expect(result.subject).toBe("Review code")
         expect(result.description).toBe("Full review of auth module")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -109,7 +109,7 @@ describe("TaskGetTool", () => {
           ctx,
         )
         expect(result.error).toContain("not found")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })
@@ -127,7 +127,7 @@ describe("TaskUpdateTool", () => {
           ctx,
         )
         expect(result.status).toBe("completed")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 
@@ -155,7 +155,7 @@ describe("TaskUpdateTool", () => {
         const envelopes = yield* Fiber.join(eventsFiber)
         const events = Array.from(envelopes, (envelope) => envelope.event._tag)
         expect(events).toContain("ExtensionStateChanged")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
 })

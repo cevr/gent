@@ -1,11 +1,11 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
-  CapabilityAccess,
   ExtensionStatePublisher,
   type CapabilityError,
   type AgentName,
   type SessionId,
   type BranchId,
+  requireCapabilityWrite,
 } from "@gent/core/extensions/api"
 import {
   Task,
@@ -21,20 +21,12 @@ import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 // Pure state management — no execution, no fibers, no agent spawning.
 
 const requireTaskWrite = (operation: string) =>
-  Effect.serviceOption(CapabilityAccess).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.void,
-        onSome: (access) =>
-          access.requireWrite({
-            tag: "task",
-            extensionId: TASK_TOOLS_EXTENSION_ID,
-            capabilityId: operation,
-            operation,
-          }),
-      }),
-    ),
-  )
+  requireCapabilityWrite({
+    tag: "task",
+    extensionId: TASK_TOOLS_EXTENSION_ID,
+    capabilityId: operation,
+    operation,
+  })
 
 export class TaskServiceUnavailableError extends Schema.TaggedErrorClass<TaskServiceUnavailableError>()(
   "TaskServiceUnavailableError",
